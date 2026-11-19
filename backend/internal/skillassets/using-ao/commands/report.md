@@ -31,6 +31,8 @@ one flag per deliverable, not its supporting files. Examples include a requested
 document, a rendered dashboard, or another output the orchestrator or human
 needs to open directly. `--artifact` takes only a path to a file in the session
 artifact directory; mention issues, links, and other URLs in the note.
+`--artifact` does not make a file appear as a session artifact: run
+[`ao artifact add`](artifact.md) for that, before you report it.
 In a chat session, an HTML file from the artifact directory that you attach
 with `--artifact` also shows in the thread.
 

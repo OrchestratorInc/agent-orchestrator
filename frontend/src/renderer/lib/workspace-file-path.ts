@@ -4,7 +4,8 @@ function normalizeWorkspacePath(path: string): string {
 	return path.trim().replace(/^\.\//, "").replace(/\\/g, "/");
 }
 
-function decodePath(path: string): string {
+/** A path with its percent escapes decoded, or as it is when it holds a malformed one. */
+export function decodePath(path: string): string {
 	try {
 		return decodeURIComponent(path);
 	} catch {
@@ -76,6 +77,51 @@ export function findWorkspaceFilePath(
 	const base = fileBasename(normalized);
 	const byBase = paths.filter((path) => fileBasename(normalizeWorkspacePath(path)) === base);
 	return byBase.length === 1 ? byBase[0] : undefined;
+}
+
+/** Reuse hits and misses for one immutable workspace catalog. */
+export function createWorkspaceFileLookup(paths: readonly string[]): (reference: string) => string | undefined {
+	const results = new Map<string, string | undefined>();
+	let index: {
+		exact: Map<string, string>;
+		byBasename: Map<string, { path: string; normalized: string }[]>;
+	} | undefined;
+	const resolve = (reference: string): string | undefined => {
+		if (hasNonFileScheme(reference)) return undefined;
+		const normalized = normalizeWorkspaceFileReference(reference);
+		if (!normalized) return undefined;
+		// Build on the first file reference, not for chats without any. A fresh
+		// session mount must not normalize the whole catalog for every snippet.
+		if (!index) {
+			index = { exact: new Map(), byBasename: new Map() };
+			for (const path of paths) {
+				const candidate = normalizeWorkspacePath(path);
+				if (!index.exact.has(candidate)) index.exact.set(candidate, path);
+				const base = fileBasename(candidate);
+				const entries = index.byBasename.get(base) ?? [];
+				entries.push({ path, normalized: candidate });
+				index.byBasename.set(base, entries);
+			}
+		}
+		const exact = index.exact.get(normalized);
+		if (exact) return exact;
+		// Every suffix match shares the final path segment. Keep duplicates in
+		// the bucket: they must remain ambiguous, just as in the linear lookup.
+		const candidates = index.byBasename.get(fileBasename(normalized)) ?? [];
+		const suffixes = candidates.filter(({ normalized: candidate }) =>
+			normalized.endsWith(`/${candidate}`) || candidate.endsWith(`/${normalized}`),
+		);
+		if (suffixes.length === 1) return suffixes[0]?.path;
+		return candidates.length === 1 ? candidates[0]?.path : undefined;
+	};
+	return (reference) => {
+		if (results.has(reference)) return results.get(reference);
+		const result = resolve(reference);
+		// Streaming can produce arbitrarily many incomplete references.
+		if (results.size >= 1024) results.clear();
+		results.set(reference, result);
+		return result;
+	};
 }
 
 /** A link-shaped local path can still target a new file absent from a stale catalog. */

@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const (
@@ -93,6 +95,8 @@ type clientState struct {
 	cols, rows int
 	sized      bool
 	watcher    bool // sent MsgWatchForegroundReq; gets no terminal output
+	// titleWatcher sent MsgWatchTitleReq; it also gets no terminal output.
+	titleWatcher bool
 
 	out       chan []byte
 	drained   chan struct{} // signalled when the writer frees queue space
@@ -151,6 +155,10 @@ type host struct {
 	fgWatchers atomic.Int32
 	// da1C queues DA1 replies for writeDA1Replies (see deviceattrs.go).
 	da1C chan struct{}
+	// title is the normalized title the program last set. It is kept with no
+	// client attached, so a watcher that connects later still learns it.
+	// Guarded by mu.
+	title string
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -272,10 +280,16 @@ func (h *host) shutdown() {
 func (h *host) pumpPTY() {
 	buf := make([]byte, 32*1024)
 	var da1 da1Scanner
+	var titles oscTitleScanner
 	for {
 		n, err := h.cfg.PTY.Read(buf)
 		if n > 0 && answersDeviceAttributes {
 			h.queueDA1Replies(da1.scan(buf[:n]))
+		}
+		if n > 0 {
+			if raw, ok := titles.scan(buf[:n]); ok {
+				h.setTitle(domain.NormalizeTerminalTitle(raw))
+			}
 		}
 		if n > 0 {
 			chunk := make([]byte, n)
@@ -331,6 +345,32 @@ func (h *host) record(chunk []byte) {
 	if h.fgWatchers.Load() > 0 {
 		h.fg.noteOutput(time.Now())
 	}
+}
+
+// setTitle records a title and tells the title watchers, only when it changed.
+// A watcher whose queue is full is dropped: it re-subscribes and reads the
+// current title, so it cannot be left holding a stale one.
+func (h *host) setTitle(title string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.title == title {
+		return
+	}
+	h.title = title
+	frame := titleFrame(title)
+	for conn, client := range h.clients {
+		if client.titleWatcher && !client.enqueue(frame) {
+			delete(h.clients, conn)
+			client.close(conn)
+		}
+	}
+}
+
+// titleFrame cannot fail: the payload is small and the title is bounded.
+func titleFrame(title string) []byte {
+	b, _ := json.Marshal(TitlePayload{Title: title})
+	frame, _ := EncodeMessage(MsgTitleState, b)
+	return frame
 }
 
 func (h *host) publishForeground(state ForegroundPayload) {
@@ -415,7 +455,7 @@ func (h *host) lockWithRoom() bool {
 // touch the queues while h.mu is held, so these cannot fail.
 func (h *host) enqueueAllLocked(msg []byte) {
 	for _, client := range h.clients {
-		if client.watcher && msg[0] == MsgTerminalData {
+		if (client.watcher || client.titleWatcher) && msg[0] == MsgTerminalData {
 			continue
 		}
 		client.enqueue(msg)
@@ -634,6 +674,17 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 			h.sendTo(conn, foregroundFrame(state))
 		}
 		h.fg.wake()
+
+	case MsgWatchTitleReq:
+		// The watcher gets the current title at once, then each change, under
+		// one lock so a title set in between cannot be missed.
+		h.mu.Lock()
+		cs := h.clients[conn]
+		if cs != nil {
+			cs.titleWatcher = true
+			cs.enqueue(titleFrame(h.title))
+		}
+		h.mu.Unlock()
 
 	case MsgKillReq:
 		// Trigger graceful shutdown; returns immediately (idempotent).

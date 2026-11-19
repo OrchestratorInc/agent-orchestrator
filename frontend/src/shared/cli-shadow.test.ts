@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { nodeCliShadowIo } from "../main/cli-link-fs";
-import { inspectCliShadow, replaceCliShadow as replaceCliShadowImpl, type CliShadowIo, type CliShadowRequest } from "./cli-shadow";
+import { cliShadowEnabled, inspectCliShadow, replaceCliShadow as replaceCliShadowImpl, type CliShadowIo, type CliShadowRequest } from "./cli-shadow";
 
 async function replaceCliShadow(io: CliShadowIo, req: CliShadowRequest, expected: { path: string; target: string; identity?: string }) {
 	return replaceCliShadowImpl(io, req, { ...expected, identity: expected.identity ?? await io.identity(expected.path) ?? "missing" });
@@ -40,6 +40,24 @@ const inspect = async (shellPath: string | undefined, bundledPath: string | unde
 	const probeIdentity = shellPath ? await io.identity(path.join(shellPath.split(":")[0] ?? "", "ao")) : null;
 	return inspectCliShadow(io, { ...request(shellPath, bundledPath, platform, isPackaged), probeIdentity: probeIdentity ?? undefined });
 };
+
+describe("cliShadowEnabled", () => {
+	it("applies only to an installed app on its default profile", () => {
+		expect(cliShadowEnabled({}, true)).toBe(true);
+	});
+
+	it.each([
+		["a dev build", {}, false],
+		["an isolated data dir", { AO_DATA_DIR: "/tmp/scratch" }, true],
+		["an isolated run file", { AO_RUN_FILE: "/tmp/running.json" }, true],
+	] as const)("stays off in %s", (_name, env, isPackaged) => {
+		expect(cliShadowEnabled(env, isPackaged)).toBe(false);
+	});
+
+	it("treats a blank override as unset", () => {
+		expect(cliShadowEnabled({ AO_DATA_DIR: "  ", AO_RUN_FILE: "" }, true)).toBe(true);
+	});
+});
 
 describe("inspectCliShadow", () => {
 	it("does not execute a different file using consent for an earlier identity", async () => {

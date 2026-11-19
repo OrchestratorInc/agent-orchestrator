@@ -1,8 +1,9 @@
+import type { TriageResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
 import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
-import type { PendingSideClose } from "./shared/side-close";
+import { SIDE_CLOSE_PROTOCOL_VERSION, type SideCloseRequest, type SideCloseState } from "./shared/side-close";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -20,6 +21,7 @@ import type {
 	BrowserRuntimeState,
 	BrowserTabsState,
 } from "./main/browser-view-host";
+import type { UserBrowser } from "./main/user-browser";
 import {
 	TRAY_OPEN_SESSION_CHANNEL,
 	TRAY_RENDERER_READY_CHANNEL,
@@ -30,6 +32,7 @@ import {
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
 import type { DictationEvent } from "./shared/dictation";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -54,18 +57,25 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
-import type { PrivacyGuideRequest, PrivacyPane } from "./main/privacy-guide";
+import type { PrivacyGuideRequest, PrivacyGuideTarget, PrivacyPane } from "./main/privacy-guide";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
+	type CloudShareAccess,
 	type CloudShareFile,
+	type CloudShareGrants,
+	type CloudShareInvite,
 	type CloudShareInspection,
+	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
+	type HostShareLink,
 } from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
+import type { PushFolderInput, PushFolderPreview, PushFolderResult } from "./main/cloud-folder-push";
+export type { PushFolderInput, PushFolderPreview, PushFolderResult };
 import type {
 	CloudCpProxyRequestInit,
 	CloudCpProxyResponse,
@@ -178,6 +188,43 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 	}
 });
 
+// A session deep link (ao-app://sessions/…) flushed by main on renderer ready
+// races the same way as the folder path above: the readiness ping comes from a
+// child effect, before ShellLayout subscribes. Same dispatcher-and-buffer.
+// The payload is the raw URL; the shell re-reads it as its in-app ao:// form.
+let bufferedSessionDeepLink: string | null = null;
+let activeSessionDeepLinkListener: ((rawUrl: string) => void) | null = null;
+function isSessionDeepLinkUrl(value: unknown): value is string {
+	return typeof value === "string" && value.startsWith("ao-app://");
+}
+ipcRenderer.on(OPEN_SESSION_DEEP_LINK_CHANNEL, (_event, target: unknown) => {
+	if (!isSessionDeepLinkUrl(target)) return;
+	if (activeSessionDeepLinkListener) {
+		activeSessionDeepLinkListener(target);
+	} else {
+		bufferedSessionDeepLink = target;
+	}
+});
+
+// A billing return (ao-app://billing) flushed on the shell's readiness ping
+// races ShellLayout's settings subscription exactly like the channels above —
+// the ping comes from a child effect, before the parent effect subscribes.
+// Same dispatcher-and-buffer. A keyboard/menu open-settings event can only
+// exist once a shell exists to carry it, so replaying the one buffered event
+// on subscription honors the user's intent rather than dropping it.
+let bufferedOpenSettings: string | undefined = undefined;
+let hasBufferedOpenSettings = false;
+let activeOpenSettingsListener: ((section?: string) => void) | null = null;
+ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, (_event, section?: unknown) => {
+	const payload = typeof section === "string" ? section : undefined;
+	if (activeOpenSettingsListener) {
+		activeOpenSettingsListener(payload);
+	} else {
+		bufferedOpenSettings = payload;
+		hasBufferedOpenSettings = true;
+	}
+});
+
 let currentTelemetryPolicy: TelemetryPolicyView | null = null;
 const telemetryPolicyListeners = new Set<(view: TelemetryPolicyView) => void>();
 const rendererQueuePurgeListeners = new Set<() => void | Promise<void>>();
@@ -221,6 +268,9 @@ function isRendererQueuePurgeRequest(value: unknown): value is RendererTelemetry
 const binaryRequestsInFlight = new Set<string>();
 
 const api = {
+	triage: {
+		launch: () => ipcRenderer.invoke("triage.launch") as Promise<TriageResult>,
+	},
 	dictation: {
 		start: () => ipcRenderer.invoke("dictation:start") as Promise<void>,
 		stop: () => ipcRenderer.invoke("dictation:stop") as Promise<void>,
@@ -239,8 +289,10 @@ const api = {
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
 		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
-		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
+		updatePrivacyGuide: (target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", target, granted) as Promise<boolean>,
 		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
+		getAppPrivacy: () => ipcRenderer.invoke("app:getAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
+		requestAppPrivacy: () => ipcRenderer.invoke("app:requestAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
 		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
@@ -271,6 +323,20 @@ const api = {
 			}
 			return () => {
 				if (activeOpenFolderPathListener === listener) activeOpenFolderPathListener = null;
+			};
+		},
+		// Fired by the main process for ao-app://sessions/… deep links from
+		// external tools; the payload is the raw URL and the shell resolves it
+		// with the same session-links path as in-app ao:// links.
+		onOpenSessionDeepLink: (listener: (rawUrl: string) => void) => {
+			activeSessionDeepLinkListener = listener;
+			if (bufferedSessionDeepLink) {
+				const target = bufferedSessionDeepLink;
+				bufferedSessionDeepLink = null;
+				listener(target);
+			}
+			return () => {
+				if (activeSessionDeepLinkListener === listener) activeSessionDeepLinkListener = null;
 			};
 		},
 		// Fired by the main process when the app-level new-session shortcut
@@ -322,10 +388,13 @@ const api = {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
 		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
-			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
-			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
+			activeOpenSettingsListener = listener;
+			if (hasBufferedOpenSettings) {
+				hasBufferedOpenSettings = false;
+				listener(bufferedOpenSettings);
+			}
 			return () => {
-				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
+				if (activeOpenSettingsListener === listener) activeOpenSettingsListener = null;
 			};
 		},
 		onPreviousSessionShortcut: (listener: () => void) => {
@@ -363,6 +432,8 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		// Tells main the first frame that shows the workspace is on screen.
+		reportSessionsShown: () => ipcRenderer.send("app:sessionsShown"),
 		setMenuAvailability: (availability: AppMenuAvailability) => {
 			ipcRenderer.send(SET_APP_MENU_AVAILABILITY_CHANNEL, availability);
 		},
@@ -457,6 +528,12 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
+	// Cards load them from the snapshot scheme; this only asks for a missing one.
+	artifactSnapshot: {
+		/** Renders a missing preview; true once it is cached. */
+		request: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:request", job) as Promise<boolean>,
+	},
 	// Session and project share links this device made (main/session-share-urls.ts).
 	sessionShareUrls: {
 		remember: (baseUrl: string, linkId: string, url: string) =>
@@ -466,16 +543,25 @@ const api = {
 		forget: (baseUrl: string, linkIds: readonly string[]) =>
 			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
 	},
-	// Public share links, published from the share popover's Publish button.
+	// Share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
 		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
+		/** The links this computer published remote hosts' files to; their daemons list none. */
+		hostLinks: (baseUrl: string) => ipcRenderer.invoke("cloudShare:hostLinks", { baseUrl }) as Promise<HostShareLink[]>,
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
+		setAccess: (baseUrl: string, shareId: string, access: CloudShareAccess) =>
+			ipcRenderer.invoke("cloudShare:setAccess", { baseUrl, shareId, access }) as Promise<CloudShareLink>,
+		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrants>,
+		invite: (baseUrl: string, shareId: string, invite: CloudShareInvite) =>
+			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, ...invite }) as Promise<CloudShareGrants>,
+		removeGrant: (baseUrl: string, shareId: string, grantId: string) =>
+			ipcRenderer.invoke("cloudShare:removeGrant", { baseUrl, shareId, grantId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, progress: CloudShareProgress) => listener(progress);
 			ipcRenderer.on(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
@@ -518,12 +604,15 @@ const api = {
 		request: (input: AgentLoginRequest) => ipcRenderer.invoke("agentLogin:request", input) as Promise<AgentLoginResponse | null>,
 	},
 	sideChats: {
-		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
-		confirmClose: (sideId: string, alreadyClosed = false) => ipcRenderer.invoke("sideChats:confirmClose", sideId, alreadyClosed) as Promise<void>,
-		getPendingCloses: (sessionId: string) => ipcRenderer.invoke("sideChats:pendingCloses", sessionId) as Promise<PendingSideClose[]>,
-		onPendingClosesChanged: (listener: () => void) => {
-			ipcRenderer.on("sideChats:pendingClosesChanged", listener);
-			return () => { ipcRenderer.removeListener("sideChats:pendingClosesChanged", listener); };
+		protocolVersion: SIDE_CLOSE_PROTOCOL_VERSION,
+		mode: "desktop" as "desktop" | "web",
+		capture: () => ipcRenderer.invoke("sideChats:capture") as Promise<void>,
+		requestClose: (input: SideCloseRequest) => ipcRenderer.invoke("sideChats:requestClose", input) as Promise<SideCloseState>,
+		getCloseState: (sessionId: string) => ipcRenderer.invoke("sideChats:closeState", sessionId) as Promise<SideCloseState>,
+		onCloseStateChanged: (listener: (state: SideCloseState) => void) => {
+			const wrapped = (_event: unknown, state: SideCloseState) => listener(state);
+			ipcRenderer.on("sideChats:closeStateChanged", wrapped);
+			return () => { ipcRenderer.removeListener("sideChats:closeStateChanged", wrapped); };
 		},
 	},
 	editorHandoff: {
@@ -559,6 +648,8 @@ const api = {
 		},
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
+		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
+		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			applyTelemetryPolicy(view);
@@ -600,6 +691,10 @@ const api = {
 		goForward: (viewId: string) => ipcRenderer.invoke("browser:goForward", viewId) as Promise<BrowserNavState>,
 		reload: (viewId: string) => ipcRenderer.invoke("browser:reload", viewId) as Promise<BrowserNavState>,
 		stop: (viewId: string) => ipcRenderer.invoke("browser:stop", viewId) as Promise<BrowserNavState>,
+		/** The person's own browser (Chrome when installed), or null when unavailable. */
+		userBrowser: () => ipcRenderer.invoke("browser:userBrowser") as Promise<UserBrowser | null>,
+		/** Open the view's current page in the person's own browser. */
+		openInUserBrowser: (viewId: string) => ipcRenderer.invoke("browser:openInUserBrowser", viewId) as Promise<UserBrowser>,
 		getFindState: (viewId: string) =>
 			ipcRenderer.invoke("browser:find:get", viewId) as Promise<BrowserFindState>,
 		findInPage: (input: BrowserFindInput) =>
@@ -885,15 +980,15 @@ const api = {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
 	},
-	// Saved AO daemons, shared with the CLI's ~/.ao/remotes.json. Everything the
-	// renderer receives back is password-free (see main/remotes-ipc.ts); the
-	// plaintext password only travels renderer -> main on add or credential edit.
+	// Saved AO daemons in ~/.ao/remotes.json. Everything the renderer receives
+	// back is password-free (see main/remotes-ipc.ts); a password only travels
+	// renderer -> main on add or credential edit. Account host tokens stay in main.
 	remotes: {
 		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
-		importAccountHost: (accountId: string, input: { hostId: string; label: string; url: string; password: string }) =>
-			ipcRenderer.invoke("remotes:importAccountHost", accountId, input) as Promise<void>,
-		pruneAccountHosts: (accountId: string, hostIds: string[]) => ipcRenderer.invoke("remotes:pruneAccountHosts", accountId, hostIds) as Promise<void>,
-		issueAccountToken: (url: string) => ipcRenderer.invoke("remotes:issueAccountToken", url) as Promise<{ token: string; hostKey?: string }>,
+		// Saves the account's machines from AO Cloud and forgets the ones it no longer lists.
+		syncAccountHosts: (accountId: string) => ipcRenderer.invoke("remotes:syncAccountHosts", accountId) as Promise<void>,
+		// Lists a paired host under the signed-in account.
+		linkAccountHost: (url: string) => ipcRenderer.invoke("remotes:linkAccountHost", url) as Promise<void>,
 		add: (input: { label: string; url: string; password: string }) =>
 			ipcRenderer.invoke("remotes:add", input) as Promise<RemoteHealth>,
 		// An edit carries only what changed: an omitted password keeps the saved
@@ -922,7 +1017,7 @@ const api = {
 		signIn: () => ipcRenderer.invoke("cloud:signIn") as Promise<void>,
 		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
 		cancelProviderAuth: () => ipcRenderer.invoke("cloud:cancelProviderAuth") as Promise<void>,
-		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean }) =>
+		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean; account?: "new" | string }) =>
 			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<
 				| string
 				| { secret: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number }
@@ -954,6 +1049,28 @@ const api = {
 		},
 		// One that arrived before the window was ready, taken once.
 		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
+		// A published artifact's viewer URL, from "Open on orchestrator" on its web page
+		// (ao-app://shared-artifact): the Artifacts page opens it.
+		onOpenSharedArtifact: (listener: (viewerUrl: string) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, viewerUrl: string) => listener(viewerUrl);
+			ipcRenderer.on("cloud:openSharedArtifact", wrapped);
+			return () => {
+				ipcRenderer.off("cloud:openSharedArtifact", wrapped);
+			};
+		},
+		// One that arrived before the window was ready, taken once.
+		takePendingSharedArtifact: () => ipcRenderer.invoke("cloud:takePendingSharedArtifact") as Promise<string | null>,
+		// Shows it in its own isolated window when the Artifacts page cannot: signed
+		// out of Cloud, or it does not open for this account.
+		openSharedArtifactWindow: (viewerUrl: string) => ipcRenderer.invoke("cloud:openSharedArtifactWindow", viewerUrl) as Promise<void>,
+		// Uploads a local folder into the empty repository AO Cloud made for it
+		// (main/cloud-folder-push.ts); the token stays in main.
+		pushFolderToRepository: (input: PushFolderInput) =>
+			ipcRenderer.invoke("cloud:pushFolderToRepository", input) as Promise<PushFolderResult>,
+		// What uploading a picked folder would do, before anything is uploaded:
+		// the secret-looking files it leaves out, or why it cannot go.
+		previewFolderUpload: (input: { folder: string }) =>
+			ipcRenderer.invoke("cloud:previewFolderUpload", input) as Promise<PushFolderPreview>,
 		// The context a sign-in that just completed added (CloudSignInContext),
 		// with its account, taken once; null when there is none.
 		takePendingSignIn: () => ipcRenderer.invoke("cloud:takePendingSignIn") as Promise<CloudPendingSignIn | null>,

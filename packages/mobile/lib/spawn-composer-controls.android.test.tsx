@@ -162,6 +162,16 @@ describe("Android spawn selectors", () => {
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.expanded === false)).toBe(true);
 	});
 
+	// Each machine with its glyph, as each project has its folder.
+	it("draws a computer for each machine and a cloud for Orchestrator Cloud in the machine menu", async () => {
+		const root = await render(baseProps({ hosts: [{ id: "host-a", label: "Alpha" }, { id: "orchestrator-cloud", label: "Cloud", icon: "cloud" }], hostId: "orchestrator-cloud" }));
+		await act(async () => trigger(root, "spawn-host").props.onClick());
+		const menu = menuOf(trigger(root, "spawn-host"));
+		const glyph = (label: string) => item(menu, label).findAll((node) => hostType(node) === "Icon").map((node) => node.props.source)[0];
+		expect(glyph("Alpha")).toBe("drawable:laptop");
+		expect(glyph("Cloud")).toBe("drawable:cloud");
+	});
+
 	it("selects another machine from its menu and closes it", async () => {
 		const props = baseProps();
 		const root = await render(props);

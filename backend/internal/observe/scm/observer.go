@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -90,6 +91,9 @@ type Store interface {
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
+	// PRDetailsUpdatedAt returns the provider updatedAt the PR's stored
+	// details were read at; ok is false when they are due a read.
+	PRDetailsUpdatedAt(ctx context.Context, prURL string) (time.Time, bool, error)
 	WriteSCMObservation(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error
 	RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error
 }
@@ -700,7 +704,22 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		}
 		prepared := o.prepareForPersistence(obs, local, opts, now)
 		if !prepared.Changed.Metadata && !prepared.Changed.CI && !prepared.Changed.Review {
-			prRefreshOK[key] = true
+			// Details are left out of the hashes, and a provider reads them only
+			// when none are stored or the PR's updatedAt moved, so details here
+			// with no other change are ones the store lacks (a PR stored before
+			// details existed, or by a path that writes none). Store them; there
+			// is nothing new for lifecycle.
+			// Details still owed (a failed read or write) keep the refresh
+			// incomplete, so the repository cursor waits and they are retried.
+			refreshed := !prepared.PR.DetailsPending
+			if prepared.PR.Details != nil {
+				pr, _, _, _, _ := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
+				if err := o.store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+					o.logger.Warn("scm observer: PR details write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+					refreshed = false
+				}
+			}
+			prRefreshOK[key] = refreshed
 			continue
 		}
 		finalPR, finalChecks, finalReviews, finalThreads, finalComments := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
@@ -759,7 +778,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		// this branch (it returns at the unchanged-hashes check above), so
 		// its repo stays refresh-incomplete and the ETag/cursor stay pinned.
 		markRepoRefreshOK(subj.repo)
-		prRefreshOK[key] = true
+		prRefreshOK[key] = !prepared.PR.DetailsPending
 	}
 	for key, ok := range prRefreshOK {
 		if !ok {
@@ -1182,7 +1201,8 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 		}
 		// Incremental discovery: request only MRs updated since the last
 		// successful cursor minus an overlap window. Zero cursor (first poll)
-		// requests a full listing
+		// requests a full listing. GitHub has no such filter and always lists
+		// every open PR, which terminal reconciliation below relies on.
 		repoKey := prKey(repo, 0)
 		cursor := o.Cache.LastSyncCursor[repoKey]
 		updatedAfter := time.Time{}
@@ -1273,6 +1293,12 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				headRepo = repoFullName(repo)
 			}
 			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
+			// Session IDs repeat across installations. GitHub reports whole seconds.
+			if !pr.CreatedAtProvider.IsZero() {
+				eligible = slices.DeleteFunc(eligible, func(sr sessionRepo) bool {
+					return pr.CreatedAtProvider.Before(sr.session.CreatedAt.Truncate(time.Second))
+				})
+			}
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue
@@ -1431,6 +1457,26 @@ func sessionBranchPrefixes(branch string) []string {
 	return prefixes
 }
 
+// trackedPRRef is the provider ref for a tracked PR. It carries the provider
+// updatedAt the PR's stored details were read at, so the provider reads them
+// again only once the PR has changed. A failed lookup leaves it zero, which
+// costs a details read and never skips one.
+func (o *Observer) trackedPRRef(ctx context.Context, s *subject) ports.SCMPRRef {
+	ref := ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL}
+	if s.known.URL == "" {
+		return ref
+	}
+	updatedAt, ok, err := o.store.PRDetailsUpdatedAt(ctx, s.known.URL)
+	if err != nil {
+		o.logger.Warn("scm observer: read stored PR details updatedAt failed; reading details again", "pr", s.known.URL, "err", err)
+		return ref
+	}
+	if ok {
+		ref.DetailsUpdatedAt = updatedAt
+	}
+	return ref
+}
+
 func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs, forced map[string]bool, forcedSessions map[domain.SessionID]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
 	selection := refreshSelection{
 		subjectsByPR:  map[string]*subject{},
@@ -1513,7 +1559,7 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 			}
 		}
 		if candidate {
-			selection.refs = append(selection.refs, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
+			selection.refs = append(selection.refs, o.trackedPRRef(ctx, s))
 			selection.refKeys = append(selection.refKeys, key)
 			selection.candidateKeys[key] = true
 		}
@@ -1603,7 +1649,7 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 			continue
 		}
 		refs = append(refs, pendingReconcile{
-			ref: ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL},
+			ref: o.trackedPRRef(ctx, s),
 			s:   s,
 		})
 	}
@@ -1711,7 +1757,7 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 	}
 	if strings.HasPrefix(local.CIHash, obs.CI.FailedFingerprint+":") {
 		checks, err := o.store.ListChecks(ctx, local.URL)
-		if err == nil && applyStoredFailedLogTails(obs, checks) {
+		if err == nil && obs.CI.ApplyStoredLogTails(checks) {
 			return
 		}
 	}
@@ -1746,37 +1792,6 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 
 func checkProviderKey(ch ports.SCMCheckObservation) string {
 	return ch.Name + "\x00" + ch.ProviderID
-}
-
-func applyStoredFailedLogTails(obs *ports.SCMObservation, checks []domain.PullRequestCheck) bool {
-	tailsByName := map[string]string{}
-	for _, ch := range checks {
-		if obs.CI.HeadSHA != "" && ch.CommitHash != "" && ch.CommitHash != obs.CI.HeadSHA {
-			continue
-		}
-		if ch.LogTail != "" && ch.Status == domain.PRCheckFailed {
-			tailsByName[ch.Name] = ch.LogTail
-		}
-	}
-	if len(tailsByName) == 0 {
-		return false
-	}
-	tails := make([]string, 0, len(obs.CI.FailedChecks))
-	for i := range obs.CI.FailedChecks {
-		tail := tailsByName[obs.CI.FailedChecks[i].Name]
-		if tail == "" {
-			return false
-		}
-		obs.CI.FailedChecks[i].LogTail = tail
-		tails = append(tails, tail)
-	}
-	for i := range obs.CI.Checks {
-		if tail := tailsByName[obs.CI.Checks[i].Name]; tail != "" {
-			obs.CI.Checks[i].LogTail = tail
-		}
-	}
-	obs.CI.FailureLogTail = strings.Join(tails, "\n---\n")
-	return true
 }
 
 func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subject, observations map[string]ports.SCMObservation, subjectsByPR map[string]*subject, forced map[string]bool, reviewModes map[string]ports.ReviewWriteMode, localOnlyObservations, reviewStale map[string]bool, now time.Time) {
@@ -1984,6 +1999,8 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		ProviderID:               obs.PR.ProviderID,
 		SourceBranch:             obs.PR.SourceBranch,
 		TargetBranch:             obs.PR.TargetBranch,
+		HeadFromFork:             obs.PR.HeadFromFork,
+		HeadIsDefaultBranch:      obs.PR.HeadIsDefaultBranch,
 		HeadSHA:                  obs.PR.HeadSHA,
 		Title:                    obs.PR.Title,
 		Additions:                obs.PR.Additions,
@@ -2008,6 +2025,11 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		CIObservedAt:             ciObservedAt,
 		ReviewObservedAt:         reviewObservedAt,
 		ReviewPartial:            reviewPartial,
+	}
+	if obs.PR.Details != nil {
+		details := *obs.PR.Details
+		details.ObservedAt = obs.ObservedAt
+		pr.Details = &details
 	}
 	checks := make([]domain.PullRequestCheck, 0, len(obs.CI.Checks))
 	for _, ch := range obs.CI.Checks {
@@ -2036,7 +2058,7 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 	for _, th := range obs.Review.Threads {
 		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, SemanticHash: threadSemanticHash(th), UpdatedAt: now})
 		for _, c := range th.Comments {
-			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview})
+			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: firstTime(c.CreatedAt, now), AutoInjectReview: sessionRecord.AutoInjectReview})
 		}
 	}
 	return pr, checks, reviews, threads, comments
@@ -2048,7 +2070,7 @@ func observationFromLocal(repo ports.SCMRepo, pr domain.PullRequest, checks []do
 		Provider:     firstNonEmpty(pr.Provider, repo.Provider),
 		Host:         firstNonEmpty(pr.Host, repo.Host),
 		Repo:         firstNonEmpty(pr.Repo, repoFullName(repo)),
-		PR:           ports.SCMPRObservation{URL: pr.URL, Number: pr.Number, State: normalizePRState(pr.Draft, pr.Merged, pr.Closed), Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch, HeadSHA: pr.HeadSHA, Title: pr.Title, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles, Author: pr.Author, AuthorAvatarURL: pr.AuthorAvatarURL, BaseSHA: pr.BaseSHA, MergeCommitSHA: pr.MergeCommitSHA, ProviderState: pr.ProviderState, ProviderMergeable: pr.ProviderMergeable, ProviderMergeStateStatus: pr.ProviderMergeStateStatus, HTMLURL: pr.HTMLURL, CreatedAtProvider: pr.CreatedAtProvider, UpdatedAtProvider: pr.UpdatedAtProvider, MergedAtProvider: pr.MergedAtProvider, ClosedAtProvider: pr.ClosedAtProvider},
+		PR:           ports.SCMPRObservation{URL: pr.URL, Number: pr.Number, State: normalizePRState(pr.Draft, pr.Merged, pr.Closed), Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch, HeadFromFork: pr.HeadFromFork, HeadIsDefaultBranch: pr.HeadIsDefaultBranch, HeadSHA: pr.HeadSHA, Title: pr.Title, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles, Author: pr.Author, AuthorAvatarURL: pr.AuthorAvatarURL, BaseSHA: pr.BaseSHA, MergeCommitSHA: pr.MergeCommitSHA, ProviderState: pr.ProviderState, ProviderMergeable: pr.ProviderMergeable, ProviderMergeStateStatus: pr.ProviderMergeStateStatus, HTMLURL: pr.HTMLURL, CreatedAtProvider: pr.CreatedAtProvider, UpdatedAtProvider: pr.UpdatedAtProvider, MergedAtProvider: pr.MergedAtProvider, ClosedAtProvider: pr.ClosedAtProvider},
 		CI:           ciObservationFromLocal(pr, checks),
 		Review:       ports.SCMReviewObservation{Decision: string(pr.Review)},
 		Mergeability: mergeabilityObservationFromLocal(pr),

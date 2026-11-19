@@ -324,6 +324,30 @@ describe("HumanMessageEditor", () => {
 		expect(fold).toContainElement(screen.getByRole("textbox", { name: "Edit message" }));
 	});
 
+	it("keeps attachments outside the fold, where the bubble draws them", () => {
+		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
+		const text = "a long edited message\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12.png";
+		render(
+			<TooltipProvider>
+				<HumanMessageEditor
+					text={text}
+					originalText={text}
+					content={[]}
+					sessionId="session-1"
+					apiBaseUrl="http://127.0.0.1:3002"
+					pending={false}
+					busy={false}
+					onCancel={vi.fn()}
+					onSend={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+		const toggle = screen.getByRole("button", { name: "Show more" });
+		const fold = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+		expect(fold).toContainElement(screen.getByRole("textbox", { name: "Edit message" }));
+		expect(fold).not.toContainElement(screen.getByRole("list", { name: "Attached files" }));
+	});
+
 	it("explains the branch through the field's description", () => {
 		render(
 			<TooltipProvider>

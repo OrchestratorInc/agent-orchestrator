@@ -57,6 +57,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			getTeamShareAccess: async (_org: string, _project: string, _session: string | undefined, teamId: string) => ({ members: mocks.teamMembers[teamId] ?? [] }),
 			listShareCandidates: async () => ({ candidates: mocks.candidates }),
 			listShareLinks: async () => ({ links: [] }),
+			listOrgMembers: async () => ({ members: [{ userId: "u-asha" }, { userId: "u-farah" }, { userId: "u-ben" }, { userId: "u-dana" }] }),
 			createShareGrants: async (...args: unknown[]) => {
 				mocks.calls.push(["createShareGrants", ...args]);
 				await held("createShareGrants");
@@ -93,12 +94,12 @@ const entry = (grantId: string, subject: CloudCpShareEntry["subject"], extra: Pa
 	grantId, subject, scope: "session", sessionId: "sess", projectId: "proj", projectName: "storefront", role: "viewer", modeCap: "read-only", deniedCommands: [], source: "direct", createdAt: "2026-10-30T00:00:00Z", ...extra,
 });
 
-function renderDialog(props: { onOpenChange?: (open: boolean) => void } = {}) {
+function renderDialog(props: { onOpenChange?: (open: boolean) => void; standaloneAgent?: boolean } = {}) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = (open: boolean) => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
-				<ShareSessionDialog open={open} onOpenChange={props.onOpenChange ?? (() => undefined)} orgId="org" projectId="proj" sessionId="sess" />
+				<ShareSessionDialog open={open} onOpenChange={props.onOpenChange ?? (() => undefined)} orgId="org" projectId="proj" sessionId="sess" standaloneAgent={props.standaloneAgent} />
 				<GlobalToast />
 			</TooltipProvider>
 		</QueryClientProvider>
@@ -169,7 +170,8 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(within(list).getByText(/Asha Rao/).textContent).toContain("(you)");
 		expect(within(list).getByText("Owner")).toBeInTheDocument();
 		const workspace = list.querySelector("[data-share-workspace-row]")!;
-		expect(workspace.textContent).toContain("People in Northwind");
+		expect(workspace.textContent).toContain("Everyone in your workspace");
+		expect(workspace.textContent).toContain("Northwind · 4 members");
 		expect(workspace.textContent).toContain("Full access");
 		const rows = [...list.querySelectorAll("[data-share-entry]")];
 		expect(rows.map((element) => element.getAttribute("data-share-row"))).toEqual([
@@ -202,11 +204,25 @@ describe("ShareSessionDialog people and teams", () => {
 		renderDialog();
 		await screen.findByText("Platform");
 		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
-		const workspace = await screen.findByText("People in Northwind");
+		const workspace = await screen.findByText("Everyone in your workspace");
 		const first = workspace.closest("li")!;
 		expect(first.hasAttribute("data-share-workspace-row")).toBe(true);
 		expect(first.textContent).toContain("Full access");
 		expect(first.parentElement!.firstElementChild).toBe(first);
+	});
+
+	it("still lists the workspace for a project nobody has been added to", async () => {
+		mocks.projectAccess = { entries: [] };
+		renderDialog();
+		await screen.findByText("Platform");
+		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
+		expect(await screen.findByRole("heading", { name: /Share project/ })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.calls).toContainEqual(["getShareAccess", undefined]));
+		const workspace = await screen.findByText("Everyone in your workspace");
+		const list = workspace.closest("[data-share-access-list]")!;
+		expect(list.querySelectorAll("li")).toHaveLength(1);
+		expect(list.firstElementChild!.hasAttribute("data-share-workspace-row")).toBe(true);
+		expect(screen.getByText("People with access")).toBeInTheDocument();
 	});
 
 	it("shows a team's people its new access at once, before the change is saved", async () => {
@@ -269,6 +285,19 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(mocks.calls.find((call) => call[0] === "createShareGrants")).toEqual([
 			"createShareGrants", "org", "proj", { sessionId: "sess", subjects: [{ teamId: "t-checkout" }], role: "editor", modeCap: "standard" },
 		]);
+	});
+
+	it("names workspace members a team share of a Cloud standalone agent reaches as getting access", async () => {
+		// The control plane weighs a workspace member by what is shared with
+		// them in another person's agent, so Farah has nothing yet.
+		mocks.teamMembers["t-checkout"] = mocks.teamMembers["t-checkout"]!.map((entry) =>
+			entry.member.name === "Farah Nasser" ? { ...entry, access: {} } : entry);
+		renderDialog({ standaloneAgent: true });
+		await screen.findByText("Platform");
+		await stageCheckout();
+		const summary = await screen.findByText(/Farah Nasser get Can watch\./);
+		expect(summary.textContent).toContain("Dana Kim");
+		expect(summary.textContent).not.toContain("workspace member");
 	});
 
 	it("shows a share in the list at once, then as the grant the control plane made", async () => {
@@ -340,12 +369,13 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(row(list, "Platform").textContent).toContain("Can write");
 		const input = await stageCheckout();
 		const field = input.closest("[data-people-field]") as HTMLElement;
-		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
+		// The staged chip renders after the pick; wait for it rather than racing a busy runner.
+		await userEvent.click(await within(field).findByRole("button", { name: /Change access: Can watch/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(document.activeElement).toBe(input);
 		await stageCheckout();
-		expect(within(field).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can watch");
+		expect(await within(field).findByRole("button", { name: /Change access/ })).toHaveTextContent("Can watch");
 		view.reopen(false);
 		view.reopen(true);
 		await screen.findByText("Platform");

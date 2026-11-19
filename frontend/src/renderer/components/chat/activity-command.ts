@@ -6,7 +6,7 @@ export type CommandCategory = "read" | "search" | "vcs" | "run";
 
 /** Shared chrome for one command summary and a collapsed run of commands. */
 export const ACTIVITY_SUMMARY_BUTTON_CLASS =
-	"activity-summary-button group/run flex w-full select-none items-center gap-1.5 py-0.5 pr-1 text-left outline-none focus-visible:outline-none";
+	"activity-summary-button group/run flex w-full select-none items-center gap-2 py-0.5 pr-1 text-left outline-none focus-visible:outline-none";
 
 /** A completed shell command that reported an ordinary non-zero process exit. */
 export function isNonzeroCommandExit(activity: ConversationActivity): boolean {
@@ -17,6 +17,16 @@ export function isNonzeroCommandExit(activity: ConversationActivity): boolean {
 		typeof exitCode === "number" &&
 		exitCode !== 0
 	);
+}
+
+/**
+ * A call that really failed, as opposed to a command that exited non-zero (a grep
+ * with no match is not an error). These stay visible when the steps around them fold.
+ */
+export function isFailedCall(activity: ConversationActivity): boolean {
+	if (isNonzeroCommandExit(activity)) return false;
+	if (activity.status === "failed") return true;
+	return activity.activityKind === "mcp_tool" && (activity.detail?.success === false || Boolean(activity.detail?.error));
 }
 
 const VCS = new Set(["git", "gh"]);

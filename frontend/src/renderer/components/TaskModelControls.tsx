@@ -41,6 +41,7 @@ export function TaskEffortPicker({
 }
 
 export function TaskModelPicker({
+	hostId,
 	agentId,
 	agentLabel,
 	catalog,
@@ -57,6 +58,7 @@ export function TaskModelPicker({
 }: TaskComposerModelControl & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
+	hostId?: string;
 	/** Offer the native default as a choice and any model ID, as a cloud task can run them. */
 	allowNativeSelection?: boolean;
 	/** Where the listed models come from. */
@@ -100,16 +102,21 @@ export function TaskModelPicker({
 	const selectCatalogModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};
+	// Open Interpreter's native catalog can be empty or partial for a custom
+	// provider, so a local task still accepts a model ID it names directly.
+	const directEntry = !allowNativeSelection && agentId === "open-interpreter" && catalog?.customModelEntry === "direct";
+	const acceptsCustom = allowNativeSelection || directEntry;
 
 	return (
 		<AgentModelCombobox
+			hostId={hostId}
 			key={agentId}
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={allowNativeSelection && catalog?.allowCustom}
-			customModelEntry={allowNativeSelection ? catalog?.customModelEntry : catalog?.customModelEntry === "configured" ? "configured" : "none"}
-			onCustom={allowNativeSelection ? onModelChange : undefined}
+			allowCustom={allowNativeSelection ? catalog?.allowCustom : directEntry}
+			customModelEntry={allowNativeSelection ? catalog?.customModelEntry : directEntry ? "direct" : catalog?.customModelEntry === "configured" ? "configured" : "none"}
+			onCustom={acceptsCustom ? onModelChange : undefined}
 			// Default sends no model, so the project's or the agent's own applies.
 			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
 			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}

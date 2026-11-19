@@ -9,7 +9,14 @@ import { ARCHIVE_SESSION_HINT } from "../worker-action-model";
  * session to Terminal UI, and archiving it. Artifacts and PR Review show only once there is something to
  * open: on an empty session they led to an empty page.
  */
-export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "switch_tui" | "delete";
+export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "account" | "switch_tui" | "delete" | CloudConversationMenuAction;
+
+/**
+ * What only an Orchestrator Cloud session's sheet offers: its agent's own
+ * terminal (a Terminal UI session's view, beside the chat), its project, and
+ * Restore for an archived one. See lib/cloud/sessionMenu.
+ */
+export type CloudConversationMenuAction = "agent_terminal" | "project" | "restore" | "switch_chat";
 
 export type ConversationMenuSection = {
 	// Switching to Terminal UI and Archive act on the session, not the
@@ -19,9 +26,9 @@ export type ConversationMenuSection = {
 	actions: ConversationMenuAction[];
 };
 
-export function conversationMenuSections({ canPin, canCompact, canDelete, canSwitchToTerminal, artifactCount, hasPullRequest }: Pick<ConversationMenuState, "canPin" | "canCompact" | "canDelete" | "canSwitchToTerminal" | "artifactCount" | "hasPullRequest">): ConversationMenuSection[] {
+export function conversationMenuSections({ canPin, canCompact, canDelete, canSwitchToTerminal, artifactCount, hasPullRequest, account }: Pick<ConversationMenuState, "canPin" | "canCompact" | "canDelete" | "canSwitchToTerminal" | "artifactCount" | "hasPullRequest" | "account">): ConversationMenuSection[] {
 	const worker: ConversationMenuAction[] = [...(canPin ? ["pin" as const] : []), ...(hasPullRequest ? ["pull_requests" as const] : [])];
-	const session: ConversationMenuAction[] = [...(canSwitchToTerminal ? ["switch_tui" as const] : []), ...(canDelete ? ["delete" as const] : [])];
+	const session: ConversationMenuAction[] = [...(account ? ["account" as const] : []), ...(canSwitchToTerminal ? ["switch_tui" as const] : []), ...(canDelete ? ["delete" as const] : [])];
 	return [
 		{ title: "Open", actions: ["shell", "preview", ...(artifactCount ? ["artifacts" as const] : [])] },
 		// A section only when it has something in it: the sheet never shows an empty group.
@@ -38,8 +45,11 @@ export type ConversationMenuState = {
 	canDelete: boolean;
 	/** The agent can carry this conversation on in Terminal UI. */
 	canSwitchToTerminal?: boolean;
+	account?: { name: string; moving: boolean; canMove: boolean };
 	/** A switch to Terminal UI is starting or under way. */
 	switchingToTerminal?: boolean;
+	/** A switch back to Chat is starting or under way (a cloud Terminal UI session). */
+	switchingToChat?: boolean;
 	/** Something the agent produced is ready to preview. */
 	previewReady?: boolean;
 	/** Files in the session's artifact directory, when known. */
@@ -87,7 +97,7 @@ export function conversationMenuGroups(state: ConversationMenuState): Conversati
 	}));
 }
 
-function conversationMenuItem(action: ConversationMenuAction, state: ConversationMenuState): ConversationMenuItem {
+export function conversationMenuItem(action: ConversationMenuAction, state: ConversationMenuState): ConversationMenuItem {
 	switch (action) {
 		case "shell": return { action, label: state.openingShell ? "Opening shell…" : "Shell", disabled: state.openingShell, icon: { ios: "chevron.left.forwardslash.chevron.right", android: "code" } };
 		case "preview": return { action, label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: { ios: "globe", android: "language" } };
@@ -102,6 +112,13 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 			icon: { ios: "arrow.down.right.and.arrow.up.left", android: "compress" },
 			meter: state.contextPercent,
 		};
+		case "account": return {
+			action,
+			label: state.account?.moving ? "Switching account…" : "Account",
+			subtitle: state.account?.name,
+			disabled: state.account?.moving || !state.account?.canMove,
+			icon: { ios: "person.crop.circle", android: "account_circle" },
+		};
 		case "switch_tui": return {
 			action,
 			label: state.switchingToTerminal ? "Switching to Terminal UI…" : "Switch to Terminal UI",
@@ -110,6 +127,16 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 			icon: { ios: "terminal", android: "terminal" },
 		};
 		case "delete": return { action, label: "Archive", subtitle: ARCHIVE_SESSION_HINT, destructive: true, icon: { ios: "archivebox", android: "archive" } };
+		case "agent_terminal": return { action, label: "Agent terminal", subtitle: "The agent's own Terminal UI", icon: { ios: "terminal", android: "terminal" } };
+		case "project": return { action, label: "Project", icon: { ios: "folder", android: "folder" } };
+		case "restore": return { action, label: "Restore", subtitle: "Start its sandbox again where it left off", icon: { ios: "arrow.uturn.backward", android: "history" } };
+		case "switch_chat": return {
+			action,
+			label: state.switchingToChat ? "Switching to Chat…" : "Switch to Chat",
+			subtitle: "Same session, worktree and conversation",
+			disabled: state.switchingToChat,
+			icon: { ios: "bubble.left", android: "chat_bubble" },
+		};
 	}
 }
 

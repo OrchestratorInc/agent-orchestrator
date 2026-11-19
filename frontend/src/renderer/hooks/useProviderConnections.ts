@@ -12,11 +12,11 @@ import { useCloudCp } from "./useCloudCp";
 
 export const providerConnectionsQueryKey = ["cloud-provider-connections"] as const;
 
-export function useProviderConnections() {
-	const { client, ready } = useCloudCp();
+export function useProviderConnections(enabled = true) {
+	const { client, ready } = useCloudCp(enabled);
 	return useQuery({
 		queryKey: providerConnectionsQueryKey,
-		enabled: ready,
+		enabled: ready && enabled,
 		staleTime: 60_000,
 		queryFn: async (): Promise<CloudCpProviderConnection[]> =>
 			(await client.listUserProviderConnections()).providerConnections,

@@ -69,3 +69,10 @@ it("keeps a deleted file's historical File-view capture out of diff mode", () =>
 	expect(isFileViewCapture({ side: "old", lines: [{ ...row, side: "old" }] })).toBe(false);
 	expect(isFileViewCapture({ side: "old", lines: [row, { ...row, side: "old" }] })).toBe(false);
 });
+it("rejects unknown annotation prompt formats while keeping legacy captures readable", () => {
+	const ref = captureFileReference({ path: "a.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "code();" }] }, "session");
+	expect(isSupportedFileReference(ref)).toBe(true);
+	delete ref.referenceFormat;
+	expect(isSupportedFileReference(ref)).toBe(true);
+	expect(isSupportedFileReference({ ...ref, referenceFormat: "unknown" } as unknown as typeof ref)).toBe(false);
+});

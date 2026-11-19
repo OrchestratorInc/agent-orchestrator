@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 
 	jsonschema "github.com/swaggest/jsonschema-go"
 	openapi "github.com/swaggest/openapi-go"
@@ -137,6 +138,11 @@ func Build() ([]byte, error) {
 		if err := r.AddOperation(oc); err != nil {
 			return nil, fmt.Errorf("add operation %s %s: %w", op.method, op.path, err)
 		}
+		if op.rawReqBody != "" {
+			if err := setRawRequestBody(r.Spec, op.method, op.path, op.rawReqBody); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return r.Spec.MarshalYAML()
@@ -160,8 +166,16 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"DomainAutoSpawnPause":                                 "AutoSpawnPause",
+	"DomainChatExcerptSnapshot":                            "ChatExcerptSnapshot",
+	"DomainChatExcerptRange":                               "ChatExcerptRange",
+	"DomainChatExcerptTurnSnapshot":                        "ChatExcerptTurnSnapshot",
+	"DomainChatExcerptTurnMessage":                         "ChatExcerptTurnMessage",
+	"ControllersConversationFindResponse":                  "ConversationFindResponse",
+	"ChatFindOccurrence":                                   "ConversationFindOccurrence",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
+	"ControllersAgentLoginActionRequest":                   "AgentLoginActionRequest",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
 	"ControllersAgentAccountSessionIDParam":                "AgentAccountSessionIDParam",
 	"ControllersAgentAccountListQuery":                     "AgentAccountListQuery",
@@ -210,6 +224,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
+	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -287,7 +302,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionHistoryQuery":                       "SessionHistoryQuery",
 	"DomainHandoffTurn":                                    "SessionHistoryTurn",
 	"ControllersSessionHistoryResponse":                    "SessionHistoryResponse",
+	"ControllersRollbackConversationRequest":               "RollbackConversationRequest",
 	"ControllersRollbackConversationResponse":              "RollbackConversationResponse",
+	"ControllersRollbackPreviewResponse":                   "RollbackPreviewResponse",
+	"ControllersRollbackFileChange":                        "RollbackFileChange",
 	"ControllersRetryTurnResponse":                         "RetryTurnResponse",
 	"ControllersSetConversationTitleRequest":               "SetConversationTitleRequest",
 	"ControllersSetConversationTitleResponse":              "SetConversationTitleResponse",
@@ -392,12 +410,15 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersArtifactVersionResponse":                  "ArtifactVersionResponse",
 	"ControllersRestoreArtifactVersionRequest":            "RestoreArtifactVersionRequest",
 	"ControllersSyncArtifactVersionsRequest":              "SyncArtifactVersionsRequest",
+	"ControllersRegisterArtifactsRequest":                 "RegisterArtifactsRequest",
+	"ControllersRegisterArtifactsResponse":                "RegisterArtifactsResponse",
 	"ControllersPRFileQuery":                              "PRFileQuery",
 	"ControllersPRFileRevisionQuery":                      "PRFileRevisionQuery",
 	"ControllersUpdateWorkspaceFileRequest":               "UpdateWorkspaceFileRequest",
 	"ControllersWorkspaceFileBlobQuery":                   "WorkspaceFileBlobQuery",
 	"ControllersWorkspaceFileRevisionQuery":               "WorkspaceFileRevisionQuery",
 	"ControllersWorkspaceSearchQuery":                     "WorkspaceSearchQuery",
+	"ControllersAttachmentUploadResponse":                 "AttachmentUploadResponse",
 	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
 	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
 	"ControllersAttachmentInput":                          "AttachmentInput",
@@ -470,9 +491,15 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersClaimPRRequest":                           "ClaimPRRequest",
 	"ControllersSessionPRFacts":                           "SessionPRFacts",
 	"ControllersSessionPRSummary":                         "SessionPRSummary",
+	"ControllersSessionPRLabel":                           "SessionPRLabel",
+	"ControllersSessionPRRequestedReviewer":               "SessionPRRequestedReviewer",
+	"ControllersSessionPRCommit":                          "SessionPRCommit",
+	"ControllersSessionPRThread":                          "SessionPRThread",
+	"ControllersSessionPRComment":                         "SessionPRComment",
 	"ControllersSessionPRReference":                       "SessionPRReference",
 	"ControllersSessionPRCISummary":                       "SessionPRCISummary",
 	"ControllersSessionPRFailingCheck":                    "SessionPRFailingCheck",
+	"ControllersSessionPRCheck":                           "SessionPRCheck",
 	"ControllersSessionPRReviewSummary":                   "SessionPRReviewSummary",
 	"ControllersSessionPRReviewEntry":                     "SessionPRReviewEntry",
 	"ControllersSessionPRUnresolvedReviewer":              "SessionPRUnresolvedReviewer",
@@ -535,6 +562,17 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
 	"AgentauthLoginMethod":                        "AgentLoginMethod",
 	"AgentauthLoginSnapshot":                      "AgentLoginSnapshot",
+	"AgentauthProviderKey":                        "ProviderKey",
+	"ProviderkeysCheckResult":                     "ProviderKeyCheck",
+	"ControllersProviderKeyNameParam":             "ProviderKeyNameParam",
+	"ControllersListProviderKeysResponse":         "ListProviderKeysResponse",
+	"ControllersSaveProviderKeyRequest":           "SaveProviderKeyRequest",
+	"ControllersCheckProviderKeyRequest":          "CheckProviderKeyRequest",
+	"AgentauthCatalogProvider":                    "CatalogProvider",
+	"ControllersCatalogProviderParam":             "CatalogProviderParam",
+	"ControllersListCatalogProvidersResponse":     "ListCatalogProvidersResponse",
+	"ControllersListCatalogModelsResponse":        "ListCatalogModelsResponse",
+	"ControllersRecordAgentSignInResponse":        "RecordAgentSignInResponse",
 	"PortsAgentModelCatalog":                      "AgentModelsResponse",
 	"PortsAgentModelInfo":                         "AgentModelInfo",
 	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
@@ -556,6 +594,20 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersClearNotificationsResponse":       "ClearNotificationsResponse",
 	"ControllersUsageHookMetadata":                "UsageHookMetadata",
 	"ControllersListUsageSessionsQuery":           "ListUsageSessionsQuery",
+	"ControllersUsageLimitHistoryRequest":         "UsageLimitHistoryRequest",
+	"ControllersUsagePriceOverride":               "UsagePriceOverride",
+	"ControllersUsagePricesRequest":               "UsagePricesRequest",
+	"ControllersUsagePricesResponse":              "UsagePricesResponse",
+	"ControllersUsageLimitHistoryResponse":        "UsageLimitHistoryResponse",
+	"ControllersUsageLimitWindowsQuery":           "UsageLimitWindowsQuery",
+	"ControllersUsageLimitWindowsResponse":        "UsageLimitWindowsResponse",
+	"DomainUsageLimitLogin":                       "UsageLimitLogin",
+	"DomainUsageLimitSpan":                        "UsageLimitSpan",
+	"DomainUsageLimitPoint":                       "UsageLimitPoint",
+	"ControllersUsageReportQuery":                 "UsageReportQuery",
+	"ControllersUsageReportResponse":              "UsageReportResponse",
+	"ControllersUsageReportRowResponse":           "UsageReportRowResponse",
+	"ControllersUsageReportSessionResponse":       "UsageReportSessionResponse",
 	"ControllersEstimatedCostResponse":            "EstimatedCostResponse",
 	"ControllersCompactSessionUsageResponse":      "CompactSessionUsageResponse",
 	"ControllersListSessionMemoryResponse":        "ListSessionMemoryResponse",
@@ -567,14 +619,11 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionActivityResponse":          "SessionActivityResponse",
 	"ControllersSessionStepResponse":              "SessionStepResponse",
 	"ControllersListCompactSessionUsageResponse":  "ListCompactSessionUsageResponse",
-	"ControllersUsageTotalsResponse":              "UsageTotalsResponse",
-	"ControllersUsageModelResponse":               "UsageModelResponse",
-	"ControllersUsageHarnessResponse":             "UsageHarnessResponse",
-	"ControllersSessionUsageResponse":             "SessionUsageResponse",
 	// httpd/controllers — standalone shell terminal wire envelopes
 	"ControllersShellTerminalHandleIDParam":            "ShellTerminalHandleIDParam",
 	"ControllersOpenShellTerminalRequest":              "OpenShellTerminalRequest",
 	"ControllersUpdateShellTerminalRequest":            "UpdateShellTerminalRequest",
+	"ControllersReopenShellTerminalRequest":            "ReopenShellTerminalRequest",
 	"ControllersShellTerminalResponse":                 "ShellTerminalResponse",
 	"ControllersListShellTerminalsResponse":            "ListShellTerminalsResponse",
 	"ControllersTerminalShellResponse":                 "TerminalShellResponse",
@@ -593,10 +642,26 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersInvokeCueResponse":    "InvokeCueResponse",
 	"ControllersCueEnvelope":          "CueEnvelope",
 	// httpd/controllers — PR wire envelopes
-	"ControllersMergePRRequest":          "MergePRRequest",
-	"ControllersMergePRResponse":         "MergePRResponse",
-	"ControllersResolveCommentsRequest":  "ResolveCommentsRequest",
-	"ControllersResolveCommentsResponse": "ResolveCommentsResponse",
+	"ControllersMergePRRequest":             "MergePRRequest",
+	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
+	"ControllersPRStackResponse":            "PRStackResponse",
+	"ControllersPRStackParentResponse":      "PRStackParentResponse",
+	"ControllersPRStackQuery":               "PRStackQuery",
+	"ControllersGetPRStackResponse":         "GetPRStackResponse",
+	"ControllersAddPRToStackRequest":        "AddPRToStackRequest",
+	"ControllersLoadPRDetailsRequest":       "LoadPRDetailsRequest",
+	"ControllersPRStackHead":                "PRStackHead",
+	"ControllersMergePRStackRequest":        "MergePRStackRequest",
+	"ControllersMergePRStackResponse":       "MergePRStackResponse",
+	"ControllersMergePRResponse":            "MergePRResponse",
+	"ControllersResolveCommentsRequest":     "ResolveCommentsRequest",
+	"ControllersResolveCommentsResponse":    "ResolveCommentsResponse",
+	"ControllersChangePRStateRequest":       "ChangePRStateRequest",
+	"ControllersChangePRStateResponse":      "ChangePRStateResponse",
+	"ControllersPostPRCommentRequest":       "PostPRCommentRequest",
+	"ControllersPostPRCommentResponse":      "PostPRCommentResponse",
+	"ControllersPRCommentAttachment":        "PRCommentAttachment",
+	"ControllersPRAttachmentAccessResponse": "PRAttachmentAccessResponse",
 	// httpd/controllers — review wire envelopes
 	"ControllersListReviewsResponse":   "ListReviewsResponse",
 	"ControllersReviewRunResponse":     "ReviewRunResponse",
@@ -607,8 +672,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSubmitReviewItem":      "SubmitReviewItem",
 	"ControllersSubmitReviewInput":     "SubmitReviewInput",
 	// domain review entities
-	"DomainReviewRun":     "ReviewRun",
-	"ReviewPRReviewState": "PRReviewState",
+	"DomainReviewRun":                  "ReviewRun",
+	"ReviewPRReviewState":              "PRReviewState",
+	"SessionimportCandidate":           "SessionImportCandidate",
+	"SessionimportPreview":             "SessionImportPreview",
+	"SessionimportResult":              "SessionImportResult",
+	"ControllersSessionImportRequest":  "SessionImportRequest",
+	"ControllersSessionImportResponse": "SessionImportResponse",
 	// httpd/controllers: import wire envelopes
 	"ControllersImportStatusResponse": "ImportStatusResponse",
 	"ControllersImportRunResponse":    "ImportRunResponse",
@@ -625,18 +695,24 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDevImportProjectsRequest":  "DevImportProjectsRequest",
 	"ControllersDevImportProjectsResponse": "DevImportProjectsResponse",
 	// httpd/controllers: mobile wire envelopes
-	"ControllersMobileStatusResponse":          "MobileStatusResponse",
-	"ControllersSetBrowserRemoteAccessRequest": "SetBrowserRemoteAccessRequest",
-	"MobilebridgeEndpoint":                     "MobileEndpoint",
-	"MobilebridgeTunnelStatus":                 "MobileTunnelStatus",
-	"ControllersIdentityResponse":              "IdentityResponse",
-	"ControllersEndpointsResponse":             "EndpointsResponse",
-	"ControllersLinkPreviewQuery":              "LinkPreviewQuery",
-	"ControllersLinkPreviewResponse":           "LinkPreviewResponse",
-	"ControllersMobileDeviceResponse":          "MobileDeviceResponse",
-	"ControllersMobileDevicesResponse":         "MobileDevicesResponse",
-	"ControllersInstallIDParam":                "InstallIDParam",
-	"ControllersPushPairingIDParam":            "PushPairingIDParam",
+	"ControllersMobileStatusResponse":             "MobileStatusResponse",
+	"ControllersSetBrowserRemoteAccessRequest":    "SetBrowserRemoteAccessRequest",
+	"MobilebridgeEndpoint":                        "MobileEndpoint",
+	"MobilebridgeTunnelStatus":                    "MobileTunnelStatus",
+	"ControllersIdentityResponse":                 "IdentityResponse",
+	"ControllersEndpointsResponse":                "EndpointsResponse",
+	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
+	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
+	"ControllersSessionSearchQuery":               "SessionSearchQuery",
+	"ControllersSessionSearchResponse":            "SessionSearchResponse",
+	"ControllersSessionSearchResult":              "SessionSearchResult",
+	"ControllersSessionSearchHighlight":           "SessionSearchHighlight",
+	"ControllersSessionSearchCoverage":            "SessionSearchCoverage",
+	"ControllersSessionSearchIndexStatusResponse": "SessionSearchIndexStatusResponse",
+	"ControllersMobileDeviceResponse":             "MobileDeviceResponse",
+	"ControllersMobileDevicesResponse":            "MobileDevicesResponse",
+	"ControllersMobileDeviceIDParam":              "MobileDeviceIDParam",
+	"ControllersPushPairingIDParam":               "PushPairingIDParam",
 	// devimport report
 	"DevimportReport":   "DevImportProjectsReport",
 	"DevimportConflict": "DevImportProjectsConflict",
@@ -671,6 +747,25 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 
 // markRequestBodyRequired sets requestBody.required: true on the operation's
 // JSON body. swaggest leaves it absent (== optional) for AddReqStructure bodies.
+// setRawRequestBody declares a required request body of raw bytes, which the
+// reflector has no struct form for: a file streamed as the whole body.
+func setRawRequestBody(spec *openapi31.Spec, method, path, contentType string) error {
+	var item openapi31.PathItem
+	if spec.Paths != nil {
+		item = spec.Paths.MapOfPathItemValues[path]
+	}
+	if method != http.MethodPost || item.Post == nil {
+		return fmt.Errorf("raw request body for %s %s: only a POST operation is supported", method, path)
+	}
+	// OpenAPI 3.1 describes raw bytes by the media type with no schema;
+	// "type: string, format: binary" would type the body as a string, which a
+	// typed client cannot fill from a File or Blob without reading it whole.
+	body := openapi31.RequestBody{Content: map[string]openapi31.MediaType{contentType: {}}}
+	body.WithRequired(true)
+	item.Post.RequestBody = &openapi31.RequestBodyOrReference{RequestBody: &body}
+	return nil
+}
+
 func markRequestBodyRequired(cor openapi.ContentOrReference) {
 	if rb, ok := cor.(*openapi31.RequestBodyOrReference); ok && rb.RequestBody != nil {
 		rb.RequestBody.WithRequired(true)
@@ -707,8 +802,8 @@ func validNullableReferenceUnions(p jsonschema.InterceptNullabilityParams) {
 	}
 }
 
-// requiredFromJSONTag marks a property required when its json tag lacks
-// `omitempty` (the Go convention for "always present"). Runs after default
+// requiredFromJSONTag marks a property required when its json tag has neither
+// `omitempty` nor `omitzero` (the Go convention for "always present"). Runs after default
 // processing so ParentSchema exists; skips fields without a json tag (e.g. path
 // params, which swaggest marks required on their own).
 func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
@@ -725,7 +820,7 @@ func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
 		name = p.Name
 	}
 	for _, opt := range parts[1:] {
-		if opt == "omitempty" {
+		if opt == "omitempty" || opt == "omitzero" {
 			return nil
 		}
 	}
@@ -748,8 +843,9 @@ type respUnit struct {
 type operation struct {
 	method, path, id, summary string
 	tag                       string
-	pathParams                []any // path/query param containers (e.g. ProjectIDParam)
-	reqBody                   any   // JSON request body struct, nil when the op takes none
+	pathParams                []any  // path/query param containers (e.g. ProjectIDParam)
+	reqBody                   any    // JSON request body struct, nil when the op takes none
+	rawReqBody                string // content type of a required raw-bytes body, in place of reqBody
 	// optionalReqBody declares the body without marking it required, for the
 	// handlers that accept an empty body as a meaningful default.
 	optionalReqBody bool
@@ -776,6 +872,7 @@ func operations() []operation {
 	ops = append(ops, awakeOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
+	ops = append(ops, paneOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
@@ -784,6 +881,7 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, sessionSearchOperations()...)
 	return ops
 }
 
@@ -802,6 +900,42 @@ func automationOperations() []operation {
 		{method: http.MethodPatch, path: "/api/v1/automations/{automationId}", id: "updateAutomation", tag: "automations", summary: "Update a recurring automation", pathParams: id, reqBody: controllers.UpdateAutomationRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.AutomationEnvelope{}}}, commonErrors...)},
 		{method: http.MethodDelete, path: "/api/v1/automations/{automationId}", id: "deleteAutomation", tag: "automations", summary: "Delete an automation and its run history", pathParams: id, resps: append([]respUnit{{http.StatusNoContent, nil}}, commonErrors...)},
 		{method: http.MethodGet, path: "/api/v1/automations/{automationId}/runs", id: "listAutomationRuns", tag: "automations", summary: "List durable automation run history", pathParams: []any{controllers.AutomationIDParam{}, controllers.ListAutomationRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListAutomationRunsResponse{}}}, commonErrors...)},
+	}
+}
+
+// sessionSearchOperations declares the ranked search over past sessions. Must
+// stay 1:1 with the routes SessionSearchController.Register mounts (enforced by
+// the parity test).
+func sessionSearchOperations() []operation {
+	commonErrors := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/search/sessions", id: "searchSessions", tag: "sessions",
+			summary:    "Search past sessions by title, message text, tool output, and touched file paths",
+			pathParams: []any{controllers.SessionSearchQuery{}},
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.SessionSearchResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/search/index-status", id: "getSessionSearchIndexStatus", tag: "sessions",
+			summary: "Report what the session search index covers",
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.SessionSearchIndexStatusResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/search/reindex", id: "reindexSessionSearch", tag: "sessions",
+			summary: "Empty the session search index and rebuild it from scratch in the background",
+			resps: append([]respUnit{
+				{http.StatusAccepted, controllers.SessionSearchIndexStatusResponse{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			}, commonErrors...),
+		},
 	}
 }
 
@@ -1027,6 +1161,71 @@ func computerUseOperations() []operation {
 	}
 }
 
+func paneOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/panes", id: "getSessionPanes", tag: "sessions",
+			summary:    "Read the split-pane layout the desktop window shows for a session",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneLayoutResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/panes/input", id: "typeIntoSessionPane", tag: "sessions",
+			summary:    "Type into, or interrupt, one of the session's own terminal tabs",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			reqBody:    controllers.PaneInputRequest{},
+			resps: []respUnit{
+				{http.StatusNoContent, nil},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/panes/output", id: "readSessionPaneOutput", tag: "sessions",
+			summary:    "Read what one of the session's own terminal tabs shows",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.PaneOutputQuery{}, controllers.BrowserCapabilityHeader{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneOutputResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/panes", id: "commandSessionPanes", tag: "sessions",
+			summary:    "Ask the desktop window to split, unsplit or focus a session's tabs",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			reqBody:    controllers.PaneCommandRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneLayoutResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+				{http.StatusGatewayTimeout, envelope.APIError{}},
+			},
+		},
+	}
+}
+
 func browserOperations() []operation {
 	return []operation{
 		{
@@ -1111,6 +1310,59 @@ type sessionConversationSnapshotQuery struct {
 func usageOperations() []operation {
 	return []operation{
 		{
+			method: http.MethodGet, path: "/api/v1/usage/report", id: "getUsageReport", tag: "usage",
+			summary:    "Read token and estimated cost usage over a window, by day or hour, for the usage page",
+			pathParams: []any{controllers.UsageReportQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageReportResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/usage/limit-history", id: "setUsageLimitHistory", tag: "usage",
+			summary: "Turn keeping limit readings, and reading limits in the background, on or off",
+			reqBody: controllers.UsageLimitHistoryRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageLimitHistoryResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/prices", id: "getUsagePrices", tag: "usage",
+			summary: "Read the user's model prices and the catalog models a model can price as",
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsagePricesResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/usage/prices", id: "setUsagePrices", tag: "usage",
+			summary: "Replace the user's model prices and reprice the usage they change",
+			reqBody: controllers.UsagePricesRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsagePricesResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/limit-windows", id: "getUsageLimitWindows", tag: "usage",
+			summary:    "Read each login's five-hour and weekly windows from the limit readings AO took",
+			pathParams: []any{controllers.UsageLimitWindowsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageLimitWindowsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/usage/sessions", id: "listCompactSessionUsage", tag: "usage",
 			summary:    "List compact token and estimated cost usage for session cards",
 			pathParams: []any{controllers.ListUsageSessionsQuery{}},
@@ -1135,17 +1387,6 @@ func usageOperations() []operation {
 			summary: "Read the machine's memory-pressure verdict without sampling any process",
 			resps: []respUnit{
 				{http.StatusOK, controllers.MemoryPressureResponse{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodGet, path: "/api/v1/usage/sessions/{sessionId}", id: "getSessionUsage", tag: "usage",
-			summary:    "Get detailed token and estimated cost usage for one session",
-			pathParams: []any{controllers.SessionIDParam{}},
-			resps: []respUnit{
-				{http.StatusOK, controllers.SessionUsageResponse{}},
-				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -1218,6 +1459,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/session-retention", id: "updateSessionRetention", tag: "settings",
 			summary: "Choose how long archived sessions are kept before they are deleted",
 			reqBody: controllers.UpdateSessionRetentionRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/account-handoff", id: "updateAccountHandoff", tag: "settings",
+			summary: "Choose whether a usage-limited Chat session moves to another account and retries its prompt",
+			reqBody: controllers.UpdateAccountHandoffRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -1546,6 +1798,18 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/conversations/{conversationId}/find", id: "findConversation", tag: "conversations",
+			summary:    "Find literal occurrences in the active conversation branch",
+			pathParams: []any{controllers.ConversationFindParam{}, controllers.ConversationFindQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ConversationFindResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/conversations/{conversationId}/find-window", id: "findConversationWindow", tag: "conversations",
+			summary:    "Load a read-only transcript page around a find result",
+			pathParams: []any{controllers.ConversationFindParam{}, controllers.ConversationFindWindowQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ConversationSnapshotResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/conversations/search", id: "searchConversations", tag: "conversations",
 			summary:    "Search visible chat messages across conversations",
 			pathParams: []any{controllers.ConversationSearchQuery{}},
@@ -1576,6 +1840,18 @@ func shellTerminalOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.ConversationTurnSettingsPayload{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/stop-turn", id: "stopSessionTurn", tag: "sessions",
+			summary:    "Stop an active turn without ending the session",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusNoContent, nil},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -1766,11 +2042,26 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback", id: "rollbackSessionConversation", tag: "conversations",
-			summary:    "Discard a turn and everything after it from the agent's memory",
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback", id: "previewSessionConversationRollback", tag: "conversations",
+			summary:    "List the worktree files rolling back to a turn would restore",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.ConversationTurnIDParam{}},
 			resps: []respUnit{
+				{http.StatusOK, controllers.RollbackPreviewResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback", id: "rollbackSessionConversation", tag: "conversations",
+			summary:         "Discard a turn and everything after it from the agent's memory, optionally restoring its files",
+			pathParams:      []any{controllers.SessionIDParam{}, controllers.ConversationTurnIDParam{}},
+			reqBody:         controllers.RollbackConversationRequest{},
+			optionalReqBody: true,
+			resps: []respUnit{
 				{http.StatusOK, controllers.RollbackConversationResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -1839,6 +2130,20 @@ func shellTerminalOperations() []operation {
 				{http.StatusOK, controllers.ShellTerminalEnvelope{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/shell-terminals/{handleId}/reopen", id: "reopenShellTerminal", tag: "shellTerminals",
+			summary:    "Replace an ended shell terminal with a fresh shell in the same tab",
+			pathParams: []any{controllers.ShellTerminalHandleIDParam{}},
+			reqBody:    controllers.ReopenShellTerminalRequest{}, optionalReqBody: true,
+			resps: []respUnit{
+				{http.StatusOK, controllers.ShellTerminalEnvelope{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -1964,6 +2269,13 @@ func cueOperations() []operation {
 func agentOperations() []operation {
 	return []operation{
 		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/actions", id: "actOnAgentUILogin", tag: "agents",
+			summary:    "Send a fixed action to a recognized native login menu",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			reqBody:    controllers.AgentLoginActionRequest{},
+			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/code", id: "submitAgentUILoginCode", tag: "agents",
 			summary:    "Submit a one-time Claude sign-in code to the existing native login",
 			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
@@ -1997,6 +2309,49 @@ func agentOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/signed-in", id: "recordAgentSignIn", tag: "agents",
+			summary:    "Apply a sign-in completed in an agent's own terminal login",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.RecordAgentSignInResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/{agent}/auth/providers", id: "listAgentCatalogProviders", tag: "agents",
+			summary:    "List the key-only providers in an agent's own provider catalog on this device",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ListCatalogProvidersResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/{agent}/auth/providers/{provider}/models", id: "listAgentCatalogModels", tag: "agents",
+			summary:    "List the model IDs an agent's own catalog offers for one provider",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.CatalogProviderParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ListCatalogModelsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/provider-keys", id: "listProviderKeys", tag: "agents",
+			summary: "List reviewed provider keys with display-safe saved state; values are never returned",
+			resps:   []respUnit{{http.StatusOK, controllers.ListProviderKeysResponse{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/provider-keys/{name}", id: "saveProviderKey", tag: "agents",
+			summary:    "Save a provider key for AO sessions and set whether it is published to the OS user environment",
+			pathParams: []any{controllers.ProviderKeyNameParam{}},
+			reqBody:    controllers.SaveProviderKeyRequest{},
+			resps:      []respUnit{{http.StatusOK, agentauth.ProviderKey{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/provider-keys/{name}", id: "removeProviderKey", tag: "agents",
+			summary:    "Remove a provider key from AO and from the OS user environment when AO published it",
+			pathParams: []any{controllers.ProviderKeyNameParam{}},
+			resps:      []respUnit{{http.StatusOK, agentauth.ProviderKey{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/provider-keys/{name}/check", id: "checkProviderKey", tag: "agents",
+			summary:    "Ask the provider whether it accepts a key and list the models it offers",
+			pathParams: []any{controllers.ProviderKeyNameParam{}},
+			reqBody:    controllers.CheckProviderKeyRequest{},
+			resps:      []respUnit{{http.StatusOK, agentauth.ProviderKeyCheck{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/agents/chat/unavailable", id: "listUnavailableChatAgents", tag: "conversations",
@@ -2331,10 +2686,45 @@ func mobileOperations() []operation {
 	return []operation{
 		{
 			method: http.MethodPost, path: "/api/v1/remote-host/account-token", id: "issueRemoteHostAccountToken", tag: "mobile",
-			summary: "Issue a host-scoped account credential using the pairing password",
+			summary: "Issue a host-scoped account credential using the pairing password or a device token",
 			resps: []respUnit{
 				{http.StatusOK, controllers.RemoteHostAccountTokenResponse{}},
 				{http.StatusForbidden, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/remote-host/devices", id: "pairRemoteHostDevice", tag: "mobile",
+			summary:         "Exchange a one-time pairing code, or the pairing password, for this device's own token",
+			reqBody:         controllers.PairDeviceRequest{},
+			optionalReqBody: true,
+			resps: []respUnit{
+				{http.StatusOK, controllers.PairDeviceResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusUnauthorized, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/mobile/pairing-code", id: "createMobilePairingCode", tag: "mobile",
+			summary: "Make a one-time code a new device exchanges for its own token",
+			resps: []respUnit{
+				{http.StatusOK, controllers.PairingCodeResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/mobile/require-device-credentials", id: "setMobileRequireDeviceCredentials", tag: "mobile",
+			summary: "Refuse or accept the pairing password on the remote listener",
+			reqBody: controllers.SetRequireDeviceCredentialsRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MobileStatusResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 			},
 		},
 		{
@@ -2392,7 +2782,7 @@ func mobileOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/mobile/regenerate", id: "regenerateMobile", tag: "mobile",
-			summary: "Rotate the Connect Mobile password, dropping any connected phone",
+			summary: "Revoke every device: rotate the pairing password, remove all device tokens and unlink the account",
 			resps: []respUnit{
 				{http.StatusOK, controllers.MobileStatusResponse{}},
 				{http.StatusForbidden, envelope.APIError{}},
@@ -2444,7 +2834,7 @@ func mobileDeviceOperations() []operation {
 	return []operation{
 		{
 			method: http.MethodGet, path: "/api/v1/mobile/devices", id: "listMobileDevices", tag: "mobile",
-			summary: "List paired mobile devices with their live status",
+			summary: "List the devices that can reach this host, with their live status",
 			resps: []respUnit{
 				{http.StatusOK, controllers.MobileDevicesResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -2452,9 +2842,9 @@ func mobileDeviceOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodDelete, path: "/api/v1/mobile/devices/{installId}", id: "removeMobileDevice", tag: "mobile",
-			summary:    "Remove a paired device from the roster",
-			pathParams: []any{controllers.InstallIDParam{}},
+			method: http.MethodDelete, path: "/api/v1/mobile/devices/{id}", id: "removeMobileDevice", tag: "mobile",
+			summary:    "Remove a device: revoke its token and stop its notifications",
+			pathParams: []any{controllers.MobileDeviceIDParam{}},
 			resps: []respUnit{
 				{http.StatusNoContent, nil},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -2468,6 +2858,9 @@ func mobileDeviceOperations() []operation {
 // the routes ImportController.Register mounts (enforced by the parity test).
 func importOperations() []operation {
 	return []operation{
+		{method: http.MethodGet, path: "/api/v1/session-import", id: "scanSessionImport", tag: "import", summary: "Preview readable local agent histories from Git folders and Standalone", resps: []respUnit{{http.StatusOK, sessionimport.Preview{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/session-import", id: "importSelectedSessions", tag: "import", summary: "Import selected histories as idle AO sessions without starting providers", reqBody: controllers.SessionImportRequest{}, resps: []respUnit{{http.StatusOK, controllers.SessionImportResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+
 		{
 			method: http.MethodGet, path: "/api/v1/import", id: "getImportStatus", tag: "import",
 			summary: "Check whether a legacy AO install is available to import",
@@ -2503,6 +2896,23 @@ func importOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, importsvc.GitPreparationResult{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/imports/github-owners", id: "listImportGitHubOwners", tag: "import",
+			summary: "List the GitHub accounts gh on this machine can create a project's repository under",
+			resps: []respUnit{
+				{http.StatusOK, importsvc.GitHubOwnersResult{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/imports/github-availability", id: "checkImportGitHubAvailability", tag: "import",
+			summary:    "Check whether a GitHub repository name is free to create for a project import",
+			pathParams: []any{importsvc.GitHubAvailabilityQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, importsvc.GitHubAvailabilityResult{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
@@ -3125,6 +3535,15 @@ func sessionOperations() []operation {
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/kept-artifacts", id: "listKeptArtifacts", tag: "sessions",
+			summary: "List the artifacts no session or project lists: those of sessions deleted with their artifacts kept, and of sessions in removed projects",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListKeptArtifactsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-events", id: "streamSessionArtifactChanges", tag: "sessions",
 			summary:    "Stream changes to the files in a session's artifact directory",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -3180,6 +3599,20 @@ func sessionOperations() []operation {
 				{http.StatusOK, controllers.ArtifactVersionResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/artifact-registrations", id: "registerSessionArtifacts", tag: "sessions",
+			summary:    "Register files in the session's artifact directory as its deliverables",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.RegisterArtifactsRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.RegisterArtifactsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -3267,6 +3700,18 @@ func sessionOperations() []operation {
 			pathParams:   []any{controllers.SessionIDParam{}},
 			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
 			contentTypes: map[int]string{http.StatusBadGateway: "text/plain"},
+		},
+		{
+			// The body is the file's raw bytes, streamed to disk with no size cap.
+			method: http.MethodPost, path: "/api/v1/attachment-uploads", id: "uploadAttachment", tag: "sessions",
+			summary:    "Stream a file to disk for a later attachment to name by uploadId",
+			rawReqBody: "application/octet-stream",
+			resps: []respUnit{
+				{http.StatusCreated, controllers.AttachmentUploadResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments", id: "stageSessionAttachments", tag: "sessions",
@@ -3540,6 +3985,29 @@ func sessionOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/fork-options", id: "getSessionForkOptions", tag: "sessions",
+			summary:    "Report whether a session can be forked",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SessionForkOptionsResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/fork", id: "forkSession", tag: "sessions",
+			summary:    "Fork a session at a finished turn",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.ForkSessionRequest{},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.ForkSessionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 			},
 		},
 		{
@@ -3901,12 +4369,50 @@ func prOperations() []operation {
 	return []operation{
 		{
 			method: http.MethodPost, path: "/api/v1/prs/{id}/merge", id: "mergePR", tag: "prs",
-			summary:    "Squash-merge a pull request",
+			summary:    "Merge a pull request (squash, merge commit, or rebase)",
 			pathParams: []any{controllers.PRIDParam{}},
 			reqBody:    controllers.MergePRRequest{},
 			resps: []respUnit{
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusOK, controllers.MergePRResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/prs/{id}/stack", id: "getPRStack", tag: "prs",
+			summary:    "Read a pull request's stack, or the open pull request it could be stacked on",
+			pathParams: []any{controllers.PRIDParam{}, controllers.PRStackQuery{}},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.GetPRStackResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/stack", id: "addPRToStack", tag: "prs",
+			summary:    "Stack a pull request on the open pull request it is based on",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.AddPRToStackRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.GetPRStackResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/stack/merge", id: "mergePRStack", tag: "prs",
+			summary:    "Merge a pull request and the unmerged layers below it, all or nothing",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.MergePRStackRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.MergePRStackResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
@@ -3923,6 +4429,56 @@ func prOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/state", id: "changePRState", tag: "prs",
+			summary:    "Close, reopen, mark ready, or convert a pull request to draft",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.ChangePRStateRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.ChangePRStateResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/comments", id: "postPRComment", tag: "prs",
+			summary:    "Post a pull request conversation comment or review-thread reply",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.PostPRCommentRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.PostPRCommentResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/details", id: "loadPRDetails", tag: "prs",
+			summary:    "Read a tracked pull request's details from its provider when none are stored",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.LoadPRDetailsRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNoContent, nil},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/prs/{id}/attachment-access", id: "getPRAttachmentAccess", tag: "prs",
+			summary:    "Whether files can be attached to a pull request's comments, and where they would be stored",
+			pathParams: []any{controllers.PRIDParam{}, controllers.PRAttachmentAccessQuery{}},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.PRAttachmentAccessResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
 			},
 		},
 		// GitHub PAT + repos (local daemon storage)

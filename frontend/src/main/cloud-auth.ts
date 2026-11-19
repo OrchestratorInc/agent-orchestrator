@@ -564,10 +564,10 @@ async function completeCloudSignIn(
 
 export interface CloudDeepLinkSignIn {
   account: CloudAccount;
-  // What the orchestrator.inc return page adds to the sign-in: the website
-  // visitor id (web_distinct_id) for visitors who accepted analytics there.
-  // Present only when it is well formed and this link completed a new sign-in,
-  // so a repeated return link never hands it over twice. Analytics only: it
+  // Present only when this link completed a new sign-in, so a repeated return
+  // link never hands it over twice. It holds what the orchestrator.inc return
+  // page adds: the website visitor id (web_distinct_id) for visitors who
+  // accepted analytics there, when it is well formed. Analytics only: it
   // plays no part in signing in, and nothing stores or logs it.
   signIn?: CloudSignInContext;
 }
@@ -590,11 +590,13 @@ export async function handleCloudDeepLink(
     url.searchParams.get("state"),
     dataDir,
   );
+  if (!exchanged) return { account };
   // Read only once signing in has finished, so it cannot change how that went.
+  // A sign-in without the website's id still hands over an empty context: it
+  // tells the renderer a sign-in completed, even for the account already
+  // signed in, which the session notification alone does not.
   const webDistinctId = url.searchParams.get("web_distinct_id");
-  return exchanged && isWebDistinctId(webDistinctId)
-    ? { account, signIn: { webDistinctId } }
-    : { account };
+  return { account, signIn: isWebDistinctId(webDistinctId) ? { webDistinctId } : {} };
 }
 
 const CALLBACK_HTML = (title: string, body: string): string =>
@@ -744,9 +746,38 @@ export function registerCloudProtocol(): void {
   }
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The control plane's reason for refusing an account login (the same login is
+// already saved, or a sign-in again used another login), from its error
+// envelope's message. Never the response body itself.
+async function controlPlaneRefusal(response: Response): Promise<string | undefined> {
+  if (response.status !== 409 && response.status !== 422) return undefined;
+  try {
+    const envelope = (await response.json()) as { message?: unknown };
+    return typeof envelope.message === "string" && envelope.message.trim() !== "" ? envelope.message.slice(0, 300) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether the control plane saved an account login as its harness's default
+// account, from its answer ({ agentAccount: { isDefault } }).
+async function savedAsDefaultAccount(response: Response): Promise<boolean> {
+  try {
+    const answer = (await response.json()) as { agentAccount?: { isDefault?: unknown } };
+    return answer.agentAccount?.isDefault === true;
+  } catch {
+    return false;
+  }
+}
+
 export function installCloudIPC(
   getDataDir: () => string,
   notifyRenderers: (session: CloudAccount | null) => void,
+  // Runs before an explicit sign-out completes, so its effects are durable even
+  // if the app quits right after.
+  onSignedOut: () => Promise<void> = async () => undefined,
 ): void {
   notifyRenderersFn = notifyRenderers;
   ipcMain.handle("cloud:getSession", () => getCloudSessionCached(getDataDir()));
@@ -776,6 +807,7 @@ export function installCloudIPC(
       // Sign-out must never fail on a revoke round-trip; clear the store anyway.
     }
     await signOutCloud(dataDir);
+    await onSignedOut().catch(() => undefined);
     notifyRenderers(null);
   });
   ipcMain.handle("cloud:cancelProviderAuth", async () => {
@@ -786,8 +818,11 @@ export function installCloudIPC(
   });
   ipcMain.handle("cloud:connectProviderAuth", async (_event, input: unknown) => {
     if (typeof input !== "object" || input === null) throw new Error("Invalid Cloud provider login request.");
-    const { baseUrl, provider, persistLocalClaudeToken } = input as Record<string, unknown>;
+    const { baseUrl, provider, persistLocalClaudeToken, account } = input as Record<string, unknown>;
     if (typeof baseUrl !== "string" || typeof provider !== "string") throw new Error("Invalid Cloud provider login request.");
+    // account: "new" saves the login as another account, an account id signs
+    // that account in again; absent, the login replaces the agent's default.
+    if (account !== undefined && account !== "new" && !(typeof account === "string" && UUID_PATTERN.test(account))) throw new Error("Invalid Cloud provider login request.");
     let base: URL;
     try {
       base = new URL(baseUrl);
@@ -826,21 +861,29 @@ export function installCloudIPC(
     const basePath = base.pathname.replace(/\/+$/, "");
     // Cloud agent credentials are always personal: the caller's own connection,
     // usable in every org they belong to.
-    const endpointPath = `/api/cloud/v1/me/providers/${encodeURIComponent(credential.provider)}`;
-    const target = new URL(`${base.origin}${basePath}${endpointPath}`);
+    const save = account === "new"
+      ? { method: "POST", path: "/me/agent-accounts", body: { agent: credential.provider, credentialType: credential.credentialType, secret: credential.secret } }
+      : typeof account === "string"
+        ? { method: "PUT", path: `/me/agent-accounts/${account}/credential`, body: { credentialType: credential.credentialType, secret: credential.secret } }
+        : { method: "PUT", path: `/me/providers/${encodeURIComponent(credential.provider)}`, body: { credentialType: credential.credentialType, secret: credential.secret } };
+    const target = new URL(`${base.origin}${basePath}/api/cloud/v1${save.path}`);
     const response = await fetch(target, {
-      method: "PUT",
+      method: save.method,
       redirect: "error",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }),
+      body: JSON.stringify(save.body),
     });
-    if (!response.ok) throw new Error("Orchestrator Cloud could not save the provider credential.");
+    if (!response.ok) throw new Error(await controlPlaneRefusal(response) ?? "Orchestrator Cloud could not save the provider credential.");
 
     // Persist the captured Claude setup-token locally as a fallback for local
     // sessions, only once the cloud copy is saved: a failed cloud save must not
     // leave a local login behind. The daemon's claudecode adapter injects it only
     // when no native login is present, so it never shadows an existing login.
-    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token") {
+    // Of a harness's several accounts only the default's: the control plane
+    // says which account the login became (an added one is the default when it
+    // is the first, or when the default stopped working).
+    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token" &&
+      (account === undefined || await savedAsDefaultAccount(response))) {
       await persistLocalClaudeOAuthToken(dataDir, credential.secret);
     }
     return undefined;

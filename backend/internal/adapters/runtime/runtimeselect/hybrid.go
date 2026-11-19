@@ -197,6 +197,15 @@ func (r *hybridRuntime) Restart(ctx context.Context, handle ports.RuntimeHandle,
 	return r.Create(ctx, cfg)
 }
 
+func (r *hybridRuntime) BoundedProcessRoots(ctx context.Context, handle ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	backend, raw := r.route(handle)
+	inspector, ok := backend.(ports.RuntimeProcessRootBoundInspector)
+	if !ok {
+		return nil, fmt.Errorf("%s runtime cannot bound its process roots", r.platform)
+	}
+	return inspector.BoundedProcessRoots(ctx, raw)
+}
+
 func (r *hybridRuntime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
 	backend, raw := r.route(handle)
 	return backend.ProcessRootPIDs(ctx, raw)
@@ -221,4 +230,17 @@ func (r *hybridRuntime) WatchTerminalForeground(ctx context.Context, handle port
 		return ports.ErrTerminalForegroundUnavailable
 	}
 	return watcher.WatchTerminalForeground(ctx, raw, fn)
+}
+
+var _ ports.TerminalTitleWatcher = (*hybridRuntime)(nil)
+
+// WatchTerminalTitle routes to the backend that owns the handle; legacy tmux
+// handles have no host to report titles.
+func (r *hybridRuntime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
+	backend, raw := r.route(handle)
+	watcher, ok := backend.(ports.TerminalTitleWatcher)
+	if !ok {
+		return ports.ErrTerminalTitleUnavailable
+	}
+	return watcher.WatchTerminalTitle(ctx, raw, fn)
 }

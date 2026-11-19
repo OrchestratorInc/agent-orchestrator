@@ -4,8 +4,9 @@ import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBa
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversationOnce } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, forgetRemoteConversationRereads, refreshLocalConversationTail, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -13,6 +14,7 @@ import {
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
+import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
 import { persistRemoteCache } from "./remote-chat-cache";
@@ -150,12 +152,50 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				};
 				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
 			};
+			// An open local chat with nothing loading reads only the rows that can still
+			// change, as a remote chat does, so a streaming turn stops refetching the
+			// whole history on every event. A closed chat, one still loading, and every
+			// tail that cannot be merged take the full invalidation above. Both share the
+			// one-in-flight, one-catch-up bookkeeping.
+			const refreshLocalChat = (sessionId: string) => {
+				if (disposed) return;
+				const queryKey = conversationQueryKey(sessionId);
+				const key = JSON.stringify(queryKey);
+				const running = refreshes.get(key);
+				if (running) {
+					running.dirty = true;
+					return;
+				}
+				if (!queryClient.getQueryCache().find({ queryKey, type: "active" }) || queryClient.isFetching({ queryKey }) > 0) {
+					invalidate(queryKey);
+					return;
+				}
+				const state = { dirty: false };
+				refreshes.set(key, state);
+				const settled = () => {
+					refreshes.delete(key);
+					if (state.dirty && !disposed) refreshLocalChat(sessionId);
+				};
+				void refreshLocalConversationTail(queryClient, sessionId)
+					.then((merged) => {
+						if (disposed) return undefined;
+						// A query fetch that started during the tail read (an older page, a
+						// mount) may predate this event, or write back the live page it
+						// captured before the merge. Catch up once it has finished.
+						if (queryClient.isFetching({ queryKey }) > 0) state.dirty = true;
+						if (merged) return undefined;
+						return queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+					})
+					.then(settled, settled);
+			};
 			const refreshRemote = (hostId: string, reconnect = false) => {
 				const connection = remoteSources.get(hostId);
 				if (connection) connection.lastRefreshAt = Date.now();
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
+				// A reconnect may follow a host restart, which settles stranded rows.
+				if (reconnect) forgetRemoteConversationRereads(queryClient, hostId);
 				if (reconnect) invalidate(["remote-conversation", hostId]);
 				if (reconnect) invalidate(["reviewer-conversation", hostId]);
 				invalidate(["session-scm-summary", hostId]);
@@ -208,7 +248,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 								const decoded = JSON.parse(String((event as MessageEvent).data)) as {
 									type?: unknown;
 									sessionId?: unknown;
-									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown };
+									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown };
 								};
 								const payload = typeof decoded.payload === "object" && decoded.payload !== null ? decoded.payload : undefined;
 								const sessionId = typeof decoded.sessionId === "string" && decoded.sessionId ? decoded.sessionId : undefined;
@@ -217,6 +257,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 									conversationOnly = typeof payload.conversationId === "string";
 								} else if (sessionId && typeof payload?.conversationId === "string") {
 									refreshOpenRemoteChat(hostId, sessionId);
+									conversationOnly = true;
+								} else if (typeof payload?.shellTerminalHandleId === "string") {
+									invalidate(shellTerminalsQueryKeyForHost(hostId));
 									conversationOnly = true;
 								} else if (decoded.type === "session_updated" && sessionId && typeof payload?.interfaceTransitionId !== "string") {
 									idOnlySessionUpdate = payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
@@ -279,6 +322,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
+					// A deleted session or removed project changes what is kept.
+					invalidate(keptArtifactsQueryKey);
 					invalidate(sessionScmSummaryQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
@@ -302,7 +347,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					pendingEditorHandoffSessions.clear();
 				}
 				for (const sessionId of pendingConversationSessions) {
-					invalidate(conversationQueryKey(sessionId));
+					refreshLocalChat(sessionId);
 				}
 				pendingConversationSessions.clear();
 				for (const sessionId of pendingReviewSessions) {
@@ -397,11 +442,18 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										conversationId?: unknown;
 										reviewId?: unknown;
 										interfaceTransitionId?: unknown;
+										activity?: unknown;
+										shellTerminalHandleId?: unknown;
 										kind?: unknown;
 										agentId?: unknown;
 										projectId?: unknown;
 								  })
 								: undefined;
+						// A shell's program title changed; only the shell list shows it.
+						if (typeof payload?.shellTerminalHandleId === "string") {
+							void queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
+							conversationOnly = true;
+						}
 						// A review run can start or finish without this window asking for
 						// it: an agent ran `ao review trigger`, auto-review fired, or a
 						// reviewer submitted. Refresh that session's reviews so the
@@ -450,7 +502,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof decoded.sessionId === "string" &&
 							decoded.sessionId &&
 							typeof payload?.conversationId !== "string" &&
-							typeof payload?.interfaceTransitionId !== "string"
+							typeof payload?.interfaceTransitionId !== "string" &&
+							typeof payload?.shellTerminalHandleId !== "string"
 						) {
 							idOnlySessionUpdate =
 								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
@@ -463,6 +516,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							// refetching for each one reloaded its whole page every few seconds.
 							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
 								pendingConversationSessions.add(decoded.sessionId);
+							}
+							// Native identity and provisioning changes carry the session-row
+							// activity field. Recheck switch readiness even after its poll
+							// budget expires, without reacting to id-only usage updates.
+							if (typeof payload?.activity === "string") {
+								pendingInterfaceTransitionSessions.add(decoded.sessionId);
 							}
 							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}

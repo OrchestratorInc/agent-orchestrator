@@ -77,8 +77,10 @@ function loadPdfjs(): Promise<Pdfjs> {
  * A cloud file is cross-origin to the renderer, so its bytes are read through
  * the main process.
  */
-export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError, path, src }: {
+export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false, load, onError, path, src }: {
 	cloud?: boolean;
+	/** A tiny tile: the first page fills the box edge to edge and is cropped, with no padding, backdrop or loading text. */
+	cover?: boolean;
 	firstPageOnly?: boolean;
 	/** Reads the document's bytes itself (a cloud attachment); src then only keys it. */
 	load?: () => Promise<Uint8Array>;
@@ -89,6 +91,7 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 	const { t } = useTranslation();
 	const [loaded, setLoaded] = useState<{ pdf: PDFDocumentProxy; pdfjs: Pdfjs; sizes: PageSize[] } | null>(null);
 	const [width, setWidth] = useState(0);
+	const [height, setHeight] = useState(0);
 	const [tooLarge, setTooLarge] = useState<number | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const onErrorRef = useRef(onError);
@@ -130,7 +133,7 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 			if (cancelled) return;
 			loadingTask = pdfjs.getDocument({ data });
 			const pdf = await loadingTask.promise;
-			const sizes = await Promise.all(Array.from({ length: firstPageOnly ? Math.min(pdf.numPages, 1) : pdf.numPages }, async (_, index) => {
+			const sizes = await Promise.all(Array.from({ length: firstPageOnly || cover ? Math.min(pdf.numPages, 1) : pdf.numPages }, async (_, index) => {
 				const { width, height } = (await pdf.getPage(index + 1)).getViewport({ scale: 1 });
 				return { width, height };
 			}));
@@ -144,7 +147,7 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 			cancelled = true;
 			void loadingTask?.destroy();
 		};
-	}, [cloud, firstPageOnly, src]);
+	}, [cloud, cover, firstPageOnly, src]);
 
 	useEffect(() => {
 		const element = scrollRef.current;
@@ -154,7 +157,10 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 		const observer = new ResizeObserver(([entry]) => {
 			if (timer !== null) window.clearTimeout(timer);
 			// A drag-resize settles before the pages redraw at the new width.
-			timer = window.setTimeout(() => setWidth(Math.floor(entry.contentRect.width)), measured ? 120 : 0);
+			timer = window.setTimeout(() => {
+				setWidth(Math.floor(entry.contentRect.width));
+				setHeight(Math.floor(entry.contentRect.height));
+			}, measured ? 120 : 0);
 			measured = true;
 		});
 		observer.observe(element);
@@ -164,6 +170,18 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 		};
 	}, []);
 
+	if (cover) {
+		if (tooLarge !== null) return null;
+		const page = loaded?.sizes[0];
+		return (
+			// Centered both ways, so a page wider or taller than the box crops evenly; a portrait page shows its top.
+			<div aria-label={path} className="flex min-h-0 min-w-0 flex-1 items-start justify-center overflow-hidden" ref={scrollRef} role="document">
+				{loaded && page && width > 0 && height > 0 ? (
+					<PdfPage pageNumber={1} pdf={loaded.pdf} pdfjs={loaded.pdfjs} root={scrollRef} scale={Math.max(width / page.width, height / page.height)} size={page} />
+				) : null}
+			</div>
+		);
+	}
 	if (tooLarge !== null) return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(tooLarge) })}</PanelMessage>;
 	return (
 		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface p-3" ref={scrollRef} role="document">

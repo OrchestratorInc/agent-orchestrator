@@ -25,7 +25,7 @@ The package ships JavaScript and declarations in `dist`. Tailwind consumers
 should include `@aoagents/product-ui/dist` in their source scan because the
 components use Orchestrator design-system utility classes and semantic tokens.
 
-`SessionsBoardGridView`, `SessionCardView`, and `SessionsArchiveView` accept
+`SessionsBoardGridView` and `SessionCardView` accept
 neutral presentation models plus focused action/asset slots. Hosts retain data
 fetching, routing, persistence, and platform-specific controls.
 

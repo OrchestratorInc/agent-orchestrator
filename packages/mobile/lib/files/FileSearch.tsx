@@ -1,18 +1,18 @@
 import { Stack } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import type { SearchBarCommands } from "react-native-screens";
-import type { ServerConfig } from "../config";
+import type { FilesBackend } from "./backend";
 import { useTheme } from "../ThemeProvider";
 import { useWorkspaceSearch } from "./FolderList";
 
 /**
  * Finding a file anywhere in the worktree from the header's own search. Pass
- * a null config while the search is not on offer.
+ * a null backend while the search is not on offer.
  */
-export function useFileSearch(config: ServerConfig | null, sessionId: string) {
+export function useFileSearch(backend: FilesBackend | null, sessionId: string) {
 	const [query, setQuery] = useState("");
 	const bar = useRef<SearchBarCommands>(null);
-	const found = useWorkspaceSearch(config, sessionId, query);
+	const found = useWorkspaceSearch(backend, sessionId, query);
 	const onChangeText = useCallback((event: { nativeEvent: { text: string } }) => setQuery(event.nativeEvent.text), []);
 	const clear = useCallback(() => setQuery(""), []);
 	// Closes the search before its bar leaves the header. A UIKit search

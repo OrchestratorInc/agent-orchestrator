@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/container/dockerreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
+	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	workspacerouter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
@@ -64,10 +64,17 @@ type lifecycleStack struct {
 	turnFailureDone  <-chan struct{}
 	artifactsDone    <-chan struct{}
 	autoReviewDone   <-chan struct{}
+	reviewDoneDone   <-chan struct{}
 	scmDone          <-chan struct{}
 	trackerDone      <-chan struct{}
 	herdr            *herdr.Server
 	automationDone   <-chan struct{}
+	// activity is the activity observer. It polls only once
+	// StartActivityObserver has given it the session manager's runtime
+	// environment.
+	activity          *activityobserver.Observer
+	activityStart     chan struct{}
+	activityStartOnce sync.Once
 }
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
@@ -89,7 +96,8 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	)
 	reaperStart := make(chan struct{})
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir})
+	activityStart := make(chan struct{})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
@@ -109,6 +117,8 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		turnFailureDone:  turnFailurePoller.Start(ctx),
 		herdr:            herdrServer,
 		artifactsDone:    artifactsPoller.Start(ctx),
+		activity:         activityPoller,
+		activityStart:    activityStart,
 	}
 }
 
@@ -165,6 +175,23 @@ func (l *lifecycleStack) StartReaperLoop() {
 	l.reaperStartOnce.Do(func() { close(l.reaperStart) })
 }
 
+// StartActivityObserver installs the session environment for native-identity
+// lookups, then lets the activity observer poll. Installing it first means no
+// state change is read, and its native identity resolved, without the
+// session's project-level settings or credentials; a steady session would not
+// be looked up again.
+func (l *lifecycleStack) StartActivityObserver(env activityobserver.SessionEnvFunc) {
+	if l.activity == nil {
+		return
+	}
+	if env != nil {
+		l.activity.SetSessionEnv(env)
+	}
+	if l.activityStart != nil {
+		l.activityStartOnce.Do(func() { close(l.activityStart) })
+	}
+}
+
 // activeTurnSteering resolves the per-harness active-turn steering capability
 // from the agent adapters, so lifecycle policy consumes an adapter-declared
 // capability instead of knowing harness-specific terminal semantics. An
@@ -203,6 +230,9 @@ func (l *lifecycleStack) Stop() {
 	if l.autoReviewDone != nil {
 		<-l.autoReviewDone
 	}
+	if l.reviewDoneDone != nil {
+		<-l.reviewDoneDone
+	}
 	if l.scmDone != nil {
 		<-l.scmDone
 	}
@@ -236,6 +266,9 @@ type sessionLifecycle interface {
 	BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error)
 	StopHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionID, error)
 	ResumeHarnessSessions(ctx context.Context, ids []domain.SessionID) error
+	// SessionRuntimeEnv feeds the activity observer's native-identity
+	// lookups the environment each session's agent runs in.
+	SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecord) (map[string]string, error)
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
@@ -248,7 +281,9 @@ type sessionLifecycle interface {
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	StopTUITurn(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	SendWithClientMessageID(ctx context.Context, id domain.SessionID, message, clientMessageID string) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
 	// is built after Session Manager during boot (see startShellTerminals), so
@@ -268,6 +303,9 @@ type sessionLifecycle interface {
 	// SetHarnessUseGate prevents lifecycle operations from racing a harness
 	// executable replacement.
 	SetHarnessUseGate(gate sessionmanager.HarnessUseGate)
+	// SetImportArchiveRefresher rereads an imported conversation before its
+	// first open, using the same import service the REST surface serves.
+	SetImportArchiveRefresher(refresher sessionmanager.ImportArchiveRefresher)
 	// PersistChatModel records the model the user picked in ChatUI onto the
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
@@ -284,10 +322,13 @@ type sessionLifecycleMessenger struct {
 }
 
 func (m sessionLifecycleMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
+	if clientMessageID := ports.ClientMessageIDFromContext(ctx); clientMessageID != "" {
+		return m.SendWithClientMessageID(ctx, id, message, clientMessageID)
+	}
 	return m.sessionLifecycle.Send(ctx, id, message, nil)
 }
 
-// telemetryEmitsSpawned reports whether the ao.session.spawned carrier event can
+// telemetryEmitsSpawned reports whether the ao.sessions.spawned carrier event can
 // reach a sink under this config: product telemetry on and the event not on the
 // kill switch. When it cannot, session wiring leaves the GitHub identity resolver
 // nil so a spawn never makes a GitHub call whose only purpose is a dropped event.
@@ -297,7 +338,7 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 	if !cfg.Telemetry.Events {
 		return false
 	}
-	return !slices.Contains(cfg.Telemetry.DisabledEvents, "ao.session.spawned")
+	return !telemetryadapter.EventDenied(cfg.Telemetry.DisabledEvents, "ao.sessions.spawned")
 }
 
 // startSession builds the controller-facing session service: a session manager
@@ -364,7 +405,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	if scmProvider != nil && telemetryEmitsSpawned(cfg) {
 		githubIdentity = scmProvider
 	}
-	sessionSvc := sessionsvc.NewWithDeps(sessionsvc.Deps{
+	deps := sessionsvc.Deps{
 		Manager:           mgr,
 		Store:             store,
 		PRClaimer:         store,
@@ -384,7 +425,13 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		OutputTypeReconciler: lcm,
 		ArtifactDeleter:      artifactVersions,
 		ShareLinks:           sessionartifacts.NewShareLinks(cfg.DataDir, cfg.CloudControlPlaneURL),
-	})
+	}
+	// Guard the typed nil some tests pass, so reads list files by path instead.
+	if artifactVersions != nil {
+		deps.ArtifactTracker = artifactVersions
+	}
+	sessionSvc := sessionsvc.NewWithDeps(deps)
+	mgr.SetBranchStateRecorder(sessionSvc)
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
 	// reviewer posts its review to the PR itself, so the service needs no SCM
@@ -408,11 +455,16 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 
 		ChatRecoveryDone: reviewerRecoveryDone,
+		// The reaper's first pass settles runs a previous daemon left active.
+		AwaitBootPass: true,
 	})
 	reviewOpts := []reviewsvc.Option{
 		reviewsvc.WithTelemetry(telemetry),
 		reviewsvc.WithNotificationSink(notifications),
 		reviewsvc.WithCodexAccountOperationGate(codexOperationGate),
+	}
+	if lcm != nil {
+		reviewOpts = append(reviewOpts, reviewsvc.WithReviewDoneNotifier(lcm))
 	}
 	if scmProvider != nil {
 		reviewOpts = append(reviewOpts,
@@ -760,12 +812,21 @@ func (c chatLauncher) PreflightChat(
 	return c.svc.PreflightChat(ctx, harness, permissions)
 }
 
+func (c chatLauncher) PreflightChatWithEnv(
+	ctx context.Context,
+	harness domain.AgentHarness,
+	permissions ports.PermissionMode,
+	env map[string]string,
+) error {
+	return c.svc.PreflightChatWithEnv(ctx, harness, permissions, env)
+}
+
 func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
-func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness) error {
-	return c.svc.PreflightChat(ctx, harness, ports.PermissionModeAuto)
+func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness, workspacePath string) error {
+	return c.svc.PreflightReviewChat(ctx, harness, workspacePath)
 }
 
 func (c chatLauncher) StartReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart) (string, error) {

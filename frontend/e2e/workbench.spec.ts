@@ -8,7 +8,7 @@ import { expect, test } from "@playwright/test";
 test("renders the orchestrator-first workbench shell", async ({ page }) => {
 	await page.goto("/");
 	// The single pinned Orchestrator anchor + the Projects group + a name-only worker row.
-	await expect(page.getByRole("button", { name: "Orchestrator agent", exact: true })).toBeVisible();
+	await expect(page.getByRole("button", { name: "Orchestrator", exact: true })).toBeVisible();
 	await expect(page.getByText("Projects", { exact: true })).toBeVisible();
 	await expect(page.getByRole("button", { name: "fix-webgl-fallback", exact: true })).toBeVisible();
 	// Orchestrator side rail = the quiet Workers list.

@@ -224,8 +224,6 @@ beforeEach(() => {
 	});
 	deleteMock.mockResolvedValue({ error: undefined });
 	useUiStore.setState({
-		// The simplified top bar is a Developer Mode preview; these tests cover it.
-		developerMode: true,
 		orchestratorReplacementErrors: {},
 		orchestratorStartupErrors: {},
 		provisioningProjectIds: new Set(),

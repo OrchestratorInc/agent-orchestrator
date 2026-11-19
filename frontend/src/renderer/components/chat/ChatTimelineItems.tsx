@@ -1,4 +1,5 @@
 import { AppLink } from "../AppLink";
+import { TurnForkButton } from "../SessionForkControls";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
@@ -11,17 +12,22 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
-import { ProviderMark } from "./ProviderMark";
-import { useChatSessionId } from "./chat-image-source";
+import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
+import { ArtifactThumbnail } from "../ArtifactThumbnail";
+import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
+import type { ArtifactRow } from "../../lib/artifacts";
+import { useChatEntrance } from "./chat-entrance";
+import { pageHidden } from "../../lib/page-hidden";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -29,12 +35,14 @@ import {
 	Bot,
 	ArrowRight,
 	ArrowRightLeft,
+	Ban,
 	Brain,
 	ChevronDown,
 	ChevronRight,
 	CircleAlert,
 	CircleCheck,
 	CircleDot,
+	CircleHelp,
 	CircleStop,
 	Clock,
 	Copy,
@@ -56,6 +64,7 @@ import {
 	Globe,
 	Hammer,
 	History,
+	Hourglass,
 	KeyRound,
 	Keyboard,
 	ListChecks,
@@ -66,7 +75,6 @@ import {
 	Plug,
 	RotateCw,
 	Search,
-	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
 	ShieldX,
@@ -126,8 +134,10 @@ import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
+import { useComposerTokenRenderer } from "./sentComposerTokens";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
+import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
@@ -136,7 +146,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
-import { StagedAttachmentItems } from "./StagedAttachmentItems";
+import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 import { UsageLimitMarker, UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -148,7 +158,7 @@ import { actionDetailLines, describeConversationActivity } from "./activity-acti
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
+import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -162,12 +172,14 @@ import {
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationMessage,
+	type ConversationTurn,
 	type ConversationUsageLimit,
 	type DecisionOption,
 	type DeliveryState,
 	type DiffStatus,
 	type FileChangeFile,
 	type ConversationItem,
+	type TurnArtifactChange,
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
@@ -373,7 +385,9 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		const grew = message.text !== targetRef.current && message.text.startsWith(targetRef.current);
 		targetRef.current = message.text;
 		targetGraphemesRef.current = targetGraphemes;
-		if (reducedMotion) {
+		// A hidden window draws no frames, so a reveal would stall and replay once the
+		// reader is back. Show what arrived now; the fade treats it as settled too.
+		if (reducedMotion || pageHidden()) {
 			showWhole();
 			return;
 		}
@@ -496,7 +510,7 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
-/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+/** One side of a handoff: the agent's mark, then its model by name when one was recorded, else the agent's name. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
 	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
@@ -600,6 +614,20 @@ const TURN_OUTCOME_COPY = {
 		tone: "font-medium text-destructive",
 		iconTone: "text-destructive",
 	},
+	// It ended before the agent started on it; the reason follows in the turn's voice.
+	not_run: {
+		label: "This message was not run",
+		icon: Ban,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
+	// The controller went away mid-turn, so nothing reported how it ended.
+	unknown: {
+		label: "The agent stopped before this turn finished",
+		icon: CircleHelp,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
 } as const;
 
 /**
@@ -616,6 +644,7 @@ export function TurnOutcome({
 	error,
 	failureCode,
 	onConfigure,
+	login,
 	retry,
 	usageLimit,
 	copyText,
@@ -623,10 +652,12 @@ export function TurnOutcome({
 	rollbackDisabled,
 	timestamp,
 }: {
-	state: "recovered" | "interrupted" | "failed";
+	state: "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 	error?: string;
-	failureCode?: "provider_key_missing";
+	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
+	/** The provider refused the agent's login: a quiet line in place of its CLI advice. */
+	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
@@ -651,6 +682,33 @@ export function TurnOutcome({
 					rollbackDisabled={rollbackDisabled}
 					timestamp={timestamp}
 				/>
+			</div>
+		);
+	}
+	// A refused login is offered on the chat box, where the user was about to
+	// write. The turn keeps one quiet line saying what happens to its message;
+	// the provider's own advice ("run /login") is for its CLI and never shows.
+	if (state === "failed" && failureCode === "auth_required" && login) {
+		// A turn that did work still closes on the shared row, so its copy and undo
+		// stay where they always are; the band sends the latest refusal again, so that
+		// one has no Retry. One that did nothing else has its line under the message,
+		// whose row has them.
+		// An earlier refusal, past what the band offers, keeps its Retry like any failed turn.
+		const closesTurn = login.align === "start";
+		const ownRetry = login.ownRetry ? retry : undefined;
+		return (
+			<div data-turn-outcome={state} className={cn("flex min-w-0", closesTurn && "group/message flex-col gap-1.5")}>
+				<LoginStatusNote status={login.status} retry={closesTurn ? undefined : ownRetry} />
+				{closesTurn ? (
+					<TurnActions
+						className="-mt-1"
+						retry={ownRetry}
+						copyText={copyText}
+						onRollback={onRollback}
+						rollbackDisabled={rollbackDisabled}
+						timestamp={timestamp}
+					/>
+				) : null}
 			</div>
 		);
 	}
@@ -704,6 +762,82 @@ export function TurnOutcome({
 	);
 }
 
+const LOGIN_STATUS_ICON = { queued: Hourglass, waiting: Hourglass, sending: Loader2, resend: undefined, stopped: undefined } as const;
+
+/**
+ * What happens to a message the agent refused for its login. A message whose
+ * turn did nothing else leads its own row under the bubble with it, before the
+ * time and copy; otherwise it is the turn's last line.
+ */
+export function LoginStatusNote({ status, retry }: {
+	status: TurnOutcomeLogin["status"];
+	/** An earlier refusal's Retry, on the line itself when the message's row carries it. */
+	retry?: TurnOutcomeRetryControl;
+}) {
+	const { t } = useTranslation();
+	const Icon = LOGIN_STATUS_ICON[status];
+	const note = (
+		<div
+			data-testid="login-status"
+			data-login-status={status}
+			className="flex min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground"
+		>
+			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", status === "sending" && "animate-spin")} /> : null}
+			<span className="min-w-0">{t(`chat.login.status.${status}`)}</span>
+		</div>
+	);
+	if (!retry) return note;
+	return (
+		<div className="flex min-w-0 items-center gap-1">
+			{note}
+			<RetryTurnButton retry={retry} />
+			{/* The row is one line, so a failed retry says why where its button is. */}
+			{retry.error ? (
+				<span role="alert" title={retry.error} className="min-w-0 truncate text-xs leading-5 text-destructive">
+					{retry.error}
+				</span>
+			) : null}
+		</div>
+	);
+}
+
+/** How a message the agent refused for its login reads in the timeline. */
+export interface TurnOutcomeLogin {
+	/**
+	 * queued: sends again by itself once the user logs in. waiting: the Agents
+	 * page was opened and the login has not taken yet. sending: logged in, sending
+	 * it again. resend: the user sends it again (it did work, or nothing watches
+	 * the login). stopped: an earlier refusal, since sent again or moved past.
+	 */
+	status: "queued" | "waiting" | "sending" | "resend" | "stopped";
+	/** On the message, under its bubble, when the turn did nothing else; otherwise the turn's last line. */
+	align: "end" | "start";
+	/** An earlier refusal the band no longer offers: it keeps its own Retry, as any failed turn does. */
+	ownRetry?: boolean;
+}
+
+/** Sends a failed turn's prompt again as a new turn. */
+function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
+	return (
+		<Button
+			type="button"
+			variant="quiet"
+			size="sm"
+			onClick={retry.onRetry}
+			disabled={retry.pending || retry.disabled}
+			aria-label="Retry this turn"
+			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
+			data-testid="retry-turn"
+		>
+			<RotateCw
+				aria-hidden="true"
+				className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
+			/>
+			{retry.pending ? "Retrying…" : "Retry"}
+		</Button>
+	);
+}
+
 interface TurnActionsProps {
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
@@ -739,24 +873,7 @@ export function TurnActions({
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
-				{retry ? (
-					<Button
-						type="button"
-						variant="quiet"
-						size="sm"
-						onClick={retry.onRetry}
-						disabled={retry.pending || retry.disabled}
-						aria-label="Retry this turn"
-						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-						data-testid="retry-turn"
-					>
-						<RotateCw
-							aria-hidden="true"
-							className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
-						/>
-						{retry.pending ? "Retrying…" : "Retry"}
-					</Button>
-				) : null}
+				{retry ? <RetryTurnButton retry={retry} /> : null}
 				{copyText !== undefined ? (
 					<div className="size-7 shrink-0">
 						<CopyButton
@@ -783,6 +900,7 @@ export function TurnActions({
 						<TooltipContent side="bottom">Roll back to here</TooltipContent>
 					</Tooltip>
 				) : null}
+				<TurnForkButton />
 				{time ? (
 					<span
 						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
@@ -804,6 +922,49 @@ export function TurnActions({
 function formatTokens(tokens: number): string {
 	if (tokens < 1000) return `${tokens}`;
 	return `${(tokens / 1000).toFixed(1)}k`;
+}
+
+/**
+ * The bubble's text renderer: inline image chips when the message has images,
+ * nothing otherwise, so a message without them keeps UserMarkdown's memo.
+ */
+function inlineImageRenderer(attachments: string[], sessionId: string, apiBaseUrl: string | null) {
+	if (apiBaseUrl === null || !attachments.some((path) => IMAGE_ATTACHMENT_PATH.test(path))) return undefined;
+	return (text: string) => (
+		<ProseWithInlineImages text={text} attachments={attachments} sessionId={sessionId} apiBaseUrl={apiBaseUrl} renderText={(plain) => plain} />
+	);
+}
+
+/**
+ * The bubble's text renderer: skills and files it sent as chips in the accent
+ * color, and inline image chips. Undefined when neither applies, which keeps
+ * UserMarkdown's memo; stable while the message and its attachments are.
+ */
+function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null) {
+	const renderTokens = useComposerTokenRenderer(sessionId, body);
+	const attachmentKey = attachments.join("\n");
+	return useMemo(() => {
+		const renderImages = inlineImageRenderer(attachmentKey ? attachmentKey.split("\n") : [], sessionId, apiBaseUrl);
+		return renderTokens ? (text: string) => renderTokens(text, renderImages) : renderImages;
+	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl]);
+}
+
+// A list, quote or code block at either end of a message sits flush with the
+// bubble's padding instead of adding its own outer margin.
+const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+
+const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
+
+/**
+ * Copying the whole of a rendered message gives back what the person typed, list
+ * markers and backticks included, as the Copy button does. A partial selection
+ * copies what it shows.
+ */
+function copyWholeMessageAsTyped(event: ClipboardEvent<HTMLDivElement>, typed: string) {
+	const selected = window.getSelection()?.toString() ?? "";
+	if (!selected.trim() || collapseWhitespace(selected) !== collapseWhitespace(event.currentTarget.textContent ?? "")) return;
+	event.preventDefault();
+	event.clipboardData.setData("text/plain", typed);
 }
 
 /**
@@ -831,14 +992,22 @@ function ProseWithInlineImages({
 		segment.path === undefined ? (
 			<Fragment key={index}>{renderText(segment.text)}</Fragment>
 		) : (
-			<ChatImage
+			<InlineStagedImage
 				key={index}
-				inline
-				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
+				path={segment.path}
+				sessionId={sessionId}
+				apiBaseUrl={apiBaseUrl}
 				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
 			/>
 		),
 	);
+}
+
+/** An inline image chip, drawn from the composer's copy while the file was just sent. */
+function InlineStagedImage({ path, sessionId, apiBaseUrl, alt }: { path: string; sessionId: string; apiBaseUrl: string; alt: string }) {
+	// A local copy that fails to draw hands the chip to the daemon's copy.
+	const local = useSentAttachmentPreview(path);
+	return <ChatImage inline src={local.url ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} onError={local.onError} />;
 }
 
 /** Collapse the home directory so a long absolute path does not eat the row. */
@@ -863,13 +1032,22 @@ function formatDecisionDuration(ms: number): string {
 }
 
 /**
+ * The step rows' icon column (ACTIVITY_SUMMARY_BUTTON_CLASS: a 12px icon at the
+ * turn's edge, then an 8px gap). The live row, its setup checklist and their marks
+ * use the same box, so a mark sits on the step icons' left edge and the label
+ * starts where the step labels do. The lattice is 13px across, a pixel wider than
+ * the slot: it starts at the slot's left edge and overhangs into the gap. Centred,
+ * it would sit half a pixel outside the column, where the live row clips it.
+ */
+export const STEP_MARK_SLOT_CLASS = "flex size-3 shrink-0 items-center justify-start";
+
+/**
  * A running setup step's mark: the live row's lattice, so setup and work share one
- * "working" signal. It sits in the step icons' 12px slot and overhangs it by half a
- * pixel each side, so the step labels stay aligned with the done and pending marks.
+ * "working" signal, in the step icons' slot (STEP_MARK_SLOT_CLASS).
  */
 export function ResponseSpinner() {
 	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
+		<span aria-hidden="true" data-testid="response-spinner" className={cn(STEP_MARK_SLOT_CLASS, "text-muted-foreground")}>
 			<LatticeLoader />
 		</span>
 	);
@@ -877,15 +1055,11 @@ export function ResponseSpinner() {
 
 /**
  * The live turn's working mark: a lattice of dots with a trail running round it
- * (see LatticeLoader). Decorative here, since the label and timer beside it carry
- * the meaning.
+ * (see LatticeLoader), in the step icons' slot (STEP_MARK_SLOT_CLASS). Decorative
+ * here, since the label and timer beside it carry the meaning.
  */
 export function LiveWorkingMark() {
-	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-			<LatticeLoader />
-		</span>
-	);
+	return <ResponseSpinner />;
 }
 
 export function formatTime(iso: string): string {
@@ -893,7 +1067,7 @@ export function formatTime(iso: string): string {
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
 
-function formatMessageTimestamp(iso: string, now = new Date()): string {
+export function formatMessageTimestamp(iso: string, now = new Date()): string {
 	const parsed = new Date(iso);
 	if (Number.isNaN(parsed.getTime())) return "";
 
@@ -937,6 +1111,30 @@ export function QueuedNote() {
 const WORKER_REPORT_OPEN = "<ao-worker-reports>";
 const WORKER_REPORT_CLOSE = "</ao-worker-reports>";
 
+const ANNOTATION_PLACEHOLDER = /^Use the attached \d+ (?:chat excerpt|annotation)\(s\) as context$/;
+
+export function withoutAnnotationPlaceholder(text: string, annotationCount: number): string {
+	return annotationCount > 0 && ANNOTATION_PLACEHOLDER.test(text.trim()) ? "" : text;
+}
+
+type SteerContent = NonNullable<ConversationActivity["detail"]>["content"];
+
+export function steerAnnotations(content: SteerContent = []): ChatAnnotationSummaryItem[] {
+	return content.flatMap((item): ChatAnnotationSummaryItem[] => {
+		if (item.type === "file_reference" && item.fileReference) {
+			return [{ fileReference: item.fileReference, id: item.fileReference.id, order: item.fileReference.order, text: "" }];
+		}
+		if (item.type !== "excerpt") return [];
+		const ref = item.excerpt?.reference;
+		const text = item.excerpt?.selectedText || ref?.text || item.text || "";
+		if (!text && !ref?.snapshot?.badgeOnly) return [];
+		return [{
+			id: ref?.id, order: ref?.order, text, comment: ref?.comment, snapshot: ref?.snapshot,
+			conversationId: ref?.conversationId, messageId: ref?.messageId, revision: ref?.revision,
+		}];
+	});
+}
+
 export function humanVisibleText(text: string): string {
 	if (!text.endsWith(WORKER_REPORT_CLOSE)) return text;
 	const reportStart = text.lastIndexOf(`\n\n${WORKER_REPORT_OPEN}\n`);
@@ -965,8 +1163,11 @@ export function HumanMessage({
 	branchPoint,
 	onActivateBranch,
 	activateBranchPending = false,
+	activateBranchDisabled = false,
+	activateBranchTarget,
 	activateBranchError,
 	onSelectAnnotation,
+	status,
 }: {
 	message: ConversationMessage;
 	/** The staged paths are relative to this session's workspace. */
@@ -992,33 +1193,48 @@ export function HumanMessage({
 	branchPoint?: ConversationBranchPoint;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	/**
+	 * Where the message stands (a refused login's). It leads the row under the
+	 * bubble, and the row then stays in place with its time and actions in view.
+	 */
+	status?: ReactNode;
 }) {
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
-	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
-		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
+		(content) => (content.type === "excerpt" && (Boolean(content.text) || content.snapshot?.badgeOnly === true)) || Boolean(content.fileReference),
 	);
+	const { body, attachments } = stagedAttachmentParts(withoutAnnotationPlaceholder(visibleMessageText, excerptReferences.length));
 	const annotationSummary = excerptReferences.length > 0 ? (
 		<ChatAnnotationSummary
 			annotations={excerptReferences.map((excerpt) => ({
 				fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
 				text: excerpt.text ?? "",
+				comment: excerpt.comment,
 				conversationId: excerpt.sourceConversationId,
 				messageId: excerpt.sourceMessageId,
 				revision: excerpt.sourceRevision,
+				snapshot: excerpt.snapshot,
 			}))}
 			onSelect={onSelectAnnotation}
-			className="mb-2"
 		/>
 	) : null;
+	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
+	// The skills and files it sent as chips, drawn as colored text.
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
+	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
+	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
+	// So does a status: it leads the row, and the time and actions follow it in
+	// view, one line under the bubble.
 	const inFlowActions = Boolean(branchPoint && onActivateBranch);
-	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-full z-10");
+	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : status ? "-mt-0.5" : "absolute right-0 top-full z-10 mt-1");
 	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
 	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
 	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
@@ -1026,6 +1242,7 @@ export function HumanMessage({
 		<div
 			className="group/message relative flex flex-col items-end gap-1"
 			data-chat-message-id={!queued && !editing ? message.id : undefined}
+			data-find-message-id={!queued && !editing && message.origin !== "automation" && message.origin !== "daemon" && !message.continuation ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
@@ -1047,7 +1264,7 @@ export function HumanMessage({
 					className={humanBubbleClass()}
 					actionsClassName={editActionRowClass}
 					leading={annotationSummary}
-					cloudAttachments={<CloudMessageAttachments attachments={message.cloudAttachments} className="mb-2" />}
+					cloudAttachments={message.cloudAttachments?.length ? <CloudMessageAttachments attachments={message.cloudAttachments} className="contents" /> : undefined}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}
@@ -1063,40 +1280,46 @@ export function HumanMessage({
 					}}
 				/>
 			) : (
-				<div
-					/* Themes draw sent and queued differently; light theme needs to tell them
-					   apart in CSS because it paints an enclosure only around a sent one. */
-					data-queued={queued ? "" : undefined}
-					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
-				>
-					<CollapsibleHumanBody stateKey={visibleMessageText}>
-						{annotationSummary}
-						{/* Attachments sit above the text they came with. */}
-						<StagedAttachmentItems
-							paths={attachments}
-							sessionId={sessionId}
-							apiBaseUrl={apiBaseUrl}
-							ariaLabel="Attached files"
-							className={cn((body || Boolean(message.cloudAttachments?.length)) && "mb-2")}
-						/>
-						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn(body && "mb-2")} />
-						{body ? (
-							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-								<ProseWithInlineImages
-									text={body}
-									attachments={attachments}
-									sessionId={sessionId}
-									apiBaseUrl={apiBaseUrl}
-									renderText={(text) => <SessionLinkedText text={text} />}
-								/>
-							</p>
-						) : null}
-					</CollapsibleHumanBody>
-				</div>
+				<>
+					{/* Attachments sit above the text they came with, outside its bubble and fold. */}
+					{hasAttachments ? (
+						<AttachmentStrip className={cn(animateIn && "chat-human-message-enter")}>
+							{annotationSummary}
+							<StagedAttachmentItems
+								paths={attachments}
+								sessionId={sessionId}
+								apiBaseUrl={apiBaseUrl}
+								ariaLabel="Attached files"
+								className="contents"
+							/>
+							<CloudMessageAttachments attachments={message.cloudAttachments} className="contents" />
+						</AttachmentStrip>
+					) : null}
+					{showBubble ? (
+						<div
+							/* Themes draw sent and queued differently; light theme needs to tell them
+							   apart in CSS because it paints an enclosure only around a sent one. */
+							data-queued={queued ? "" : undefined}
+							className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
+						>
+							<CollapsibleHumanBody stateKey={visibleMessageText}>
+								{body ? (
+									<div data-chat-message-body="" className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+										<UserMarkdown
+											text={body}
+											renderText={renderText}
+										/>
+									</div>
+								) : null}
+							</CollapsibleHumanBody>
+						</div>
+					) : null}
+				</>
 			)}
 			{editing ? null : (
 				<div className={actionRowClass}>
-					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
+					{status ? <div className="mr-1 flex items-center">{status}</div> : null}
+					<div className={cn("flex items-center gap-2", !status && "opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none")}>
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Button
@@ -1119,7 +1342,14 @@ export function HumanMessage({
 						<ConversationBranchNavigator
 							point={branchPoint}
 							pending={activateBranchPending}
-							error={activateBranchError}
+							disabled={activateBranchDisabled}
+							error={
+								!activateBranchTarget ||
+								branchPoint.previousBranchId === activateBranchTarget ||
+								branchPoint.nextBranchId === activateBranchTarget
+									? activateBranchError
+									: undefined
+							}
 							onActivate={onActivateBranch}
 						/>
 					) : null}
@@ -1236,6 +1466,7 @@ export function AssistantMessage({
 		<div
 			className="group/message relative"
 			data-chat-streaming-output={renderingStreaming ? "" : undefined}
+			data-find-message-id={message.origin !== "automation" && message.origin !== "daemon" ? message.id : undefined}
 			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
 			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
 			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
@@ -1293,6 +1524,8 @@ export function stepInProgress(activity: ConversationActivity): boolean {
  * output the reader opened to follow stays open where it lands.
  */
 export const LiveStepChoices = createContext<Map<string, boolean> | undefined>(undefined);
+/** The activity a search match opened at: the folds that hold it open, and its row opens on its output. */
+export const RevealedChatActivity = createContext<string | undefined>(undefined);
 
 /**
  * Which form of a step's label to show. In progress reads in the present tense, and
@@ -1334,7 +1567,9 @@ const LIVE_RECONNECT_CHIP =
  * when the turn settles this row fades out where it is and "Worked for" opens at the
  * top of the turn, so nothing appears to travel between the two.
  */
-export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+	/** Names this row across remounts (windowing), so its label's entrance plays once. */
+	entranceKey?: string;
 	startedAt?: string;
 	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
@@ -1352,13 +1587,12 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 }) {
 	const reducedMotion = useReducedMotion();
 	const labelId = useId();
-	// Per step: null until the reader decides, so a step that starts printing opens
-	// itself, as its own row did. The next step starts from its own default.
+	// Per step: the row stays one line, even while the step prints, until the reader
+	// opens it. The next step starts closed again.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
 	const stepChoices = useContext(LiveStepChoices);
 	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
-	const stepStreaming = step?.status === "running" && Boolean(step.detail?.output);
-	const stepOpen = expandable && (stepChoice?.id === step?.id ? stepChoice!.open : stepStreaming);
+	const stepOpen = expandable && stepChoice?.id === step?.id && stepChoice!.open;
 	// A finished step stays on the row for a moment before it moves up. It says what
 	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
 	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
@@ -1378,10 +1612,19 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
 	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
+	// A row that mounts with its chat (a switch to a working session) shows the
+	// label it opened with in place; any label after that fades in.
+	const labelEnters = useChatEntrance(entranceKey ?? labelId);
+	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
+	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
+	const labelEntrance = quietLabelKind.current === null;
+	// The mark takes the step rows' icon slot and gap (STEP_MARK_SLOT_CLASS), so the
+	// dots sit on the step icons' left edge and the label starts where theirs do: a
+	// step that moves up from here into its own row keeps both edges.
 	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
 	const row = (
 		<>
-			<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
+			<span aria-hidden="true" className={STEP_MARK_SLOT_CLASS}>
 				{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 			</span>
 			<span
@@ -1393,7 +1636,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 				{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
 				    while the text inside updates in place. */}
 				{label && labelKind ? (
-					<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
+					<span key={labelKind} className={cn(labelEntrance && "chat-live-label", "min-w-0 truncate")} data-testid="live-working-task">
 						{reconnect && !startupLabel ? (
 							<span className={LIVE_RECONNECT_CHIP}>
 								<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
@@ -1466,7 +1709,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 			</AnimatePresence>
 			{reconnect?.detail && !startupLabel ? (
 				<p
-					className="truncate pl-7 text-xs leading-5 text-muted-foreground"
+					className="truncate pl-5 text-xs leading-5 text-muted-foreground"
 					title={reconnect.detail}
 					data-testid="live-turn-status"
 				>
@@ -1528,7 +1771,17 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
  * kind this build does not recognize still renders as a generic row — dropping it
  * would hide work the agent really did.
  */
-export function ActivityRow({ activity }: { activity: ConversationActivity }) {
+export function ActivityRow({
+	activity,
+	repeats,
+}: {
+	activity: ConversationActivity;
+	/** Earlier calls with the same label, folded into this row. */
+	repeats?: readonly ConversationActivity[];
+}) {
+	// A call already in the chat when it opened, or scrolled back into view, is
+	// drawn in place; only a call that arrives fades in.
+	const entering = useChatEntrance(`row:${activity.id}`, activity.sequence);
 	const toolActivity =
 		activity.activityKind === "command" ||
 		activity.activityKind === "file_change" ||
@@ -1546,18 +1799,20 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "reasoning") content = <ReasoningBlock activity={activity} />;
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.activityKind === "ao_action") content = <AOActionRow activity={activity} />;
-	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
+	// The model picker already names the model that answered.
+	else if (isModelReroute(activity)) return null;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
+	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} retry={activity.detail.retry} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
-	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
-	else content = <GenericActivityRow activity={activity} />;
+	else if (artifactRef) content = <RenderFrame artifact={artifactRef} foldKey={activity.id} />;
+	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;
 	return (
-		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`}>
+		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`} enter={entering}>
 			{content}
 		</ActivityTransition>
 	);
@@ -1567,10 +1822,13 @@ export function ActivityTransition({
 	value,
 	children,
 	inline = false,
+	enter = true,
 }: {
 	value: string;
 	children: ReactNode;
 	inline?: boolean;
+	/** Fades in on mount. Off for content that was already on screen (see chat-entrance.ts). */
+	enter?: boolean;
 }) {
 	const reducedMotion = useReducedMotion();
 	const previousValue = useRef(value);
@@ -1579,13 +1837,15 @@ export function ActivityTransition({
 	useEffect(() => {
 		if (previousValue.current === value) return;
 		previousValue.current = value;
+		// A change made while the window is hidden would dip on the reader's return.
+		if (pageHidden()) return;
 		setSettling(true);
 	}, [value]);
 
 	const MotionElement = inline ? motion.span : motion.div;
 	return (
 		<MotionElement
-			initial={reducedMotion ? false : { opacity: 0 }}
+			initial={reducedMotion || !enter ? false : { opacity: 0 }}
 			animate={
 				reducedMotion || !settling
 					? { opacity: 1 }
@@ -1667,22 +1927,33 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * A `running` activity with no completion is a real terminal state here, not a
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
-function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
-	// null means "nobody has decided", which is what lets a running command open
-	// itself and then close again once it settles. Once the user clicks, their
-	// choice sticks: auto-collapsing a log someone is reading is worse than leaving
-	// a finished row open. That goes for a choice made on the live row too, which
-	// the row starts from when the step moves up from there.
+function GenericActivityRow({
+	activity,
+	repeats = [],
+}: {
+	activity: ConversationActivity;
+	repeats?: readonly ConversationActivity[];
+}) {
+	// Closed until the reader opens it, and their choice sticks: auto-collapsing a log
+	// someone is reading is worse than leaving a finished row open. That goes for a
+	// choice made on the live row too, which the row starts from when the step moves
+	// up from there.
 	const stepChoices = useContext(LiveStepChoices);
-	const [override, setOverride] = useState<boolean | null>(() => stepChoices?.get(activity.id) ?? null);
-	const toggle = (open: boolean) => {
-		setOverride(open);
+	// A folded row of repeated commands opens for a reveal of any call in it.
+	const revealedId = useContext(RevealedChatActivity);
+	const revealed = revealedId !== undefined
+		&& (revealedId === activity.id || repeats.some((each) => each.id === revealedId));
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? revealed);
+	useEffect(() => {
+		if (revealed) setOpen(true);
+	}, [revealed]);
+	const toggle = (next: boolean) => {
+		setOpen(next);
 		// Kept current, so a later remount starts from the reader's latest choice.
-		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, open);
+		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, next);
 	};
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
-	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const hasBody = genericActivityHasBody(activity);
 	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
@@ -1702,13 +1973,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const noticeDetail = noticeLabel ? retry?.detail : undefined;
 	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
 
-	// Live output is only live if it is on screen, so a command that is still
-	// running and already printing opens itself.
-	const streamingOutput = activity.status === "running" && Boolean(detail?.output);
-	const open = override ?? streamingOutput;
-
 	return (
 		<div
+			data-chat-activity-id={activity.id}
 			className={cn(
 				"min-w-0 max-w-full",
 				compactSummary
@@ -1834,7 +2101,21 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<GenericActivityBody activity={activity} />
+						{repeats.length > 0 ? (
+							<div className="flex flex-col gap-1">
+								{/* The row itself is the last call's target; each earlier call's
+								    output is its own, so a reveal finds and marks that call. */}
+								{repeats.map((each) => (
+									<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
+										<GenericActivityBody activity={each} />
+									</div>
+								))}
+								<GenericActivityBody activity={activity} />
+
+							</div>
+						) : (
+							<GenericActivityBody activity={activity} />
+						)}
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -2435,7 +2716,11 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// A choice made on the live row carries over when the call moves up from there.
 	const stepChoices = useContext(LiveStepChoices);
-	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
+	const revealed = useContext(RevealedChatActivity) === activity.id;
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? revealed);
+	useEffect(() => {
+		if (revealed) setOpen(true);
+	}, [revealed]);
 	const toggle = () => {
 		setOpen(!open);
 		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, !open);
@@ -2459,7 +2744,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	const hasBody = mcpToolHasBody(activity);
 
 	return (
-		<div className="min-w-0 max-w-full">
+		<div className="min-w-0 max-w-full" data-chat-activity-id={activity.id}>
 			<Pressable
 				onClick={toggle}
 				disabled={!hasBody}
@@ -2951,35 +3236,9 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 /* system events                                                               */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Where the provider swapped the model out.
- *
- * On the timeline as well as in the composer because it happened at a point in the
- * conversation: everything after this row was answered by a different model than
- * everything before it, and only a timeline entry can say where the line is.
- */
-function RerouteRow({ activity }: { activity: ConversationActivity }) {
-	const detail = activity.detail;
-	return (
-		<div className="flex items-start gap-2.5 rounded-md border border-border bg-surface/60 px-3 py-2">
-			<Shuffle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-			<div className="flex min-w-0 flex-col gap-0.5">
-				<span className="text-xs text-foreground">
-					Answered by{" "}
-					<strong className="font-medium">{detail?.toModel ?? "another model"}</strong>
-					{detail?.fromModel ? (
-						<>
-							{" "}
-							instead of <span className="text-muted-foreground">{detail.fromModel}</span>
-						</>
-					) : null}
-				</span>
-				{detail?.reason ? (
-					<span className="text-xs leading-snug text-muted-foreground">{detail.reason}</span>
-				) : null}
-			</div>
-		</div>
-	);
+/** A provider's note that another model answered. Never drawn: the model picker already names that model. */
+export function isModelReroute(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.detail?.event === "model.rerouted";
 }
 
 /**
@@ -3229,8 +3488,15 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
  * continues on the new account with the next message. */
 function AccountSwitchedRow({ accountId }: { accountId?: string }) {
 	const { t } = useTranslation();
-	const label = useAgentAccountLabel();
+	const label = useAgentAccountLabel(true, useContext(ChatHostId));
 	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
+}
+
+function AccountHandoffRow({ accountId, retry }: { accountId?: string; retry?: "sent" | "skipped" }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	const detail = retry === "sent" ? t("chat.accountHandoffRetried") : retry === "skipped" ? t("chat.accountHandoffNotRetried") : undefined;
+	return <TwoRowTimelineMarker message={t("chat.accountHandoff", { email: label(accountId) })} detail={detail} wrapDetail />;
 }
 
 function ReauthRow({ activity }: { activity: ConversationActivity }) {
@@ -3264,22 +3530,29 @@ export function SteerMessage({
 	activity,
 	sessionId,
 	apiBaseUrl = getApiBaseUrl(),
+	onSelectAnnotation,
 }: {
 	activity: ConversationActivity;
 	sessionId: string;
 	apiBaseUrl?: string | null;
+	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
 	const [expanded, setExpanded] = useState(false);
-	const text = activity.detail?.text ?? activity.summary;
+	const annotations = steerAnnotations(activity.detail?.content);
+	const text = withoutAnnotationPlaceholder(activity.detail?.text ?? activity.summary, annotations.length);
 	const senderSessionId = activity.detail?.senderSessionId?.trim();
 	const senderProjectId = activity.detail?.senderProjectId?.trim();
 	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
-	const automationSteer = Boolean(senderSessionId);
+	// From another AO session, or from the orchestrator that spawned this one (a Cloud
+	// orchestrator's message steered into a busy worker names only its label).
+	const automationSteer = Boolean(senderSessionId) || (activity.detail?.origin === "automation" && Boolean(senderLabel));
 	const senderHref = senderSessionId && senderProjectId
 		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
 		: undefined;
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
+	// Only the person's own steer is marked; a steer from another session is not theirs.
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
@@ -3288,7 +3561,11 @@ export function SteerMessage({
 	// Composer images are recorded twice: once as durable staged paths and once as
 	// native prompt blocks. Suppress only the corresponding leading native images;
 	// later image blocks may be distinct provider content and must remain visible.
+	const annotationSummary = annotations.length > 0
+		? <ChatAnnotationSummary annotations={annotations} onSelect={onSelectAnnotation} />
+		: null;
 	const remainingContent = (activity.detail?.content ?? []).filter((item) => {
+		if (item.type === "excerpt" || item.type === "file_reference") return false;
 		if (item.type !== "image" || stagedImagesToMatch === 0) return true;
 		stagedImagesToMatch -= 1;
 		return false;
@@ -3302,12 +3579,13 @@ export function SteerMessage({
 					<SessionLinkedText text={preview} />
 				</p>
 			) : null}
+				{annotationSummary ? <div className={cn(body && "mt-2")}>{annotationSummary}</div> : null}
 				<StagedAttachmentItems
 					paths={attachments}
 					sessionId={sessionId}
 					apiBaseUrl={apiBaseUrl}
 					ariaLabel="Steered attachments"
-					className={cn(body && "mt-2")}
+					className={cn((body || annotationSummary) && "mt-2")}
 				/>
 				<ConversationContentItems
 					content={remainingContent}
@@ -3329,37 +3607,43 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
-					{body ? (
-						<p>
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
+				<>
+					{/* As on a sent message: attachments above the text, outside its bubble. */}
+					{annotationSummary || attachments.length > 0 || remainingContent.length > 0 ? (
+						<AttachmentStrip>
+							{annotationSummary}
+							<StagedAttachmentItems
+								paths={attachments}
 								sessionId={sessionId}
 								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => text}
+								ariaLabel="Steered attachments"
+								className="contents"
 							/>
-						</p>
+							<ConversationContentItems
+								content={remainingContent}
+								ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
+								imageLabel="Image"
+								imageAlt={(position) => `Steered attachment ${position}`}
+								className="contents"
+							/>
+						</AttachmentStrip>
 					) : null}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel="Steered attachments"
-						className={cn(body && "mt-2")}
-					/>
-					<ConversationContentItems
-						content={remainingContent}
-						ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
-						imageLabel="Image"
-						imageAlt={(position) => `Steered attachment ${position}`}
-						className={cn((body || attachments.length > 0) && "mt-2")}
-					/>
-				</div>
+					{body || (!annotationSummary && attachments.length === 0 && remainingContent.length === 0) ? (
+						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+							{body ? (
+								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+									<UserMarkdown text={body} renderText={renderText} />
+								</div>
+							) : null}
+						</div>
+					) : null}
+				</>
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered
+				{activity.detail?.deliveredBeforeDelete
+					? "Steered: the agent took it before your delete could stop it"
+					: "Steered"}
 			</span>
 		</div>
 	);
@@ -3738,6 +4022,110 @@ function fileChangeIcon(status: DiffStatus): StepIcon {
 		default:
 			return "write";
 	}
+}
+
+/** Fills a 5:4 tile with a page laid out 1000 wide, as the Summary's previews do. */
+const TURN_ARTIFACT_PAGE_HEIGHT = 800;
+
+/**
+ * The end-of-turn results: deliverables the turn created or edited as preview
+ * cards, then every other changed file in the changed-files card. An artifact
+ * is the thing the reader asked for, not a code change to review, so it never
+ * appears in both.
+ */
+export function TurnResults({
+	diff,
+	reportedArtifacts,
+	items,
+	onReview,
+	onOpenFile,
+	onOpenArtifact,
+}: {
+	/** Absent for an agent that reports no diffs, or a turn that only wrote artifacts. */
+	diff?: TurnDiff;
+	/** The artifacts the daemon saw the turn create or edit. */
+	reportedArtifacts?: TurnArtifactChange[];
+	items?: ConversationItem[];
+	onReview?: () => void;
+	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens an artifact in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
+}) {
+	const source = useChatArtifactFiles();
+	const pathHints = useMemo(() => turnPathHints(items), [items]);
+	const split = useMemo(
+		() => splitTurnArtifacts(diff, source?.sessionId, source?.artifacts, (path) => resolveTurnFilePath(path, pathHints), reportedArtifacts),
+		[diff, source?.sessionId, source?.artifacts, pathHints, reportedArtifacts],
+	);
+	const files = useMemo<TurnDiff | undefined>(() => (diff ? { ...diff, files: split.files } : undefined), [diff, split.files]);
+	return (
+		<>
+			{split.artifacts.length > 0 && source ? (
+				<TurnArtifacts artifacts={split.artifacts} sessionId={source.sessionId} cloud={source.cloud} onOpenArtifact={onOpenArtifact} />
+			) : null}
+			{files ? <TurnChangedFiles diff={files} items={items} onReview={onReview} onOpenFile={onOpenFile} /> : null}
+		</>
+	);
+}
+
+/** Preview cards for the deliverables one turn created or edited. */
+export function TurnArtifacts({
+	artifacts,
+	sessionId,
+	cloud,
+	onOpenArtifact,
+}: {
+	artifacts: TurnArtifact[];
+	sessionId: string;
+	cloud?: ArtifactRow["cloud"];
+	/**
+	 * Opens the artifact by its artifact path. Not the workspace-file opener: a
+	 * cloud chat resolves that against workspace files, which never holds the
+	 * artifact, so a card would open the wrong file or none.
+	 */
+	onOpenArtifact?: (target: { path: string }) => void;
+}) {
+	return (
+		<section aria-label={artifacts.length === 1 ? "Artifact" : `${artifacts.length} Artifacts`} className="flex min-w-0 flex-col gap-2">
+			<span className="text-xs text-muted-foreground">
+				{artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`}
+			</span>
+			<ul className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2.5">
+				{artifacts.map(({ artifact, status }) => {
+					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
+					const verb = fileChangeVerb(status);
+					const body = (
+						<>
+							<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+								<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={TURN_ARTIFACT_PAGE_HEIGHT} row={row} />
+							</span>
+							<span className="flex min-w-0 flex-col">
+								<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
+								<span className="truncate text-caption leading-4 text-passive">{verb}</span>
+							</span>
+						</>
+					);
+					const tileClass = "group flex w-full min-w-0 flex-col gap-1.5 rounded-md text-left focus-visible:ring-1 focus-visible:ring-ring";
+					return (
+						<li key={artifact.path} className="min-w-0">
+							{onOpenArtifact ? (
+								<Pressable
+									aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
+									className={tileClass}
+									onClick={() => onOpenArtifact({ path: artifact.path })}
+									title={artifact.path}
+								>
+									{body}
+								</Pressable>
+							) : (
+								<div className={tileClass} title={artifact.path}>{body}</div>
+							)}
+						</li>
+					);
+				})}
+			</ul>
+		</section>
+	);
 }
 
 /**

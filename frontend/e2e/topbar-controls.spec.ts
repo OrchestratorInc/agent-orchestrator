@@ -8,7 +8,6 @@ for (const mode of ["light", "dark"]) {
 		await page.addInitScript((theme) => {
 			Object.defineProperty(navigator, "platform", { get: () => "MacIntel", configurable: true });
 			Object.defineProperty(navigator, "userAgentData", { get: () => ({ platform: "macOS" }), configurable: true });
-			localStorage.setItem("ao.developerMode", "true");
 			localStorage.setItem("ao.theme", theme);
 		}, mode);
 		await page.route("**/api/v1/projects/ao-demo/cues", (route) => route.fulfill({ json: { cues: [] } }));
@@ -78,7 +77,6 @@ for (const mode of ["light", "dark"]) {
 			await page.addInitScript(({ mode, palette }) => {
 				Object.defineProperty(navigator, "platform", { get: () => "MacIntel", configurable: true });
 				Object.defineProperty(navigator, "userAgentData", { get: () => ({ platform: "macOS" }), configurable: true });
-				localStorage.setItem("ao.developerMode", "true");
 				localStorage.setItem("ao.theme", mode);
 				localStorage.setItem("ao.theme-style", palette);
 			}, { mode, palette });

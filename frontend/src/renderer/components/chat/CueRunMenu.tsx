@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Loader2, MessageSquare, Play, Plus, TerminalSquare } from "@/components/app-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUiStore } from "../../stores/ui-store";
-import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
 import { apiErrorMessage } from "../../lib/api-client";
 import { useCueHost, useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
 import { fetchProjectCues, invokeCloudCue, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
@@ -69,9 +68,6 @@ function CueRunMenuTrigger({
 	onRun?: () => void;
 }) {
 	const { t } = useTranslation();
-	// The hover-highlight and focus handling below belong to the simplified top
-	// bar; the previous one keeps the menu exactly as it was.
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const queryClient = useQueryClient();
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
@@ -249,7 +245,7 @@ function CueRunMenuTrigger({
 						disabled={disabled || spinner}
 						variant="quiet"
 						// Hover opens this menu; an open menu is not a pressed action.
-						className={simplifiedTopbar ? "data-[state=open]:before:opacity-0 data-[state=open]:before:bg-interactive-hover data-[state=open]:text-muted-foreground data-[state=open]:hover:before:opacity-100 data-[state=open]:hover:text-foreground data-[state=open]:focus-visible:before:opacity-100 data-[state=open]:focus-visible:text-foreground" : undefined}
+						className="data-[state=open]:before:opacity-0 data-[state=open]:before:bg-interactive-hover data-[state=open]:text-muted-foreground data-[state=open]:hover:before:opacity-100 data-[state=open]:hover:text-foreground data-[state=open]:focus-visible:before:opacity-100 data-[state=open]:focus-visible:text-foreground"
 						onPointerEnter={handlePointerEnter}
 						onPointerLeave={handlePointerLeave}
 						// Keyboard activation opens the menu (Radix); only pointer
@@ -285,7 +281,7 @@ function CueRunMenuTrigger({
 							escapeRequested.current = true;
 						}}
 						onCloseAutoFocus={(event) => {
-							if (simplifiedTopbar && openedByPointer.current) event.preventDefault();
+							if (openedByPointer.current) event.preventDefault();
 						}}
 					/>
 				) : null}

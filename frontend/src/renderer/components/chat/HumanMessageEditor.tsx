@@ -12,7 +12,7 @@ import {
 	stagedAttachmentParts,
 	withAttachmentReferences,
 } from "./messageAttachments";
-import { StagedAttachmentItems } from "./StagedAttachmentItems";
+import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 
 export interface HumanMessageEditorProps {
 	/** The full prompt text, including AO's attached-files block when the message had one. */
@@ -26,9 +26,9 @@ export interface HumanMessageEditorProps {
 	className?: string;
 	/** Places Cancel and Send in the row the message's hover actions use. */
 	actionsClassName?: string;
-	/** Drawn first, where the bubble draws it. */
+	/** Drawn first in the row above the box, where the message draws it. */
 	leading?: ReactNode;
-	/** Drawn after the staged files and above the text, where the bubble draws them. */
+	/** Drawn after the staged files, above the box, where the message draws them. */
 	cloudAttachments?: ReactNode;
 	pending: boolean;
 	/** Durable unresolved delivery: lock edits, but allow explicit safe recovery. */
@@ -154,6 +154,27 @@ export function HumanMessageEditor({
 
 	return (
 		<>
+			{/* Above the box and outside its fold, where the bubble draws them. */}
+			{leading || attachments.length > 0 || cloudAttachments || otherContent.length > 0 ? (
+				<AttachmentStrip>
+					{leading}
+					<StagedAttachmentItems
+						paths={attachments}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						ariaLabel={t("chat.attachment.list")}
+						className="contents"
+						onRemove={pending || locked ? undefined : removeAttachment}
+					/>
+					{cloudAttachments}
+					<ConversationContentItems
+						content={otherContent}
+						ariaLabel={t("chat.edit.preservedContent")}
+						imageLabel={t("chat.edit.image")}
+						className="contents"
+					/>
+				</AttachmentStrip>
+			) : null}
 			<div
 				ref={box}
 				className={className}
@@ -162,16 +183,6 @@ export function HumanMessageEditor({
 				{/* The bubble's own fold, so a long message keeps its height, folded or open.
 				    Folded, the editor scrolls instead of clipping, so all of it stays reachable. */}
 				<CollapsibleHumanBody stateKey={foldKey} scrollWhenFolded>
-					{leading}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel={t("chat.attachment.list")}
-						className="mb-2"
-						onRemove={pending || locked ? undefined : removeAttachment}
-					/>
-					{cloudAttachments}
 					{/* A hidden copy of the draft sizes the field (see styles.css), so the box
 					    fits its text exactly as the bubble did and grows only with the text. */}
 					<div className="chat-human-edit-field" data-value={draft}>
@@ -192,12 +203,6 @@ export function HumanMessageEditor({
 							className="w-full min-w-0 resize-none overflow-hidden bg-transparent p-0 break-words whitespace-pre-wrap text-pretty text-foreground outline-none"
 						/>
 					</div>
-					<ConversationContentItems
-						content={otherContent}
-						ariaLabel={t("chat.edit.preservedContent")}
-						imageLabel={t("chat.edit.image")}
-						className="mt-2"
-					/>
 				</CollapsibleHumanBody>
 				{/* Below the field it belongs to, on its own line, so all of it reads. */}
 				{error ? (

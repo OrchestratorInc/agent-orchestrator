@@ -11,6 +11,13 @@ describe("reviewer attachment composer", () => {
 		expect(source).toContain("<ChatAttachmentMenu");
 	});
 
+	it("draws attachments inside the pill, over the field", () => {
+		const pill = source.slice(source.indexOf("<View style={[styles.composer"));
+		const tray = pill.indexOf("<ComposerAttachmentTray items={trayItems}");
+		expect(tray).toBeGreaterThan(0);
+		expect(tray).toBeLessThan(pill.indexOf("<TextInput"));
+	});
+
 	it("only sends or interrupts and has no ordinary session actions", () => {
 		expect(source).toContain("await onSend(");
 		expect(source).toContain("onInterrupt()");

@@ -3,6 +3,9 @@ package review
 import (
 	"fmt"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // reviewTexts returns the user-facing prompt and the system prompt to deliver to
@@ -18,17 +21,20 @@ func reviewTexts(spec LaunchSpec) (prompt, systemPrompt string) {
 	systemPrompt = reviewSystemPrompt()
 
 	queueText := reviewQueueText(spec)
-	prompt = fmt.Sprintf(`Review the requested implementation pull request(s) owned by worker session %s.
-%s
+	post, record, rules := reviewSubmitExamples(spec)
+	prompt = fmt.Sprintf(`Review the requested implementation pull request(s) owned by worker session %[1]s.
+%[2]s
 
 Complete every review task in the queue autonomously. Do not ask the user whether to continue to the next PR, and do not stop after the first PR unless the provider or checkout is genuinely unusable for every queued task.
 
 For each task, use its queued head commit as the review target. Read PR metadata to identify the base commit, then use `+"`git diff <base-sha>...<head-commit-from-queue>`"+` to compare the PR's merge base with that target. Read source and tests at the target commit with `+"`git show`"+`. The worker may change the checkout while you review: do not substitute the working tree, local HEAD, or a newer PR head for the queued commit. Inspect relevant callers, callees, and repository guidance before drawing conclusions.
 
-Do these steps in order:
-1. For each PR below, post a separate review on that pull request and capture its id in one call. Post with `+"`gh api`"+` rather than `+"`gh pr review`"+`: it is the only way to attach inline comments, and its response carries the created review's id, so Orchestrator can tell the worker exactly which review to address. Send the review as a JSON body so the inline comments form a proper array of objects:
+Do these steps in order for each PR:
+1. Post a separate review on the pull request and capture its id in one call. Use the command below to attach inline comments and return the created GitHub review ID.
 
-    printf '%%s' '{ "event": "COMMENT", "commit_id": "<head-commit-from-queue>", "body": "<summary>", "comments": [ { "path": "<file>", "line": <n>, "side": "RIGHT", "body": "<finding>" } ] }' | gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id'
+~~~sh
+%[3]s
+~~~
 
    - Substitute the PR's owner/repo/number and that task's exact queued head commit for commit_id. Never omit commit_id: GitHub otherwise attaches the review to the latest PR commit, which may differ from the code you inspected.
    - The worker receives only your inline comments, never the summary, and treats each one as a required change. So:
@@ -37,16 +43,51 @@ Do these steps in order:
      - Omit "comments" only when nothing needs to change.
    - Anchor each comment on a changed line in that task's diff. Use side RIGHT for the target side, or LEFT for a deleted line on the base side. Start with [P1] for an urgent defect, [P2] for a defect that should be fixed, or [P0] only for an unconditional critical failure. Explain the trigger, observed code path, and consequence in a short paragraph. Give the smallest useful correction; do not ask for a broad rewrite.
    - In the summary, name the reviewed commit, describe the areas inspected, and disclose unavailable context or checks. Distinguish static reasoning and observed CI results from tests you executed. Never claim to have run tests, or treat passing CI as proof that no bugs remain.
-	   - Keep the JSON on one line and shell-escape any single quotes in review text before passing it to printf; do not use a heredoc because reviewer panes run through an interactive PTY.
    - Always use "event": "COMMENT": reviews are posted from the PR author's own account, and GitHub rejects both APPROVE and REQUEST_CHANGES on your own PR. State in the body whether you are requesting changes or approving; the machine-readable verdict goes to Orchestrator in step 2.
    - The printed number is the review id. If the call fails on the provider, leave the id empty.
-2. After every PR has its own GitHub review from step 1, record Orchestrator's bookkeeping for those already-posted reviews using one command. Pass JSON on stdin so nothing is ever written into the worktree (a file there could be committed onto the worker's branch). Include one object per PR/run from the queue:
+2. Record Orchestrator's bookkeeping for that already-posted review. The body here is plain Markdown, not JSON:
 
-    printf '%%s' '{ "reviews": [ { "runId": "<run-id>", "verdict": "<approved|changes_requested>", "githubReviewId": "<id-from-step-1-or-empty>", "body": "<your full review markdown>" } ] }' | ao review submit --session %s --reviews -
+~~~sh
+%[4]s
+~~~
 
-Only if step 1 genuinely fails on the provider for a PR, still include that run in step 2 with an empty githubReviewId so the result is recorded.`,
-		spec.WorkerID, queueText, spec.WorkerID)
+   - If step 1 produced no review id, leave out `+"`--review-id <id-from-step-1>`"+` entirely; still record the result so the run is not lost.
+
+%[5]s
+
+If step 2 reports that the run was superseded, skip it without retrying and continue with the next queued PR.
+Do not retry a failing submit command more than twice. If step 1 still fails, go on to step 2 without --review-id. If step 2 still fails, stop and report the command's error output in your final message instead of trying again.`,
+		spec.WorkerID, queueText, post, record, rules)
 	return prompt, systemPrompt
+}
+
+func reviewSubmitExamples(spec LaunchSpec) (post, record, rules string) {
+	const gh = "gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id'"
+	ao := fmt.Sprintf("ao review submit --session %s --run <run-id> --verdict <approved|changes_requested> --review-id <id-from-step-1> --body -", spec.WorkerID)
+	const payload = `{"event":"COMMENT","commit_id":"<head-commit-from-queue>","body":"<summary>","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<finding>"}]}`
+	switch spec.Harness {
+	case domain.ReviewerClaudeCode:
+		const delimiter = ports.ReviewSubmitHeredocDelimiter
+		heredoc := " <<'" + delimiter + "'\n"
+		return gh + heredoc + payload + "\n" + delimiter, ao + heredoc + "<your full review markdown>\n" + delimiter, fmt.Sprintf(`Heredoc rules for both commands:
+- The quoted heredoc passes the text through exactly as written. Do not shell-escape anything inside it: apostrophes, quotes, backticks, and dollar signs are safe. Step 1's JSON must still be valid JSON (escape double quotes and write newlines inside strings as \n).
+- Put the closing %s alone on its own line with no indentation, write nothing after it, and never write a line that is exactly %s inside the review text.
+- Run the command exactly as shown: no other commands, redirections, or files around it.
+
+If a heredoc command fails because the shell cannot create a temp file for the here document (some reviewer sandboxes are read-only), run the same command once more with the text piped through printf instead: `+"`printf '%%s' '<the same text>' | <the same command without the heredoc>`"+`. In that form, replace every single quote in the text with '\''.`, delimiter, delimiter)
+	case domain.ReviewerKiro, domain.ReviewerOpenCodeV2:
+		body, target := payload, gh
+		if spec.Harness == domain.ReviewerOpenCodeV2 {
+			target = "ao review post-github"
+			body = `{"endpoint":"repos/{owner}/{repo}/pulls/{number}/reviews","review":` + payload + "}"
+		}
+		const pipe = "' | base64 --decode | "
+		return "printf '%s' '<base64 of review JSON>" + pipe + target, "printf '%s' '<base64 of review Markdown>" + pipe + ao, "Encode each UTF-8 body as one unwrapped base64 string. Use base64 -D if your platform requires it. Step 1's JSON shape is " + body
+	default:
+		post = "printf '%s' '" + payload + "' | " + gh
+	}
+	return post, "printf '%s' '<one-paragraph review Markdown>' | " + ao, `Keep each command on one physical line. In each printf operand replace every single quote with '\''. Encode newlines in JSON strings as \n.`
+
 }
 
 func reviewSystemPrompt() string {
@@ -74,7 +115,7 @@ func reviewQueueText(spec LaunchSpec) string {
 		return fmt.Sprintf("\nReview task queue:\n* 1. %s (head commit %s, run %s)\n", spec.PRURL, spec.TargetSHA, spec.RunID)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\nAO created %d review tasks for this worker session. Review every queued PR, then submit all results together.\n\nReview task queue:\n", len(spec.ReviewQueue))
+	fmt.Fprintf(&b, "\nAO created %d review tasks for this worker session. Review every queued PR and record a result for each one.\n\nReview task queue:\n", len(spec.ReviewQueue))
 	for i, task := range spec.ReviewQueue {
 		fmt.Fprintf(&b, "* %d. %s (head commit %s, run %s)\n", i+1, task.PRURL, task.TargetSHA, task.RunID)
 	}

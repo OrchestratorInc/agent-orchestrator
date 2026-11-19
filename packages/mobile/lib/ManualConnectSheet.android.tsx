@@ -4,7 +4,7 @@ import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LOCAL_NETWORK_HINT } from "./connectionError";
-import { FormPasswordField, FormTextField, FormTextFieldRow, FormToggle } from "./formFields";
+import { FormPasswordField, FormTextField, FormTextFieldRow } from "./formFields";
 import type { Theme } from "./theme";
 import { useThemeState, useThemedStyles } from "./ThemeProvider";
 import { space, type } from "./tokens";
@@ -67,13 +67,12 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 							label="Password"
 							value={cfg.password}
 							onChangeText={form.setField("password")}
-							placeholder="Connection password"
+							placeholder="Pairing code or password"
 							returnKeyType="go"
 							onSubmitEditing={() => { if (form.canConnect && !form.busy) void form.connect(); }}
 							error={failure?.field === "password" ? failure.message : undefined}
 							testID="manual-connect-password"
 						/>
-						<FormToggle label="Use TLS" value={!!cfg.secure} onValueChange={form.setSecure} testID="manual-connect-tls" />
 					</Column>
 				</Host>
 				<Button

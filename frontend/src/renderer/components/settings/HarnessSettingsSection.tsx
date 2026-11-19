@@ -48,7 +48,7 @@ export function HarnessSettingsSection({
 		title={t("settings.harness")}
 		titleHidden={titleHidden}
 		sectionId="harness"
-		toolbar={showToolbar ? (<div className="flex shrink-0 items-center gap-2 pb-2">
+		toolbar={showToolbar ? (<div className="flex shrink-0 items-center gap-2 pb-3">
 			<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
 				<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
 				<span className="sr-only">{t("settings.harness.search")}</span>
