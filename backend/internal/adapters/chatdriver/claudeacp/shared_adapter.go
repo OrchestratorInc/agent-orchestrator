@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -34,9 +35,31 @@ var adapterBaseEnvKeys = []string{"HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "
 // maxSocketPath stays under the 104-byte sun_path limit on macOS.
 const maxSocketPath = 100
 
-// sessionEnv holds each shared-adapter chat's full env until claudeSessionMeta
-// sends it with session/new.
-var sessionEnv sync.Map // domain.SessionID -> map[string]string
+// sharedAdapterSupported is false where the adapter cannot run as a shared
+// process; those chats start their own adapter.
+var sharedAdapterSupported = sharedAdapterAvailable
+
+// sessionEnv holds each shared-adapter chat's full env for claudeSessionMeta.
+// One launch reads it once or twice within its startup (a failed session/load
+// falls back to session/new), so entries older than sessionEnvTTL are dropped.
+var sessionEnv sync.Map // domain.SessionID -> launchEnv
+
+const sessionEnvTTL = 10 * time.Minute
+
+type launchEnv struct {
+	env    map[string]string
+	stored time.Time
+}
+
+func storeSessionEnv(id domain.SessionID, env map[string]string, now time.Time) {
+	sessionEnv.Range(func(key, value any) bool {
+		if now.Sub(value.(launchEnv).stored) > sessionEnvTTL {
+			sessionEnv.Delete(key)
+		}
+		return true
+	})
+	sessionEnv.Store(id, launchEnv{env: env, stored: now})
+}
 
 // sharedAdapterEnvs splits a chat's effective env (the daemon's env with the
 // launch overlay) into the adapter process's env and the session's env.
@@ -63,8 +86,19 @@ func sharedAdapterEnvs(overlay map[string]string, workspace string) (server, ses
 }
 
 // sharedAdapterSocket names the adapter process for exactly this runtime and env.
+// The file stamps change when an update replaces the runtime at the same path.
 func sharedAdapterSocket(dataDir string, rt runtimeLaunch, server map[string]string) (string, error) {
-	identity, err := json.Marshal([]any{rt.command, rt.server, server})
+	files := []string{rt.command, rt.server}
+	if len(rt.args) > 0 {
+		files = append(files, filepath.Join(filepath.Dir(rt.args[0]), "acp-agent.js"))
+	}
+	stamps := make([]string, 0, len(files))
+	for _, path := range files {
+		if info, err := os.Stat(path); err == nil {
+			stamps = append(stamps, fmt.Sprintf("%s %d %d", path, info.Size(), info.ModTime().UnixNano()))
+		}
+	}
+	identity, err := json.Marshal([]any{stamps, server})
 	if err != nil {
 		return "", err
 	}
@@ -75,6 +109,9 @@ func sharedAdapterSocket(dataDir string, rt runtimeLaunch, server map[string]str
 // sharedAdapterLaunch connects the chat to a running adapter process, starting
 // one if needed. ok is false when the chat should start its own adapter.
 func sharedAdapterLaunch(ctx context.Context, cfg acpdriver.LaunchConfig, rt runtimeLaunch, env map[string]string) (acpdriver.Launch, bool, error) {
+	if !sharedAdapterSupported {
+		return acpdriver.Launch{}, false, nil
+	}
 	server, session := sharedAdapterEnvs(env, cfg.WorkspacePath)
 	socket, err := sharedAdapterSocket(cfg.DataDir, rt, server)
 	if err != nil {
@@ -86,14 +123,14 @@ func sharedAdapterLaunch(ctx context.Context, cfg acpdriver.LaunchConfig, rt run
 	if err := ensureSharedAdapter(ctx, socket, rt, server); err != nil {
 		return acpdriver.Launch{}, false, err
 	}
-	sessionEnv.Store(cfg.SessionID, session)
+	storeSessionEnv(cfg.SessionID, session, time.Now())
 	return acpdriver.Launch{Command: persistenthost.SocketProvider, Args: []string{socket}}, true, nil
 }
 
 func sharedSessionEnv(id domain.SessionID) map[string]string {
-	env, _ := sessionEnv.Load(id)
-	values, _ := env.(map[string]string)
-	return values
+	value, _ := sessionEnv.Load(id)
+	stored, _ := value.(launchEnv)
+	return stored.env
 }
 
 func adapterListening(socket string) bool {

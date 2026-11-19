@@ -13,6 +13,8 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
+const sharedAdapterAvailable = true
+
 // ensureSharedAdapter starts acp-server.mjs on socket unless one already
 // listens there. The server runs in its own session so it outlives a daemon
 // restart, and exits by itself once its last chat disconnects.
