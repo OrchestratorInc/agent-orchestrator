@@ -154,7 +154,7 @@ import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
-import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
@@ -608,7 +608,8 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: a red
 // alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge.
+// request is ready to merge. The blue spinner (working) and the green dot (a
+// finished turn you have not opened) are drawn by SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
@@ -633,6 +634,33 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 	);
 }
 
+// The spinner and the dot: a blue spinner while the agent works, a filled green
+// dot for a finished turn the user has not opened, a hollow grey ring otherwise.
+// Spinner, filled dot and ring differ in shape as well as colour.
+function SessionActivityGlyph({ state, ...rest }: {
+	state: "working" | "unread" | "read";
+} & Record<`data-${string}`, string | undefined>) {
+	if (state === "working") {
+		return (
+			<LoaderCircle
+				className="-mx-0.5 size-3 animate-spin text-status-working motion-reduce:animate-none"
+				{...rest}
+			/>
+		);
+	}
+	return (
+		<span className="-mx-0.5 inline-flex size-3 items-center justify-center" {...rest}>
+			<span
+				className={cn(
+					"size-2 rounded-full",
+					state === "unread" ? "bg-status-ready" : "border border-muted-foreground/60",
+				)}
+				data-session-unread={state === "unread" ? "" : undefined}
+			/>
+		</span>
+	);
+}
+
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
@@ -653,8 +681,9 @@ export function SessionStatusDot({ session, indicator }: {
 		if (previous.current !== marker && marker) setPopped(true);
 		previous.current = marker;
 	}, [marker]);
-	// Rows with nothing to flag still get a quiet dot, so every title starts on
-	// the same column: filled while unread, hollow once the user has read it.
+	// Rows with nothing to flag still get a dot, so every title starts on the
+	// same column: filled green while a finished turn is unread, a hollow grey
+	// ring once the user has read it.
 	const stopped =
 		session.activity?.state === "exited" || session.status === "exited" || session.status === "no_signal";
 	return (
@@ -670,24 +699,13 @@ export function SessionStatusDot({ session, indicator }: {
 					popped={popped}
 				/>
 			) : working ? (
-				<LoaderCircle
-					className="-mx-0.5 size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
-					data-session-status={session.status}
-					data-session-spinner=""
-				/>
+				<SessionActivityGlyph data-session-spinner="" data-session-status={session.status} state="working" />
 			) : (
-				<span
-					className="-mx-0.5 inline-flex size-3 items-center justify-center"
+				<SessionActivityGlyph
 					data-session-idle={stopped ? "stopped" : "idle"}
 					data-session-status={session.status}
-				>
-					<span
-						className={cn(
-							"size-2 rounded-full",
-							unread ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
-						)}
-					/>
-				</span>
+					state={unread ? "unread" : "read"}
+				/>
 			)}
 		</span>
 	);
@@ -1610,6 +1628,20 @@ const ProjectItem = memo(function ProjectItem({
 		[workspace.sessions, workspace.shared],
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
+	// What a collapsed project shows in place of its icon, strongest first: a
+	// session waiting on the user, then one whose agent is working, then a
+	// finished turn the user has not opened.
+	const readAt = useSessionReadStore((state) => state.readAt);
+	const readBaseline = useSessionReadStore((state) => state.baseline);
+	const projectActivity = useMemo(() => {
+		if (projectNeedsInput) return "attention" as const;
+		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
+		if (indicators.includes("working")) return "working" as const;
+		const read = { readAt, baseline: readBaseline };
+		return visibleSessions.some((session, index) => indicators[index] === null && isSessionUnread(session, read))
+			? ("unread" as const)
+			: null;
+	}, [projectNeedsInput, readAt, readBaseline, visibleSessions]);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
 		() => {
@@ -2003,8 +2035,10 @@ const ProjectItem = memo(function ProjectItem({
 											className="inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
-											{!expanded && projectNeedsInput ? (
+											{!expanded && projectActivity === "attention" ? (
 												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
+											) : !expanded && projectActivity ? (
+												<SessionActivityGlyph data-project-marker={projectActivity} state={projectActivity} />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
 										</span>
 										<span

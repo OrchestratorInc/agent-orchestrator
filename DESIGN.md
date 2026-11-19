@@ -151,9 +151,17 @@ Status is derived from durable runtime, PR, CI, and review facts. The renderer c
 
 Use one fixed status slot where status belongs. Prefer an icon/glyph over a prose badge.
 
-1. If the session is actively working, show the working spinner.
+1. If the session is actively working, show the working spinner in `--color-status-working`.
 2. Otherwise, if a PR is relevant, show the PR glyph tinted by its actionable state.
 3. Otherwise, show a dot: amber/red for attention, muted for idle/complete.
+
+Sidebar session rows apply these rules with distinct shapes, so colour is never the only signal:
+
+- Working: blue spinner (`--color-status-working`). The title sweep is tinted toward the same blue at low strength (40% mixed into the foreground). The open row keeps the spinner without the sweep, and reduced motion stops both.
+- Waiting on the user, CI failing, merge conflicts, changes requested: red alert icon. A person's review next: orange alert icon.
+- Ready to merge: green pull-request icon. Merged: dimmed purple merge icon.
+- A finished turn the user has not opened: filled green dot (`--color-status-ready`). Once opened: hollow muted ring.
+- A collapsed project shows its strongest state in place of its icon, in this order: red alert when any session waits on the user, blue spinner when any agent is working, green dot for an unopened finished turn. Otherwise it shows the project icon.
 
 Do not show multiple competing status chips on a session card or sidebar row. Text labels are allowed when needed for accessibility, an empty state, an inspector summary, or a decision the user must make.
 
@@ -450,3 +458,4 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-11-10 | The board's archive is a searchable modal of session cards in the Cmd+K surface, opened from a quiet Archive button under the lanes | The inline archive could not be searched and crowded the board. Compact palette-style rows were tried and rejected: the person wants the archived cards themselves, only inside the modal. |
 | 2026-11-13 | The archive's entry points (board button, sidebar project menu, Cmd+K) are labelled Archived sessions, not Archive | A bare Archive beside a project's other actions read as the verb, archiving the whole project. A noun names the place; Archive stays the verb for one session. |
 | 2026-11-18 | Looping animations animate only `transform` or `opacity`; working sidebar titles sweep a masked copy of the title with `transform` | The old `background-position` sweep repainted every working row each frame and delayed typing while replies streamed (ADEMark A8 median 50.1 to 35.4 ms). |
+| 2026-11-19 | Sidebar activity carries colour: the working spinner is blue, the working title sweep is tinted blue at low strength, an unopened finished turn is a filled green dot, and collapsed projects show attention, then working, then an unopened finished turn | Working and finished turns were both grey, so a long list had to be read row by row; the board already used the working blue. Green for a finished turn stays apart from ready-to-merge by shape (dot vs pull-request icon). |

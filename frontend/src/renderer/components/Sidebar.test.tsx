@@ -31,6 +31,7 @@ import {
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
+import { sessionReadKey, useSessionReadStore } from "../stores/session-read-store";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
@@ -541,6 +542,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
+	useSessionReadStore.setState({ baseline: Date.now(), readAt: {} });
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
 	useSessionImportStore.setState({ importedCounts: {} });
 	dragEnds.clear();
@@ -3337,7 +3339,7 @@ describe("Sidebar", () => {
 
 		const workingDot = sessionDot("working task");
 		expect(workingDot).toHaveAttribute("data-session-spinner");
-		expect(workingDot).toHaveClass("animate-spin");
+		expect(workingDot).toHaveClass("animate-spin", "text-status-working");
 
 		// A working agent spins even when its PR has a state to flag.
 		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
@@ -3434,6 +3436,52 @@ describe("Sidebar", () => {
 		});
 		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("icon-circle-alert", "text-destructive");
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
+	});
+
+	it("fills the dot green for a finished turn the user has not opened, and leaves a hollow ring once read", () => {
+		useSessionReadStore.setState({ baseline: 0, readAt: { [sessionReadKey({ id: "proj-1-read" })]: Date.parse("2026-07-01T00:00:00Z") } });
+		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
+		renderSidebar({
+			workspaces: [{
+				...workspace,
+				sessions: [
+					{ ...session, id: "proj-1-unread", title: "unread task", status: "idle", activity: idle },
+					{ ...session, id: "proj-1-read", title: "read task", status: "idle", activity: idle },
+				],
+			}],
+		});
+		const dot = (title: string) => screen.getByLabelText(`Open ${title}`).querySelector("[data-session-idle] > span");
+
+		expect(dot("unread task")).toHaveAttribute("data-session-unread");
+		expect(dot("unread task")).toHaveClass("bg-status-ready");
+		expect(dot("read task")).not.toHaveAttribute("data-session-unread");
+		expect(dot("read task")).toHaveClass("border");
+		expect(dot("read task")).not.toHaveClass("bg-status-ready");
+	});
+
+	it("shows a collapsed project's strongest state: attention, then working, then an unread finished turn", () => {
+		useUiStore.setState({ projectAvatars: false });
+		useSessionReadStore.setState({ baseline: 0, readAt: {} });
+		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
+		const unread = { ...session, id: "proj-1-unread", status: "idle", activity: idle } as const;
+		const working = { ...session, id: "proj-1-working", activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" } } as const;
+		const input = { ...session, id: "proj-1-input", status: "needs_input" } as const;
+		const projectMarker = () => document.querySelector<HTMLElement>("[data-project-folder-icon] [data-project-marker]");
+
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread] }] });
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "unread");
+		expect(projectMarker()?.firstElementChild).toHaveClass("bg-status-ready");
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
+
+		cleanup();
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working] }] });
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "working");
+		expect(projectMarker()).toHaveClass("animate-spin", "text-status-working");
+
+		cleanup();
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working, input] }] });
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "attention");
+		expect(projectMarker()).toHaveClass("icon-circle-alert", "text-destructive");
 	});
 
 	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
