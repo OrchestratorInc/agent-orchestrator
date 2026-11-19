@@ -10,8 +10,8 @@
 // at once. Opening a stream per session just for approvals would spend the
 // window's small stream budget.
 
-import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useQueries, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { CloudCpBrowserApproval, CloudCpClient } from "./cloud-cp";
@@ -153,34 +153,45 @@ export function mayHaveApprovals(cloud: { desiredState?: string; observedState?:
 	return cloud.desiredState === "running" || cloud.observedState === "running";
 }
 
-// What the shell's live reader holds, for every other reader.
-let published: PendingApproval[] = [];
-const listeners = new Set<() => void>();
-const subscribePublished = (listener: () => void) => {
-	listeners.add(listener);
-	return () => {
-		listeners.delete(listener);
-	};
-};
-const getPublished = () => published;
-function publish(next: PendingApproval[]) {
-	const same = next.length === published.length && next.every((request, index) => request === published[index]);
-	if (same) return;
-	published = next;
-	for (const listener of listeners) listener();
+// Approval reads leave a short trace in the console when what they find
+// changes, so a missing card can be traced in a packaged build.
+const lastCounts = new Map<string, number>();
+function traceRead(sessionId: string, count: number) {
+	if (lastCounts.get(sessionId) === count) return;
+	lastCounts.set(sessionId, count);
+	console.info(`[approvals] cloud session ${sessionId}: ${count} pending`);
+}
+
+const CLOUD_PENDING_PREFIX = ["approvals", "pending", "cloud"] as const;
+
+/** Every cloud session's pending requests in the query cache, still waiting at `now`. */
+export function cachedCloudPendingApprovals(queryClient: QueryClient, now: number): PendingApproval[] {
+	return unexpired(
+		queryClient.getQueriesData<PendingApproval[]>({ queryKey: CLOUD_PENDING_PREFIX }).flatMap(([, data]) => data ?? []),
+		now,
+	);
 }
 
 /**
- * Pending approvals for cloud sessions, as the app shell's live reader last
- * saw them. Reading them fetches nothing.
+ * Pending approvals for cloud sessions, read straight from the query cache
+ * the app shell's live reader fills. Reading them fetches nothing.
  */
 export function useCloudPendingApprovals(): PendingApproval[] {
-	return useSyncExternalStore(subscribePublished, getPublished, getPublished);
+	const queryClient = useQueryClient();
+	const last = useRef<PendingApproval[]>([]);
+	const subscribe = useCallback((listener: () => void) => queryClient.getQueryCache().subscribe(listener), [queryClient]);
+	const read = useCallback(() => {
+		const next = cachedCloudPendingApprovals(queryClient, Date.now());
+		const same = next.length === last.current.length && next.every((request, index) => request === last.current[index]);
+		if (!same) last.current = next;
+		return last.current;
+	}, [queryClient]);
+	return useSyncExternalStore(subscribe, read, read);
 }
 
 /**
  * The app shell's one live reader: reads every running cloud session's
- * requests, listens for approval events, and publishes what it finds.
+ * requests into the query cache and listens for approval events.
  */
 export function useLiveCloudPendingApprovals(): PendingApproval[] {
 	const queryClient = useQueryClient();
@@ -219,7 +230,10 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 		queries: targets.map((target) => ({
 			queryKey: cloudPendingApprovalsQueryKey(target),
 			queryFn: () =>
-				fetchCloudPendingApprovals(client, target).catch((error: unknown) => {
+				fetchCloudPendingApprovals(client, target).then((pending) => {
+					traceRead(target.sessionId, pending.length);
+					return pending;
+				}, (error: unknown) => {
 					// A failed read must not pass for "nothing pending" without a trace.
 					console.warn(`Could not read browser approvals for cloud session ${target.sessionId}`, error);
 					throw error;
@@ -241,8 +255,10 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 		}, wait + 50);
 		return () => clearTimeout(timer);
 	}, [queryClient, wait]);
-	const current = unexpired(all, Math.max(now, Date.now()));
-	useEffect(() => publish(current));
-	useEffect(() => () => publish([]), []);
-	return current;
+	const targetList = targets.map((target) => target.sessionId).join(", ");
+	useEffect(() => {
+		console.info(`[approvals] reading browser approvals for ${targets.length} cloud session(s)${targetList ? `: ${targetList}` : ""}`);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [targetList]);
+	return unexpired(all, Math.max(now, Date.now()));
 }
