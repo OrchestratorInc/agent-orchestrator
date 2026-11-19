@@ -64,6 +64,9 @@ type Gesture = {
 	tracked: number;
 	// Started right after a scroll ended and has only decayed since.
 	maybeMomentum: boolean;
+	// Released into momentum past the arm point: navigates once the event that
+	// decided it has reached its target, unless the target took the swipe.
+	flick: boolean;
 	// Horizontally scrollable ancestors with their starting scrollLeft. If one
 	// actually scrolls, the swipe belongs to it, as with browser overscroll.
 	scrollers: Array<[HTMLElement, number]>;
@@ -184,11 +187,33 @@ export function SwipeNavigation({
 			idleTimer = undefined;
 			const ended = gesture;
 			gesture = null;
-			if (ended?.mode === "owned") lastOwnedEndAt = performance.now();
-			if (!ended || ended.mode !== "tracking") return;
+			if (!ended) return;
+			const claimed = swipeClaimed();
+			if (ended.mode === "owned" || claimed) lastOwnedEndAt = performance.now();
+			// A flick whose deciding event never bubbled back to the window.
+			if (ended.flick) {
+				if (!claimed) navigate(ended.offset);
+				return;
+			}
+			if (ended.mode !== "tracking") return;
 			release();
-			if (ended.scrollers.some(([el, start]) => el.scrollLeft !== start)) return;
+			if (claimed || ended.scrollers.some(([el, start]) => el.scrollLeft !== start)) return;
 			navigate(ended.offset);
+		};
+
+		// Runs after the event's own handlers, which the capture listener cannot
+		// see: one that claimed the swipe or prevented its default (a strip that
+		// scrolls itself, a zoomed image that pans) took it, even on its last event.
+		const afterWheel = (event: WheelEvent) => {
+			if (!gesture) return;
+			const taken = swipeClaimed() || event.defaultPrevented;
+			if (taken && (gesture.mode === "pending" || gesture.mode === "tracking")) {
+				gesture.mode = "owned";
+				release();
+			}
+			if (!gesture.flick) return;
+			gesture.flick = false;
+			if (!taken) navigate(gesture.offset);
 		};
 
 		const onWheel = (event: WheelEvent) => {
@@ -219,6 +244,7 @@ export function SwipeNavigation({
 					lastSpeed: 0,
 					tracked: 0,
 					maybeMomentum: now - lastEndAt <= MOMENTUM_GAP_MS,
+					flick: false,
 					scrollers: owned ? [] : horizontalScrollers(path, container),
 				};
 			}
@@ -268,11 +294,11 @@ export function SwipeNavigation({
 				return;
 			}
 			if (gesture.decay >= MOMENTUM_DECAY_EVENTS && gesture.decayFrom >= FLICK_SPEED_PX && Math.abs(offset) >= SWIPE_ARM_PX) {
-				// Released into momentum: navigate now and ignore the rest of the scroll.
+				// Released into momentum: navigate as soon as this event has been
+				// handled (afterWheel) and ignore the rest of the scroll.
 				gesture.mode = "done";
-				window.clearTimeout(idleTimer);
+				gesture.flick = true;
 				release();
-				navigate(offset);
 			}
 		};
 
@@ -290,9 +316,11 @@ export function SwipeNavigation({
 		// The whole window, not just the pane: a swipe is followed from wherever it
 		// starts, so the rest of one that began elsewhere is known to be its tail.
 		window.addEventListener("wheel", onWheel, { capture: true, passive: true });
+		window.addEventListener("wheel", afterWheel, { passive: true });
 		return () => {
 			stopPhases();
 			window.removeEventListener("wheel", onWheel, { capture: true });
+			window.removeEventListener("wheel", afterWheel);
 			window.clearTimeout(idleTimer);
 			cancelAnimationFrame(frame);
 		};

@@ -421,5 +421,41 @@ describe("SwipeNavigation", () => {
 			swipe(getByTestId("pane"), drag(-20, 8));
 			expect(history.back).toHaveBeenCalledTimes(1);
 		});
+
+		it("does not navigate when the target claims the swipe on its only event", () => {
+			const { getByTestId } = render(<Harness><div data-testid="claimer" /></Harness>);
+			const claimer = getByTestId("claimer");
+			claimer.addEventListener("wheel", () => claimSwipe());
+			fingers("down");
+			swipe(claimer, [[-120, 0]], 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("does not flick back when the target claims the event that decides the flick", () => {
+			const { getByTestId } = render(<Harness><div data-testid="claimer" /></Harness>);
+			const claimer = getByTestId("claimer");
+			claimer.addEventListener("wheel", (event) => {
+				if (event.deltaX === -18) claimSwipe();
+			});
+			fingers("down");
+			swipe(claimer, [...drag(-30, 5), [-27, 0], [-24, 0], [-21, 0], [-18, 0]], 0);
+			expect(history.back).not.toHaveBeenCalled();
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("does not navigate when the target prevents the default of the swipe's only event", () => {
+			const { getByTestId } = render(<Harness><div data-testid="panner" /></Harness>);
+			const panner = getByTestId("panner");
+			// A zoomed image panning, or a strip scrolling itself.
+			panner.addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
+			fingers("down");
+			act(() => {
+				panner.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: -120, deltaMode: 0 }));
+			});
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
 	});
 });
