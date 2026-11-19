@@ -241,7 +241,9 @@ func downloadInstallScriptAttempt(ctx context.Context, client *http.Client, sour
 
 func retryableDownloadError(err error) bool {
 	var networkError net.Error
+	var dnsError *net.DNSError
 	return (errors.As(err, &networkError) && networkError.Timeout()) ||
+		(errors.As(err, &dnsError) && dnsError.IsTemporary && !dnsError.IsNotFound) ||
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE)
 }

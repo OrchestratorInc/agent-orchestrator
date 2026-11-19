@@ -401,6 +401,7 @@ func TestRunInstallScriptTransportFailures(t *testing.T) {
 		wantAttempts int
 	}{
 		{"TLS timeout", &net.DNSError{Err: "TLS handshake timeout", IsTimeout: true}, 3},
+		{"temporary DNS failure", &net.DNSError{Err: "server misbehaving", IsTemporary: true}, 3},
 		{"truncated download", io.ErrUnexpectedEOF, 3},
 		{"invalid certificate", x509.UnknownAuthorityError{}, 1},
 		{"canceled", context.Canceled, 1},

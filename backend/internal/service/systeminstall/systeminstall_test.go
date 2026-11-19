@@ -2144,6 +2144,8 @@ func TestAgentInstallReportsLiveOutputWithoutDuplicatingDiagnostics(t *testing.T
 	// Let the worker finish before checking the persisted output.
 	release <- struct{}{}
 	waitForStatus(t, s, TargetCursor, StatusFailed)
+	// The in-memory job reaches failed before the record is persisted.
+	s.workers.Wait()
 	job, _ = s.Status(context.Background(), TargetCursor)
 	if strings.Count(job.Output, "attempt 2/3") != 1 {
 		t.Fatalf("duplicated diagnostics: %q", job.Output)

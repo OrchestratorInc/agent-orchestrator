@@ -363,6 +363,10 @@ function InstallRow({
 	const running = starting || isActiveInstallJob(job);
 	const failed = job?.status === "failed";
 	const unsupported = job?.status === "unsupported";
+	// Download attempts and retry backoff first; otherwise what is running on this machine (brew, sudo, npm…), in full.
+	const runningDetail =
+		(job?.status !== "verifying" ? installerProgress(job?.output) : undefined) ??
+		(job?.command ? t("startup.installingCommand", { command: job.command }) : undefined);
 
 	let action: React.ReactNode;
 	if (succeeded) action = <span className="text-caption text-settings-muted">{t("settings.harness.installed")}</span>;
@@ -384,9 +388,8 @@ function InstallRow({
 	const detail = succeeded ? null : (
 		<>
 			{notice && !running ? <p className="text-caption text-warning" role="status">{notice}</p> : null}
-			{/* What is running on this machine (brew, sudo, npm…), in full. */}
-			{running && job?.command ? (
-				<p className="break-all text-caption text-settings-muted">{t("startup.installingCommand", { command: job.command })}</p>
+			{running && runningDetail ? (
+				<p className="break-all text-caption text-settings-muted" role="status">{runningDetail}</p>
 			) : null}
 			{running ? (
 				<div className="ao-install-progress" aria-hidden="true">
