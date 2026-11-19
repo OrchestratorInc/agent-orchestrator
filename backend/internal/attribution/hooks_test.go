@@ -198,9 +198,16 @@ func TestHookFollowsGitsUnchangedTemplateRule(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	dropDiff := editor("drop-diff.sh", `awk '{ print } /------------------------ >8 ------------------------/ { exit }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`)
+	// Fails unless git put a diff below the scissors line, then removes only it.
+	dropDiff := editor("drop-diff.sh", `grep -q '^diff --git' "$1" || exit 1
+awk '{ print } /------------------------ >8 ------------------------/ { exit }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`)
 	addSignoff := editor("add-signoff.sh", `printf '\nSigned-off-by: Dev <dev@example.com>\n' >> "$1"`)
 	onlySignoff := editor("only-signoff.sh", `printf 'Signed-off-by: Dev <dev@example.com>\n' > "$1"`)
+	// A staged change, so `commit -v` shows a diff to remove.
+	if err := os.WriteFile(filepath.Join(r.worktree, "staged.txt"), []byte("change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.worktree, "add", "staged.txt")
 	for _, tc := range []struct {
 		name   string
 		editor string
@@ -212,8 +219,12 @@ func TestHookFollowsGitsUnchangedTemplateRule(t *testing.T) {
 		{"only a sign-off", onlySignoff, nil},
 	} {
 		before := r.git(r.worktree, "rev-parse", "HEAD")
-		if out, err := run(tc.editor, tc.args...); err == nil {
+		out, err := run(tc.editor, tc.args...)
+		if err == nil {
 			t.Fatalf("%s: committed, want an abort:\n%s\n%s", tc.name, out, r.message("HEAD"))
+		}
+		if !strings.Contains(out, "did not edit the message") && !strings.Contains(out, "empty commit message") {
+			t.Fatalf("%s: want git's unedited or empty abort, got:\n%s", tc.name, out)
 		}
 		if after := r.git(r.worktree, "rev-parse", "HEAD"); after != before {
 			t.Fatalf("%s: HEAD moved", tc.name)
