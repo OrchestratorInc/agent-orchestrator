@@ -90,57 +90,15 @@ describe("SessionInspectorShellView", () => {
     rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
     expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
   });
-  it("adds closable task tabs after the fixed tabs and walks them with the keyboard", () => {
-    const onViewChange = vi.fn();
-    const onTaskTabSelect = vi.fn();
-    const onTaskTabClose = vi.fn();
-    const taskTabs = [
-      { id: "dev", label: "Dev server", closeLabel: "Close Dev server", icon: <svg /> },
-      { id: "tests", label: "Running tests", closeLabel: "Close Running tests", icon: <svg /> },
-    ];
+  it("renders the Background tasks view edge to edge under its own tab", () => {
+    const withTasks = [...tabs, { id: "task" as const, icon: <svg />, label: "Background tasks" }];
     render(<SessionInspectorShellView
-      activeView="task" activeTaskTab="dev" ariaLabel="Session inspector" browserPoppedOut={false}
-      tabs={tabs} onViewChange={onViewChange} taskTabs={taskTabs} taskView={<div data-testid="task-slot" />}
-      onTaskTabSelect={onTaskTabSelect} onTaskTabClose={onTaskTabClose}
+      activeView="task" ariaLabel="Session inspector" browserPoppedOut={false}
+      taskView={<div data-testid="task-slot" />}
+      tabs={withTasks} onViewChange={vi.fn()}
     />);
-    const dev = screen.getByRole("tab", { name: "Dev server" });
-    expect(dev).toHaveAttribute("aria-selected", "true");
-    expect(dev).toHaveAttribute("tabindex", "0");
-    expect(screen.getByRole("tab", { name: "Running tests" })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getAllByRole("tab").filter((tab) => tab.getAttribute("aria-selected") === "true")).toHaveLength(1);
     expect(screen.getByTestId("task-slot").parentElement).toHaveClass("p-0", "overflow-hidden");
-
-    fireEvent.keyDown(dev, { key: "ArrowRight" });
-    expect(onTaskTabSelect).toHaveBeenCalledWith("tests");
-    fireEvent.keyDown(dev, { key: "ArrowLeft" });
-    expect(onViewChange).toHaveBeenCalledWith(tabs[tabs.length - 1].id);
-    fireEvent.keyDown(dev, { key: "Delete" });
-    expect(onTaskTabClose).toHaveBeenCalledWith("dev");
-    fireEvent.click(screen.getByRole("button", { name: "Close Running tests" }));
-    expect(onTaskTabClose).toHaveBeenLastCalledWith("tests");
-    fireEvent.click(screen.getByRole("tab", { name: "Running tests" }));
-    expect(onTaskTabSelect).toHaveBeenLastCalledWith("tests");
-  });
-  it("scrolls the shown task tab into view when the tabs overflow, and scrolls them with a mouse wheel", () => {
-    const taskTabs = ["a", "b", "c"].map((id) => ({ id, label: `Task ${id}`, closeLabel: `Close Task ${id}`, icon: <svg /> }));
-    const rect = (left: number, width: number) => ({ left, right: left + width, width, top: 0, bottom: 28, height: 28, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
-    const view = (activeTaskTab: string) => (
-      <SessionInspectorShellView
-        activeView="task" activeTaskTab={activeTaskTab} ariaLabel="Session inspector" browserPoppedOut={false}
-        tabs={tabs} onViewChange={vi.fn()} taskTabs={taskTabs} taskView={<div />} onTaskTabSelect={vi.fn()} onTaskTabClose={vi.fn()}
-      />
-    );
-    const { rerender } = render(view("a"));
-    const scroller = screen.getByRole("tab", { name: "Task a" }).closest(".session-inspector__task-tabs") as HTMLElement;
-    // The strip shows 0..200; tab c sits past its end at 300..380.
-    scroller.getBoundingClientRect = () => rect(0, 200);
-    (screen.getByRole("tab", { name: "Task c" }).parentElement as HTMLElement).getBoundingClientRect = () => rect(300, 80);
-    const start = scroller.scrollLeft;
-    rerender(view("c"));
-    // Far enough that its right edge clears the 24px edge fade.
-    expect(scroller.scrollLeft - start).toBe(380 - (200 - 24));
-    fireEvent.wheel(scroller, { deltaY: 40 });
-    expect(scroller.scrollLeft - start).toBe(380 - (200 - 24) + 40);
+    expect(screen.getByRole("tab", { name: "Background tasks" })).toHaveAttribute("aria-selected", "true");
   });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];

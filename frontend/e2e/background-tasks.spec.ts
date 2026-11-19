@@ -182,7 +182,7 @@ test("several tasks fold to a count and open in place without moving into the qu
 	await testInfo.attach("open task list beside an open queue", { path: screenshot, contentType: "image/png" });
 });
 
-test("a task opens in its own side panel tab that follows its output @T0", async ({ page }, testInfo) => {
+test("a task opens in the side panel's Background tasks tab and follows its output @T0", async ({ page }, testInfo) => {
 	let ticks = 60;
 	const lines = () => Array.from({ length: ticks }, (_, i) => `tick-${i + 1}`).join("\n");
 	const fixture: Fixture = {
@@ -198,8 +198,8 @@ test("a task opens in its own side panel tab that follows its output @T0", async
 	await strip.getByRole("button", { name: /2 running/ }).click();
 	await strip.getByRole("button", { name: /^Dev server on port 3000/ }).click();
 
-	const devTab = page.getByRole("tab", { name: "Dev server on port 3000" });
-	await expect(devTab).toHaveAttribute("aria-selected", "true");
+	const tasksTab = page.getByRole("tab", { name: "Background tasks" });
+	await expect(tasksTab).toHaveAttribute("aria-selected", "true");
 	const panel = page.getByRole("region", { name: "Dev server on port 3000" });
 	await expect(panel.getByText("npm run dev -- --port 3000")).toBeVisible();
 	const output = panel.getByRole("region", { name: "Output" });
@@ -231,13 +231,15 @@ test("a task opens in its own side panel tab that follows its output @T0", async
 	await expect.poll(atBottom).toBe(true);
 	await expect(jump).toHaveCount(0);
 
-	// A second task opens a second tab; closing tabs shows the neighbour, then leaves task tabs.
-	await strip.getByRole("button", { name: /^Running tests/ }).click();
-	await expect(page.getByRole("tab", { name: "Running tests" })).toHaveAttribute("aria-selected", "true");
+	// Back leads to the list of the chat's tasks, as Subagents does; a row opens another.
+	await panel.getByRole("button", { name: "All background tasks" }).click();
+	await expect(panel).toHaveCount(0);
+	const running = page.getByRole("group", { name: "Running" });
+	await expect(running).toContainText("Running · 2");
+	const list = testInfo.outputPath("background-tasks-list.png");
+	await page.screenshot({ path: list });
+	await testInfo.attach("background tasks list", { path: list, contentType: "image/png" });
+	await running.getByRole("button", { name: /^Running tests/ }).click();
 	await expect(page.getByRole("region", { name: "Running tests" }).getByText("No output yet")).toBeVisible();
-	await page.getByRole("button", { name: "Close Running tests" }).click();
-	await expect(devTab).toHaveAttribute("aria-selected", "true");
-	await page.getByRole("button", { name: "Close Dev server on port 3000" }).click();
-	await expect(page.getByRole("tab", { name: /Dev server/ })).toHaveCount(0);
-	await expect(page.getByRole("region", { name: "Dev server on port 3000" })).toHaveCount(0);
+	await expect(tasksTab).toHaveAttribute("aria-selected", "true");
 });

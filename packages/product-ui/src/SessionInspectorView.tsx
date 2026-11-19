@@ -8,7 +8,6 @@ import {
 	ChevronIcon,
 	GitPullRequestIcon,
 	MoreHorizontalIcon,
-	XIcon,
 } from "./icons";
 import {
 	PRCardStatusSummary,
@@ -26,14 +25,6 @@ import { UserAvatar } from "./UserAvatar";
 
 export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts" | "task";
 
-/** A temporary tab for one background task; the user closes it when done. */
-export type InspectorTaskTab = {
-	closeLabel: string;
-	icon: ReactNode;
-	id: string;
-	label: string;
-};
-
 export type InspectorTab = {
 	badge?: boolean;
 	/** Corner badge count, e.g. changed files; hidden at zero. */
@@ -48,8 +39,6 @@ const inspectorShellClass = "@container/inspector flex h-full min-h-0 flex-col o
 const inspectorBodyBaseClass = "min-h-0 flex-1";
 const inspectorScrollableBodyClass = "board-scrollbar overflow-x-hidden overflow-y-auto pt-0.5 pb-3";
 export const inspectorEmptyClass = "text-xs text-settings-muted leading-normal";
-/** How far a shown task tab stays from the scroller's edge: the edge fade's width. */
-const TASK_TAB_EDGE_PX = 24;
 
 export function SessionInspectorShellView({
 	activeView,
@@ -66,10 +55,6 @@ export function SessionInspectorShellView({
 	reviewsView,
 	summaryView,
 	tabs,
-	taskTabs = [],
-	activeTaskTab,
-	onTaskTabSelect,
-	onTaskTabClose,
 	taskView,
 }: {
 	activeView: InspectorView;
@@ -86,28 +71,9 @@ export function SessionInspectorShellView({
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
-	/** Background task tabs, after the fixed tabs. One shows when activeView is "task". */
-	taskTabs?: InspectorTaskTab[];
-	activeTaskTab?: string;
-	onTaskTabSelect?: (id: string) => void;
-	onTaskTabClose?: (id: string) => void;
+	/** The Background tasks tab: its list, or the task it has open. */
 	taskView?: ReactNode;
 }) {
-	const tablistRef = useRef<HTMLDivElement>(null);
-	const taskTabsRef = useRef<HTMLDivElement>(null);
-	const shownTaskTab = activeView === "task" ? activeTaskTab : undefined;
-	// Task tabs scroll sideways once they outgrow the bar. The shown one scrolls
-	// into view when it opens or is picked, clear of the edge fade. Only this
-	// strip moves: scrollIntoView would also shift the app's sideways wrappers.
-	useEffect(() => {
-		const scroller = taskTabsRef.current;
-		const tab = scroller?.querySelector<HTMLElement>('[role="tab"][data-active]')?.parentElement;
-		if (!scroller || !tab || !shownTaskTab) return;
-		const bounds = scroller.getBoundingClientRect();
-		const rect = tab.getBoundingClientRect();
-		if (rect.left < bounds.left + TASK_TAB_EDGE_PX) scroller.scrollLeft -= bounds.left + TASK_TAB_EDGE_PX - rect.left;
-		else if (rect.right > bounds.right - TASK_TAB_EDGE_PX) scroller.scrollLeft += rect.right - (bounds.right - TASK_TAB_EDGE_PX);
-	}, [shownTaskTab, taskTabs.length]);
 
 	if (loadingText) {
 		return (
@@ -119,42 +85,30 @@ export function SessionInspectorShellView({
 		);
 	}
 
-	// Arrow keys walk the fixed tabs and the task tabs as one list.
-	const tabCount = tabs.length + taskTabs.length;
-	const selectTabAt = (index: number) => {
-		if (index < tabs.length) onViewChange(tabs[index].id);
-		else onTaskTabSelect?.(taskTabs[index - tabs.length].id);
-	};
 	const selectAdjacentTab = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
 		let nextIndex: number;
 		switch (event.key) {
 			case "ArrowLeft":
-				nextIndex = (index - 1 + tabCount) % tabCount;
+				nextIndex = (index - 1 + tabs.length) % tabs.length;
 				break;
 			case "ArrowRight":
-				nextIndex = (index + 1) % tabCount;
+				nextIndex = (index + 1) % tabs.length;
 				break;
 			case "Home":
 				nextIndex = 0;
 				break;
 			case "End":
-				nextIndex = tabCount - 1;
+				nextIndex = tabs.length - 1;
 				break;
-			case "Delete":
-			case "Backspace":
-				if (index < tabs.length) return;
-				event.preventDefault();
-				onTaskTabClose?.(taskTabs[index - tabs.length].id);
-				return;
 			default:
 				return;
 		}
 		event.preventDefault();
-		selectTabAt(nextIndex);
-		tablistRef.current
+		onViewChange(tabs[nextIndex].id);
+		event.currentTarget.parentElement
 			?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
 			.item(nextIndex)
-			?.focus();
+			.focus();
 	};
 
 	return (
@@ -165,15 +119,14 @@ export function SessionInspectorShellView({
 					activeView === "browser" && "session-inspector__topbar--browser",
 				)}
 			>
-				{isVisible && tabs.length === 1 && taskTabs.length === 0 ? (
+				{isVisible && tabs.length === 1 ? (
 					<span className="min-w-0 flex-1 px-2 text-sm text-passive">{tabs[0].label}</span>
 				) : isVisible ? (
 					<div
 						className={cn(
 							"session-inspector__tablist flex min-w-0 items-center justify-start gap-1",
-							activeView !== "browser" ? "flex-1" : taskTabs.length ? "shrink" : "shrink-0",
+							activeView === "browser" ? "shrink-0" : "flex-1",
 						)}
-						ref={tablistRef}
 						role="tablist"
 					>
 						{tabs.map((tab, index) => (
@@ -183,7 +136,6 @@ export function SessionInspectorShellView({
 								type="button"
 								role="tab"
 								aria-selected={activeView === tab.id}
-								data-active={activeView === tab.id || undefined}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
 									"session-inspector__tab-button relative inline-flex size-control-md shrink-0 items-center justify-center rounded-md border border-transparent p-0 font-medium text-passive outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2",
@@ -220,55 +172,6 @@ export function SessionInspectorShellView({
 								</span>
 							</button>
 						))}
-						{taskTabs.length ? (
-							<div
-								className="session-inspector__task-tabs edge-fade edge-fade-x scrollbar-none flex min-w-0 items-center gap-1 overflow-x-auto"
-								// A mouse wheel scrolls the tabs sideways; a trackpad already does.
-								onWheel={(event) => {
-									if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
-								}}
-								ref={taskTabsRef}
-							>
-								<span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />
-								{taskTabs.map((tab, index) => {
-									const selected = activeView === "task" && activeTaskTab === tab.id;
-									return (
-										<div
-											className={cn(
-												"session-inspector__task-tab flex h-control-md min-w-20 max-w-40 shrink items-center rounded-md text-passive hover:bg-interactive-hover hover:text-foreground",
-												selected && "text-foreground",
-											)}
-											key={tab.id}
-										>
-											<button
-												aria-selected={selected}
-												className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-0.5 pl-2 text-left text-xs font-medium outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
-												data-active={selected || undefined}
-												onClick={() => onTaskTabSelect?.(tab.id)}
-												onKeyDown={(event) => selectAdjacentTab(event, tabs.length + index)}
-												role="tab"
-												tabIndex={selected ? 0 : -1}
-												title={tab.label}
-												type="button"
-											>
-												<span className="inline-flex shrink-0 [&_svg]:size-icon-md">{tab.icon}</span>
-												<span className="min-w-0 truncate">{tab.label}</span>
-											</button>
-											<button
-												aria-label={tab.closeLabel}
-												className="mr-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-passive outline-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-												onClick={() => onTaskTabClose?.(tab.id)}
-												tabIndex={selected ? 0 : -1}
-												title={tab.closeLabel}
-												type="button"
-											>
-												<XIcon aria-hidden="true" className="size-3" />
-											</button>
-										</div>
-									);
-								})}
-							</div>
-						) : null}
 					</div>
 				) : null}
 				{isVisible ? headerActions : null}

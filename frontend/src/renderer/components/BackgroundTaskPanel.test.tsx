@@ -1,8 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import type { ComponentProps } from "react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackgroundTask } from "../hooks/useBackgroundTasks";
-import { BackgroundTaskPanel, TailedOutput } from "./BackgroundTaskPanel";
+import { useUiStore } from "../stores/ui-store";
+import { BackgroundTaskPanel, BackgroundTasksPanel, TailedOutput } from "./BackgroundTaskPanel";
+import { TooltipProvider } from "./ui/tooltip";
 
 const { outputMock, mutateMock } = vi.hoisted(() => ({ outputMock: vi.fn(), mutateMock: vi.fn() }));
 vi.mock("../hooks/useBackgroundTasks", () => ({
@@ -19,6 +22,11 @@ const outputOf = (output: string, extra: Record<string, unknown> = {}) => ({
 	data: { sessionId: "s", taskId: "dev", availability: "ready", output, ...extra }, isError: false, refetch: vi.fn(),
 });
 
+/** The task view as the side panel mounts it: under the app's tooltip provider, with a way back to the list. */
+function Panel({ onBack = () => {}, ...props }: Omit<ComponentProps<typeof BackgroundTaskPanel>, "onBack"> & { onBack?: () => void }) {
+	return <TooltipProvider><BackgroundTaskPanel onBack={onBack} {...props} /></TooltipProvider>;
+}
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	mutateMock.mockResolvedValue(undefined);
@@ -27,7 +35,7 @@ beforeEach(() => {
 
 describe("background task panel", () => {
 	it("shows the task, its command and its output, and stops it", async () => {
-		render(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task() }} />);
+		render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
 		expect(screen.getByRole("region", { name: "Dev server on port 3000" })).toBeVisible();
 		expect(screen.getByText("Running")).toBeVisible();
 		expect(screen.getByText("12m")).toBeVisible();
@@ -41,7 +49,7 @@ describe("background task panel", () => {
 
 	it("counts the output's warnings and errors and tints their rows", () => {
 		outputMock.mockReturnValue(outputOf("✓ Ready in 1.4s\n⚠ Fast Refresh had to perform a full reload\nsrc/a.tsx:4:2 - error TS2322: nope\nFound 1 error.\n"));
-		render(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task() }} />);
+		render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
 		expect(screen.getByText("4 lines")).toBeVisible();
 		expect(screen.getByText("1 warning")).toBeVisible();
 		expect(screen.getByText("1 error")).toBeVisible();
@@ -53,12 +61,12 @@ describe("background task panel", () => {
 	});
 
 	it("keeps a finished task readable without a stop, and says when a task ended without an outcome", () => {
-		const { rerender } = render(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task({ state: "failed", endedAt: ago(60_000) }) }} />);
+		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task({ state: "failed", endedAt: ago(60_000) }) }} />);
 		expect(screen.getByText("Failed")).toBeVisible();
 		expect(screen.getByText("11m")).toBeVisible();
 		expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
 		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: false });
-		rerender(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task(), ended: true }} />);
+		rerender(<Panel isVisible sessionId="s" tab={{ task: task(), ended: true }} />);
 		expect(screen.getByText("Ended")).toBeVisible();
 		expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
 	});
@@ -66,10 +74,10 @@ describe("background task panel", () => {
 	it("reads once more when the task ends, and never polls while hidden", () => {
 		const refetch = vi.fn();
 		outputMock.mockReturnValue({ ...outputOf("tick-1"), refetch });
-		const { rerender } = render(<BackgroundTaskPanel isVisible={false} sessionId="s" tab={{ task: task() }} />);
+		const { rerender } = render(<Panel isVisible={false} sessionId="s" tab={{ task: task() }} />);
 		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: false, live: false });
-		rerender(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task() }} />);
-		rerender(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task({ state: "completed", endedAt: ago(0) }) }} />);
+		rerender(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
+		rerender(<Panel isVisible sessionId="s" tab={{ task: task({ state: "completed", endedAt: ago(0) }) }} />);
 		expect(refetch).toHaveBeenCalledTimes(1);
 	});
 
@@ -79,9 +87,47 @@ describe("background task panel", () => {
 		["error", { data: undefined, isError: true, refetch: vi.fn() }, "Couldn't load the output"],
 	])("says so when the output is %s", (_name, result, message) => {
 		outputMock.mockReturnValue(result);
-		render(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task() }} />);
+		render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
 		expect(screen.getByText(message)).toBeVisible();
 		expect(screen.queryByRole("region", { name: "Output" })).toBeNull();
+	});
+});
+
+describe("background tasks list", () => {
+	const uiKey = "list-session";
+	function List() {
+		const state = useUiStore((store) => store.inspectorSessions[uiKey]);
+		const open = state?.taskTabs?.find((tab) => tab.task.id === state.activeTaskTab);
+		return (
+			<TooltipProvider>
+				<BackgroundTasksPanel isVisible openTask={open} sessionId="s" tasks={state?.taskTabs ?? []} uiKey={uiKey} />
+			</TooltipProvider>
+		);
+	}
+
+	it("lists running tasks, then finished ones, opens one and comes back to its row", async () => {
+		useUiStore.setState({ inspectorSessions: { [uiKey]: { isOpen: true, view: "task" } } });
+		useUiStore.getState().syncTaskTabs(uiKey, [
+			task(),
+			task({ id: "build", description: "npm run build", command: "npm run build", state: "failed", startedAt: ago(5_000), endedAt: ago(3_000), stoppable: false }),
+		]);
+		render(<List />);
+		const running = screen.getByRole("group", { name: "Running" });
+		expect(running).toHaveTextContent("Running · 1");
+		expect(running).toHaveTextContent("Dev server on port 3000");
+		expect(running).toHaveTextContent("12m");
+		const finished = screen.getByRole("group", { name: "Finished" });
+		expect(within(finished).getByText("Failed")).toBeVisible();
+		expect(within(finished).getByText("2s")).toBeVisible();
+
+		await userEvent.click(within(finished).getByRole("button", { name: /Building/ }));
+		expect(screen.getByRole("region", { name: "Building" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "All background tasks" })).toHaveFocus();
+		expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
+
+		await userEvent.click(screen.getByRole("button", { name: "All background tasks" }));
+		expect(useUiStore.getState().inspectorSessions[uiKey]?.activeTaskTab).toBeUndefined();
+		expect(screen.getByRole("button", { name: /Building/ })).toHaveFocus();
 	});
 });
 

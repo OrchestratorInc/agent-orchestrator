@@ -434,65 +434,60 @@ describe("retired new sidebar design switch", () => {
 	});
 });
 
-describe("background task tabs", () => {
+describe("background tasks side panel", () => {
 	const id = "task-tabs-session";
 	const task = (taskId: string, extra: Record<string, unknown> = {}) => ({ id: taskId, kind: "shell" as const, state: "running" as const, description: `Task ${taskId}`, ...extra });
-	const tabs = () => useUiStore.getState().inspectorSessions[id];
+	const panel = () => useUiStore.getState().inspectorSessions[id];
 	beforeEach(() => {
 		useUiStore.setState({ inspectorSessions: { [id]: { isOpen: false, view: "browser" } } });
 	});
 
-	it("opens one tab per task, brings an open tab forward, and returns to the previous view when the last closes", () => {
+	it("opens a task in the Background tasks tab, back to the list, and into another listed task", () => {
 		const store = useUiStore.getState();
 		store.openTaskTab(id, task("a"));
-		expect(tabs()).toMatchObject({ isOpen: true, view: "task", activeTaskTab: "a", taskReturnView: "browser" });
+		expect(panel()).toMatchObject({ isOpen: true, view: "task", activeTaskTab: "a" });
 		store.openTaskTab(id, task("b"));
 		store.openTaskTab(id, task("a", { description: "renamed" }));
-		expect(tabs().taskTabs?.map((tab) => tab.task.id)).toEqual(["a", "b"]);
-		expect(tabs().taskTabs?.[0].task.description).toBe("renamed");
-		expect(tabs().activeTaskTab).toBe("a");
-
-		// Closing the shown tab shows its neighbour; the view stays on tasks.
-		store.closeTaskTab(id, "a");
-		expect(tabs()).toMatchObject({ view: "task", activeTaskTab: "b" });
-		store.closeTaskTab(id, "b");
-		expect(tabs()).toMatchObject({ view: "browser", taskTabs: undefined, activeTaskTab: undefined, taskReturnView: undefined });
+		expect(panel().taskTabs?.map((tab) => tab.task.id)).toEqual(["a", "b"]);
+		expect(panel().taskTabs?.[0].task.description).toBe("renamed");
+		store.showTaskList(id);
+		expect(panel()).toMatchObject({ view: "task", activeTaskTab: undefined });
+		store.selectTaskTab(id, "b");
+		expect(panel().activeTaskTab).toBe("b");
+		store.selectTaskTab(id, "missing");
+		expect(panel().activeTaskTab).toBe("b");
 	});
 
-	it("keeps the outcome of a task that left the reading and marks a silent exit as ended", () => {
+	it("lists every task a reading names but agents, and marks a live task that left it as ended", () => {
 		const store = useUiStore.getState();
-		store.openTaskTab(id, task("fails"));
-		store.openTaskTab(id, task("vanishes"));
-		store.syncTaskTabs(id, [task("fails", { state: "failed", endedAt: "2026-11-14T10:00:00Z" }), task("vanishes")]);
-		expect(tabs().taskTabs?.map((tab) => [tab.task.state, Boolean(tab.ended)])).toEqual([["failed", false], ["running", false]]);
-		const before = tabs();
-		store.syncTaskTabs(id, [task("fails", { state: "failed", endedAt: "2026-11-14T10:00:00Z" }), task("vanishes")]);
-		expect(tabs()).toBe(before);
+		store.syncTaskTabs(id, [task("dev"), task("helper", { kind: "agent" })]);
+		expect(panel().taskTabs?.map((tab) => tab.task.id)).toEqual(["dev"]);
+		store.syncTaskTabs(id, [task("dev"), task("build", { state: "failed", endedAt: "2026-11-14T10:00:00Z" })]);
+		expect(panel().taskTabs?.map((tab) => [tab.task.id, tab.task.state, Boolean(tab.ended)])).toEqual([["dev", "running", false], ["build", "failed", false]]);
+		const before = panel();
+		store.syncTaskTabs(id, [task("dev"), task("build", { state: "failed", endedAt: "2026-11-14T10:00:00Z" })]);
+		expect(panel()).toBe(before);
 		store.syncTaskTabs(id, []);
-		expect(tabs().taskTabs?.map((tab) => [tab.task.state, Boolean(tab.ended)])).toEqual([["failed", false], ["running", true]]);
+		expect(panel().taskTabs?.map((tab) => [tab.task.id, Boolean(tab.ended)])).toEqual([["dev", true], ["build", false]]);
+		// Listed again, it is live again.
+		store.syncTaskTabs(id, [task("dev")]);
+		expect(panel().taskTabs?.[0].ended).toBeUndefined();
+	});
+
+	it("leaves a session with no tasks untouched", () => {
+		const before = useUiStore.getState().inspectorSessions;
+		useUiStore.getState().syncTaskTabs("never-ran-a-task", []);
+		expect(useUiStore.getState().inspectorSessions).toBe(before);
 	});
 
 	it("remembers each failed run that its tab has shown, once", () => {
 		const store = useUiStore.getState();
 		const failed = task("build", { state: "failed", runId: "r1" });
 		store.acknowledgeFailedTask(id, failed);
-		const before = tabs();
+		const before = panel();
 		store.acknowledgeFailedTask(id, failed);
-		expect(tabs()).toBe(before);
+		expect(panel()).toBe(before);
 		store.acknowledgeFailedTask(id, task("build", { state: "failed", runId: "r2" }));
-		expect(tabs().seenFailedTasks).toEqual([failedTaskKey(failed), failedTaskKey(task("build", { runId: "r2" }))]);
-	});
-
-	it("remembers the view a fixed tab left for the task tabs", () => {
-		const store = useUiStore.getState();
-		store.openTaskTab(id, task("a"));
-		store.setInspectorView(id, "files");
-		store.selectTaskTab(id, "a");
-		store.setInspectorView(id, "task");
-		expect(tabs().taskReturnView).toBe("files");
-		store.closeTaskTab(id, "a");
-		expect(tabs().view).toBe("files");
-		store.selectTaskTab(id, "missing");
-		expect(tabs().activeTaskTab).toBeUndefined();
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(failed), failedTaskKey(task("build", { runId: "r2" }))]);
 	});
 });

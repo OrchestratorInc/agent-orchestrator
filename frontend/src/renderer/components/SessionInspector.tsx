@@ -51,8 +51,8 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { useBackgroundTasks } from "../hooks/useBackgroundTasks";
-import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
-import { backgroundTaskName, supportsLocalBackgroundTasks } from "./BackgroundTasks";
+import { BackgroundTasksPanel } from "./BackgroundTaskPanel";
+import { supportsLocalBackgroundTasks } from "./BackgroundTasks";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -139,7 +139,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title" | "backgroundTasks.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
@@ -148,6 +148,7 @@ const VIEW_DEFS: {
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
+	{ id: "task", labelKey: "backgroundTasks.title", icon: <SquareTerminal /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -221,22 +222,21 @@ export const SessionInspector = memo(function SessionInspector({
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
 	);
-	// Background tasks opened from the composer, each in its own closable tab.
+	// The Background tasks tab: every task this chat ran, and one at a time when opened.
 	const uiKey = session ? sessionUiKey(session.id, hostId) : "";
 	const taskTabs = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.taskTabs : undefined));
 	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
 	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
 	const tasksWatchable = Boolean(session && supportsLocalBackgroundTasks(session));
-	const hasTaskTabs = Boolean(taskTabs?.length);
-	const tasksReading = useBackgroundTasks(session?.id ?? "", hasTaskTabs && tasksWatchable, true).data;
+	const tasksReading = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task").data;
 	useEffect(() => {
-		if (!uiKey || !hasTaskTabs) return;
+		if (!uiKey) return;
 		// An ended session sends no more readings, and an unavailable one means its
-		// agent isn't reporting: a tab still showing a live task would offer a Stop
-		// that can't land. Mark it ended; a reading that lists it again restores it.
+		// agent isn't reporting: a task still shown as live would offer a Stop that
+		// can't land. Mark it ended; a reading that lists it again restores it.
 		if (!tasksWatchable || tasksReading?.availability === "unavailable") useUiStore.getState().syncTaskTabs(uiKey, []);
 		else if (tasksReading) useUiStore.getState().syncTaskTabs(uiKey, tasksReading.tasks);
-	}, [hasTaskTabs, tasksReading, tasksWatchable, uiKey]);
+	}, [tasksReading, tasksWatchable, uiKey]);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -286,10 +286,10 @@ export const SessionInspector = memo(function SessionInspector({
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
-			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
-	const view: InspectorView = requestedView === "task"
-		? (activeTaskTab ? "task" : "summary")
-		: availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)
+			// Background tasks shows once the chat has run one.
+			&& (entry.id !== "task" || Boolean(taskTabs?.length)));
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	// A failure shown in its tab has been seen: the composer strip stops raising it.
 	const shownFailure = view === "task" && isInspectorVisible && activeTaskTab && !activeTaskTab.ended && activeTaskTab.task.state === "failed"
 		? activeTaskTab.task
@@ -392,18 +392,8 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				tabs={tabs}
-				taskTabs={taskTabs?.map((tab) => {
-					const name = backgroundTaskName(tab.task, t);
-					return { id: tab.task.id, label: name, closeLabel: t("backgroundTasks.closeTab", { name }), icon: <SquareTerminal aria-hidden="true" /> };
-				})}
-				activeTaskTab={activeTaskTab?.task.id}
-				onTaskTabSelect={(id) => {
-					useUiStore.getState().selectTaskTab(uiKey, id);
-					setView("task");
-				}}
-				onTaskTabClose={(id) => useUiStore.getState().closeTaskTab(uiKey, id)}
-				taskView={session && activeTaskTab ? (
-					<BackgroundTaskPanel isVisible={isInspectorVisible} key={activeTaskTab.task.id} sessionId={session.id} tab={activeTaskTab} />
+				taskView={session && taskTabs?.length ? (
+					<BackgroundTasksPanel isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} tasks={taskTabs} uiKey={uiKey} />
 				) : undefined}
 			/>
 		</div>

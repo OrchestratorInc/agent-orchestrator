@@ -84,9 +84,10 @@ export type WorkbenchTab = "changes" | "files" | "terminal";
 export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts" | "task";
 
 /**
- * A background task opened as a temporary side-panel tab. `task` is the latest
- * reading of it, kept after the task leaves the reading so its tab still shows
- * how it ended. `ended` marks a live task that left without a reported outcome.
+ * A background task listed in the side panel's Background tasks tab. `task` is
+ * the latest reading of it, kept after the task leaves the reading so the panel
+ * still shows how it ended. `ended` marks a live task that left without a
+ * reported outcome.
  */
 export type BackgroundTaskTab = { task: BackgroundTask; ended?: boolean };
 
@@ -126,12 +127,10 @@ export type InspectorSessionState = {
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
-	/** Background tasks opened as side-panel tabs, in opening order. In memory only: they close with the app. */
+	/** The background tasks the side panel lists, in the order first seen. In memory only: they go with the app. */
 	taskTabs?: BackgroundTaskTab[];
-	/** The task tab shown while the view is "task". */
+	/** The task the Background tasks tab has open; unset shows the list. */
 	activeTaskTab?: string;
-	/** The view that closing the last task tab returns to. */
-	taskReturnView?: InspectorView;
 	/** Failed task runs whose tab has been shown (`failedTaskKey`); the composer strip leaves them out. */
 	seenFailedTasks?: string[];
 };
@@ -335,11 +334,13 @@ export type UiState = {
 	setInspectorOpen: (sessionId: string, isOpen: boolean) => void;
 	toggleInspector: (sessionId: string) => void;
 	setInspectorView: (sessionId: string, view: InspectorView) => void;
-	/** Opens a background task in its own side-panel tab, or brings its open tab forward. */
+	/** Opens a background task in the side panel's Background tasks tab. */
 	openTaskTab: (sessionId: string, task: BackgroundTask) => void;
+	/** Opens a task the Background tasks list already holds, keeping how it ended. */
 	selectTaskTab: (sessionId: string, taskId: string) => void;
-	closeTaskTab: (sessionId: string, taskId: string) => void;
-	/** Refreshes open task tabs from a background-task reading. */
+	/** Leaves the open task for the Background tasks list. */
+	showTaskList: (sessionId: string) => void;
+	/** Lists the tasks in a background-task reading, and ends live ones that left it. */
 	syncTaskTabs: (sessionId: string, tasks: BackgroundTask[]) => void;
 	/** Records that a failed task run was shown in its tab, so the composer strip stops raising it. */
 	acknowledgeFailedTask: (sessionId: string, task: BackgroundTask) => void;
@@ -723,11 +724,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 			const current = inspectorState(state.inspectorSessions, sessionId);
 			const browserUnseen = view === "browser" ? false : current.browserUnseen;
 			const artifactsUnseen = view === "artifacts" ? false : current.artifactsUnseen;
-			const taskReturnView = view === "task" && current.view !== "task" ? current.view : current.taskReturnView;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, view, browserUnseen, artifactsUnseen, taskReturnView },
+					[sessionId]: { ...current, view, browserUnseen, artifactsUnseen },
 				},
 			};
 		}),
@@ -738,11 +738,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 			const taskTabs = tabs.some((tab) => tab.task.id === task.id)
 				? tabs.map((tab) => (tab.task.id === task.id ? { task } : tab))
 				: [...tabs, { task }];
-			const taskReturnView = current.view === "task" ? current.taskReturnView : current.view;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, isOpen: true, view: "task", taskTabs, activeTaskTab: task.id, taskReturnView },
+					[sessionId]: { ...current, isOpen: true, view: "task", taskTabs, activeTaskTab: task.id },
 				},
 			};
 		}),
@@ -752,37 +751,21 @@ export const useUiStore = create<UiState>((set, get) => ({
 			if (!current.taskTabs?.some((tab) => tab.task.id === taskId)) return state;
 			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, activeTaskTab: taskId } } };
 		}),
-	closeTaskTab: (sessionId, taskId) =>
+	showTaskList: (sessionId) =>
 		set((state) => {
-			const current = inspectorState(state.inspectorSessions, sessionId);
-			const tabs = current.taskTabs ?? [];
-			const index = tabs.findIndex((tab) => tab.task.id === taskId);
-			if (index < 0) return state;
-			const taskTabs = tabs.filter((tab) => tab.task.id !== taskId);
-			// Closing the shown tab shows its neighbour; closing the last leaves task tabs entirely.
-			const activeTaskTab = current.activeTaskTab === taskId
-				? taskTabs[Math.min(index, taskTabs.length - 1)]?.task.id
-				: current.activeTaskTab;
-			const view = !taskTabs.length && current.view === "task" ? (current.taskReturnView ?? "summary") : current.view;
-			return {
-				inspectorSessions: {
-					...state.inspectorSessions,
-					[sessionId]: {
-						...current,
-						view,
-						taskTabs: taskTabs.length ? taskTabs : undefined,
-						activeTaskTab,
-						taskReturnView: taskTabs.length ? current.taskReturnView : undefined,
-					},
-				},
-			};
+			const current = state.inspectorSessions[sessionId];
+			if (!current?.activeTaskTab) return state;
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, activeTaskTab: undefined } } };
 		}),
 	syncTaskTabs: (sessionId, tasks) =>
 		set((state) => {
-			const current = state.inspectorSessions[sessionId];
-			if (!current?.taskTabs?.length) return state;
-			let changed = false;
-			const taskTabs = current.taskTabs.map((tab) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			// Agents belong to Subagents; every other task the reading lists joins the list.
+			const listed = tasks.filter((task) => task.kind !== "agent");
+			const known = current.taskTabs ?? [];
+			const added = listed.filter((task) => !known.some((tab) => tab.task.id === task.id)).map((task) => ({ task }));
+			let changed = added.length > 0;
+			const taskTabs = known.map((tab) => {
 				const latest = tasks.find((task) => task.id === tab.task.id);
 				if (latest) {
 					if (!tab.ended && JSON.stringify(latest) === JSON.stringify(tab.task)) return tab;
@@ -795,7 +778,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 				return { ...tab, ended: true };
 			});
 			if (!changed) return state;
-			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, taskTabs } } };
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, taskTabs: [...taskTabs, ...added] } } };
 		}),
 	acknowledgeFailedTask: (sessionId, task) =>
 		set((state) => {

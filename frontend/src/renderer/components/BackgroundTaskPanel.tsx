@@ -1,20 +1,185 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowDown } from "@/components/app-icons";
+import { InspectorSection } from "@aoagents/product-ui";
+import { ArrowDown, ArrowLeft, ChevronRight, Square, SquareTerminal } from "@/components/app-icons";
 import { useBackgroundTaskOutput } from "../hooks/useBackgroundTasks";
-import type { BackgroundTaskTab } from "../stores/ui-store";
+import { useUiStore, type BackgroundTaskTab } from "../stores/ui-store";
 import { lineTone, outputLines, outputSummary } from "../lib/output-lines";
 import { cn } from "../lib/utils";
 import { backgroundTaskName, elapsed, isLive, useNow, useTaskStops } from "./BackgroundTasks";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 /**
- * One background task in its side-panel tab: what it is, how it is doing, the
- * command it runs and its latest output. The tab outlives the task, so a run
- * that just failed can still be read; nothing is kept once the tab closes.
+ * The side panel's Background tasks tab, laid out like Subagents: every task the
+ * chat ran, running ones first, and one task's output at a time behind a header
+ * that leads back to the list.
  */
-export function BackgroundTaskPanel({ sessionId, tab, isVisible }: { sessionId: string; tab: BackgroundTaskTab; isVisible: boolean }) {
+export function BackgroundTasksPanel({ sessionId, uiKey, tasks, openTask, isVisible }: {
+	sessionId: string;
+	/** The session's side-panel key, where the open task is kept. */
+	uiKey: string;
+	tasks: readonly BackgroundTaskTab[];
+	/** The task whose output shows; the list shows while unset. */
+	openTask?: BackgroundTaskTab;
+	isVisible: boolean;
+}) {
+	// The list and a task replace each other, so focus would leave with them.
+	// Opening a row moves it to Back, and Back returns it to the row it left.
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [focusBackFor, setFocusBackFor] = useState<string>();
+	const returnFocusTo = useRef<string | undefined>(undefined);
+	const openFromList = useCallback((taskId: string) => {
+		setFocusBackFor(taskId);
+		useUiStore.getState().selectTaskTab(uiKey, taskId);
+	}, [uiKey]);
+	const back = useCallback(() => {
+		returnFocusTo.current = openTask?.task.id;
+		setFocusBackFor(undefined);
+		useUiStore.getState().showTaskList(uiKey);
+	}, [openTask?.task.id, uiKey]);
+	useEffect(() => {
+		const taskId = returnFocusTo.current;
+		if (openTask || !taskId) return;
+		returnFocusTo.current = undefined;
+		const rows = rootRef.current?.querySelectorAll<HTMLElement>("[data-task-row]") ?? [];
+		Array.from(rows).find((row) => row.dataset.taskRow === taskId)?.focus();
+	}, [openTask]);
+
+	return (
+		<div ref={rootRef} className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
+			{openTask ? (
+				<BackgroundTaskPanel
+					key={openTask.task.id}
+					autoFocusBack={focusBackFor === openTask.task.id}
+					isVisible={isVisible}
+					onBack={back}
+					sessionId={sessionId}
+					tab={openTask}
+				/>
+			) : (
+				<BackgroundTaskList tasks={tasks} onOpen={openFromList} />
+			)}
+		</div>
+	);
+}
+
+/** Running tasks first, then the finished ones; the newest at the top of each. */
+function BackgroundTaskList({ tasks, onOpen }: { tasks: readonly BackgroundTaskTab[]; onOpen: (taskId: string) => void }) {
+	const { t } = useTranslation();
+	const newestFirst = [...tasks].reverse();
+	const running = newestFirst.filter(isRunning);
+	const finished = newestFirst.filter((entry) => !isRunning(entry));
+	const now = useNow(running.map((entry) => entry.task));
+	// The side panel's own body and sections, as Summary and Subagents draw theirs.
+	return (
+		<div className="board-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden pt-0.5 pb-3">
+			<BackgroundTaskGroup label={t("backgroundTasks.state.running")} tasks={running} now={now} onOpen={onOpen} />
+			<BackgroundTaskGroup label={t("backgroundTasks.panel.finished")} tasks={finished} now={now} onOpen={onOpen} />
+		</div>
+	);
+}
+
+function BackgroundTaskGroup({ label, tasks, now, onOpen }: {
+	label: string;
+	tasks: readonly BackgroundTaskTab[];
+	now: number;
+	onOpen: (taskId: string) => void;
+}) {
+	if (tasks.length === 0) return null;
+	return (
+		<div role="group" aria-label={label}>
+			<InspectorSection surface={false} title={`${label} · ${tasks.length}`}>
+				<ul className="flex min-w-0 flex-col">
+					{tasks.map((entry) => (
+						<li key={entry.task.id}>
+							<BackgroundTaskRow entry={entry} now={now} onClick={() => onOpen(entry.task.id)} />
+						</li>
+					))}
+				</ul>
+			</InspectorSection>
+		</div>
+	);
+}
+
+/** One task as a line, like a Subagents row: its mark and name, then how it stands and how long it ran. */
+function BackgroundTaskRow({ entry, now, onClick }: { entry: BackgroundTaskTab; now: number; onClick: () => void }) {
+	const { t } = useTranslation();
+	// A task that ended unreported has no end time to measure to.
+	const time = entry.ended ? null : elapsed(entry.task, now);
+	return (
+		<Pressable
+			data-task-row={entry.task.id}
+			className="group/task flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover"
+			onClick={onClick}
+		>
+			<TaskMark entry={entry} />
+			<span className="min-w-0 truncate text-foreground/90">{backgroundTaskName(entry.task, t)}</span>
+			<span className="flex flex-1 items-center justify-end gap-2">
+				<TaskState entry={entry} />
+				{time ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground/70">{time}</span> : null}
+				<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/40 group-hover/task:text-muted-foreground" />
+			</span>
+		</Pressable>
+	);
+}
+
+const isRunning = (entry: BackgroundTaskTab) => !entry.ended && isLive(entry.task);
+
+/** The terminal mark, with a dot while the task runs or after it failed, as a subagent's avatar carries one. */
+function TaskMark({ entry }: { entry: BackgroundTaskTab }) {
+	const failed = !entry.ended && entry.task.state === "failed";
+	return (
+		<span aria-hidden="true" className="relative flex shrink-0">
+			<SquareTerminal className="size-4 text-muted-foreground" />
+			{isRunning(entry) || failed ? (
+				<span className={cn("absolute -bottom-0.5 -right-0.5 size-1.5 rounded-full ring-1 ring-background", failed ? "bg-destructive" : "bg-status-working")} />
+			) : null}
+		</span>
+	);
+}
+
+/**
+ * A word for anything that did not simply run or finish, so the state never
+ * rests on color alone. Running and completed show nothing: the group, the dot
+ * and the time already say it, and screen readers still hear it.
+ */
+function TaskState({ entry }: { entry: BackgroundTaskTab }) {
+	const { t } = useTranslation();
+	const { task, ended } = entry;
+	if (ended) return <span className="shrink-0 text-caption text-muted-foreground/70">{t("backgroundTasks.state.ended")}</span>;
+	switch (task.state) {
+		case "failed":
+			return <span className="shrink-0 text-caption text-destructive">{t("backgroundTasks.state.failed")}</span>;
+		case "stopped":
+			return (
+				<span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground/70">
+					<Square aria-hidden="true" className="size-2.5" />
+					{t("backgroundTasks.state.stopped")}
+				</span>
+			);
+		case "paused":
+			return <span className="shrink-0 text-caption text-muted-foreground/70">{t("backgroundTasks.state.paused")}</span>;
+		default:
+			return <span className="sr-only">{stateLabel(task.state, t)}</span>;
+	}
+}
+
+/**
+ * One background task under a header that leads back to the list: what it is,
+ * how it stands, the command it runs and its latest output. A task that just
+ * failed or left the reading can still be read here.
+ */
+export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFocusBack = false }: {
+	sessionId: string;
+	tab: BackgroundTaskTab;
+	isVisible: boolean;
+	onBack: () => void;
+	/** Opened from the list: focus starts on Back, where the reader's row was. */
+	autoFocusBack?: boolean;
+}) {
 	const { t } = useTranslation();
 	const { task, ended } = tab;
 	const live = !ended && isLive(task);
@@ -29,59 +194,68 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible }: { sessionId: 
 		if (wasLive.current && !live && isVisible) void refetch();
 		wasLive.current = live;
 	}, [isVisible, live, refetch]);
+	const backButton = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (autoFocusBack) backButton.current?.focus();
+	}, [autoFocusBack]);
 
-	const status = ended ? t("backgroundTasks.state.ended") : stateLabel(task.state, t);
-	const isFailed = task.state === "failed" && !ended;
+	const backLabel = t("backgroundTasks.panel.back");
 	const time = elapsed(task, now);
 	const command = task.command && task.command !== name ? task.command : null;
 	const text = output.data?.availability === "ready" ? output.data.output : "";
 	const summary = useMemo(() => (text ? outputSummary(text) : null), [text]);
 
-	// The tab names the task, so the header starts with how it is doing.
 	return (
 		<section aria-label={name} className="flex h-full min-h-0 flex-col">
-			<header className="flex shrink-0 flex-col gap-0.5 border-b border-border pt-1.5 pr-2 pb-2.5 pl-3">
-				<div className="flex h-control-md min-w-0 items-center gap-1.5 text-xs">
-					{isFailed ? <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-destructive" /> : null}
-					<span className={cn("font-medium", isFailed ? "text-destructive" : "text-foreground")}>{status}</span>
-					{time ? <><span aria-hidden="true" className="text-muted-foreground">·</span><span className="text-muted-foreground tabular-nums">{time}</span></> : null}
-					{failed === task.id ? <span role="status" className="text-destructive">· {t("backgroundTasks.stopFailed")}</span> : null}
-					{live && task.stoppable ? (
-						<Button
-							type="button"
-							variant="quiet"
-							size="xs"
-							className="ml-auto shrink-0"
-							aria-label={t("backgroundTasks.stop", { name })}
-							disabled={stopping.has(task.id)}
-							onClick={() => stop(task.id)}
-						>
-							<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
-							{t("backgroundTasks.stopAction")}
+			<div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border py-1.5 pl-1.5 pr-3">
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button ref={backButton} type="button" variant="ghost" size="icon-sm" aria-label={backLabel} onClick={onBack}>
+							<ArrowLeft aria-hidden="true" className="size-3.5" />
 						</Button>
+					</TooltipTrigger>
+					<TooltipContent>{backLabel}</TooltipContent>
+				</Tooltip>
+				<TaskMark entry={tab} />
+				<h3 className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{name}</h3>
+				{failed === task.id ? <span role="status" className="shrink-0 text-caption text-destructive">{t("backgroundTasks.stopFailed")}</span> : null}
+				<TaskState entry={tab} />
+				{time ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground/70">{time}</span> : null}
+				{live && task.stoppable ? (
+					<Button
+						type="button"
+						variant="quiet"
+						size="xs"
+						className="-mr-1 shrink-0"
+						aria-label={t("backgroundTasks.stop", { name })}
+						disabled={stopping.has(task.id)}
+						onClick={() => stop(task.id)}
+					>
+						<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
+						{t("backgroundTasks.stopAction")}
+					</Button>
+				) : null}
+			</div>
+			{command || summary ? (
+				<div className="flex min-w-0 shrink-0 items-baseline gap-3 border-b border-border py-1.5 pr-4 pl-3">
+					{command ? (
+						<code className="board-scrollbar max-h-20 min-w-0 flex-1 overflow-y-auto font-mono text-xs leading-[18px] break-all whitespace-pre-wrap text-muted-foreground select-text">
+							{command}
+						</code>
+					) : null}
+					{summary ? (
+						<span className="ml-auto shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+							{t("backgroundTasks.output.lines", { count: summary.lines })}
+							{summary.warnings ? (
+								<><span aria-hidden="true"> · </span><span className="text-(--color-term-yellow)">{t("backgroundTasks.output.warnings", { count: summary.warnings })}</span></>
+							) : null}
+							{summary.errors ? (
+								<><span aria-hidden="true"> · </span><span className="text-(--color-term-red)">{t("backgroundTasks.output.errors", { count: summary.errors })}</span></>
+							) : null}
+						</span>
 					) : null}
 				</div>
-				{command || summary ? (
-					<div className="flex min-w-0 items-baseline gap-3 pr-1">
-						{command ? (
-							<code className="board-scrollbar max-h-20 min-w-0 flex-1 overflow-y-auto font-mono text-xs leading-[18px] break-all whitespace-pre-wrap text-muted-foreground select-text">
-								{command}
-							</code>
-						) : null}
-						{summary ? (
-							<span className="ml-auto shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-								{t("backgroundTasks.output.lines", { count: summary.lines })}
-								{summary.warnings ? (
-									<><span aria-hidden="true"> · </span><span className="text-(--color-term-yellow)">{t("backgroundTasks.output.warnings", { count: summary.warnings })}</span></>
-								) : null}
-								{summary.errors ? (
-									<><span aria-hidden="true"> · </span><span className="text-(--color-term-red)">{t("backgroundTasks.output.errors", { count: summary.errors })}</span></>
-								) : null}
-							</span>
-						) : null}
-					</div>
-				) : null}
-			</header>
+			) : null}
 			<div className="flex min-h-0 flex-1 flex-col">
 				{output.isError ? (
 					<p className="px-3 py-2.5 text-xs text-muted-foreground">{t("backgroundTasks.output.error")}</p>
