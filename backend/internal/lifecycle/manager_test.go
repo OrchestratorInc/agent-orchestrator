@@ -142,15 +142,20 @@ type activityRevisionConflictStore struct {
 
 type fakeSemanticDeliveryActivityStore struct {
 	*fakeStore
+	accepted []string // coordination IDs recorded as accepted
 }
 
 func (f *fakeSemanticDeliveryActivityStore) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
 	ctx context.Context,
 	rec domain.SessionRecord,
 	expectedRevision int64,
-	_ string,
+	coordinationID string,
 ) (bool, error) {
-	return f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
+	applied, err := f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
+	if applied && err == nil {
+		f.accepted = append(f.accepted, coordinationID)
+	}
+	return applied, err
 }
 
 func (f *activityRevisionConflictStore) UpdateSessionFromActivitySignal(
@@ -5366,5 +5371,42 @@ func TestActivity_LatePromptDoesNotUndoALaterStop(t *testing.T) {
 				t.Fatalf("idle since %s, want the last Stop at 38s", got.Activity.LastActivityAt.Sub(base))
 			}
 		})
+	}
+}
+
+// A late prompt cannot change the idle state, but it was still submitted: the
+// delivery it carries is recorded as accepted.
+func TestActivity_LatePromptStillAcceptsItsDelivery(t *testing.T) {
+	m, st, _ := newManager()
+	semantic := &fakeSemanticDeliveryActivityStore{fakeStore: st}
+	m.store = semantic
+	rec := working("mer-1")
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-current"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	base := time.Now().UTC().Truncate(time.Second)
+	rec.Activity.LastActivityAt = base
+	st.sessions[rec.ID] = rec
+	signal := func(state domain.ActivityState, event, prompt string, at time.Duration, coordination string) ports.ActivitySignal {
+		return ports.ActivitySignal{Valid: true, State: state, Event: event, LaunchID: "launch-current",
+			AgentSessionID: "native-current", LatestUserPrompt: prompt, CoordinationID: coordination, Timestamp: base.Add(at)}
+	}
+	for _, s := range []ports.ActivitySignal{
+		signal(domain.ActivityActive, "user-prompt-submit", "review notice", 36*time.Second, ""),
+		signal(domain.ActivityIdle, "stop", "", 38*time.Second, ""),
+		// A delayed duplicate of that prompt, carrying its delivery: older than
+		// the Stop and the recorded prompt, it changes neither the state nor any
+		// metadata.
+		signal(domain.ActivityActive, "user-prompt-submit", "review notice", 35*time.Second, "session-send:review-notice"),
+	} {
+		if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := st.sessions[rec.ID].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity = %s, want idle", got)
+	}
+	if !slices.Contains(semantic.accepted, "session-send:review-notice") {
+		t.Fatalf("accepted deliveries = %q, want the late prompt's", semantic.accepted)
 	}
 }

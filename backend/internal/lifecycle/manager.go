@@ -969,15 +969,18 @@ retryProjection:
 	// before that idle keeps its metadata but cannot change the state. The
 	// spawn's seeded idle is not a signal, so an early first hook still lands,
 	// and an exited session stays resumable.
+	lateSignal := false
 	if s.Valid && s.State != domain.ActivityExited && !s.Timestamp.IsZero() &&
 		rec.Activity.State == domain.ActivityIdle && !rec.FirstSignalAt.IsZero() &&
 		s.Timestamp.Before(rec.Activity.LastActivityAt) {
-		s.Valid = false
+		s.Valid, lateSignal = false, true
 	}
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Harness, rec.Activity.State, s)
 	}
-	if !s.Valid && !metadataChanged {
+	// A late prompt was still submitted: its metadata-only projection is what
+	// records its delivery as accepted, so it is not skipped.
+	if !s.Valid && !metadataChanged && !(lateSignal && semanticDeliveryStore != nil) {
 		m.mu.Unlock()
 		return nil
 	}
