@@ -142,9 +142,9 @@ func (c *commandContext) codexStartFailure(ctx context.Context, codex string) er
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	line := strings.TrimSpace(lines[len(lines)-1])
-	const limit = 300
-	if len(line) > limit {
-		line = line[:limit] + "..."
+	const limit = 300 // characters, so a cut never splits one
+	if runes := []rune(line); len(runes) > limit {
+		line = string(runes[:limit]) + "..."
 	}
 	return line
 }
@@ -252,6 +252,9 @@ func runInteractiveCommand(ctx context.Context, name, dir string, args []string,
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// A child the launcher started can keep a captured output pipe open after
+	// the context kills the launcher; stop waiting for it shortly after.
+	cmd.WaitDelay = 100 * time.Millisecond
 	return cmd.Run()
 }
 

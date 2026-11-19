@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
@@ -214,5 +215,20 @@ func TestRunInteractiveCommandFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out.String()); got != "login --device-auth" {
 		t.Fatalf("output = %q, want npm launcher to run under node", got)
+	}
+}
+
+func TestLastLineKeepsTheLauncherErrorWhole(t *testing.T) {
+	long := strings.Repeat("a", 299) + "é" + "tail"
+	for _, tt := range []struct{ name, in, want string }{
+		{name: "last non-blank line", in: "starting\nError: spawn codex ENOENT\n\n", want: "Error: spawn codex ENOENT"},
+		{name: "cut by character", in: long, want: strings.Repeat("a", 299) + "é..."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := lastLine(tt.in)
+			if got != tt.want || !utf8.ValidString(got) {
+				t.Fatalf("lastLine = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
