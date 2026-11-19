@@ -2471,6 +2471,8 @@ function ChatWorkspaceContent({
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
+												: moving?.phase === "moving"
+												? t("moveSession.moving", { host: moving.targetLabel })
 												: terminated && movedToLabel
 												? t("moveSession.movedHeading", { host: movedToLabel })
 												: terminated && snapshot.controller.state === "stopped"

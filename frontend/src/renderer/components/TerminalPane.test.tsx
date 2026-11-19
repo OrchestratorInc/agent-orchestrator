@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shellTerminalsQueryKey, type ShellTerminal } from "../hooks/useShellTerminals";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { moveKey, useMoveStore } from "../lib/move-runner";
 import type { AttachableTerminal } from "../hooks/useTerminalSession";
 import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
@@ -859,6 +860,21 @@ describe("TerminalPane replay cover", () => {
 			expect(screen.queryByTestId("terminal-replay-cover")).not.toBeInTheDocument();
 		} finally {
 			view.restore();
+		}
+	});
+
+	it("says the session is moving instead of showing the empty terminal the move leaves", () => {
+		replaySettled.value = true;
+		const key = moveKey(undefined, worker.id);
+		useMoveStore.setState({ moves: { [key]: { phase: "moving", targetHostId: "h_b", targetProjectId: "proj-1", targetLabel: "MacBook B" } }, shown: {} });
+		const view = renderPane({ ...worker, terminalHandleId: "term-1" });
+		try {
+			expect(screen.getByText("Moving to MacBook B")).toBeInTheDocument();
+			act(() => useMoveStore.setState({ moves: {}, shown: {} }));
+			expect(screen.queryByText("Moving to MacBook B")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+			useMoveStore.setState({ moves: {}, shown: {} });
 		}
 	});
 

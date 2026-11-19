@@ -1437,6 +1437,9 @@ function AttachedTerminal({
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;
 	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
+	// A move stops the agent first, which leaves an empty terminal; say what is happening instead.
+	const move = useMoveStore((store) => (session ? store.moves[moveKey(session.hostId, session.id)] : undefined));
+	const movingLabel = move?.phase === "moving" && terminalTarget?.kind === "worker" ? t("moveSession.moving", { host: move.targetLabel }) : undefined;
 	// A Cloud session's socket also closes for a pause, a handoff or a reviewer
 	// whose verdict is still landing, so the strip shows there only for an end
 	// the control plane recorded: the agent process gone in a live session, or
@@ -1493,10 +1496,10 @@ function AttachedTerminal({
 				/>
 				</Suspense>
 				</LazyChunkBoundary>
-				{(showEmptyState || booting || switchingCover) && (
+				{(showEmptyState || booting || switchingCover || movingLabel) && (
 					<div className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control">
 						{session ? (
-							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
+							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={movingLabel ?? coverLabel} />
 						) : (
 							<div className="text-center">
 								<div className="text-terminal">{"Orchestrator"}</div>

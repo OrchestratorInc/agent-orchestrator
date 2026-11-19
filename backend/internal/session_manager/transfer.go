@@ -711,7 +711,7 @@ func (m *Manager) refuseMoved(ctx context.Context, id domain.SessionID) error {
 	case err != nil || !ok:
 		return err
 	case state.Pending():
-		return fmt.Errorf("%w: open Move to another computer to finish the move to %s", ErrTransferPending, state.Label)
+		return fmt.Errorf("%w: the move to %s is not finished; use Finish move or Keep it here on the session", ErrTransferPending, state.Label)
 	default:
 		return fmt.Errorf("%w: continues on %s as %s", ErrSessionMoved, state.Label, state.SessionID)
 	}
