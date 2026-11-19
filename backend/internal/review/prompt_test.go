@@ -103,7 +103,7 @@ func TestSingleLineSubmitExamples(t *testing.T) {
 			if strings.Contains(cmd, "<<") || strings.Contains(cmd, "\n") || !strings.HasPrefix(cmd, "printf '%s'") {
 				t.Errorf("%s expected single-line pipeline, got %q", harness, cmd)
 			}
-			if strings.Contains(cmd, " | base64 --decode | ") != (harness == domain.ReviewerKiro) {
+			if strings.Contains(cmd, " | base64 --decode | ") != (harness == domain.ReviewerKiro || harness == domain.ReviewerOpenCodeV2) {
 				t.Errorf("%s unexpected encoding in %q", harness, cmd)
 			}
 		}

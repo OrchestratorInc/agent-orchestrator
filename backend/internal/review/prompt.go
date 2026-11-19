@@ -70,11 +70,14 @@ func reviewSubmitExamples(spec LaunchSpec) (post, record, rules string) {
 - Run the command exactly as shown: no other commands, redirections, or files around it.
 
 If a heredoc command fails because the shell cannot create a temp file for the here document (some reviewer sandboxes are read-only), run the same command once more with the text piped through printf instead: `+"`printf '%%s' '<the same text>' | <the same command without the heredoc>`"+`. In that form, replace every single quote in the text with '\''.`, delimiter, delimiter)
-	case domain.ReviewerKiro:
+	case domain.ReviewerKiro, domain.ReviewerOpenCodeV2:
+		body, target := payload, gh
+		if spec.Harness == domain.ReviewerOpenCodeV2 {
+			target = "ao review post-github"
+			body = `{"endpoint":"repos/{owner}/{repo}/pulls/{number}/reviews","review":` + payload + "}"
+		}
 		const pipe = "' | base64 --decode | "
-		return "printf '%s' '<base64 of review JSON>" + pipe + gh, "printf '%s' '<base64 of review Markdown>" + pipe + ao, "Encode the UTF-8 body as one unwrapped base64 string. Use base64 -D if your platform requires it. The GitHub JSON shape is " + payload
-	case domain.ReviewerOpenCodeV2:
-		post = "printf '%s' '" + `{"endpoint":"repos/{owner}/{repo}/pulls/{number}/reviews","review":` + payload + "}' | ao review post-github"
+		return "printf '%s' '<base64 of review JSON>" + pipe + target, "printf '%s' '<base64 of review Markdown>" + pipe + ao, "Encode each UTF-8 body as one unwrapped base64 string. Use base64 -D if your platform requires it. Step 1's JSON shape is " + body
 	default:
 		post = "printf '%s' '" + payload + "' | " + gh
 	}

@@ -2,6 +2,7 @@ package opencodev2_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -82,6 +83,9 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 	if permissionEffect(append(config.Permissions, agent.Permissions...), "edit", "src/main.go") != "deny" {
 		t.Fatalf("edit remained allowed after caller and agent rules: global=%#v agent=%#v", config.Permissions, agent.Permissions)
 	}
+	// The shell sees only base64 characters, even when quoted review prose
+	// contains a quote followed by whitespace and a redirect character.
+	encoded := base64.StdEncoding.EncodeToString([]byte(`{"event":"COMMENT","body":"Use 'x' > 0"}`))
 	for _, command := range []string{
 		"gh api repos/o/r/pulls/1",
 		"git diff HEAD^ HEAD",
@@ -89,7 +93,9 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 		"git show HEAD",
 		"git status --short",
 		"ao review post-github",
-		"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"a > b\", \"comments\": [] }'",
+		"printf '%s' '" + encoded + "'",
+		"base64 --decode",
+		"base64 -D",
 		"printf '%s' '{ \"reviews\": [] }'",
 		"ao review submit --session ao-1 --run run-1 --verdict approved --body -",
 	} {

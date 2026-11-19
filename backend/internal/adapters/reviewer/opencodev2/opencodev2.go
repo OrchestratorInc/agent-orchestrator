@@ -185,6 +185,8 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		"git status *",
 		"ao review submit --session * --run * --verdict * --body -",
 		"ao review post-github",
+		"base64 --decode",
+		"base64 -D",
 		"printf '%s' '*'",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
@@ -224,11 +226,10 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 	}
 	for _, resource := range []string{
 		"ao review submit *--reviews*",
-		"printf '%s' '*' *>*",
-		"printf '%s' '*' *<*",
-		"printf '%s' '*' *|*",
-		"printf '%s' '*' *;*",
-		"printf '%s' '*' *&*",
+		// Reviewer payloads are base64, so shell syntax is never needed
+		// anywhere in the printf resource.
+		"printf *>*", "printf *<*", "printf *|*", "printf *;*", "printf *&*",
+		"printf *$*", "printf *`*", "printf *\n*",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
 	}
