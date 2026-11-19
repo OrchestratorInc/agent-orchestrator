@@ -159,10 +159,8 @@ again: the command exits 1 with `REVIEW_ALREADY_RUNNING` or
 just pushed and it still says already reviewed, wait a few seconds and retry. The same reviewer agent never runs twice on one head at the same time.
 
 By default the command turns on the worker session's review auto-inject. The
-reviewer posts an inline GitHub comment for each change it requires, and Orchestrator
-forwards those comments to the worker like any other review comments. An
-approval adds no comments, so check the verdict with `ao review ls`. If a run
-shows `failed` or `cancelled`, trigger again; nothing else reports it.
+reviewer posts an inline GitHub comment for each change it requires, and AO
+forwards those comments to the worker like any other review comments. For reviews requested by a worker or orchestrator, Orchestrator sends the final verdict to the requesting session when review feedback delivery is enabled. Trigger failures appear in the command result. Human-triggered and scheduled reviews are available in the UI and through `ao review ls`. For a posted GitHub review, the notice waits up to three minutes for Orchestrator to observe the review. It includes the review link and observed inline-comment count, or says the count is unknown if the wait expires. Inline findings go to the worker that owns the PR.
 
 **Examples:**
 
