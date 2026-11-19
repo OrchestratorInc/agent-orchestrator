@@ -774,6 +774,26 @@ describe("ChatWorkspace timeline", () => {
 		expect(onLoadOlder).toHaveBeenCalledTimes(1);
 	});
 
+	// A send reloads the chat's pages from its new newest row, which drops the oldest
+	// rows: the content shrinks and the browser clamps the view to the new end, which
+	// can be near the top. Loading a page above then showed some earlier turn and rode
+	// all the way back down to the new message.
+	it("does not load older history when shrinking content clamps the view to the end", () => {
+		const onLoadOlder = vi.fn();
+		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} hasOlder onLoadOlder={onLoadOlder} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+		stubGeometry(log, { scrollHeight: 1200, clientHeight: 800, scrollTop: 400 });
+		fireEvent.scroll(log);
+		expect(onLoadOlder).not.toHaveBeenCalled();
+
+		// The reader moving up from there still loads it.
+		log.scrollTop = 300;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
+	});
+
 	// A history shorter than the view cannot scroll, so no scroll ever comes to load
 	// older pages by: the chat sat under "Load earlier messages" until it was clicked.
 	describe("older history in a chat too short to scroll", () => {
@@ -4215,6 +4235,26 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Reader at virtualization boundary")).toBeInTheDocument();
 		expect(log.scrollTop).toBe(8034);
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+	});
+
+	// The log has no scroll anchoring of its own: rows added above a short history kept
+	// the same scrollTop, so the reader's turn slid down by everything that loaded.
+	it("keeps the reader's turn in place when older history loads above a short chat", () => {
+		stubVirtualTimelineGeometry();
+		const full = chatFixtureLongHistory(8);
+		const anchor = full.items.find((item) => item.kind === "message" && item.role === "user" && item.turnId === "turn-h4") as ConversationMessage;
+		anchor.text = "Reader in a short history";
+		const olderIds = new Set(full.turns.slice(0, 2).map((turn) => turn.id));
+		const initial = { ...full, hasMoreBefore: true, turns: full.turns.slice(2), items: full.items.filter((item) => !olderIds.has(item.turnId!)) };
+		const view = render(<ChatWorkspace snapshot={initial} hasOlder />);
+		const log = screen.getByRole("log");
+		log.scrollTop = 1300;
+		fireEvent.scroll(log);
+		const readerRow = () => screen.getByText("Reader in a short history").closest<HTMLElement>("[data-chat-turn]")!;
+		const top = readerRow().getBoundingClientRect().top;
+		view.rerender(<ChatWorkspace snapshot={full} />);
+		expect(readerRow().getBoundingClientRect().top).toBe(top);
+		expect(log.scrollTop).toBe(1300 + 2 * 618);
 	});
 
 	it("preserves the virtual reading anchor when history is prepended and new output arrives", async () => {
