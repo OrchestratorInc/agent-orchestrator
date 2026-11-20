@@ -2024,10 +2024,11 @@ function ChatWorkspaceContent({
 	// and from then on the turn's own state decides (a turn that already finished
 	// reads as idle). A failed send drops its echo; one kept to show a failure is
 	// not waiting on anything, and an opening brief has the startup's own words.
-	const sentTurnPending = sendAwaitingTurn || (localEchos ?? []).some((echo) =>
+	const sentTurnPending = useMemo(() => sendAwaitingTurn || (localEchos ?? []).some((echo) =>
 		!echo.opening && !echo.delivery &&
 		!(echo.turnId && snapshot.turns.some((entry) => entry.id === echo.turnId)) &&
-		!snapshot.items.some((item) => echoMatchesItem(echo, item, NO_TURN_IDS)));
+		!snapshot.items.some((item) => echoMatchesItem(echo, item, NO_TURN_IDS))),
+	[localEchos, sendAwaitingTurn, snapshot.items, snapshot.turns]);
 	// One steady line for the whole start. A local start runs its steps in a
 	// second or two, and naming each one flickered through the placeholder.
 	const setupPlaceholder = "Starting your orchestrator";
