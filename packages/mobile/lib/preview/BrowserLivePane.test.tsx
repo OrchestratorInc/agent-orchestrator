@@ -395,6 +395,29 @@ describe("live browser gestures", () => {
 		expect(sent()).toEqual([]);
 	});
 
+	// The pane stays on screen through an app switch, and so does the last
+	// stream's frame. The desktop page may have moved meanwhile, so a tap on
+	// that frame could click another control: it waits for the new stream's own.
+	it("takes no taps on the last stream's frame until the new stream draws one", async () => {
+		await render();
+		await open();
+		await showFrame();
+		expect(gesture("tap").enabled).toBe(true);
+		fixtures.config = null;
+		await act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
+		fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+		await act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
+		expect(fixtures.clients).toHaveLength(2);
+		await open();
+		// The old frame still shows, but neither tap nor drag reaches the page.
+		expect(nodes("Image")).toHaveLength(1);
+		expect(gesture("tap").enabled).toBe(false);
+		expect(gesture("pan").enabled).toBe(false);
+		await showFrame();
+		expect(gesture("tap").enabled).toBe(true);
+		expect(gesture("pan").enabled).toBe(true);
+	});
+
 	it("clicks the page where a tap lands, and ignores the letterbox", async () => {
 		await render();
 		await open();
