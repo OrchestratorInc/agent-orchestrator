@@ -205,6 +205,10 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
+          - column: "review_run.requester_session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
           - column: "review_run.harness"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

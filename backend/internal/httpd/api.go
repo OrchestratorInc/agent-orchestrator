@@ -42,6 +42,7 @@ type APIDeps struct {
 	Activity           controllers.ActivityRecorder
 	PRRefresh          controllers.PRRefresher
 	NativeSessions     ports.AgentNativeSessionResolver
+	TerminalReplies    ports.AgentResolver // Stop replies from native history; nil disables
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
 	UsageReport        controllers.UsageReportService
@@ -221,6 +222,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Activity:                 deps.Activity,
 			PRRefresh:                deps.PRRefresh,
 			NativeSessions:           deps.NativeSessions,
+			TerminalReplies:          deps.TerminalReplies,
 			DataDir:                  cfg.DataDir,
 			Usage:                    deps.UsageHooks,
 			Attachments:              attachmentstore.New(cfg.DataDir),

@@ -519,7 +519,6 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				<CliShadowSettingsRow />
-				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
@@ -611,21 +610,6 @@ function DiagnosticsRow() {
 	return (
 		<SettingsRow label={t("settings.diagnostics")} description={t("settings.diagnosticsToggleHint")}>
 			<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
-		</SettingsRow>
-	);
-}
-
-/**
- * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw, and "Add to side chat".
- */
-function SideChatsRow() {
-	const { t } = useTranslation();
-	const sideChats = useUiStore((state) => state.sideChats);
-	const setSideChats = useUiStore((state) => state.setSideChats);
-	return (
-		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
-			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
 		</SettingsRow>
 	);
 }
