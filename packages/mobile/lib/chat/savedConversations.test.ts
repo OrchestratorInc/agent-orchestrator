@@ -27,7 +27,7 @@ import {
 	savedPageEvictions,
 	savedPageView,
 } from "./savedConversations";
-import { disk, resetSavedChatFakes, savedFileNames, secrets, undeletable } from "./savedConversations.fakes";
+import { disk, interruptedWrites, resetSavedChatFakes, savedFileNames, secrets, undeletable } from "./savedConversations.fakes";
 import type { ConversationPage } from "./snapshot";
 import { streamingCursorMessageId } from "./timelineModel";
 
@@ -118,6 +118,35 @@ describe("saved chat pages", () => {
 		expect(savedKeys()).toEqual(["host.a/chat", "host.a/copy", "host.a/cut"]);
 	});
 
+	it("keep the previous page when its replacement is cut short", async () => {
+		await save("host.a/chat", page("before"));
+		// Killed while writing the replacement: only part of the `.tmp` lands.
+		interruptedWrites.add(`${fileOf("host.a/chat")}.tmp`);
+		await save("host.a/chat", page("after"));
+		expect(savedFileNames()).toEqual(["host.a%2Fchat.page", "host.a%2Fchat.page.tmp"]);
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "before" });
+
+		// Another chat's write clears the stale `.tmp` beside its page.
+		await save("host.a/other", page("x"));
+		expect(savedFileNames()).toEqual(["host.a%2Fchat.page", "host.a%2Fother.page"]);
+		// The chat's next write replaces the page.
+		await save("host.a/chat", page("next"));
+		expect(savedFileNames()).toEqual(["host.a%2Fchat.page", "host.a%2Fother.page"]);
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "next" });
+	});
+
+	it("load a whole replacement left when the app was killed as it was moved into place", async () => {
+		await save("host.a/chat", page("after"));
+		// Killed between the move's delete and its rename: only the whole `.tmp` is left.
+		disk.set(`${fileOf("host.a/chat")}.tmp`, disk.get(fileOf("host.a/chat"))!);
+		disk.delete(fileOf("host.a/chat"));
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after" });
+		// Another chat's write keeps it, as the chat's page.
+		await save("host.a/other", page("x"));
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after" });
+		expect(savedKeys()).toEqual(["host.a/chat", "host.a/other"]);
+	});
+
 	it("are written once a streaming chat settles, the newest page per chat", async () => {
 		vi.useFakeTimers();
 		const writes: Array<[string, number]> = [];
@@ -139,6 +168,7 @@ describe("saved chat pages", () => {
 		expect(savedFileName("http.192.168.1.20.3011/ao-1")).toBe("http.192.168.1.20.3011%2Fao-1.page");
 		expect(savedFileKey("http.192.168.1.20.3011%2Fao-1.page")).toBe("http.192.168.1.20.3011/ao-1");
 		expect(savedFileName(`host.a/${"x".repeat(300)}`)).toBeNull();
+		expect(savedFileKey("http.192.168.1.20.3011%2Fao-1.page.tmp")).toBe("http.192.168.1.20.3011/ao-1");
 		expect(savedFileKey("stray.tmp")).toBeNull();
 		expect(savedFileKey("%E0%A4%A.page")).toBeNull();
 	});
@@ -158,6 +188,11 @@ describe("which saved files go", () => {
 		const now = SAVED_PAGE_KEEP_MS + 10_000;
 		const listed = [{ name: "a.page", size: 1, modified: now }, { name: "stray.tmp", size: 1, modified: now }, { name: "old.page", size: 1, modified: 9_000 }];
 		expect(savedPageEvictions(listed, "a.page", now)).toEqual(["stray.tmp", "old.page"]);
+	});
+
+	it("a replacement beside its page, but not one standing in for a missing page", () => {
+		const listed = [{ name: "a.page", size: 1, modified: 3 }, { name: "a.page.tmp", size: 1, modified: 2 }, { name: "b.page.tmp", size: 1, modified: 1 }];
+		expect(savedPageEvictions(listed, "a.page", 10)).toEqual(["a.page.tmp"]);
 	});
 });
 
@@ -219,10 +254,12 @@ describe("forgetting a machine", () => {
 		await save("host.h_one/s1", page("one"));
 		await save("http.host-one.3011/s2", page("migrated"));
 		await save("host.h_two/s3", page("two"));
+		// A replacement a kill left behind goes with its chat.
+		disk.set(`${fileOf("host.h_one/s1")}.tmp`, disk.get(fileOf("host.h_one/s1"))!);
 
 		await forgetSavedConversations(host);
 
-		expect(savedKeys()).toEqual(["host.h_two/s3"]);
+		expect(savedFileNames()).toEqual(["host.h_two%2Fs3.page"]);
 		expect(await loadSavedConversation("host.h_one/s1")).toBeNull();
 		expect(await loadSavedConversation("host.h_two/s3")).not.toBeNull();
 	});

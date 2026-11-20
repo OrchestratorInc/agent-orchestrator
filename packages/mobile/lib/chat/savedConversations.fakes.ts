@@ -12,12 +12,15 @@ export const disk = new Map<string, { bytes: Uint8Array; modified: number }>();
 export const secrets = new Map<string, string>();
 /** Paths whose delete throws, as a file the OS will not let go of. */
 export const undeletable = new Set<string>();
+/** Paths whose next write is cut short: part of it lands, then it throws, as the app killed mid-write. */
+export const interruptedWrites = new Set<string>();
 let lastModified = 0;
 
 export function resetSavedChatFakes() {
 	disk.clear();
 	secrets.clear();
 	undeletable.clear();
+	interruptedWrites.clear();
 	lastModified = 0;
 }
 
@@ -60,7 +63,13 @@ class File {
 	write(content: string | Uint8Array) {
 		// Distinct, increasing times even within one millisecond, so the newest is known.
 		lastModified = Math.max(Date.now(), lastModified + 1);
-		disk.set(this.uri, { bytes: typeof content === "string" ? new TextEncoder().encode(content) : new Uint8Array(content), modified: lastModified });
+		const bytes = typeof content === "string" ? new TextEncoder().encode(content) : new Uint8Array(content);
+		if (interruptedWrites.delete(this.uri)) {
+			// As the native write: the file is truncated first, then only part of it is written.
+			disk.set(this.uri, { bytes: bytes.slice(0, Math.floor(bytes.byteLength / 2)), modified: lastModified });
+			throw new Error(`write to ${this.uri} cut short`);
+		}
+		disk.set(this.uri, { bytes, modified: lastModified });
 	}
 	async bytes() {
 		const file = disk.get(this.uri);
@@ -74,6 +83,19 @@ class File {
 	delete() {
 		if (undeletable.has(this.uri)) throw new Error(`cannot delete ${this.uri}`);
 		if (!disk.delete(this.uri)) throw new Error(`no file at ${this.uri}`);
+	}
+	/** As expo-file-system: an existing destination fails the move, unless `overwrite` deletes it just before the rename. */
+	moveSync(destination: File, options: { overwrite?: boolean } = {}) {
+		const file = disk.get(this.uri);
+		if (!file) throw new Error(`no file at ${this.uri}`);
+		if (disk.has(destination.uri)) {
+			if (!options.overwrite) throw new Error(`${destination.uri} exists`);
+			disk.delete(destination.uri);
+		}
+		disk.delete(this.uri);
+		disk.set(destination.uri, file);
+		this.uri = destination.uri;
+		this.name = destination.name;
 	}
 }
 
