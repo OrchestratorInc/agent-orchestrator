@@ -536,11 +536,13 @@ func Site(raw string) string {
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	if port := u.Port(); port != "" && !(scheme == "http" && port == "80") && !(scheme == "https" && port == "443") {
+	if port := u.Port(); port != "" && port != defaultPort[scheme] {
 		host += ":" + port
 	}
 	return scheme + "://" + host
 }
+
+var defaultPort = map[string]string{"http": "80", "https": "443"}
 
 // Host names a page's host for prompts ("shop.example"); rules key on Site.
 func Host(raw string) string {
