@@ -24,6 +24,7 @@ const {
 	navigateMock,
 	notificationShowMock,
 	postMock,
+	getMock,
 	patchMock,
 	workspaceQueryMock,
 	cloudProjectsMock,
@@ -51,6 +52,7 @@ const {
 		navigateMock: vi.fn(),
 		notificationShowMock: vi.fn(),
 		postMock: vi.fn(),
+		getMock: vi.fn(),
 		patchMock: vi.fn(),
 		workspaceQueryMock: vi.fn(),
 		cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
@@ -118,7 +120,7 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 });
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: (...args: unknown[]) => postMock(...args), PATCH: (...args: unknown[]) => patchMock(...args) },
+	apiClient: { GET: (...args: unknown[]) => getMock(...args), POST: (...args: unknown[]) => postMock(...args), PATCH: (...args: unknown[]) => patchMock(...args) },
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
@@ -465,6 +467,23 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
+	});
+
+	it.each([
+		["acme/demo#42", "https://github.com/acme/demo/issues/42"],
+		["https://github.com/acme/demo/issues/42", "https://github.com/acme/demo/issues/42"],
+		["https://gitlab.local/group/sub/demo/-/issues/42", "https://gitlab.local/group/sub/demo/-/issues/42"],
+		["42", "https://github.com/acme/demo/issues/42"],
+	])("links manual issue %s on the board", async (issueId, url) => {
+		getMock.mockResolvedValue({ data: { status: "ok", project: { repo: "git@github.com:acme/demo.git" } } });
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "issue-session", title: "Issue task", issueId, status: "idle" })])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+		const issue = await screen.findByRole("link", { name: /Intake issue:/ });
+		expect(issue).toHaveAttribute("href", url);
+		expect(issue).toHaveAttribute("target", "_blank");
 	});
 
 	it("uses the last human message time rather than generic session updatedAt", () => {

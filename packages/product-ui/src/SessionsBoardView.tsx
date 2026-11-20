@@ -6,6 +6,7 @@ import {
 } from "react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
+	CircleDotIcon,
 	GitBranchIcon,
 	GitPullRequestIcon,
 	LoaderCircleIcon,
@@ -70,7 +71,7 @@ export type BoardSessionPresentation = {
 	/** Paint the plain card surface instead of the status's own tint, such as the terminated red. */
 	plainSurface?: boolean;
 	title: string;
-	trackerIssueId?: string;
+	trackerIssue?: BoardTrackerIssue;
 	updatedAt: string;
 	lastUserMessageAt?: string;
 };
@@ -106,6 +107,12 @@ export type BoardPullRequestPresentation = {
 	number: number;
 	reviewers?: BoardReviewerPresentation[];
 	state: BoardPullRequestState;
+	url: string;
+};
+
+export type BoardTrackerIssue = {
+	number: number;
+	repo: string;
 	url: string;
 };
 
@@ -391,6 +398,19 @@ export function SessionCardView({
 			labels={labels.pr}
 		/>
 	));
+	const ExternalLink = externalLink;
+	const issueLink = session.trackerIssue ? (
+		<ExternalLink
+			ariaLabel={labels.intakeIssue(`${session.trackerIssue.repo}#${session.trackerIssue.number}`)}
+			className="inline-flex min-w-0 max-w-full items-center gap-x-2 self-start py-0.5 hover:underline"
+			href={session.trackerIssue.url}
+			stopPropagation
+		>
+			<CircleDotIcon className="size-icon-sm shrink-0" />
+			<span className="truncate text-xs font-medium text-foreground">#{session.trackerIssue.number}</span>
+		</ExternalLink>
+	) : null;
+
 	const branchRow = showBranch ? (
 		<>
 			{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
@@ -460,6 +480,7 @@ export function SessionCardView({
 					// Every compact card has the same shape: branch and time on one
 					// line, then the PRs on their own.
 					<div className="mt-1 flex min-w-0 flex-col gap-1 text-2xs text-muted-foreground" data-testid="session-card-meta">
+						{issueLink}
 						<div className="flex min-h-5 min-w-0 items-center gap-2">
 							<div className="flex min-w-0 flex-1 items-center gap-1.5 font-sans">{branchRow}</div>
 							{/* A long status truncates rather than squeezing out the branch;
@@ -488,9 +509,10 @@ export function SessionCardView({
 					</div>
 				) : null}
 			</div>
-			{!compact && prs.length > 0 && (
+			{!compact && (issueLink || prs.length > 0) && (
 				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
 					<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
+						{issueLink}
 						{prGroups}
 					</div>
 				</div>

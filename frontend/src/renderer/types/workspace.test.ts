@@ -4,7 +4,6 @@ import {
 	sessionWorkspaceReady,
 	attentionZone,
 	canArchiveWorkerSession,
-	canonicalTrackerIssueId,
 	findProjectOrchestrator,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -21,6 +20,7 @@ import {
 	primaryPR,
 	sessionArtifacts,
 	sortedPRs,
+	trackerIssueLink,
 	type AttentionZone,
 	type PRState,
 	type PullRequestFacts,
@@ -30,11 +30,85 @@ import {
 	type WorkspaceSummary,
 } from "./workspace";
 
-describe("canonicalTrackerIssueId", () => {
-	it("keeps provider-prefixed intake ids and rejects manual task titles", () => {
-		expect(canonicalTrackerIssueId("github:acme/project#42")).toBe("github:acme/project#42");
-		expect(canonicalTrackerIssueId("Fix fallback renderer")).toBeUndefined();
-		expect(canonicalTrackerIssueId(undefined)).toBeUndefined();
+describe("trackerIssueLink", () => {
+	it.each([
+		["acme/project#42", "https://github.com/acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["https://github.com/acme/project/issues/42", undefined, "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["https://gitlab.local:8443/group/sub/repo/-/issues/7", undefined, "https://gitlab.local:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
+		["42", "https://github.com/acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["#42", "git@github.com:acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["7", "https://gitlab.com:8443/group/sub/repo.git", "https://gitlab.com:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
+	])("links manual issue %s with repository %s", (issueId, repository, url, repo, number) => {
+		expect(trackerIssueLink(issueId, repository)).toEqual({ number, repo, url });
+	});
+
+	it.each([
+		["group/repo#7", "https://gitlab.com/group/repo.git", undefined, "https://gitlab.com/group/repo/-/issues/7"],
+		["group/sub/repo#7", "git@gitlab.com:group/sub/repo.git", undefined, "https://gitlab.com/group/sub/repo/-/issues/7"],
+		["other/sub/repo#7", "http://gitlab.local:8080/group/repo.git", "gitlab", "http://gitlab.local:8080/other/sub/repo/-/issues/7"],
+		["team/app#5", "https://acme.ghe.com/team/app.git", undefined, "https://acme.ghe.com/team/app/issues/5"],
+		["team/app#5", "https://code.acme.test:8443/team/app.git", "github", "https://code.acme.test:8443/team/app/issues/5"],
+		["team/app#5", "https://code.example.com/team/app.git", undefined, undefined],
+		["team/app#5", undefined, undefined, undefined],
+		["team/app#5", "https://github.com/team/app.git", undefined, "https://github.com/team/app/issues/5"],
+	] as const)("resolves typed issue %s with repository %s and provider %s", (issueId, repository, provider, url) => {
+		expect(trackerIssueLink(issueId, repository, provider)?.url).toBe(url);
+	});
+
+	it("uses the known web origin for an SSH port", () => {
+		expect(trackerIssueLink("42", "ssh://git@github.com:22/acme/project.git")?.url).toBe("https://github.com/acme/project/issues/42");
+	});
+
+	it("keeps an explicit HTTP browser origin", () => {
+		expect(trackerIssueLink("42", "http://gitlab.com:8080/acme/project.git")?.url).toBe("http://gitlab.com:8080/acme/project/-/issues/42");
+	});
+
+	it.each(["https://bitbucket.org/acme/project.git", "https://code.example.com/acme/project.git"])("leaves an unproven browser origin unlinked: %s", (repository) => {
+		expect(trackerIssueLink("42", repository)).toBeUndefined();
+	});
+
+	it("leaves a self-hosted SSH browser port unresolved", () => {
+		expect(trackerIssueLink("42", "ssh://git@gitlab.local:2222/acme/project.git", "gitlab")).toBeUndefined();
+	});
+
+	it("uses explicit provider metadata for a self-hosted repository", () => {
+		expect(trackerIssueLink("42", "https://code.example.com:8443/acme/project.git", "gitlab")?.url).toBe("https://code.example.com:8443/acme/project/-/issues/42");
+	});
+
+	it.each([
+		["github:acme/project#42", { number: 42, repo: "acme/project", url: "https://github.com/acme/project/issues/42" }],
+		["github:acme/.github#3", { number: 3, repo: "acme/.github", url: "https://github.com/acme/.github/issues/3" }],
+		["gitlab:group/sub/repo#7", { number: 7, repo: "group/sub/repo", url: "https://gitlab.com/group/sub/repo/-/issues/7" }],
+		[
+			"github:team/app#12@acme.ghe.com",
+			{ number: 12, repo: "team/app", url: "https://acme.ghe.com/team/app/issues/12" },
+		],
+		[
+			"gitlab:group/repo#7@gitlab.local:8443",
+			{ number: 7, repo: "group/repo", url: "https://gitlab.local:8443/group/repo/-/issues/7" },
+		],
+	])("links intake id %s to its forge page", (issueId, link) => {
+		expect(trackerIssueLink(issueId)).toEqual(link);
+	});
+
+	it.each([
+		undefined,
+		"Fix fallback renderer",
+		"42",
+		"github:42",
+		"github:acme/project#0",
+		"github:acme/project/extra#42",
+		"github:acme/project#42@acme.ghe.com/path",
+		"gitlab:repo#7",
+		"gitlab:group/repo#7@evil.example/path",
+		"github:acme/project#42 extra",
+		"https://github.com/acme/project/issues/0",
+		"https://user:password@github.com/acme/project/issues/42",
+		"javascript://github.com/acme/project/issues/42",
+		"github:acme/..#42",
+		"github:acme/project#9007199254740992",
+	])("leaves %s unlinked", (issueId) => {
+		expect(trackerIssueLink(issueId)).toBeUndefined();
 	});
 });
 

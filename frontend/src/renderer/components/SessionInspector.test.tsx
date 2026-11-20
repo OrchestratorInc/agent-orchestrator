@@ -6763,6 +6763,61 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByText(/agent/i)).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["acme/demo#42", "acme/demo#42", "https://gitlab.local:8443/acme/demo/-/issues/42"],
+    ["https://github.com/acme/demo/issues/42", "acme/demo#42", "https://github.com/acme/demo/issues/42"],
+    ["https://gitlab.local/group/sub/demo/-/issues/7", "group/sub/demo#7", "https://gitlab.local/group/sub/demo/-/issues/7"],
+    ["#7", "group/sub/demo#7", "https://gitlab.local:8443/group/sub/demo/-/issues/7"],
+  ])("links manual issue %s in the inspector", async (issueId, label, url) => {
+    mockGitState({});
+    const respond = getMock.getMockImplementation()!;
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}"
+      ? { data: { status: "ok", project: { repo: "https://gitlab.local:8443/group/sub/demo.git", config: { trackerIntake: { provider: "gitlab" } } } } }
+      : respond(path));
+    renderWithQuery(<SessionInspector session={session([], { issueId })} />);
+    const issue = await screen.findByRole("link", { name: `Intake issue: ${label}` });
+    expect(issue).toHaveAttribute("href", url);
+    expect(issue).toHaveAttribute("target", "_blank");
+  });
+
+  it.each([
+    ["github:acme/demo#42", "acme/demo#42", "https://github.com/acme/demo/issues/42"],
+    ["#7", "group/sub/demo#7", "https://gitlab.local:8443/group/sub/demo/-/issues/7"],
+  ])("links issue %s in the default inspector", async (issueId, label, url) => {
+    useUiStore.setState({ developerMode: false, prView: false });
+    mockGitState({});
+    const respond = getMock.getMockImplementation()!;
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}"
+      ? { data: { status: "ok", project: { repo: "https://gitlab.local:8443/group/sub/demo.git", config: { trackerIntake: { provider: "gitlab" } } } } }
+      : respond(path));
+    renderWithQuery(<SessionInspector session={session([], { issueId })} />);
+    const issue = await branch().findByRole("link", { name: `Intake issue: ${label}` });
+    expect(issue).toHaveAttribute("href", url);
+  });
+
+  it.each([false, true])("links an issue before an imported session is resumed (PR view=%s)", async (prView) => {
+    useUiStore.setState({ developerMode: prView, prView });
+    mockGitState({});
+    renderWithQuery(<SessionInspector session={session([], { needsResume: true, issueId: "github:acme/demo#42" })} />);
+    const issue = await screen.findByRole("link", { name: "Intake issue: acme/demo#42" });
+    expect(issue).toHaveAttribute("href", "https://github.com/acme/demo/issues/42");
+    expect(branch().queryByText("feat/ns")).not.toBeInTheDocument();
+  });
+
+  it("links an intake issue above the branch and leaves a typed task id plain", () => {
+    mockGitState({});
+    const view = renderWithQuery(<SessionInspector session={session([], { issueId: "gitlab:acme/platform/api#7@gitlab.internal" })} />);
+
+    const issue = branch().getByRole("link", { name: "Intake issue: acme/platform/api#7" });
+    expect(issue).toHaveAttribute("href", "https://gitlab.internal/acme/platform/api/-/issues/7");
+    expect(issue).toHaveAttribute("target", "_blank");
+    expect(branch().getByText("feat/ns")).toBeInTheDocument();
+    view.unmount();
+
+    renderWithQuery(<SessionInspector session={session([], { issueId: "Fix the login redirect" })} />);
+    expect(branch().queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("opens a status row to its files in place, opens a file's diff, and opens the Files tab from View all changes", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0), changedFile("src/app/page.tsx", 4, 2), changedFile("README.md", 2, 0)] });
     const onOpenReviewFile = vi.fn();

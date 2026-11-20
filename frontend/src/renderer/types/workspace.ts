@@ -6,6 +6,7 @@ import {
 	toSessionActivity,
 	toSessionStatus,
 	type AgentId,
+	type BoardTrackerIssue,
 	type KanbanColumn,
 	type SessionActivity,
 	type SessionActivityState,
@@ -304,20 +305,65 @@ export type WorkspaceSession = {
 	};
 };
 
-// Tracker providers whose ids the intake daemon stamps sessions with, in
-// "<provider>:<native>" form. Adding a provider (Linear, Jira, ...) later is
-// just another prefix in this list — no caller of canonicalTrackerIssueId
-// needs to change.
-const TRACKER_PROVIDER_PREFIXES = ["github:"] as const;
+// The ids tracker intake stamps on sessions (trackerintake.CanonicalIssueID):
+// "github:owner/repo#12" and "gitlab:group/sub/repo#7", with "@host" when the
+// forge is not github.com or gitlab.com.
+const GITHUB_ISSUE_ID = /^github:([\w.-]+\/[\w.-]+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
+const GITLAB_ISSUE_ID = /^gitlab:([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
 
-/**
- * The provider-prefixed issue id if `issueId` came from tracker intake, or
- * undefined for manually created sessions (whose issueId, if any, is a plain
- * task title with no provider prefix).
- */
-export function canonicalTrackerIssueId(issueId?: string): string | undefined {
+/** Resolve intake ids and manual refs; numbers and repo refs need a project's repository. */
+export function trackerIssueLink(issueId?: string, repository?: string, provider?: "github" | "gitlab"): BoardTrackerIssue | undefined {
 	if (!issueId) return undefined;
-	return TRACKER_PROVIDER_PREFIXES.some((prefix) => issueId.startsWith(prefix)) ? issueId : undefined;
+	issueId = issueId.trim();
+	const github = GITHUB_ISSUE_ID.exec(issueId);
+	if (github) {
+		const [, repo, number, host = "github.com"] = github;
+		return issueLink("github", repo, number, `https://${host}`);
+	}
+	const gitlab = GITLAB_ISSUE_ID.exec(issueId);
+	if (gitlab) {
+		const [, repo, number, host = "gitlab.com"] = gitlab;
+		return issueLink("gitlab", repo, number, `https://${host}`);
+	}
+	try {
+		if (/^https?:\/\//.test(issueId)) {
+			const url = new URL(issueId);
+			if (url.username || url.password) return undefined;
+			const match = /^\/(.+?)\/(?:(-)\/)?issues\/([1-9]\d*)\/?$/.exec(url.pathname);
+			return match ? issueLink(match[2] ? "gitlab" : "github", match[1], match[3], url.origin) : undefined;
+		}
+		const ref = /^([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)$/.exec(issueId);
+		if ((ref || /^#?[1-9]\d*$/.test(issueId)) && repository) {
+			const scp = /^git@([^/:]+):(.+)$/.exec(repository);
+			const url = new URL(scp ? `ssh://git@${scp[1]}/${scp[2]}` : repository);
+			if (!["https:", "http:", "ssh:"].includes(url.protocol) || url.search || url.hash) return undefined;
+			const host = url.hostname.toLowerCase();
+			const githubHost = host === "github.com" || host.endsWith(".github.com") || host.endsWith(".ghe.io") || host.endsWith(".ghe.com");
+			const gitlabHost = host === "gitlab.com" || host === "www.gitlab.com";
+			const forge = githubHost ? "github" : gitlabHost ? "gitlab" : provider;
+			if (!forge) return undefined;
+			if (url.protocol === "ssh:" && url.port && host !== "github.com" && host !== "gitlab.com") return undefined;
+			// An SSH port says nothing about the browser's port.
+			const origin = url.protocol === "ssh:" ? `https://${url.hostname}` : url.origin;
+			const repo = ref?.[1] ?? url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "");
+			return issueLink(forge, repo, ref?.[2] ?? issueId.replace(/^#/, ""), origin);
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
+}
+
+function issueLink(provider: "github" | "gitlab", repo: string, rawNumber: string, origin: string): BoardTrackerIssue | undefined {
+	const number = Number(rawNumber);
+	const parts = repo.split("/");
+	if (!Number.isSafeInteger(number) || number <= 0 || parts.length < 2 || (provider === "github" && parts.length !== 2) || parts.some((part) => !/^[\w.-]+$/.test(part) || part === "." || part === "..")) return undefined;
+	try {
+		const url = new URL(`/${repo}/${provider === "gitlab" ? "-/issues" : "issues"}/${number}`, origin);
+		return { number, repo, url: url.href };
+	} catch {
+		return undefined;
+	}
 }
 
 export type ProjectKind = "single_repo" | "workspace" | "scratch";
