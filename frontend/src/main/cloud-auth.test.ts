@@ -686,6 +686,7 @@ describe("native WorkOS authentication", () => {
         throw new Error("keychain locked again");
       });
       await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+      expect(mocks.notifyRenderers).toHaveBeenCalledWith(signedInAs("person@example.com"));
 
       mocks.encryptionAvailable = false;
       await auth.beginCloudSignIn(dataDir);

@@ -403,8 +403,10 @@ export function readAuthStore(dataDir: string): Promise<AuthStore> {
         await writeStoreFile(dataDir, store);
       } catch {
         // Keep what was recovered, so a later write that carries the file's
-        // session on is not taken for a new credential.
+        // session on is not taken for a new credential and the next read
+        // tries the save again. It is still shown again in every renderer.
         memoryStores.set(dataDir, { ...memory, store });
+        noteFileRead(dataDir, store);
         return store;
       }
       memoryStores.delete(dataDir);
