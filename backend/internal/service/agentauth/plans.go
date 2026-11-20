@@ -3,6 +3,7 @@ package agentauth
 import (
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codebuddy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
@@ -66,7 +67,7 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; Orchestrator forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
-	terminalInputPlan("codebuddy", ActionSetup, "Set up CodeBuddy Code", []string{"codebuddy"}, "/login\r", "Use native first-run login, or select Open setup after CodeBuddy finishes starting to open /login; configure third-party endpoints and keys in CodeBuddy", "https://www.codebuddy.ai/docs/cli/quickstart"),
+	codeBuddyLoginPlan(),
 	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
 	plan("stakpak", ActionLogin, "Log in to Stakpak", []string{"stakpak", "auth", "login"}, "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication"),
 	// Native login covers the built-in OpenAI provider. The plan also lists
@@ -140,6 +141,24 @@ func tauLoginPlan() Plan {
 	p.initialInput = "/login"
 	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "Ask Tau…"}}
 	p.sendInitialInputOnReadyTimeout = true
+	return p
+}
+
+// codeBuddyLoginPlan opens CodeBuddy's TUI on its native login picker
+// (International site, Enterprise domain or iOA). Without a signed-in account
+// CodeBuddy opens that picker itself, even when a models.json custom model
+// works; otherwise /login is sent once the composer footer renders, or after
+// the bounded ready wait. The first-run folder-trust dialog would take that
+// input in AO's private auth workspace, so the folder is trusted first.
+func codeBuddyLoginPlan() Plan {
+	p := plan("codebuddy", ActionLogin, "Log in to CodeBuddy Code", []string{"codebuddy"}, "CodeBuddy opens its login picker automatically; third-party models are configured in CodeBuddy's models.json", "https://www.codebuddy.ai/docs/cli/quickstart")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{
+		{Text: "Select login method", SkipInput: true},
+		{Text: "? for shortcuts"},
+	}
+	p.sendInitialInputOnReadyTimeout = true
+	p.prepareWorkspace = codebuddy.EnsureWorkspaceTrusted
 	return p
 }
 

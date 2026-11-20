@@ -269,6 +269,34 @@ func TestPiReadyStatesMatchRenderedPiScreens(t *testing.T) {
 	}
 }
 
+// CodeBuddy 2.164 opens its login picker on its own when no account is signed
+// in, so AO must not type /login into it; at the idle composer it sends /login.
+func TestCodeBuddyReadyStatesMatchRenderedScreens(t *testing.T) {
+	t.Parallel()
+
+	readyStates := planByAgentID["codebuddy"].initialInputReadyStates
+	picker := ` Select login method
+  > Log in via International Site
+    Log in via Enterprise Domain
+    Log in via iOA (Tencent only)
+ (Use ↑↓ to select, Enter to login)`
+	composer := `──────────────────────────────────────────
+>
+──────────────────────────────────────────
+? for shortcuts  ← for agents`
+	trust := ` Do you trust the files in this folder?
+ Enter to confirm • Esc to exit`
+	if got := shellterm.MatchInitialInputReadyState(picker, readyStates); got == nil || !got.SkipInput {
+		t.Fatalf("login picker = %#v, want ready without input", got)
+	}
+	if got := shellterm.MatchInitialInputReadyState(composer, readyStates); got == nil || got.SkipInput {
+		t.Fatalf("idle composer = %#v, want ready for /login", got)
+	}
+	if got := shellterm.MatchInitialInputReadyState(trust, readyStates); got != nil {
+		t.Fatalf("folder-trust dialog = %#v, want not ready", got)
+	}
+}
+
 func TestStartOpensKimchiPTYAndAutomaticallyRunsLogin(t *testing.T) {
 	t.Parallel()
 
