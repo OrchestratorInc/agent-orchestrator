@@ -391,15 +391,88 @@ function aoObserveBackgroundTasks(session, message) {
 	while (recent.size > 128) recent.delete(recent.keys().next().value);
 }
 
+// Claude Code names a background shell's live output file only in the text of
+// the result that launched it ("Output is being written to: <path>."), and its
+// command only in that call's input. Record both by task id before the adapter
+// drops the call from its tool-use cache.
+function aoObserveBackgroundLaunch(session, message) {
+	const taskId = message.type === "user" ? message.tool_use_result?.backgroundTaskId : undefined;
+	if (typeof taskId !== "string" || !taskId || !Array.isArray(message.message?.content)) return;
+	const results = message.message.content.filter(block => block?.type === "tool_result");
+	const fileName = `${taskId}.output`;
+	let launch;
+	for (const block of results) {
+		const text = typeof block.content === "string" ? block.content
+			: Array.isArray(block.content) ? block.content.map(part => typeof part?.text === "string" ? part.text : "").join("\n") : "";
+		const outputPath = aoBackgroundOutputPath(text, fileName);
+		if (!outputPath && results.length > 1) continue;
+		const command = session.toolUseCache?.[block.tool_use_id]?.input?.command;
+		launch = { command: typeof command === "string" ? command : undefined, outputPath };
+		break;
+	}
+	if (!launch) return;
+	const launches = session.aoBackgroundLaunches ??= new Map();
+	launches.delete(taskId);
+	launches.set(taskId, launch);
+	while (launches.size > 128) launches.delete(launches.keys().next().value);
+}
+
+// The output file a launch result names, which ends with the task's file name.
+// The path may contain spaces (a Windows profile such as "C:\Users\Jane Doe"),
+// so it runs from "written to:" when the sentence has it, else from the first
+// path root on that line, up to the file name.
+function aoBackgroundOutputPath(text, fileName) {
+	const root = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
+	for (const line of text.split(/\r?\n/)) {
+		const end = line.lastIndexOf(fileName);
+		if (end < 1 || (line[end - 1] !== "/" && line[end - 1] !== "\\")) continue;
+		const head = line.slice(0, end + fileName.length);
+		const anchored = /written to:\s*(.+)$/i.exec(head)?.[1];
+		const starts = anchored ? [anchored] : [...head.matchAll(/(?:^|[\s'"(])(?=\/|[A-Za-z]:[\\/]|\\\\)/g)].map(m => head.slice(m.index + m[0].length));
+		const path = starts.map(start => start.trim().replace(/^['"(]/, "")).find(start => root.test(start));
+		if (path) return path;
+	}
+	return undefined;
+}
+
+// The tail of a task's output file, at most maxBytes, starting on a whole line.
+// Null when the file is gone or not a regular file. The agent can write that
+// directory, so a symlink is not followed and a FIFO never blocks the read.
+async function aoReadBackgroundOutput(path, maxBytes) {
+	const { lstat, open } = process.getBuiltinModule("node:fs/promises");
+	const { constants } = process.getBuiltinModule("node:fs");
+	let file;
+	try {
+		if (!(await lstat(path)).isFile()) return null;
+		file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+	} catch {
+		return null;
+	}
+	try {
+		const stats = await file.stat();
+		if (!stats.isFile()) return null;
+		const start = Math.max(0, stats.size - maxBytes);
+		const buffer = Buffer.alloc(stats.size - start);
+		const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
+		let output = buffer.subarray(0, bytesRead).toString("utf8");
+		if (start > 0) output = output.slice(output.indexOf("\n") + 1);
+		return { output, truncated: start > 0 };
+	} finally {
+		await file.close();
+	}
+}
+
 export function patchClaudeBackgroundTasks(adapterPath) {
 	let source = readFileSync(adapterPath, "utf8");
 	const method = '"_ao/session/background_tasks"';
 	if (source.includes(method)) return false;
 	const marker = ".onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))";
 	const cases = ["task_started", "task_updated", "task_notification", "background_tasks_changed"];
-	if (!source.includes(marker) || cases.some(name => source.split(`case "${name}":`).length !== 2)) {
+	const messages = /case "user":\s*case "assistant": \{/g;
+	if (!source.includes(marker) || cases.some(name => source.split(`case "${name}":`).length !== 2) || source.match(messages)?.length !== 1) {
 		throw new Error("claude-agent-acp no longer matches AO's background-task projection");
 	}
+	source = source.replace(messages, match => `${match}\n                        aoObserveBackgroundLaunch(session, message);`);
 	for (const name of cases) {
 		source = source.replace(`case "${name}":`, `case "${name}":\n                                aoObserveBackgroundTasks(session, message);`);
 	}
@@ -411,7 +484,22 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             if (!session.aoBackgroundReady) throw RequestError.methodNotFound("Background task snapshot unavailable.");
             aoObserveBackgroundTasks(session, { subtype: "prune" });
             const tasks = [...session.aoBackgroundLive.values(), ...session.aoBackgroundRecent.values()];
-            return { tasks: tasks.map(({ id, runId, kind, description, state, startedAt, endedAt }) => ({ id, runId, kind, description, state, startedAt, endedAt, stoppable: state === "running" })) };
+            return { tasks: tasks.map(({ id, runId, kind, description, state, startedAt, endedAt }) => ({
+                id, runId, kind, description, command: session.aoBackgroundLaunches?.get(id)?.command, state, startedAt, endedAt, stoppable: state === "running",
+            })) };
+        })
+        .onRequest("_ao/session/background_task_output", { parse: params => params }, async (ctx) => {
+            const id = ctx.params?.sessionId;
+            const taskId = ctx.params?.taskId;
+            const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
+            if (!session || session.queryClosed) throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
+            // Only the file Claude Code named for this task, never a path from the request.
+            const path = typeof taskId === "string" ? session.aoBackgroundLaunches?.get(taskId)?.outputPath : undefined;
+            if (!path) throw RequestError.invalidParams(undefined, "This background task has no output file.");
+            const maxBytes = Math.min(Math.max(Number(ctx.params?.maxBytes) || 65536, 1024), 1048576);
+            const tail = await aoReadBackgroundOutput(path, maxBytes);
+            if (!tail) throw RequestError.invalidParams(undefined, "This background task's output file is gone.");
+            return tail;
         })
         .onRequest("_ao/session/stop_background_task", { parse: params => params }, async (ctx) => {
             const id = ctx.params?.sessionId;
@@ -430,7 +518,8 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             return {};
         })
         `;
-	writeFileSync(adapterPath, `${aoObserveBackgroundTasks.toString()}\n${source.replace(marker, registration + marker)}`);
+	const helpers = [aoObserveBackgroundTasks, aoObserveBackgroundLaunch, aoBackgroundOutputPath, aoReadBackgroundOutput].map(String).join("\n");
+	writeFileSync(adapterPath, `${helpers}\n${source.replace(marker, registration + marker)}`);
 	return true;
 }
 

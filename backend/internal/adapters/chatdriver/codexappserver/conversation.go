@@ -46,9 +46,12 @@ var approvalMethods = map[string]domain.ActivityKind{
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
 	backgroundObserved backgroundtasks.Tracker
-	conn               *conn
-	proc               *process
-	log                *slog.Logger
+	// backgroundOutput keeps recent command output by exec item, since the
+	// app-server streams it but has no way to read it back.
+	backgroundOutput backgroundtasks.OutputBuffer
+	conn             *conn
+	proc             *process
+	log              *slog.Logger
 
 	threadID        string
 	historyParentID string
@@ -77,6 +80,10 @@ type conversation struct {
 	backgroundStopping map[string]bool
 	// Command starts are observational until the native background list or a process ID confirms background work.
 	backgroundCommands map[string]ports.ChatBackgroundTask
+	// backgroundRuns maps a terminal's process ID to the exec item its output
+	// streams on, oldest first in backgroundRunOrder.
+	backgroundRuns     map[string]string
+	backgroundRunOrder []string
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.
@@ -138,6 +145,7 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 		pumpDone:        make(chan struct{}),
 		providerScopeID: providerScopeID,
 	}
+	c.backgroundOutput.MaxDeltas = codexMaxOutputDeltas
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
 	return c
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -275,5 +277,107 @@ func TestBackgroundTasksCodexCompletionSurvivesInventoryOrdering(t *testing.T) {
 	c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"fg","type":"commandExecution","exitCode":1}}`)})
 	if len(c.backgroundObserved.Snapshot(time.Now())) != 0 {
 		t.Fatal("foreground completion became background")
+	}
+}
+
+func TestBackgroundTasksCodexKeepsTerminalOutputAfterTheTurn(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"93667","itemId":"exec-1","command":"for i in $(seq 1 40); do echo tick-$i; sleep 1; done"}],"nextCursor":null}`)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	c := conv.(*conversation)
+	delta := func(thread, item, text string) {
+		params, _ := json.Marshal(map[string]string{"threadId": thread, "itemId": item, "turnId": "turn-1", "delta": text})
+		c.observeBackgroundNotification(notification{Method: "item/commandExecution/outputDelta", Params: params})
+	}
+	commandStarted(c, "exec-1")
+	commandStarted(c, "exec-2")
+	// Measured on codex-cli 0.158.0: deltas keep coming on the exec item after turn/completed.
+	delta(c.threadID, "exec-1", "tick-1\n")
+	delta(c.threadID, "exec-1", "tick-2\n")
+	delta("child-thread", "exec-1", "not ours\n")
+	delta(c.threadID, "exec-2", "a foreground command\n")
+
+	reader := conv.(ports.ChatBackgroundTaskOutputReader)
+	if _, err := reader.BackgroundTaskOutput(context.Background(), "93667"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("read output before the terminal was listed: %v", err)
+	}
+	tasks, _ := conv.(ports.ChatBackgroundTaskInspector).BackgroundTasks(context.Background())
+	if len(tasks) != 1 || tasks[0].Command != "for i in $(seq 1 40); do echo tick-$i; sleep 1; done" || tasks[0].RunID != "exec-1" {
+		t.Fatalf("tasks=%+v", tasks)
+	}
+	got, err := reader.BackgroundTaskOutput(context.Background(), "93667")
+	if err != nil || got.Text != "tick-1\ntick-2" || got.Truncated {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+	if _, err := reader.BackgroundTaskOutput(context.Background(), "unknown"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("unknown task err=%v", err)
+	}
+	if c.backgroundOutput.MaxDeltas != codexMaxOutputDeltas {
+		t.Fatalf("delta cap=%d", c.backgroundOutput.MaxDeltas)
+	}
+}
+
+func commandStarted(c *conversation, item string) {
+	c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"` + item + `","type":"commandExecution","command":"x"}}`)})
+}
+
+func commandOutput(c *conversation, item, text string) {
+	params, _ := json.Marshal(map[string]string{"itemId": item, "delta": text})
+	c.observeBackgroundNotification(notification{Method: "item/commandExecution/outputDelta", Params: params})
+}
+
+// Reproduced with real Codex on Windows: a quiet dev server, then 18 pings.
+func TestBackgroundTaskOutputCodexKeepsAListedTerminalPastForegroundCommands(t *testing.T) {
+	c := &conversation{}
+	commandStarted(c, "server")
+	commandOutput(c, "server", "QUIET-START server on http://localhost:4000\n")
+	// What a listing records for a terminal it reports.
+	c.backgroundOutput.Pin([]string{"server"})
+	c.rememberBackgroundRun("4000", "server")
+	c.backgroundObserved.ReconcileShells([]ports.ChatBackgroundTask{{ID: "4000", RunID: "server", Kind: "shell", State: "running"}}, time.Now())
+	for i := range 18 {
+		item := fmt.Sprintf("ping-%d", i)
+		commandStarted(c, item)
+		commandOutput(c, item, "Reply from 127.0.0.1\n")
+	}
+	got, err := c.BackgroundTaskOutput(context.Background(), "4000")
+	if err != nil || got.Text != "QUIET-START server on http://localhost:4000" || got.Truncated {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputCodexStaysReadableAfterTheTaskEnds(t *testing.T) {
+	c := &conversation{}
+	commandStarted(c, "late")
+	commandOutput(c, "late", "LATE2 starting\n")
+	// It ends before any listing saw it, and the stream missed its last line.
+	c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"late","type":"commandExecution","processId":"70001","exitCode":5,"aggregatedOutput":"LATE2 starting\nLATE2 FATAL: exit 5\n"}}`)})
+	// Once settled tasks leave the reading (30 s), the output is still buffered.
+	c.backgroundObserved = backgroundtasks.Tracker{}
+	got, err := c.BackgroundTaskOutput(context.Background(), "70001")
+	if err != nil || got.Text != "LATE2 starting\nLATE2 FATAL: exit 5" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+	// Evicted by later commands: unavailable is honest, empty-and-ready is not.
+	for i := range 3 * 16 {
+		commandOutput(c, fmt.Sprintf("fg-%d", i), "x\n")
+	}
+	if got, err := c.BackgroundTaskOutput(context.Background(), "70001"); err != nil || got.Text != "" || !got.Truncated {
+		t.Fatalf("evicted output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputCodexMarksAMissedStart(t *testing.T) {
+	c := &conversation{}
+	// Attached part way through: no item/started for this command.
+	commandOutput(c, "running", "tick-9\n")
+	c.rememberBackgroundRun("9", "running")
+	got, err := c.BackgroundTaskOutput(context.Background(), "9")
+	if err != nil || got.Text != "tick-9" || !got.Truncated {
+		t.Fatalf("output=%+v err=%v", got, err)
 	}
 }

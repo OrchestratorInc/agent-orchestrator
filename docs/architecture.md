@@ -111,6 +111,7 @@ inventory after attachment has no start timestamp, so its elapsed time is hidden
 Completion events retain outcomes even if the shell exited between list reads.
 Provider labels are one line, capped at 240 characters, and redact obvious
 credential assignments and Bearer values; this is not general secret detection.
+A task's command keeps its line breaks and length but gets the same redaction.
 
 `GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
 `ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
