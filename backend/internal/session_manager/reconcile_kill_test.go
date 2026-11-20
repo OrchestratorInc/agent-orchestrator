@@ -150,7 +150,7 @@ func TestStartupReconcileSkipsSessionPreemptedByKill(t *testing.T) {
 
 func TestStartupCheckRunsAfterPreemptingArchiveFails(t *testing.T) {
 	m, st, blocking, done := startBlockedStartupReconcile(t)
-	blocking.fakeRuntime.destroyErr = errors.New("runtime still live")
+	blocking.destroyErr = errors.New("runtime still live")
 	_, killErr := m.RequestKill(context.Background(), "queued")
 	if killErr == nil {
 		t.Fatal("archive succeeded; the test needs it to fail before termination")
