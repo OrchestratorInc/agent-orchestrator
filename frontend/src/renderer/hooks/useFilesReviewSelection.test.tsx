@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import type { ProjectKind } from "../types/workspace";
+import { CloudCpError, type CloudCpClient, type CloudCpWorkspaceReviewResponse } from "../lib/cloud-cp";
+import { cloudFilesManifest, cloudFilesReviewDataSource } from "./useCloudWorkspaceReview";
 import { useFilesReviewSelection } from "./useFilesReviewSelection";
 import type { WorkspaceBranch, WorkspaceBranches, WorkspaceCommitSummary, WorkspaceFilesResponse, WorkspaceHistoryResponse } from "./useSessionWorkspaceFiles";
 
@@ -405,5 +407,87 @@ describe("useFilesReviewSelection", () => {
 		getMock.mockImplementation(async (path: string) => (path.endsWith("/workspace/branches") ? errorResponse("SESSION_NOT_FOUND", 404) : { data: checkedOutHistory }));
 		const { result } = renderSelection(manifest());
 		await waitFor(() => expect(result.current.branchMenu?.state).toBe("error"));
+	});
+});
+
+describe("useFilesReviewSelection with a Cloud data source", () => {
+	const cloudSummary: CloudCpWorkspaceReviewResponse = {
+		workspaceVersion: "cv1", files: [], truncated: false, summary: { files: 0, additions: 0, deletions: 0 },
+		sections: { unstaged: [], staged: [], untracked: [], committed: [] }, commits: [],
+	};
+	const cloudBranches = {
+		supported: true, truncated: false, defaultBranch: "main",
+		branches: [
+			{ kind: "local", name: "feature/login", tipSha: SHA("1"), checkedOut: true, isDefault: false },
+			{ kind: "remote", name: "origin/main", tipSha: SHA("2"), checkedOut: false, isDefault: true },
+			{ kind: "pull_request", name: "fix/crash", tipSha: SHA("3"), checkedOut: false, isDefault: false, prNumber: 42, prUrl: PR_URL },
+		],
+	};
+	const prHistory = {
+		view: { kind: "pull_request", name: "#42", tipSha: SHA("3"), baseSha: SHA("8"), baseRef: "origin/main", rangeMode: "since_base" },
+		commits: [commit("p"), commit("q")], commitsTruncated: false, rangeSummary: { files: 2, additions: 4, deletions: 2 },
+	};
+
+	function renderCloud(client: Partial<CloudCpClient>) {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const dataSource = cloudFilesReviewDataSource({ client: client as CloudCpClient, baseUrl: "https://cloud.test", orgId: "org-1", sessionId: "cloud-1" });
+		const manifestData = cloudFilesManifest(cloudSummary, "cloud-1");
+		return renderHook(() => {
+			const stored = useUiStore((state) => state.inspectorSessions["cloud-1"]?.cloudReviewUi?.[""]?.filesSelection);
+			return useFilesReviewSelection({
+				sessionId: "cloud-1", manifest: manifestData, projectKind: "single_repo", dataSource,
+				selectionStore: {
+					key: "cloud:cloud-1:",
+					stored,
+					set: (next) => useUiStore.getState().setCloudReviewUi("cloud-1", "", { filesSelection: next }),
+					reset: () => useUiStore.getState().setCloudReviewUi("cloud-1", "", { filesSelection: undefined }),
+				},
+			});
+		}, { wrapper });
+	}
+
+	it("lists the Cloud branches and reads a PR's history and picked commits through the control plane", async () => {
+		const getWorkspaceHistory = vi.fn().mockResolvedValue(prHistory);
+		const getWorkspaceCommitSelection = vi.fn().mockResolvedValue({ tipSha: SHA("3"), contiguous: true, combinable: true, files: [file("x.ts", 4, 2)], summary: { files: 1, additions: 4, deletions: 2 }, truncated: false });
+		const getWorkspaceBranches = vi.fn().mockResolvedValue(cloudBranches);
+		const { result } = renderCloud({ getWorkspaceBranches, getWorkspaceHistory, getWorkspaceCommitSelection });
+		await waitFor(() => expect(result.current.branchMenu?.state).toBe("ready"));
+		// The worktree's commits come with the Cloud summary; no history is read for it.
+		expect(getWorkspaceHistory).not.toHaveBeenCalled();
+		expect(result.current.branchMenu?.rows.map((row) => row.id)).toEqual(["checked_out", "remote:origin/main", `pr:${PR_URL}`]);
+		// The daemon's own Files selection is left alone.
+		act(() => result.current.branchMenu?.onSelect(`pr:${PR_URL}`));
+		expect(useUiStore.getState().inspectorSessions["cloud-1"]?.filesSelection).toBeUndefined();
+		await waitFor(() => expect(result.current.changesMenu.commits.state).toBe("ready"));
+		expect(getWorkspaceHistory).toHaveBeenCalledWith("org-1", "cloud-1", { prNumber: 42, sourceUrl: PR_URL });
+		await waitFor(() => expect(result.current.target.state).toBe("ready"));
+		// All commits of the PR read through the selection route, fenced to what its history listed.
+		expect(getWorkspaceCommitSelection).toHaveBeenCalledWith("org-1", "cloud-1", { prNumber: 42, sourceUrl: PR_URL, expectedTipSha: SHA("3"), expectedBaseSha: SHA("8"), commitShas: [], workspaceVersion: undefined });
+		expect(result.current.target).toMatchObject({ key: "pr:42:all", scope: "committed", view: { prNumber: 42, sourceUrl: PR_URL, expectedTipSha: SHA("3") }, files: [file("x.ts", 4, 2)] });
+		expect(result.current.changesMenu).toMatchObject({ mode: "view", value: { kind: "commits", shas: [] } });
+
+		act(() => result.current.changesMenu.commits.onToggle(SHA("q")));
+		await waitFor(() => expect(result.current.target).toMatchObject({ state: "ready", sha: SHA("q"), commitShas: [SHA("q")], key: `pr:42:commit:${SHA("q")}` }));
+		expect(result.current.target.source).toMatchObject({ kind: "snapshot", commitShas: [SHA("q")], view: { prNumber: 42 } });
+	});
+
+	it("hides the branch menu when the worker predates views", async () => {
+		const getWorkspaceBranches = vi.fn().mockRejectedValue(new CloudCpError("unsupported", { status: 501, code: "WORKSPACE_VIEW_UNSUPPORTED" }));
+		const { result } = renderCloud({ getWorkspaceBranches });
+		await waitFor(() => expect(getWorkspaceBranches).toHaveBeenCalled());
+		await waitFor(() => expect(result.current.hasPullRequest).toBe(false));
+		expect(result.current.branchMenu).toBeNull();
+		expect(result.current.target.branch).toEqual({ kind: "checked_out" });
+	});
+
+	it("reads the branch list again when a picked view moved", async () => {
+		const getWorkspaceBranches = vi.fn().mockResolvedValue(cloudBranches);
+		const getWorkspaceHistory = vi.fn().mockResolvedValue(prHistory);
+		const getWorkspaceCommitSelection = vi.fn().mockRejectedValue(new CloudCpError("moved", { status: 409, code: "WORKSPACE_REF_MOVED" }));
+		useUiStore.getState().setCloudReviewUi("cloud-1", "", { filesSelection: { branch: { kind: "pull_request", number: 42, url: PR_URL, branch: "fix/crash" }, changes: null } });
+		const { result } = renderCloud({ getWorkspaceBranches, getWorkspaceHistory, getWorkspaceCommitSelection });
+		await waitFor(() => expect(result.current.target.state).toBe("error"));
+		await waitFor(() => expect(getWorkspaceBranches.mock.calls.length).toBeGreaterThan(1));
 	});
 });

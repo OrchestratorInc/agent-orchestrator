@@ -257,6 +257,7 @@ export interface CloudCpProjectListQuery extends CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
+import type { ChatFileReference, FileAnnotationResolution } from "../../../shared/chat-file-reference";
 import type { AddAgentAccountInput, CloudAgentAccount, SessionAgentAccount } from "../../../../../packages/cloud-client/src/types";
 import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
 
@@ -1075,7 +1076,25 @@ export interface CloudCpWorkspaceRepository {
 	present: boolean;
 }
 
-export interface CloudCpWorkspaceReviewFileQuery {
+/**
+ * What a review reads instead of the session's checked-out worktree: another
+ * branch (`branch`: a local name, or a remote one as `origin/<name>`) or one of
+ * the session's pull requests (`prNumber`, with `sourceUrl` to tell
+ * repositories apart). The expected SHAs fence a read to the tip and base its
+ * history listed: a view that moved since answers 409 `WORKSPACE_REF_MOVED`.
+ * A worker that predates views answers 501 `WORKSPACE_VIEW_UNSUPPORTED`.
+ */
+export interface CloudCpWorkspaceReviewView {
+	branch?: string;
+	prNumber?: number;
+	sourceUrl?: string;
+	expectedTipSha?: string;
+	expectedBaseSha?: string;
+	/** Picked commits of the view, sent repeated in a query string; none reads the view's whole range. */
+	commitShas?: string[];
+}
+
+export interface CloudCpWorkspaceReviewFileQuery extends CloudCpWorkspaceReviewView {
 	path: string;
 	scope?: CloudCpWorkspaceReviewScope;
 	commitSha?: string;
@@ -1095,7 +1114,7 @@ export interface CloudCpWorkspaceReviewFileResponse extends CloudCpWorkspaceRevi
 	historical?: boolean;
 }
 
-export interface CloudCpWorkspaceReviewDiffsRequest {
+export interface CloudCpWorkspaceReviewDiffsRequest extends CloudCpWorkspaceReviewView {
 	scope: CloudCpWorkspaceReviewScope;
 	paths: string[];
 	contextLines: number;
@@ -1116,7 +1135,7 @@ export interface CloudCpWorkspaceReviewDiffsResponse {
 	}>;
 }
 
-export interface CloudCpWorkspaceReviewRevisionQuery {
+export interface CloudCpWorkspaceReviewRevisionQuery extends CloudCpWorkspaceReviewView {
 	path: string;
 	scope?: CloudCpWorkspaceReviewScope;
 	side?: CloudCpWorkspaceReviewSide;
@@ -1184,6 +1203,87 @@ export interface CloudCpWorkspaceReviewWriteResponse {
 	fileFingerprint: string;
 	workspaceVersion: string;
 }
+
+/** One branch-menu row of `GET workspace/branches`. */
+export interface CloudCpWorkspaceBranch {
+	/** `pull_request`: one of the session's PRs whose source branch is not listed as a branch. */
+	kind: "local" | "remote" | "pull_request";
+	/** The branch (a remote one as `origin/<name>`), or the PR's source branch; "" for a detached HEAD. */
+	name: string;
+	tipSha: string;
+	updatedAt?: string;
+	checkedOut: boolean;
+	detached?: boolean;
+	isDefault: boolean;
+	/** Also set on a local or remote row that is a PR's source branch. */
+	prNumber?: number;
+	prUrl?: string;
+	prTitle?: string;
+}
+
+export interface CloudCpWorkspaceBranchesResponse {
+	supported: boolean;
+	defaultBranch?: string;
+	/** More than the 200 rows listed exist. */
+	truncated: boolean;
+	branches: CloudCpWorkspaceBranch[];
+}
+
+/** `GET workspace/history`: one of `branch` or `prNumber`. */
+export type CloudCpWorkspaceHistoryQuery = Pick<CloudCpWorkspaceReviewView, "branch" | "prNumber" | "sourceUrl">;
+
+export interface CloudCpWorkspaceViewInfo {
+	kind: "branch" | "pull_request";
+	/** The branch, or `#<number>` for a PR. */
+	name: string;
+	tipSha: string;
+	baseSha?: string;
+	baseRef?: string;
+	/** `recent`: a default branch's newest 50 first-parent commits. */
+	rangeMode: "since_base" | "recent";
+}
+
+export interface CloudCpWorkspaceHistoryResponse {
+	view: CloudCpWorkspaceViewInfo;
+	/** Newest first, at most 250. */
+	commits: CloudCpWorkspaceReviewCommit[];
+	commitsTruncated: boolean;
+	rangeSummary?: { files: number; additions: number; deletions: number };
+}
+
+/** `POST workspace/history/selection`: the files picked commits of a view change together. */
+export interface CloudCpWorkspaceCommitSelectionRequest extends Omit<CloudCpWorkspaceReviewView, "commitShas"> {
+	/** Empty reads the view's whole range. */
+	commitShas: string[];
+	workspaceVersion?: string;
+}
+
+export interface CloudCpWorkspaceCommitConflict {
+	commitSha: string;
+	paths: string[];
+	reason: "conflict" | "unsupported_history";
+}
+
+export interface CloudCpWorkspaceCommitSelectionResponse {
+	tipSha: string;
+	baseSha?: string;
+	contiguous: boolean;
+	combinable: boolean;
+	/** Why picks do not combine: the commit that did not apply, as a SHA or the daemon's conflict shape. */
+	conflict?: string | CloudCpWorkspaceCommitConflict;
+	files: CloudCpWorkspaceReviewFileSummary[];
+	summary: { files: number; additions: number; deletions: number };
+	truncated: boolean;
+}
+
+/** `POST conversation/file-references/resolve`: a sent chat reference, plus the sibling repository it names. */
+export type CloudCpFileReferenceResolveRequest = ChatFileReference & { repository?: string };
+
+/** Where a sent chat reference's lines are now. */
+export type CloudCpFileReferenceResolution = FileAnnotationResolution & {
+	state: "unchanged" | "changed" | "unavailable" | "moved";
+	reason?: "truncated" | "snapshot_changed" | "ambiguous" | "range_changed" | "renamed" | "incomplete_source";
+};
 
 /** One pull request on a children listing (GET .../sessions/{id}/children). */
 export interface CloudCpSessionPullRequest {

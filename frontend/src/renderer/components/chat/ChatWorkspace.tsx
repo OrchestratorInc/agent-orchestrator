@@ -1,7 +1,7 @@
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { excerptSizeError } from "../../../shared/chat-excerpt";
 import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
-import { FileAnnotationContext } from "./FileAnnotationPreview";
+import { FileAnnotationContext, type FileAnnotationContextValue } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
 import "./chat-find.css";
@@ -624,6 +624,11 @@ export interface ChatWorkspaceProps {
 	onOpenArtifact?: (target: { path: string }) => void;
 	onOpenFileAnnotation?: OpenFileAnnotation;
 	/**
+	 * Resolves sent file references where the daemon cannot (a Cloud session).
+	 * With text delivery, references are resolved and opened only through it.
+	 */
+	fileAnnotationResolver?: FileAnnotationContextValue["resolver"];
+	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
 	 * boundary and never for a turn that is running or already succeeded.
@@ -926,6 +931,7 @@ function ChatWorkspaceContent({
 	onOpenFile,
 	onOpenArtifact,
 	onOpenFileAnnotation,
+	fileAnnotationResolver,
 	retryControl,
 	onEditMessage,
 	editMessagePending,
@@ -2138,7 +2144,7 @@ function ChatWorkspaceContent({
 	}, [conversationEmpty]);
 
 	return (
- <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
+ <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" && !fileAnnotationResolver ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration, resolver: fileAnnotationResolver }}>
 		<section
 			ref={surfaceRef}
 			data-chat-find-scope=""

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { ReviewBranchMenuProps, ReviewBranchRow, ReviewBranchTrigger } from "../components/diffs/ReviewBranchMenu";
 import type { ReviewChangeStats, ReviewChangesMenuProps, ReviewChangesScope, ReviewChangesScopeOption, ReviewCommitRow } from "../components/diffs/ReviewChangesMenu";
@@ -36,7 +36,11 @@ import {
 	type FilesChanges,
 	type FilesSelection,
 	type ReviewTarget,
+	type WorkspaceBranches,
+	type WorkspaceCommitSelection,
 	type WorkspaceFilesResponse,
+	type WorkspaceHistoryResponse,
+	type WorkspaceViewParams,
 } from "./useSessionWorkspaceFiles";
 
 /** Ticks reach the queries this long after the last one, so a run of ticks sends one request. */
@@ -46,6 +50,47 @@ const OTHER_BRANCH_REFRESH_MS = 30_000;
 const LEGACY_SCOPES: readonly ReviewChangesScope[] = ["combined", "staged", "unstaged"];
 const WORKING_SCOPES: readonly ReviewChangesScope[] = ["uncommitted", "staged", "unstaged"];
 const UNCOMMITTED_SCOPES: readonly ReviewChangesScope[] = ["uncommitted"];
+
+type ReviewQueryOptions<T> = {
+	queryKey: readonly unknown[];
+	queryFn: () => Promise<T>;
+	staleTime?: number;
+	retry?: (failureCount: number, error: Error) => boolean;
+};
+
+/**
+ * Where the review reads branches, histories and commit selections: the local
+ * daemon, or a Cloud session's control plane. Failures that the selection acts
+ * on (a moved tip, a gone branch, a missing route) are WorkspaceRequestErrors
+ * carrying the server's status and code.
+ */
+export type FilesReviewDataSource = {
+	branches: (errorMessage: string) => ReviewQueryOptions<WorkspaceBranches>;
+	history: (errorMessage: string, branch: FilesBranchTarget) => ReviewQueryOptions<WorkspaceHistoryResponse>;
+	commitSelection: (request: { commitShas: readonly string[]; errorMessage: string; selectionKey: string; view?: WorkspaceViewParams; workspaceVersion?: string }) => ReviewQueryOptions<WorkspaceCommitSelection>;
+	/** A moved tip or base: read the branch list and the views' histories again. */
+	invalidateViews: (queryClient: QueryClient) => void;
+	/** False where nothing lists the checked-out branch's commits here (a Cloud review lists them itself). */
+	checkedOutHistory?: boolean;
+};
+
+export function daemonFilesReviewDataSource(sessionId: string, hostId?: string): FilesReviewDataSource {
+	return {
+		branches: (errorMessage) => sessionWorkspaceBranchesQueryOptions(sessionId, errorMessage, hostId),
+		history: (errorMessage, branch) => sessionWorkspaceHistoryQueryOptions(sessionId, errorMessage, hostId, branch),
+		commitSelection: (request) => sessionWorkspaceCommitSelectionQueryOptions({ ...request, hostId, sessionId }),
+		invalidateViews: (queryClient) => invalidateWorkspaceViews(queryClient, sessionId, hostId),
+	};
+}
+
+/** Where the pick is kept, when not the inspector's Files selection (a Cloud review keeps one per repository). */
+export type FilesSelectionStore = {
+	/** Names the pick: a notice and settled ticks belong to it. */
+	key: string;
+	stored: FilesSelection | undefined;
+	set: (next: FilesSelection) => void;
+	reset: () => void;
+};
 
 export type FilesReviewSelection = {
 	changesMenu: ReviewChangesMenuProps;
@@ -75,6 +120,8 @@ export function useFilesReviewSelection({
 	projectKind,
 	checkedOutBranch,
 	onBranchChange,
+	dataSource,
+	selectionStore,
 }: {
 	sessionId: string;
 	hostId?: string;
@@ -86,14 +133,23 @@ export function useFilesReviewSelection({
 	projectKind?: ProjectKind;
 	/** Called after the branch changes (picked, or gone), e.g. to drop a preview of the old one. */
 	onBranchChange?: () => void;
+	/** Defaults to the session's daemon. */
+	dataSource?: FilesReviewDataSource;
+	/** Defaults to the inspector's Files selection of the session. */
+	selectionStore?: FilesSelectionStore;
 }): FilesReviewSelection {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const uiKey = sessionUiKey(sessionId, hostId);
-	const stored = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSelection) ?? DEFAULT_FILES_SELECTION;
-	const setFilesSelection = useUiStore((state) => state.setFilesSelection);
-	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
+	const source = dataSource ?? daemonFilesReviewDataSource(sessionId, hostId);
+	const uiKey = selectionStore?.key ?? sessionUiKey(sessionId, hostId);
+	const storedInUi = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSelection);
+	const stored = (selectionStore ? selectionStore.stored : storedInUi) ?? DEFAULT_FILES_SELECTION;
+	const setUiFilesSelection = useUiStore((state) => state.setFilesSelection);
+	const resetUiFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
+	const setFilesSelection = useLatestCallback((key: string, next: FilesSelection) => (selectionStore ? selectionStore.set(next) : setUiFilesSelection(key, next)));
+	const resetFilesSelection = useLatestCallback((key: string) => (selectionStore ? selectionStore.reset() : resetUiFilesSelection(key)));
+	const invalidateViews = useLatestCallback(() => source.invalidateViews(queryClient));
 	const branchChanged = useLatestCallback(() => onBranchChange?.());
 	const [notice, setNotice] = useState({ uiKey, text: "" });
 
@@ -112,7 +168,7 @@ export function useFilesReviewSelection({
 	// keys a new history read, so the review follows it.
 	const viewingOtherBranch = branch.kind !== "checked_out";
 	const branchesQuery = useQuery({
-		...sessionWorkspaceBranchesQueryOptions(sessionId, t("files.branches.error"), hostId),
+		...source.branches(t("files.branches.error")),
 		enabled: Boolean(manifest) && !legacy && !scratch,
 		refetchInterval: viewingOtherBranch ? OTHER_BRANCH_REFRESH_MS : false,
 		// "always": the list counts as fresh for 15s, which would skip a focus read.
@@ -125,8 +181,8 @@ export function useFilesReviewSelection({
 	// Key another branch's history by the tip the list shows now, so a moved tip reads anew.
 	const historyBranch: FilesBranchTarget = branch.kind === "checked_out" || !selectedRow?.tipSha || prBranchRow ? branch : { ...branch, tipSha: selectedRow.tipSha };
 	const historyQuery = useQuery({
-		...sessionWorkspaceHistoryQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId, historyBranch),
-		enabled: Boolean(manifest) && !(uncommittedOnly && branch.kind === "checked_out"),
+		...source.history(t("files.error.loadWorkspace"), historyBranch),
+		enabled: Boolean(manifest) && !(uncommittedOnly && branch.kind === "checked_out") && (branch.kind !== "checked_out" || source.checkedOutHistory !== false),
 	});
 	const history = historyQuery.data;
 
@@ -135,12 +191,10 @@ export function useFilesReviewSelection({
 	const settledChanges = useSettledChanges(changes, `${uiKey}|${branchKey(branch)}`);
 	const request = commitSelectionRequest(branch, settledChanges, manifest, history);
 	const selectionQuery = useQuery({
-		...sessionWorkspaceCommitSelectionQueryOptions({
+		...source.commitSelection({
 			commitShas: request?.commitShas ?? [],
 			errorMessage: t("files.error.loadWorkspace"),
-			hostId,
 			selectionKey: request?.selectionKey ?? "",
-			sessionId,
 			view: request?.view,
 			workspaceVersion: request?.workspaceVersion,
 		}),
@@ -170,8 +224,8 @@ export function useFilesReviewSelection({
 	// A moved tip or base fails the read it fenced; the new one arrives under new keys.
 	const selectionErrorCode = workspaceErrorCode(selectionQuery.error);
 	useEffect(() => {
-		if (selectionErrorCode === "WORKSPACE_REF_MOVED") invalidateWorkspaceViews(queryClient, sessionId, hostId);
-	}, [hostId, queryClient, selectionErrorCode, sessionId]);
+		if (selectionErrorCode === "WORKSPACE_REF_MOVED") invalidateViews();
+	}, [invalidateViews, selectionErrorCode]);
 
 	// The picked branch or PR left the whole list, or its history says it is
 	// gone. A capped list leaves branches out, so missing from it proves nothing;
@@ -204,7 +258,7 @@ export function useFilesReviewSelection({
 	// Any pick in the changes menu is something to review, so it also leaves the All files view.
 	const pickChanges = (next: FilesChanges) => {
 		pick({ branch, changes: next });
-		setFilesChangedOnly(uiKey, true);
+		if (!selectionStore) setFilesChangedOnly(uiKey, true);
 	};
 
 	const commitRows = useMemo<ReviewCommitRow[]>(

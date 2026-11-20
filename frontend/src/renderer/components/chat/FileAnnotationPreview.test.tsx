@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureFileReference } from "../../../shared/chat-file-reference";
+import { captureFileReference, FILE_REFERENCE_RESOLVE_UNSUPPORTED } from "../../../shared/chat-file-reference";
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 
@@ -189,4 +189,46 @@ it.each([undefined, "ambiguous"])("opens a verified renamed but changed file (%s
  expect(ref.path).toBe("src/a.ts");
  expect(ref.lines[0].text).toBe("captured();");
  expect(resolution).not.toHaveProperty("line");
+});
+
+describe("a pluggable resolver (a Cloud session's control plane)", () => {
+	function setupResolver(resolve: (reference: typeof ref) => Promise<unknown>, onOpen?: () => void) {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const resolver = { queryKey: ["file-annotation-source", "cloud", "https://cloud.test", "org", "session"] as const, resolve: resolve as never };
+		render(
+			<QueryClientProvider client={client}>
+				<FileAnnotationContext.Provider value={{ sessionId: "session", onOpen, resolver }}>
+					<ChatAnnotationSummary annotations={[{ id: ref.id, text: ref.path, fileReference: ref }]} />
+				</FileAnnotationContext.Provider>
+			</QueryClientProvider>,
+		);
+		return client;
+	}
+
+	it("resolves through it instead of the daemon, refreshes on its key and opens what it resolved", async () => {
+		const resolve = vi.fn().mockResolvedValue({ state: "moved", path: "src/b.ts", line: 3, endLine: 3, newLineOffset: 2 });
+		const open = vi.fn();
+		const client = setupResolver(resolve, open);
+		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("moved"));
+		expect(request).not.toHaveBeenCalled();
+		expect(resolve).toHaveBeenCalledWith(ref, expect.anything());
+		// The Cloud surface refreshes this key when the workspace changes.
+		resolve.mockClear();
+		await client.invalidateQueries({ queryKey: ["file-annotation-source", "cloud", "https://cloud.test", "org", "session"] });
+		await waitFor(() => expect(resolve).toHaveBeenCalled());
+		fireEvent.click(await screen.findByRole("button", { name: /^Open file:/ }));
+		await waitFor(() => expect(open).toHaveBeenCalledWith(ref, { state: "moved", path: "src/b.ts", line: 3, endLine: 3, newLineOffset: 2 }));
+	});
+
+	it("shows only the captured code, with nothing to open, when the resolver is unsupported", async () => {
+		const open = vi.fn();
+		setupResolver(vi.fn().mockRejectedValue(new Error(FILE_REFERENCE_RESOLVE_UNSUPPORTED)), open);
+		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+		await waitFor(() => expect(screen.getByText("captured();")).toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByText(/could not|unavailable|check/i)).not.toBeInTheDocument());
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Open file:/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+	});
 });

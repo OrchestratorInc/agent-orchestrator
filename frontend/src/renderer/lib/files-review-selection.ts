@@ -2,6 +2,7 @@ import type {
 	FilesBranchTarget,
 	FilesChanges,
 	FilesSelection,
+	FilesSource,
 	ReviewTarget,
 	WorkspaceBranch,
 	WorkspaceCommitSelection,
@@ -272,6 +273,18 @@ export function scopeFiles(manifest: WorkspaceFilesResponse, scope: ScopeKind, l
 		case "combined":
 			return manifest.files.filter((file) => file.status !== "unmodified");
 	}
+}
+
+/** Names the branch a review comment is about, for the agent. */
+export function annotationSource(branch: FilesBranchTarget): string {
+	if (branch.kind === "branch") return `Branch ${branch.name}`;
+	if (branch.kind === "pull_request") return `PR #${branch.number} (${branch.url})`;
+	return "Workspace";
+}
+
+/** Names the revision a comment on a snapshot's file is about, for the agent. */
+export function snapshotAnnotationSource(source: Extract<FilesSource, { kind: "snapshot" }>): string {
+	return `${source.label} (tip ${source.view?.expectedTipSha ?? "selected revision"}; review base ${source.view?.expectedBaseSha ?? "selected history"}; commits ${source.commitShas?.join(",") || "all"})`;
 }
 
 /** A branch menu row's id; the checked-out row (a detached HEAD has no name) is always "checked_out". */

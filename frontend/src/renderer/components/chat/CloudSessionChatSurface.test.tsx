@@ -39,6 +39,7 @@ const cloudMocks = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	getInterfaceTransition: vi.fn(),
 	startInterfaceTransition: vi.fn(),
+	resolveFileReference: vi.fn(),
 	chatProps: vi.fn(),
 }));
 const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManageBilling: true }, plan: "starter", limit: 15 as number | undefined }));
@@ -333,6 +334,20 @@ describe("CloudSessionChatSurface", () => {
 		// A deleted session takes none either.
 		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, isTerminated: true, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeUndefined();
+	});
+	it("resolves sent file references through the control plane and opens them through the session view", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.resolveFileReference.mockReset().mockResolvedValue({ state: "unchanged" });
+		const onOpenFileAnnotation = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface onOpenFileAnnotation={onOpenFileAnnotation} session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.onOpenFileAnnotation).toBe(onOpenFileAnnotation);
+		expect(props.fileAnnotationResolver.queryKey).toEqual(["file-annotation-source", "cloud", cloudSetup.baseUrl, "org-1", session.id]);
+		const ref = captureFileReference({ path: "cloud.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "x" }] }, session.id);
+		await expect(props.fileAnnotationResolver.resolve(ref)).resolves.toEqual({ state: "unchanged" });
+		expect(cloudMocks.resolveFileReference).toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ id: ref.id, path: "cloud.ts" }), { signal: undefined });
 	});
 	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({events:[],hasMore:false,nextAfter:0});
