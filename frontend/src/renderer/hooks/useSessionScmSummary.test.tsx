@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { useSessionScmSummary } from "./useSessionScmSummary";
+import type { CloudCpPullRequestSummary } from "../lib/cloud-cp";
+import { cloudPRSummaryToSessionPRSummary, useSessionScmSummary } from "./useSessionScmSummary";
 
 const { listSessionPullRequestsMock, subscribeSessionEventsMock } = vi.hoisted(() => ({
 	listSessionPullRequestsMock: vi.fn(),
@@ -119,5 +120,26 @@ describe("useSessionScmSummary cloud source", () => {
 			repo: "acme/widgets",
 			mergeability: { prUrl: "https://github.com/acme/widgets/pull/7" },
 		});
+	});
+});
+
+const cloudPR = {
+	url: "https://github.com/upstream/repo/pull/7", number: 7, title: "Fix", state: "open", provider: "github",
+	repository: "upstream/repo", author: "octocat", sourceBranch: "fix", targetBranch: "main", headSha: "abc",
+	additions: 1, deletions: 0, changedFiles: 1,
+	ci: { state: "passing", failingChecks: [] },
+	review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [], resolvedBy: [], reviews: [] },
+	mergeability: { state: "mergeable", reasons: [], pullRequestUrl: "https://github.com/upstream/repo/pull/7", conflictFiles: [] },
+	updatedAt: "2026-11-20T00:00:00Z", observedAt: "2026-11-20T00:00:00Z", ciObservedAt: "2026-11-20T00:00:00Z", reviewObservedAt: "2026-11-20T00:00:00Z",
+} satisfies CloudCpPullRequestSummary;
+
+describe("cloudPRSummaryToSessionPRSummary", () => {
+	it("carries who may merge the pull request", () => {
+		const pr = cloudPRSummaryToSessionPRSummary({ ...cloudPR, mergeAccess: { permission: "read", via: "none" } }, false);
+		expect(pr.mergeAccess).toEqual({ permission: "read", via: "none" });
+	});
+
+	it("leaves it out for an older control plane", () => {
+		expect(cloudPRSummaryToSessionPRSummary(cloudPR, false).mergeAccess).toBeUndefined();
 	});
 });

@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpFromLine, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
+import { ArrowUpFromLine, ArrowUpRight, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey, usePRStack } from "../hooks/usePRStack";
@@ -8,13 +8,14 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { clientForSessionHost } from "../lib/host-clients";
-import { prSummaryBlockReason, type PRBlockReason } from "../lib/pr-display";
+import { prBrowserUrl, prSummaryBlockReason, type PRBlockReason, type PRMergeRoute } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { cn } from "../lib/utils";
 import type { SessionGitActionKind } from "../stores/session-git-action-store";
 import type { BranchGitStep } from "./SessionBranchSummary";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ProductExternalLink } from "./ProductExternalLink";
 import { prStateIcon } from "./PRPills";
 import { Button } from "./ui/button";
 import {
@@ -75,6 +76,46 @@ export function CloudPRGitStepButton({ git }: { git: BranchGitStep }) {
 				<span className="truncate">{label}</span>
 			</Button>
 			{git.error ? <p className="m-0 text-xs leading-normal text-error" role="status">{git.error}</p> : null}
+		</div>
+	);
+}
+
+/**
+ * What a Cloud PR card shows in place of Merge when AO can't merge it as the
+ * person: "Merge on GitHub" when they have write access but AO can't write to
+ * the repository as them (its GitHub App isn't installed there), or "Waiting
+ * for a maintainer to merge" when they don't have write access. Either way
+ * the PR opens on GitHub; its next status read shows the merge.
+ */
+export function PRMergeOutsideAO({ pr, route }: { pr: SessionPRSummary; route: Exclude<PRMergeRoute, "ao"> }) {
+	const { t } = useTranslation();
+	const repository = pr.repo || prBrowserUrl(pr);
+	if (route === "github") {
+		return (
+			<Button asChild className="gap-1 px-2" size="sm" variant="secondary">
+				<ProductExternalLink
+					ariaLabel={t("pr.merge.onGitHubFor", { number: pr.number })}
+					href={prBrowserUrl(pr)}
+					title={t("pr.merge.appNotInstalled", { repository })}
+				>
+					<GitMerge aria-hidden="true" className="size-icon-sm" />
+					{t("pr.merge.onGitHub")}
+					<ArrowUpRight aria-hidden="true" className="size-icon-xs" />
+				</ProductExternalLink>
+			</Button>
+		);
+	}
+	return (
+		<div className="flex min-w-0 flex-wrap items-center justify-end gap-2" data-testid="pr-merge-maintainer">
+			<span className="text-xs text-muted-foreground" title={t("pr.merge.noWriteAccess", { repository })}>
+				{t("pr.merge.waitingForMaintainer")}
+			</span>
+			<Button asChild className="gap-1 px-2" size="sm" variant="secondary">
+				<ProductExternalLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={prBrowserUrl(pr)}>
+					{t("pr.merge.openOnGitHub")}
+					<ArrowUpRight aria-hidden="true" className="size-icon-xs" />
+				</ProductExternalLink>
+			</Button>
 		</div>
 	);
 }

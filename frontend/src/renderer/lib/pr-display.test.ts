@@ -10,6 +10,7 @@ import {
 	prCheckedOut,
 	prDiffSummary,
 	prHasNoChecks,
+	prMergeRoute,
 	noChecksSettlesAt,
 	PR_NO_CHECKS_SETTLE_MS,
 	prSummaryBlockReason,
@@ -1247,5 +1248,19 @@ describe("a PR nothing checks", () => {
 		expect(view.readinessRows?.map((row) => row.label)).toContain("No checks reported");
 		expect(view.statusRows?.map((row) => row.label)).toEqual(["Review status"]);
 		expect(prCardPresentation(unchecked()).readiness?.label).toBe("Checking merge readiness");
+	});
+});
+
+describe("prMergeRoute", () => {
+	it.each([
+		[undefined, "ao"],
+		[{ permission: "write", via: "ao" }, "ao"],
+		[{ permission: "write", via: "github" }, "github"],
+		[{ permission: "read", via: "none" }, "maintainer"],
+		// Unknown keeps today's Merge, wherever AO says it would merge.
+		[{ permission: "unknown", via: "github" }, "ao"],
+		[{ permission: "unknown", via: "ao" }, "ao"],
+	] as const)("maps %j to %s", (mergeAccess, route) => {
+		expect(prMergeRoute({ mergeAccess })).toBe(route);
 	});
 });
