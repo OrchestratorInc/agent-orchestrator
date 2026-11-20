@@ -132,11 +132,18 @@ export type BrowserAnnotationTheme = Partial<{
 	destructive: string;
 }>;
 
-export type BrowserAnnotationModeInput = { viewId: string; enabled: boolean; theme?: BrowserAnnotationTheme };
+export type BrowserAnnotationModeInput = {
+	viewId: string;
+	enabled: boolean;
+	theme?: BrowserAnnotationTheme;
+	/** Offer dictation in the comment composer (macOS only). */
+	dictation?: boolean;
+};
 export type BrowserAnnotationPageMode = {
 	enabled: boolean;
 	session?: BrowserAnnotationSession;
 	theme?: BrowserAnnotationTheme;
+	dictation?: boolean;
 };
 export type BrowserAnnotationPageSubmitPayload = { session: BrowserAnnotationSession };
 export type BrowserAnnotationSnapshot = { mimeType: string; data: string };

@@ -78,7 +78,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					launch: async () => ({ ok: true }),
 				},
 					dictation: {
-						start: async () => undefined,
+						start: async () => true,
 						stop: async () => undefined,
 						cancel: async () => undefined,
 						onEvent: unsubscribe,
@@ -1097,7 +1097,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					launch: async () => ({ ok: true }),
 				},
 					dictation: {
-						start: async () => undefined,
+						start: async () => true,
 						stop: async () => undefined,
 						cancel: async () => undefined,
 						onEvent: unsubscribe,

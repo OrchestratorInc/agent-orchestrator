@@ -569,6 +569,8 @@ export type BrowserViewHost = {
   clearProfileData: (profileId: BrowserProfileId) => Promise<void>;
   // Whether browser-owned UI was the most recently used application surface.
   isLastUsedBrowser: () => boolean;
+  // Whether `contents` is a page whose annotation composer may dictate right now.
+  isAnnotationDictationSender: (contents: Pick<WebContents, "id">) => boolean;
   // Whether any Browser panel is on screen with a page in it.
   hasVisiblePanel: () => boolean;
   // Refresh the live page after raising the transparent shell for an overlay.
@@ -642,6 +644,8 @@ type BrowserEntry = {
     { session: BrowserAnnotationSession; token: string }
   >;
   annotationTheme?: BrowserAnnotationModeInput["theme"];
+  // Whether the annotation composer may offer dictation (macOS only).
+  annotationDictation?: boolean;
   documentGeneration: number;
   navigationGeneration: number;
   blockedNavigationGeneration: number;
@@ -2201,7 +2205,13 @@ export function createBrowserViewHost(
     }
     session.activeTabId = tabId;
     session.activationRevision += 1;
-    if (previous && previous !== next) previous.driver().show(false);
+    if (previous && previous !== next) {
+      previous.driver().show(false);
+      // A hidden tab's composer cannot be seen, so its dictation finishes, as
+      // leaving the app does; the final wording still reaches the page.
+      if (previous.annotationEnabled && previous.annotationDictation)
+        previous.view.webContents.send("browser:annotation:stopDictation");
+    }
     next.driver().show(true);
     if (session.devtools && isBlankBrowserEntry(next)) destroyDevTools(session);
     applySessionBounds(session, next);
@@ -2854,6 +2864,23 @@ export function createBrowserViewHost(
     }
   }
 
+  // A hidden panel's composer cannot be seen, so its dictation finishes, as
+  // leaving the app does. Re-layouts hide and re-show the view within a frame or two (a slot
+  // handoff, the 280ms settle re-measure), so only a hide that lasts ends it.
+  const ANNOTATION_DICTATION_HIDE_GRACE_MS = 500;
+  const dictationHideTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const stopDictationIfStillHidden = (viewId: string): void => {
+    if (dictationHideTimers.has(viewId)) return;
+    dictationHideTimers.set(viewId, setTimeout(() => {
+      dictationHideTimers.delete(viewId);
+      const session = entries.get(viewId);
+      if (!session || session.visible || !session.tabs.size) return;
+      const entry = activeEntry(session);
+      if (entry.annotationEnabled && entry.annotationDictation)
+        entry.view.webContents.send("browser:annotation:stopDictation");
+    }, ANNOTATION_DICTATION_HIDE_GRACE_MS));
+  };
+
   const setBounds = (
     { viewId, revision, rect, visible }: BrowserBoundsInput,
     zoomFactor = 1,
@@ -2878,8 +2905,11 @@ export function createBrowserViewHost(
       // Hiding the native surface (blank tab, transient measure) must not drop
       // the browser shortcut target — the panel chrome is still the context.
       forgetNativeFocus(viewId);
+      stopDictationIfStillHidden(viewId);
       return { viewId, revision, rect: session.bounds, visible: false };
     }
+    clearTimeout(dictationHideTimers.get(viewId));
+    dictationHideTimers.delete(viewId);
     // The renderer measures the slot in page-zoomed CSS pixels, while
     // WebContentsView bounds are window coordinates. Convert before clamping so
     // Cmd+/Cmd- page zoom does not detach the native view from its React slot.
@@ -3575,11 +3605,13 @@ export function createBrowserViewHost(
     }
     entry.annotationEnabled = input.enabled;
     if (input.theme) entry.annotationTheme = input.theme;
+    if (input.dictation !== undefined) entry.annotationDictation = input.dictation === true;
     const annotationSession = annotationSessionFor(entry);
     entry.view.webContents.send("browser:annotation:setMode", {
       enabled: input.enabled,
       ...(annotationSession ? { session: annotationSession } : {}),
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     if (input.enabled) entry.view.webContents.focus();
   };
@@ -3681,6 +3713,7 @@ export function createBrowserViewHost(
     entry.view.webContents.send("browser:annotation:setMode", {
       enabled: entry.annotationEnabled,
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     pushAnnotationState(options, entry);
   };
@@ -3714,6 +3747,7 @@ export function createBrowserViewHost(
       enabled: false,
       ...(pageSession ? { session: pageSession } : {}),
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     if (active) pushAnnotationState(options, entry);
   };
@@ -5156,6 +5190,14 @@ export function createBrowserViewHost(
     clearProfileData,
     isLastUsedBrowser: () =>
       lastUsedViewId !== null && entries.has(lastUsedViewId),
+    isAnnotationDictationSender: (contents) => {
+      const entry = tabsByWebContentsId.get(contents.id);
+      if (!entry?.annotationEnabled || !entry.annotationDictation) return false;
+      // Only the tab on screen, whose composer the user can see and finish.
+      const viewId = viewIdsBySessionId.get(entry.sessionId);
+      const session = viewId ? entries.get(viewId) : undefined;
+      return session?.activeTabId === entry.tabId;
+    },
     hasVisiblePanel: () =>
       [...entries.values()].some((session) => session.visible && session.tabs.size > 0),
     // Reordering the transparent shell above a live page can leave either
@@ -5932,6 +5974,7 @@ function wireNavEvents(
       enabled: entry.annotationEnabled,
       ...(annotationSession ? { session: annotationSession } : {}),
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     if (entry.annotationEnabled) contents.focus();
     pushAnnotationState(options, entry, annotationSession);
