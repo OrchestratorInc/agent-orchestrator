@@ -25,6 +25,7 @@ export function AgentModelField({
 	projectId,
 	hostId,
 	model,
+	savedModel = "",
 	mode,
 	effort,
 	onModelChange,
@@ -46,6 +47,8 @@ export function AgentModelField({
 	projectId: string;
 	hostId?: string;
 	model: string;
+	/** The model the project has saved, offered until a replacement is saved. */
+	savedModel?: string;
 	mode: string;
 	effort: string;
 	onModelChange: (value: string) => void;
@@ -201,11 +204,15 @@ export function AgentModelField({
 	}));
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
-	} else if (followCatalogDefaults && catalog && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
-		// A saved model the account's list lacks stays a row, noted, rather than
-		// a bare id with nothing to re-pick (#5679).
-		const pinned = { id: model, label: model, note: t("settings.models.pinnedNotListed", { agent: agentLabel(agentId) }) };
-		models.push(pinned);
+	} else if (followCatalogDefaults && catalog) {
+		// A pinned model the account's list lacks stays a row, noted, rather than
+		// a bare id with nothing to re-pick (#5679). The saved pin stays too until
+		// its replacement is saved, so a failed save can still return to it.
+		for (const pin of [savedModel, model]) {
+			if (!isConcreteModelID(pin) || models.some((item) => item.id === pin)) continue;
+			const pinned = { id: pin, label: pin, note: t("settings.models.pinnedNotListed", { agent: agentLabel(agentId) }) };
+			models.push(pinned);
+		}
 	}
 	// Cloud saves only explicit picks, but an unset model still names the one the
 	// agent uses by default rather than a generic placeholder.
