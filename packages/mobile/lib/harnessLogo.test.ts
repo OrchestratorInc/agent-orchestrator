@@ -22,9 +22,7 @@ const daemonHarnesses = [
 ].map(([, id]) => id);
 
 // The fake harness exists only for tests and intentionally has no brand asset.
-// CodeBuddy Code ships no mark: no official asset with redistribution terms is
-// available, so it uses the initial (docs/harnesses/codebuddy.md, Branding).
-const NO_ASSET = ["fake", "codebuddy"];
+const NO_ASSET = ["fake"];
 
 function luminance([red, green, blue]: readonly number[]): number {
 	const linear = (value: number) => {

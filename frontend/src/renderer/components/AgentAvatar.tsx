@@ -53,6 +53,7 @@ import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
 import mastraCodeLogo from "../assets/agents/mastra-code.svg";
+import codeBuddyLogo from "../assets/agents/codebuddy.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import minimaxCodeLogo from "../assets/agents/minimax-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
@@ -82,6 +83,7 @@ import vibeLogo from "../assets/agents/vibe.svg";
 // a lettered tile.
 const LOGOS: AgentLogoSources = {
 	"mastra-code": mastraCodeLogo,
+	codebuddy: codeBuddyLogo,
 	codex: codexLogo,
 	codewhale: { light: codewhaleLightLogo, dark: codewhaleDarkLogo },
 	"command-code": { light: commandCodeLightLogo, dark: commandCodeDarkLogo },

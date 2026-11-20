@@ -81,7 +81,7 @@ are excluded. `--acp` declarations alone do not establish conformance.
 
 ## Branding
 
-AO intentionally uses the existing initials avatar for CodeBuddy. No upstream
-brand asset is bundled because redistribution terms for a suitable official
-asset have not been verified. The product name remains CodeBuddy Code; this
-fallback does not claim an unofficial logo or Tencent endorsement.
+AO shows CodeBuddy's official mark, the site icon `copilot.tencent.com` serves
+(`download.codebuddy.cn/.../assets/logo.svg`), unchanged, as
+`frontend/src/renderer/assets/agents/codebuddy.svg`. It identifies the harness
+only and does not claim Tencent endorsement.
