@@ -1,6 +1,6 @@
 // The update screen mascot's choreography, as pure functions of one clock.
 //
-// Every moving part reads the same millisecond value, so the hop, the wand
+// Every moving part reads the same millisecond value, so the hop, the baton
 // flick, the blink and the sparkles never drift apart. The clock runs from 0 to
 // LOOP_MS and wraps; LOOP_MS is a multiple of every period below, so the frame
 // at LOOP_MS is the frame at 0 and the wrap is invisible.
@@ -8,9 +8,9 @@
 // Each function is a Reanimated worklet (UI thread) and plain TypeScript
 // (vitest), so the curves are tested without a React Native runtime.
 
-/** One hop, one wand flick and one sparkle burst. */
+/** One hop, one baton beat and one sparkle burst. */
 export const HOP_MS = 1400;
-/** The eyes blink, glance at the wand and come back once per this period. */
+/** The eyes blink twice per this period. */
 export const BLINK_MS = 4200;
 /** Shortest loop containing whole periods of both. */
 export const LOOP_MS = 8400;
@@ -49,34 +49,30 @@ export function hopAt(ms: number): HopPose {
 	return { lift, squash };
 }
 
-/** Wand angle in degrees, clockwise positive. Flicks up as the mascot leaves the ground. */
-export function wandAt(ms: number): number {
+/**
+ * Baton angle in degrees around the hand, clockwise positive: a conductor's
+ * beat, lifting as Ruto leaves the ground and coming down on the landing.
+ */
+export function batonAt(ms: number): number {
 	"worklet";
 	const p = phase(ms, HOP_MS);
 	return -9 * Math.sin(TAU * p) + 3 * Math.sin(2 * TAU * p);
 }
 
 export type EyePose = {
-	/** Vertical scale, 1 open → ~0.1 closed. */
+	/** 1 open → 0 shut. */
 	open: number;
-	/** Glance toward the wand, 0..1 (multiply by the glance distance). */
-	glance: number;
 };
 
 export function eyesAt(ms: number): EyePose {
 	"worklet";
 	const p = phase(ms, BLINK_MS);
-	const open = 1 - 0.9 * (bump(p, 0.02, 0.045) + bump(p, 0.62, 0.045));
-	// Ease over to the wand, hold, ease back.
-	let glance = 0;
-	if (p >= 0.3 && p < 0.38) glance = 0.5 - 0.5 * Math.cos((Math.PI * (p - 0.3)) / 0.08);
-	else if (p >= 0.38 && p < 0.55) glance = 1;
-	else if (p >= 0.55 && p < 0.63) glance = 0.5 + 0.5 * Math.cos((Math.PI * (p - 0.55)) / 0.08);
-	return { open, glance };
+	const open = 1 - (bump(p, 0.02, 0.045) + bump(p, 0.62, 0.045));
+	return { open };
 }
 
 export type SparklePose = {
-	/** Offset from the wand tip, in mascot units. */
+	/** Offset from the baton tip, in choreography units. */
 	x: number;
 	y: number;
 	scale: number;
