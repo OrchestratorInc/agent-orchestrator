@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError } from "./makers/macho-archs";
@@ -31,7 +31,7 @@ vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
 	return { ...actual, checkMacDmgLayout };
 });
 
-import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, WINDOWS_DISPLAY_NAME } from "./forge.config";
+import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, pruneLocales, WINDOWS_DISPLAY_NAME } from "./forge.config";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -456,6 +456,39 @@ describe("packaged native dependencies", () => {
 		expect(ignore("/node_modules/react/index.js")).toBe(true);
 		expect(ignore("/src/main.ts")).toBe(true);
 		expect(config.hooks?.prePackage).toBeTypeOf("function");
+	});
+});
+
+describe("locale pruning", () => {
+	let buildPath: string;
+	beforeEach(() => {
+		buildPath = mkdtempSync(join(tmpdir(), "ao-locales-"));
+	});
+	afterEach(() => rmSync(buildPath, { recursive: true, force: true }));
+
+	it("keeps the app's UI languages in the framework and the app bundle and removes the rest", () => {
+		const contents = join(buildPath, `${config.packagerConfig?.name}.app`, "Contents");
+		const framework = join(contents, "Frameworks", "Electron Framework.framework", "Resources");
+		const app = join(contents, "Resources");
+		const write = (dir: string, entries: string[]) => {
+			mkdirSync(dir, { recursive: true });
+			for (const entry of entries) {
+				if (entry.endsWith(".lproj")) mkdirSync(join(dir, entry));
+				else writeFileSync(join(dir, entry), "");
+			}
+		};
+		write(framework, [
+			"en.lproj", "en_FEMININE.lproj", "zh_CN.lproj", "zh_CN_NEUTER.lproj", "pt_BR.lproj",
+			"en_GB.lproj", "zh_TW.lproj", "pt_PT_MASCULINE.lproj", "af.lproj", "Info.plist",
+		]);
+		write(app, ["en.lproj", "it.lproj", "ja.lproj", "zh_TW.lproj", "app.asar"]);
+
+		pruneLocales(buildPath);
+
+		expect(readdirSync(framework).sort()).toEqual([
+			"Info.plist", "en.lproj", "en_FEMININE.lproj", "pt_BR.lproj", "zh_CN.lproj", "zh_CN_NEUTER.lproj",
+		]);
+		expect(readdirSync(app).sort()).toEqual(["app.asar", "en.lproj", "ja.lproj"]);
 	});
 });
 
