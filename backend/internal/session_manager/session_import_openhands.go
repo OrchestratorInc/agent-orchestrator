@@ -11,7 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-var openHandsPythonName = regexp.MustCompile(`^pythonw?(?:[0-9]+(?:\.[0-9]+)*)?(?:\.exe)?$`)
+var openHandsPythonName = regexp.MustCompile(`^pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?$`)
 
 // This supplementary probe detects a state descriptor held open. It cannot
 // detect an idle original CLI; the S2 preparer isolates the selected history
