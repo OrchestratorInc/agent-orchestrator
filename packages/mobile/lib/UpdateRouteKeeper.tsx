@@ -42,6 +42,13 @@ export function UpdateRouteKeeper(): null {
 		if (!navState?.key) return; // wait until navigation can accept routes
 		const current = routeHref(pathname, segments, params);
 		if (landing.current === null) landing.current = current;
+		// The first move away cancels the restore for good — checked before the
+		// storage wait, so leaving and coming back while storage is still being
+		// read does not count as having stayed.
+		if (current !== landing.current) {
+			restored.current = true;
+			return;
+		}
 		if (saved === undefined) return; // still reading storage
 		restored.current = true;
 		if (saved === null) return;
