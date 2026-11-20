@@ -10,6 +10,8 @@ import (
 )
 
 var (
+	// ErrTerminalMessageNotReady refuses a paste into native decisions or drafts.
+	ErrTerminalMessageNotReady = errors.New("terminal composer is not ready for a message")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.
@@ -295,6 +297,22 @@ type AgentTerminalVersionRefresher interface {
 // durable conversation id accepted by their resume command.
 type AgentNativeSessionResolver interface {
 	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
+}
+
+// AgentTerminalReplyReader is an optional capability for a Terminal UI harness
+// whose Stop hook omits the turn's reply. The daemon reads the reply from the
+// adapter's native history when a stop arrives without one, so the hook CLI
+// never opens agent storage itself. It returns "" when no reply is available.
+type AgentTerminalReplyReader interface {
+	TerminalTurnReply(ctx context.Context, cfg TerminalReplyConfig) string
+}
+
+// TerminalReplyConfig locates one AO session's adapter-owned native history.
+// NativeSessionID is the hook's native thread, or "" when it reported none.
+type TerminalReplyConfig struct {
+	DataDir         string
+	SessionID       domain.SessionID
+	NativeSessionID string
 }
 
 // NativeSessionResolveConfig identifies one supervised agent launch. DataDir
@@ -927,6 +945,20 @@ type RestoreConfig struct {
 	// Env is the environment the runtime layers over the daemon's own for the
 	// resumed process, as LaunchConfig.Env is for a launch.
 	Env map[string]string
+}
+
+// NativeRestoreVerifier is required by CLIs whose resume command can silently
+// open fresh history. AO checks current-generation native evidence and a
+// rendered viewport before publishing the replacement runtime.
+type NativeRestoreVerifier interface {
+	VerifyNativeRestore(context.Context, RestoreConfig, string, string) (bool, error)
+}
+
+// TerminalMessageInputGuard opts a harness into serialized pane input and
+// validates pasted messages against the current rendered composer. Raw user
+// keystrokes remain available for native decisions and editing drafts.
+type TerminalMessageInputGuard interface {
+	ValidateTerminalMessage(output, message string) error
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

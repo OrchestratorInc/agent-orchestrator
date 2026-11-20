@@ -59,8 +59,21 @@ for (const mode of ["chat", "tui"] as const) {
 				await expect.poll(() => page.evaluate(() => Number.parseFloat(document.querySelector<HTMLElement>('[data-testid="session-terminal-region"]')!.style.getPropertyValue("--ao-sidebar-layout-width")))).toBeGreaterThan(100);
 			}
 			const expanded = await geometry(page);
+			// Windowed and fullscreen both draw the selected tab as a rounded pill,
+			// never the legacy underline.
+			const activeTab = await page.evaluate(() => {
+				const frame = document.querySelector<HTMLElement>("[data-terminal-tab-frame][data-active]")!;
+				const underline = frame.querySelector<HTMLElement>('[data-testid="active-terminal-tab-indicator"]');
+				return {
+					pillRadius: getComputedStyle(frame, "::before").borderTopLeftRadius,
+					underline: underline ? getComputedStyle(underline).display : "none",
+				};
+			});
+			expect(activeTab.underline).toBe("none");
+			expect(activeTab.pillRadius).not.toBe("0px");
 			const expandedTab = await page.getByRole("tab").first().boundingBox();
-			expect(Math.abs(expandedTab!.x - expanded.region.x)).toBeLessThanOrEqual(1);
+			// Fullscreen's flush panel starts the pill strip one 4px tab gap in.
+			expect(Math.abs(expandedTab!.x - expanded.region.x - (fullScreen ? 4 : 0))).toBeLessThanOrEqual(1);
 			await nav.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
 			await expect.poll(async () => (await geometry(page)).region.x).toBeLessThan(expanded.region.x);
 			const collapsed = await geometry(page);
