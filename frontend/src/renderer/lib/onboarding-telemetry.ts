@@ -362,6 +362,8 @@ export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep
 
 /** The run ended: the last page's Continue (`finished`), Skip setup, or closed for the person (`superseded`). */
 export function completeOnboardingRun(outcome: OnboardingOutcome): void {
+	// Only a finished run goes on into the tour, which ends what is still running (GuidedTour).
+	if (outcome !== "finished") leaveOnboardingActions();
 	if (!tracking()) {
 		flowOpen = false;
 		return;
@@ -432,7 +434,7 @@ export function startOnboardingAction(
 export function finishOnboardingAction(
 	action: OnboardingAction,
 	outcome: OnboardingActionOutcome,
-	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number } = {},
+	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number; onUnload?: boolean } = {},
 ): boolean {
 	const key = actionKey(action, options.target);
 	const attempt = pending.get(key);
@@ -443,7 +445,7 @@ export function finishOnboardingAction(
 	if (errorWatch.delete(key) && outcome === "failed" && options.reason) captureOnboardingFailureToSentry(action, options.reason);
 	if (!tracking() || !attempt) return false;
 	pending.delete(key);
-	capture("ao.onboarding.action_finished", {
+	(options.onUnload ? captureOnUnload : capture)("ao.onboarding.action_finished", {
 		action,
 		target: options.target,
 		step: attempt.step,
@@ -455,6 +457,24 @@ export function finishOnboardingAction(
 	});
 	return true;
 }
+
+/**
+ * Onboarding ended (Skip setup, closed for the person, the tour ended) or the
+ * window is closing: every attempt still running ends as `left`, since no page
+ * is left to see how it ends.
+ */
+export function leaveOnboardingActions(options: { onUnload?: boolean } = {}): void {
+	for (const key of [...errorWatch]) {
+		const split = key.indexOf(":");
+		const target = key.slice(split + 1);
+		finishOnboardingAction(key.slice(0, split) as OnboardingAction, "left", { target: target || undefined, onUnload: options.onUnload });
+	}
+}
+
+// The window closing mid-onboarding (the first-run window or a tour step).
+window.addEventListener("pagehide", () => {
+	if (onboardingInProgress()) leaveOnboardingActions({ onUnload: true });
+});
 
 export function onboardingActionPending(action: OnboardingAction, target?: string): boolean {
 	return pending.has(actionKey(action, target));

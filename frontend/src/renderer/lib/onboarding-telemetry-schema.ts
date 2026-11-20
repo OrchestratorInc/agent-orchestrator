@@ -25,7 +25,8 @@ export type OnboardingOutcome = (typeof ONBOARDING_OUTCOMES)[number];
 export const ONBOARDING_SKIP_REASONS = ["already_done", "user", "dismissed"] as const;
 export type OnboardingSkipReason = (typeof ONBOARDING_SKIP_REASONS)[number];
 
-export const ONBOARDING_ACTION_OUTCOMES = ["succeeded", "failed", "cancelled", "timed_out", "handed_off"] as const;
+/** left: onboarding ended, or the window closed, with the attempt still running, so nothing will see how it ends. */
+export const ONBOARDING_ACTION_OUTCOMES = ["succeeded", "failed", "cancelled", "timed_out", "handed_off", "left"] as const;
 export type OnboardingActionOutcome = (typeof ONBOARDING_ACTION_OUTCOMES)[number];
 
 /** What a page found missing: tools, and whether any agent is installed or signed in. */
