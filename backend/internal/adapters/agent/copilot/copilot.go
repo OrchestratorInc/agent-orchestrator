@@ -21,6 +21,8 @@ package copilot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -108,7 +110,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	cmd = append(cmd, binary, "--no-auto-update")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
-	if agentName := copilotAgentName(cfg.SessionID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
+	if agentName := copilotAgentName(cfg.WorkspacePath, cfg.SessionID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
 		cmd = append(cmd, "--agent="+agentName)
 	}
 	if cfg.Prompt != "" {
@@ -157,7 +159,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	// composition is unverified against a real copilot install (see #2895
 	// and appendModelFlag). Pinned by
 	// TestGetRestoreCommandDoesNotForwardModelOverride.
-	if agentName := copilotAgentName(cfg.Session.ID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
+	if agentName := copilotAgentName(cfg.Session.WorkspacePath, cfg.Session.ID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
 		cmd = append(cmd, "--agent="+agentName)
 	}
 	cmd = append(cmd, "--resume", agentSessionID)
@@ -382,11 +384,37 @@ func copilotSystemPromptText(inline, file string) (string, error) {
 // AgentProfileName is the per-session custom-agent profile AO installs for a
 // session with standing instructions, or "" when there are none. The terminal
 // launch selects it with --agent; Chat selects the same profile over ACP.
-func AgentProfileName(sessionID, systemPrompt, systemPromptFile string) string {
-	return copilotAgentName(sessionID, systemPrompt, systemPromptFile)
+//
+// workspacePath matters: it is how AO notices that a non-AO file already owns
+// the generated name and moves its own profile out of the way.
+func AgentProfileName(workspacePath, sessionID, systemPrompt, systemPromptFile string) string {
+	return copilotAgentName(workspacePath, sessionID, systemPrompt, systemPromptFile)
 }
 
-func copilotAgentName(sessionID, inlinePrompt, promptFile string) string {
+// copilotAgentName resolves the profile name AO both writes and selects. The
+// base name is ao-<session>, but a project can legitimately ship its own agent
+// under exactly that name. Selecting the project's file with --agent would run
+// the user's agent and silently drop AO's role prompt (#6752), so a short
+// workspace digest is appended to move AO's profile out of the way. The
+// resolution is deterministic, so install, launch, restore and Chat all agree.
+//
+// The resolution reads the workspace, so deleting the project's colliding file
+// mid-session moves the name back to the base form; the next restore then falls
+// back to Copilot's default agent rather than AO's stale profile. That is a
+// degradation, not a wrong-agent run, and it only happens when the user removes
+// their own agent file.
+func copilotAgentName(workspacePath, sessionID, inlinePrompt, promptFile string) string {
+	base := copilotAgentBaseName(sessionID, inlinePrompt, promptFile)
+	if base == "" {
+		return ""
+	}
+	if !copilotAgentNameOccupiedByForeignFile(workspacePath, base) {
+		return base
+	}
+	return base + "-" + copilotAgentNameDigest(workspacePath)
+}
+
+func copilotAgentBaseName(sessionID, inlinePrompt, promptFile string) string {
 	if strings.TrimSpace(sessionID) == "" {
 		return ""
 	}
@@ -394,6 +422,32 @@ func copilotAgentName(sessionID, inlinePrompt, promptFile string) string {
 		return ""
 	}
 	return "ao-" + copilotAgentNameReplacer.Replace(strings.TrimSpace(sessionID))
+}
+
+// copilotAgentPath is the workspace path of one custom-agent profile file.
+func copilotAgentPath(workspacePath, agentName string) string {
+	return filepath.Join(workspacePath, copilotAgentsDir, agentName+".agent.md")
+}
+
+// copilotAgentNameOccupiedByForeignFile reports whether a file that AO does not
+// own already sits at the generated profile path.
+func copilotAgentNameOccupiedByForeignFile(workspacePath, agentName string) bool {
+	if strings.TrimSpace(workspacePath) == "" {
+		return false
+	}
+	data, err := os.ReadFile(copilotAgentPath(workspacePath, agentName)) //nolint:gosec // path built from caller-owned workspace dir
+	if err != nil {
+		return false
+	}
+	return !strings.Contains(string(data), hookutil.CopilotAgentProfileSentinel)
+}
+
+// copilotAgentNameDigest disambiguates AO's profile name per workspace. Eight
+// hex characters of a path hash is enough that a project file cannot plausibly
+// occupy the fallback name too.
+func copilotAgentNameDigest(workspacePath string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(workspacePath)))
+	return hex.EncodeToString(sum[:4])
 }
 
 var copilotAgentNameReplacer = strings.NewReplacer(

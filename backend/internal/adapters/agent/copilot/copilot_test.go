@@ -943,6 +943,88 @@ func TestInstallAgentProfilePreservesUserOwnedProfile(t *testing.T) {
 	if string(data) != userProfile {
 		t.Fatalf("user-owned profile changed:\n%s", data)
 	}
+
+	// AO must still install its own profile, under a name that does not
+	// collide, so --agent selects AO's role prompt instead of the project's
+	// agent (#6752).
+	agentName := copilotAgentName(workspace, "review-sess-1", "AO replacement", "")
+	if agentName == "ao-review-sess-1" {
+		t.Fatalf("agent name %q still collides with the project-owned profile", agentName)
+	}
+	written, err := os.ReadFile(copilotAgentPath(workspace, agentName))
+	if err != nil {
+		t.Fatalf("AO profile %q was not installed: %v", agentName, err)
+	}
+	if !strings.Contains(string(written), hookutil.CopilotAgentProfileSentinel) {
+		t.Fatalf("installed profile is not AO-managed:\n%s", written)
+	}
+	if !strings.Contains(string(written), "AO replacement") {
+		t.Fatalf("installed profile is missing the standing instructions:\n%s", written)
+	}
+}
+
+// AO, launch, restore and Chat must all resolve the same profile name, or the
+// CLI selects a file AO never wrote.
+func TestCopilotAgentNameIsStableAndSharedByLaunchAndRestore(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+	workspace := t.TempDir()
+	profilePath := filepath.Join(workspace, ".github", "agents", "ao-mer-1.agent.md")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, []byte("---\nname: project-owned\n---\nproject rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := plugin.InstallAgentProfile(context.Background(), ports.WorkspaceHookConfig{
+		SessionID:     "mer-1",
+		SystemPrompt:  "AO standing instructions",
+		WorkspacePath: workspace,
+	}); err != nil {
+		t.Fatalf("InstallAgentProfile: %v", err)
+	}
+
+	name := copilotAgentName(workspace, "mer-1", "AO standing instructions", "")
+	if name == "ao-mer-1" {
+		t.Fatalf("agent name %q still collides with the project-owned profile", name)
+	}
+	if again := copilotAgentName(workspace, "mer-1", "AO standing instructions", ""); again != name {
+		t.Fatalf("agent name is not stable: %q then %q", name, again)
+	}
+
+	launch, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SessionID:     "mer-1",
+		SystemPrompt:  "AO standing instructions",
+		WorkspacePath: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(launch, "--agent="+name) {
+		t.Fatalf("launch %#v does not select the installed profile %q", launch, name)
+	}
+
+	restore, _, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		SystemPrompt: "AO standing instructions",
+		Session: ports.SessionRef{
+			ID:            "mer-1",
+			WorkspacePath: workspace,
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "uuid-123"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(restore, "--agent="+name) {
+		t.Fatalf("restore %#v does not select the installed profile %q", restore, name)
+	}
+}
+
+func TestCopilotAgentNameIgnoresAForeignFileWhenNoneExists(t *testing.T) {
+	workspace := t.TempDir()
+	if got := copilotAgentName(workspace, "mer-1", "AO standing instructions", ""); got != "ao-mer-1" {
+		t.Fatalf("agent name = %q, want ao-mer-1 when the path is free", got)
+	}
 }
 
 func TestGetAgentHooksIgnoresSessionCopilotAgentInLinkedWorktreeCommonExclude(t *testing.T) {

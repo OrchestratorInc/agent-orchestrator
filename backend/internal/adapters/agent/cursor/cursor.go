@@ -95,7 +95,9 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 //
 // Cursor has no inline/file system-prompt flag: it reads workspace rule files
 // (AGENTS.md, .cursor/rules, CLAUDE.md). SystemPrompt/SystemPromptFile are
-// therefore not injected via a launch flag here.
+// therefore not injected via a launch flag here; GetAgentHooks installs them as
+// an always-applied .cursor/rules entry instead, which is the channel Cursor
+// actually reads on both a fresh launch and a resume of the same worktree.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.cursorBinary(ctx)
 	if err != nil {
