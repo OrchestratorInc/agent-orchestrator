@@ -12,9 +12,11 @@ import (
 // Codex subagents, in the shape AO's chat already reads for Claude's.
 //
 // A Codex launch is a collabAgentToolCall item (tool spawnAgent) on the parent's
-// thread. The child runs on a thread of its own, and app-server multiplexes that
+// thread, or, in the v2 multi-agent protocol, a subAgentActivity item of kind
+// "started". The child runs on a thread of its own, and app-server multiplexes that
 // thread's notifications over the root connection. Nothing on the child's events
-// names the launch: only the spawn's item/completed does, in receiverThreadIds.
+// names the launch: only the spawn's item/completed does, in receiverThreadIds, or
+// the v2 item, in agentThreadId.
 //
 // The renderer groups a launch's steps by detail.parentProviderItemId and takes a
 // SubagentHandback step as the child's report (subagent-team.ts). subagentRouter
@@ -35,6 +37,22 @@ const maxHeldSubagentEvents = 2000
 
 func isSpawnAgent(it threadItem) bool {
 	return it.Type == itemCollabAgentToolCall && deref(it.Tool) == codexSpawnTool
+}
+
+// isSubagentStart reports a v2 launch: the child exists and has a thread.
+func isSubagentStart(it threadItem) bool {
+	return it.Type == itemSubAgentActivity && it.Kind != nil &&
+		*it.Kind == codexproto.SubAgentActivityKindStarted && deref(it.AgentThreadID) != ""
+}
+
+// agentPathSummary labels a v2 launch with the task name in its agent path
+// (/root/check_build reads "check build"); v2 does not carry the prompt.
+func agentPathSummary(path string) string {
+	name := path[strings.LastIndex(path, "/")+1:]
+	if name = strings.TrimSpace(strings.ReplaceAll(name, "_", " ")); name != "" {
+		return truncateLabel(name)
+	}
+	return "Started a subagent"
 }
 
 // spawnSummary labels a launch with the first line of the task it was given, the
@@ -131,15 +149,23 @@ func (r *subagentRouter) observe(n notification, root string) {
 		Item     threadItem `json:"item"`
 	}
 	r.root = root
-	if json.Unmarshal(n.Params, &p) != nil || !isSpawnAgent(p.Item) {
+	if json.Unmarshal(n.Params, &p) != nil {
 		return
 	}
 	launch := p.Item.itemID()
-	if launch == "" {
+	v2 := isSubagentStart(p.Item)
+	if launch == "" || (!v2 && !isSpawnAgent(p.Item)) {
 		return
 	}
 	if _, known := r.origin[launch]; !known {
 		r.origin[launch] = launchOrigin{thread: p.ThreadID, turn: p.TurnID}
+	}
+	if v2 {
+		// The v2 item names the child's thread as soon as it exists.
+		if child := deref(p.Item.AgentThreadID); child != root {
+			r.launchOf[child] = launch
+		}
+		return
 	}
 	if n.Method == codexproto.MethodItemStarted {
 		r.inflight[launch] = struct{}{}

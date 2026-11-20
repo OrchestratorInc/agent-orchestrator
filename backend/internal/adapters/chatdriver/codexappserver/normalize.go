@@ -45,6 +45,10 @@ const (
 	// spawnAgent becomes an activity: it is the launch a subagent's work hangs from
 	// (see subagents.go). Wait, send-input and close calls stay out of the timeline.
 	itemCollabAgentToolCall = codexproto.ThreadItemTypeCollabAgentToolCall
+	// itemSubAgentActivity is how the v2 multi-agent protocol (the default model on
+	// Codex 0.169) reports a child agent. Only a "started" one becomes an activity:
+	// the launch, like spawnAgent in v1.
+	itemSubAgentActivity = codexproto.ThreadItemTypeSubAgentActivity
 	// itemContextCompaction is how a current app-server reports that it summarized
 	// earlier history to reclaim context. The schema also declares a
 	// `thread/compacted` notification for the same thing and marks it "Deprecated:
@@ -1100,6 +1104,11 @@ func activityFor(it threadItem) (domain.ActivityKind, string, bool) {
 			return "", "", false
 		}
 		return domain.ActivityKindMCPTool, spawnSummary(deref(it.Prompt)), true
+	case itemSubAgentActivity:
+		if !isSubagentStart(it) {
+			return "", "", false
+		}
+		return domain.ActivityKindMCPTool, agentPathSummary(deref(it.AgentPath)), true
 	default:
 		return "", "", false
 	}
@@ -1176,7 +1185,7 @@ func truncateLabel(value string) string {
 // activityDetail is the provider-neutral payload AO persists for an activity.
 // Provider DTOs are not passed through: only named fields AO renders.
 func activityDetail(it threadItem) []byte {
-	if isSpawnAgent(it) {
+	if isSpawnAgent(it) || isSubagentStart(it) {
 		return spawnDetail(it)
 	}
 	detail := map[string]any{}

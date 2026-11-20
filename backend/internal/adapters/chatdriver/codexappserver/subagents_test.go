@@ -241,3 +241,59 @@ func TestNestedLaunchJoinsRootTurnWhenItsThreadIsPlacedLater(t *testing.T) {
 		t.Fatalf("grandchild step after placement = %+v", out)
 	}
 }
+
+// Codex 0.169's default model speaks the v2 multi-agent protocol: the launch is a
+// subAgentActivity item of kind "started" that names the child's thread. The
+// child's command and report land under it; the parent keeps its own reply.
+func TestV2SubagentLaunchFilesChildUnderIt(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"root-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/completed","params":{"threadId":"thread-1","turnId":"root-turn","item":{"type":"subAgentActivity","id":"act-alpha","kind":"started","agentThreadId":"child-v2","agentPath":"/root/alpha_task"}}}`)
+	srv.push(`{"method":"turn/started","params":{"threadId":"child-v2","turn":{"id":"child-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":{"threadId":"child-v2","turnId":"child-turn","item":{"type":"commandExecution","id":"child-cmd","command":"printf AO_ALPHA_COMMAND","status":"inProgress"}}}`)
+	srv.push(`{"method":"item/completed","params":{"threadId":"child-v2","turnId":"child-turn","item":{"type":"agentMessage","id":"child-msg","text":"AO_ALPHA_COMMAND"}}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"child-v2","turn":{"id":"child-turn","status":"completed","items":[]}}}`)
+	srv.push(`{"method":"item/completed","params":{"threadId":"thread-1","turnId":"root-turn","item":{"type":"agentMessage","id":"parent-msg","text":"Alpha reported back."}}}`)
+
+	var launch, command, handback, parentReply *ports.ChatEvent
+	deadline := time.After(3 * time.Second)
+	for parentReply == nil {
+		select {
+		case ev := <-conv.Events():
+			switch {
+			case ev.ProviderItemID == "act-alpha":
+				launch = &ev
+			case ev.ProviderItemID == "child-cmd":
+				command = &ev
+			case strings.HasPrefix(ev.ProviderItemID, "codex-handback:"):
+				handback = &ev
+			case ev.ProviderItemID == "parent-msg":
+				parentReply = &ev
+			}
+		case <-deadline:
+			t.Fatal("parent reply never arrived")
+		}
+	}
+	if launch == nil || launch.Summary != "alpha task" || decodeDetail(t, *launch).ProviderToolName != "spawnAgent" {
+		t.Fatalf("launch = %+v", launch)
+	}
+	if command == nil || command.ProviderTurnID != "root-turn" || decodeDetail(t, *command).ParentProviderItemID != "act-alpha" {
+		t.Fatalf("child command = %+v", command)
+	}
+	if handback == nil || decodeDetail(t, *handback).Input["message"] != "AO_ALPHA_COMMAND" ||
+		decodeDetail(t, *handback).ParentProviderItemID != "act-alpha" {
+		t.Fatalf("hand-back = %+v", handback)
+	}
+	if parentReply.Kind != ports.ChatEventMessageCompleted || parentReply.Text != "Alpha reported back." {
+		t.Fatalf("parent reply = %+v", parentReply)
+	}
+
+	// The other v2 kinds report on a child that already has its launch.
+	normalizeNone(t, "item/completed", `{"threadId":"thread-1","turnId":"root-turn","item":{"type":"subAgentActivity","id":"act-2","kind":"interacted","agentThreadId":"child-v2","agentPath":"/root/alpha_task"}}`)
+}
