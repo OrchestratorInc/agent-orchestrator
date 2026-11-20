@@ -199,7 +199,7 @@ func (p *Plugin) runKiloImportCommand(ctx context.Context, cwd, root string, env
 	for key, value := range env {
 		command.Env = append(command.Env, key+"="+value)
 	}
-	command.Env = append(command.Env, "XDG_DATA_HOME="+filepath.Dir(root))
+	command.Env = append(command.Env, "XDG_DATA_HOME="+filepath.Dir(root), "KILO_DB=kilo.db")
 	command.Stdout, command.Stderr = stdout, stderr
 	command.WaitDelay = 100 * time.Millisecond
 	if err := command.Run(); err != nil {

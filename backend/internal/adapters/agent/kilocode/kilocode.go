@@ -152,6 +152,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		cmd = append(cmd, "--agent", agentName)
 	}
 	cmd = append(cmd, "--session", agentSessionID)
+	if cfg.Session.Metadata[ports.MetadataKeyImportConfigDir] != "" {
+		// Release-channel binaries may default to kilo-rc.db. Resume the exact
+		// stable database that AO discovered and prepared, independent of channel.
+		cmd = append([]string{"env", "KILO_DB=kilo.db"}, cmd...)
+	}
 	return cmd, true, nil
 }
 

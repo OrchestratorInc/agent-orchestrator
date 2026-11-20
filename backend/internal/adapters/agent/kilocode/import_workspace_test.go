@@ -2,6 +2,7 @@ package kilocode
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,5 +39,13 @@ func TestKiloImportedHookRejectsProjectDatabaseBeforeWorkspaceWrites(t *testing.
 	}
 	if _, err := os.Stat(kilocodePluginPath(workspace)); !os.IsNotExist(err) {
 		t.Fatal("workspace hooks were written before import validation")
+	}
+}
+
+func TestKiloImportedRestorePinsStableDatabase(t *testing.T) {
+	p := &Plugin{resolvedBinary: "kilo"}
+	cmd, ok, err := p.GetRestoreCommand(t.Context(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "ses_imported", ports.MetadataKeyImportConfigDir: "/native/kilo"}}})
+	if err != nil || !ok || !slices.Contains(cmd, "KILO_DB=kilo.db") {
+		t.Fatalf("imported database binding = %v, %v, %v", cmd, ok, err)
 	}
 }
