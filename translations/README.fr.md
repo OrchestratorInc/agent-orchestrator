@@ -31,6 +31,8 @@
 
 <br />
 
+Orchestrator.inc (anciennement Agent Orchestrator) est une application de bureau et une CLI open source (Apache-2.0) qui exécute de nombreux agents de développement en parallèle, chacun dans son propre worktree et sa propre branche Git, et renvoie les échecs de CI, les commentaires de revue et les conflits de fusion à l'agent responsable de chaque pull request. Elle prend en charge 38 agents de développement, dont Claude Code, Codex et Cursor, sur macOS, Windows et Linux, avec des applications pour iPhone, iPad et Android.
+
 ## Pourquoi Orchestrator.inc
 
 Un agent de développement peut prendre en charge une tâche. En faire tourner plusieurs implique de découper le travail, d'éviter les collisions entre branches et de suivre chaque changement à travers la CI, la revue et la fusion. Orchestrator.inc est un espace de travail de bureau local conçu pour cela : chaque tâche reçoit son propre agent, sa propre branche et son propre worktree, et votre code reste sur votre machine.
@@ -175,6 +177,45 @@ Ouvrez Orchestrator.inc et sélectionnez le dépôt qu'il doit gérer. L'applica
 | [docs/cli/README.md](../docs/cli/README.md) | Comportement de la CLI et correspondance avec les routes du daemon. |
 | [docs/development.md](../docs/development.md) | Prérequis, étapes de compilation, exécution des tests et dépannage pour le développement local. |
 | [docs/STATUS.md](../docs/STATUS.md) | Ce qui est actuellement livré sur `main` et ce qui reste en cours. |
+| [orchestrator.inc/llms.txt](https://orchestrator.inc/llms.txt) | Un résumé du produit en texte brut pour les assistants IA et les moteurs de réponse. |
+| [docs.orchestrator.inc/llms.txt](https://docs.orchestrator.inc/llms.txt) | Un index en texte brut de la documentation produit pour les assistants IA. |
+
+## FAQ
+
+<details>
+<summary>Qu'est-ce qu'Orchestrator.inc ?</summary>
+
+Orchestrator.inc est une application de bureau et une CLI open source pour faire travailler un ensemble d'agents de développement IA sur un même dépôt. Un agent orchestrateur de projet planifie le travail et lance des agents worker, chacun dans son propre worktree et sa propre branche Git. Il suit ensuite chaque pull request à travers la CI, la revue et la fusion, avec toutes les sessions sur un seul tableau.
+
+</details>
+
+<details>
+<summary>Orchestrator.inc est-il la même chose qu'Agent Orchestrator ?</summary>
+
+Oui. Orchestrator.inc est le nouveau nom d'Agent Orchestrator (AO) : même projet, même dépôt et même licence Apache-2.0. Seul le nom a changé. La commande CLI `ao` et les noms des fichiers de version, comme `agent-orchestrator-darwin-arm64.dmg`, gardent l'ancien nom, donc les installations et les scripts existants continuent de fonctionner.
+
+</details>
+
+<details>
+<summary>Quels agents de développement sont pris en charge ?</summary>
+
+Orchestrator.inc prend en charge 38 agents de développement, dont Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose et Cline. Chaque projet choisit ses propres agents worker, orchestrateur et relecteur, et vous choisissez l'agent et le modèle pour chaque tâche. La prise en charge varie selon l'agent ; les [guides de configuration des agents](https://docs.orchestrator.inc/plugins/agents) présentent la matrice à jour.
+
+</details>
+
+<details>
+<summary>Orchestrator.inc envoie-t-il mon code quelque part ?</summary>
+
+Non. Sur le bureau, votre code, vos worktrees et vos agents restent sur votre machine, et Orchestrator.inc ne sert pas de proxy aux appels d'API de vos agents. La télémétrie se limite à des données d'usage et de fiabilité, jamais votre code, vos prompts, vos conversations avec les agents ni vos identifiants, et vous pouvez la désactiver dans les Réglages. Le code ne part vers des espaces hébergés que si vous choisissez Cloud Agents.
+
+</details>
+
+<details>
+<summary>En quoi est-ce différent d'un seul agent de développement ?</summary>
+
+Un agent de développement écrit du code pour une tâche dans une session. Orchestrator.inc n'est pas un agent de développement : c'est l'espace de travail dans lequel les agents s'exécutent. Il répartit un travail plus large entre plusieurs agents en parallèle, sépare leurs branches grâce aux worktrees Git et renvoie les échecs de CI, les commentaires de revue et les conflits de fusion à l'agent responsable de chaque PR.
+
+</details>
 
 ## Contribuer
 
