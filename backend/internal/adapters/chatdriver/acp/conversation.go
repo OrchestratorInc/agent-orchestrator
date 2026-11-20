@@ -24,7 +24,9 @@ import (
 )
 
 const (
-	eventBuffer  = 4096
+	eventBuffer = 4096
+	// approvalWait bounds an unanswered permission request. Questions have no
+	// such bound (see requestInput).
 	approvalWait = 30 * time.Minute
 	// sessionCloseWait bounds the session/close sent before a provider is
 	// terminated (quickSessionCloseWait for a QuickStop provider).
