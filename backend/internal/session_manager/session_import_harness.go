@@ -23,6 +23,7 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 
 	domain.HarnessDroid:      {configEnvKey: "FACTORY_HOME_OVERRIDE", configValue: filepath.Dir},
 	domain.HarnessKimi:       {configEnvKey: "KIMI_CODE_HOME"},
+	domain.HarnessAgy:        {configEnvKey: "GEMINI_HOME"},
 	domain.HarnessClaudeCode: {configEnvKey: "CLAUDE_CONFIG_DIR"},
 	domain.HarnessCline:      {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
 	domain.HarnessCodewhale:  {configEnvKey: "CODEWHALE_HOME", ownedElsewhere: codewhaleImportOwnedElsewhere, adoptedOwnedElsewhere: codewhaleAdoptedImportOwnedElsewhere},
@@ -46,4 +47,4 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "prime-agent", "codewhale", "crush", "memcode", "fx", "openhands", "python", "droid"}
+var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "prime-agent", "codewhale", "crush", "memcode", "fx", "openhands", "python", "droid", "agy"}

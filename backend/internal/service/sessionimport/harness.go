@@ -41,6 +41,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 
 	domain.HarnessDroid:      {root: droidRoot, discover: discoverDroid, read: readDroidTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessKimi:       {root: kimiRoot, discover: discoverKimi, read: readKimiTranscript, mode: domain.SessionModeChat},
+	domain.HarnessAgy:        {root: agyRoot, discover: discoverAgy, read: readAgyTranscript},
 	domain.HarnessAider:      {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessClaudeCode: {root: claudeRoot, discover: walkSources(domain.HarnessClaudeCode, "projects", jsonlKey), read: readClaudeTranscript},
 	domain.HarnessCodewhale:  {root: codewhaleRoot, discover: discoverCodewhale, read: readCodewhaleTranscript, mode: domain.SessionModeTUI},
