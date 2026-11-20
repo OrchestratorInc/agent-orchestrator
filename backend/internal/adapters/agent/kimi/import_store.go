@@ -137,7 +137,7 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 	if err != nil {
 		return result, err
 	}
-	model, err := validateKimiWire(wire)
+	model, err := validateKimiWire(wire, metadata.CWD)
 	if err != nil {
 		return result, err
 	}
@@ -149,10 +149,10 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 	return result, nil
 }
 
-func validateKimiWire(wire []byte) (string, error) {
+func validateKimiWire(wire []byte, cwd string) (string, error) {
 	scan := bufio.NewScanner(bytes.NewReader(wire))
 	scan.Buffer(make([]byte, 4096), kimiImportBudget)
-	metadata, prompt := false, false
+	metadata, prompt, binding := false, false, false
 	model := ""
 	for scan.Scan() {
 		if len(bytes.TrimSpace(scan.Bytes())) == 0 {
@@ -173,6 +173,16 @@ func validateKimiWire(wire []byte) (string, error) {
 			continue
 		}
 		switch kind {
+		case "runtime.set_binding":
+			var b struct {
+				Agent     string `json:"agentId"`
+				Workspace string `json:"workspaceId"`
+				Runtime   string `json:"runtimeId"`
+			}
+			if json.Unmarshal(scan.Bytes(), &b) != nil || b.Agent != "main" || b.Runtime != "local" || b.Workspace != kimiWorkdirKey(cwd) {
+				return "", errors.New("kimi: unsupported native runtime binding")
+			}
+			binding = true
 		case "profile.bind", "config.update":
 			var alias string
 			if json.Unmarshal(record["modelAlias"], &alias) == nil && alias != "" {
@@ -199,8 +209,42 @@ func validateKimiWire(wire []byte) (string, error) {
 	if err := scan.Err(); err != nil {
 		return "", err
 	}
-	if !metadata || !prompt {
+	if !metadata || !prompt || !binding {
 		return "", errors.New("kimi: native conversation has no prompt history")
 	}
 	return model, nil
+}
+
+// remapKimiWire rewrites only the replayable local-runtime workspace identity.
+// Every context record and opaque tool payload retains its original bytes.
+func remapKimiWire(wire []byte, cwd string) ([]byte, error) {
+	var out bytes.Buffer
+	for _, line := range bytes.SplitAfter(wire, []byte("\n")) {
+		body := bytes.TrimSuffix(line, []byte("\n"))
+		var record map[string]json.RawMessage
+		if len(bytes.TrimSpace(body)) == 0 {
+			_, _ = out.Write(line)
+			continue
+		}
+		if err := json.Unmarshal(body, &record); err != nil {
+			return nil, err
+		}
+		var kind string
+		_ = json.Unmarshal(record["type"], &kind)
+		if kind != "runtime.set_binding" {
+			_, _ = out.Write(line)
+			continue
+		}
+		workspace, _ := json.Marshal(kimiWorkdirKey(cwd))
+		record["workspaceId"] = workspace
+		rewritten, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+		_, _ = out.Write(rewritten)
+		if bytes.HasSuffix(line, []byte("\n")) {
+			_ = out.WriteByte('\n')
+		}
+	}
+	return out.Bytes(), nil
 }

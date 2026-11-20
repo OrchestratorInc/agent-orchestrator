@@ -152,7 +152,11 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	if err != nil {
 		return zero, err
 	}
-	for name, data := range map[string][]byte{filepath.Join(sessionDir, "state.json"): b, filepath.Join(mainDir, "wire.jsonl"): original.Wire} {
+	wire, err := remapKimiWire(original.Wire, cwd)
+	if err != nil {
+		return zero, err
+	}
+	for name, data := range map[string][]byte{filepath.Join(sessionDir, "state.json"): b, filepath.Join(mainDir, "wire.jsonl"): wire} {
 		if err := os.WriteFile(name, data, 0o600); err != nil {
 			return zero, err
 		}

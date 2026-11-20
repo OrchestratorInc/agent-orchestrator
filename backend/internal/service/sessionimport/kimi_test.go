@@ -33,6 +33,10 @@ func kimiFixture(t *testing.T, root, workdir, sessionID, state, wire string) str
 	if !strings.HasPrefix(wire, `{"type":"metadata"`) {
 		wire = `{"type":"metadata","protocol_version":"1.5","created_at":1700000000000}` + "\n" + wire
 	}
+	if !strings.Contains(wire, `"type":"runtime.set_binding"`) {
+		lines := strings.SplitN(wire, "\n", 2)
+		wire = lines[0] + "\n" + `{"type":"runtime.set_binding","agentId":"main","runtimeId":"local","workspaceId":"wd_repo_ddc5e473a09b"}` + "\n" + lines[1]
+	}
 	if state != "" {
 		writeFile(t, filepath.Join(base, "state.json"), state)
 	}

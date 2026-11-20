@@ -25,6 +25,9 @@ func kimiImportFixture(t *testing.T) ports.ImportedSessionRelocation {
 		t.Fatal(err)
 	}
 	history := `{"type":"metadata","protocol_version":"1.5","created_at":1700000000000}` + "\n" + `{"type":"profile.bind","agentId":"main","modelAlias":"zai/glm","time":1700000000001}` + "\n" + `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"remember MARKER"}],"origin":{"kind":"user"}},"time":1700000000002}` + "\n"
+	binding, _ := json.Marshal(map[string]string{"type": "runtime.set_binding", "agentId": "main", "runtimeId": "local", "workspaceId": kimiWorkdirKey("/source")})
+	lines := strings.SplitN(history, "\n", 2)
+	history = lines[0] + "\n" + string(binding) + "\n" + lines[1]
 	if err := os.WriteFile(wire, []byte(history), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +55,11 @@ func TestKimiPrivatePreparationAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if copied.CWD != r.LaunchCWD || string(copied.Wire) != string(before.Wire) {
+	expected, err := remapKimiWire(before.Wire, r.LaunchCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied.CWD != r.LaunchCWD || string(copied.Wire) != string(expected) {
 		t.Fatal("copy lost history or retained source cwd")
 	}
 	var state struct {
@@ -79,7 +86,7 @@ func TestKimiPrivatePreparationAndRetry(t *testing.T) {
 }
 
 func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
-	for _, mode := range []string{"version", "selection", "state", "protocol", "subagent", "symlink", "empty"} {
+	for _, mode := range []string{"version", "selection", "state", "protocol", "subagent", "symlink", "empty", "runtime"} {
 		t.Run(mode, func(t *testing.T) {
 			r := kimiImportFixture(t)
 			version := "2.4.1"
@@ -118,6 +125,14 @@ func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
 				}
 				if err := os.Symlink(target, p); err != nil {
 					t.Skip(err)
+				}
+			case "runtime":
+				b, err := os.ReadFile(r.TranscriptPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(r.TranscriptPath, []byte(strings.Replace(string(b), `"runtimeId":"local"`, `"runtimeId":"remote"`, 1)), 0o600); err != nil {
+					t.Fatal(err)
 				}
 			case "empty":
 				if err := os.WriteFile(r.TranscriptPath, []byte("{\"type\":\"metadata\",\"protocol_version\":\"1.5\"}\n"), 0o600); err != nil {
@@ -263,5 +278,36 @@ func TestKimiPrivateHomeLinkCannotRedirectRuntimeWrites(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(aside, "config.toml")); !os.IsNotExist(err) {
 		t.Fatal("runtime wrote through private-home link")
+	}
+}
+
+func TestKimiRuntimeRemapPreservesOpaqueContext(t *testing.T) {
+	r := kimiImportFixture(t)
+	opaque := `{"type":"context.append_loop_event","event":{"type":"tool.result","result":{"workspaceId":"` + kimiWorkdirKey("/source") + `","cwd":"/source","marker":"KEEP"}}}` + "\n"
+	f, err := os.OpenFile(r.TranscriptPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(opaque)
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := ReadImportedSession(t.Context(), ref.ConfigDir, ref.NativeSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(copied.Wire), opaque) {
+		t.Fatal("opaque context rewritten")
+	}
+	for _, line := range strings.Split(string(copied.Wire), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["type"] == "runtime.set_binding" && record["workspaceId"] != kimiWorkdirKey(r.LaunchCWD) {
+			t.Fatal("native replay still binds the source workspace")
+		}
 	}
 }
