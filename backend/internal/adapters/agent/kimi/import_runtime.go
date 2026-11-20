@@ -103,6 +103,9 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	}
 	defer func() { _ = source.Close() }()
 	data, err := readKimiFile(ctx, source, "config.toml", 1<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, true, errKimiProviderMissing
+	}
 	if err != nil {
 		return nil, true, err
 	}
@@ -121,14 +124,17 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	}
 	selected, ok := config.Models[model]
 	if !ok {
-		return fail()
+		return nil, true, errKimiProviderMissing
 	}
 	providerID, ok := selected["provider"].(string)
 	if !ok {
 		return fail()
 	}
 	provider, ok := config.Providers[providerID]
-	if !ok || provider.Type == "" {
+	if !ok {
+		return nil, true, errKimiProviderMissing
+	}
+	if provider.Type == "" {
 		return fail()
 	}
 	if len(provider.CustomHeaders) != 0 || len(provider.Env) != 0 {

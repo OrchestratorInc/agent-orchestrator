@@ -19,6 +19,7 @@ import (
 var kimiOAuthSlot = regexp.MustCompile(`^oauth/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 var errKimiSignIn = errors.New("kimi: sign in to Kimi with `kimi login`, then import or open this conversation again")
+var errKimiProviderMissing = errors.New("kimi: selected provider is not configured; sign in to Kimi with `kimi login` or restore the provider configuration")
 
 // CheckImportedOAuth keeps valid OAuth histories discoverable, but refuses
 // registration/preparation with an actionable reason when native login is absent.
@@ -31,7 +32,7 @@ func CheckImportedOAuth(ctx context.Context, home, model string) error {
 	defer func() { _ = root.Close() }()
 	data, err := readKimiFile(ctx, root, "config.toml", 1<<20)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil // Non-OAuth history parsing does not require a provider config.
+		return errKimiProviderMissing
 	}
 	if err != nil {
 		return err
@@ -44,7 +45,10 @@ func CheckImportedOAuth(ctx context.Context, home, model string) error {
 		model = config.DefaultModel
 	}
 	providerID, _ := config.Models[model]["provider"].(string)
-	provider := config.Providers[providerID]
+	provider, found := config.Providers[providerID]
+	if !found || providerID == "" {
+		return errKimiProviderMissing
+	}
 	if len(provider.OAuth) == 0 && providerID != "managed:kimi-code" {
 		return nil
 	}

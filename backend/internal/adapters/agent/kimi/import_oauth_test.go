@@ -125,7 +125,7 @@ func TestKimiImportedOAuthSharesNativeRefreshAndCleansLinks(t *testing.T) {
 }
 
 func TestKimiImportedOAuthRequiresUsableNativeLogin(t *testing.T) {
-	for _, mode := range []string{"missing", "expired", "revoked", "corrupt"} {
+	for _, mode := range []string{"missing", "expired", "revoked", "corrupt", "logged out", "config removed"} {
 		t.Run(mode, func(t *testing.T) {
 			r := kimiImportFixture(t)
 			// Prepare before logging out so both registration-time and reopen-time
@@ -147,6 +147,15 @@ func TestKimiImportedOAuthRequiresUsableNativeLogin(t *testing.T) {
 					if err := os.WriteFile(filepath.Join(r.ConfigDir, "credentials", "kimi-code.json"), data, 0o600); err != nil {
 						t.Fatal(err)
 					}
+				}
+			}
+			if mode == "logged out" {
+				if err := os.WriteFile(filepath.Join(r.ConfigDir, "config.toml"), []byte("telemetry = false\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if mode == "config removed" {
+				if err := os.Remove(filepath.Join(r.ConfigDir, "config.toml")); err != nil {
+					t.Fatal(err)
 				}
 			}
 			fresh := r
