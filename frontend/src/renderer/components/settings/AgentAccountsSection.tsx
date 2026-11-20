@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
+import { apiErrorDetails } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
 import { formatRelativeTime } from "../../lib/usage-format";
@@ -44,6 +45,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [loginNote, setLoginNote] = useState("");
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState("");
+	// Windows refused the account folder's links because its own Developer Mode
+	// is off; the alert says where to turn it on. Other link failures stay errors.
+	const [needsDeveloperMode, setNeedsDeveloperMode] = useState(false);
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
@@ -55,14 +59,17 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
 		setBusy(key);
 		setError("");
+		setNeedsDeveloperMode(false);
 		try {
 			await action();
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
+			const isDeveloperMode = err instanceof Error && apiErrorDetails(err.cause)?.windowsDeveloperMode === true;
+			setNeedsDeveloperMode(isDeveloperMode);
+			setError(isDeveloperMode ? t("settings.agentAccounts.unshared") : err instanceof Error ? err.message : String(err));
 		} finally {
 			setBusy(null);
 		}
-	}, []);
+	}, [t]);
 
 	const setLogin = (next: AgentAccountLogin | undefined) => {
 		pendingLogins = { ...pendingLogins, [loginKey]: next };
@@ -124,7 +131,21 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null} onClick={() => void startLogin()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
 			</div>}
 		>
-			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
+			{/* A setting the user can change is a warning, like an account problem that needs them. */}
+			{error ? <p role="alert" className={cn("flex items-start gap-1.5 px-3 py-2.5 text-xs", needsDeveloperMode ? "text-warning" : "text-error")}>
+				{needsDeveloperMode ? <TriangleAlert aria-hidden="true" className="mt-px size-icon-sm shrink-0" /> : null}
+				<span className="min-w-0">
+					{error}
+					{needsDeveloperMode ? <Tooltip>
+						<TooltipTrigger asChild>
+							<Button type="button" size="icon-xs" variant="quiet" className="ml-1 align-middle" aria-label={t("settings.agentAccounts.unsharedHelpLabel")}>
+								<Info className="size-icon-sm" aria-hidden="true" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-sm">{t("settings.agentAccounts.unsharedHelp")}</TooltipContent>
+					</Tooltip> : null}
+				</span>
+			</p> : null}
 			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
@@ -143,7 +164,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => void startLogin(account.id)}
-				onRemove={() => { setError(""); setRemoving(account); }}
+				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>

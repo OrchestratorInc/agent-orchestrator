@@ -23,6 +23,10 @@ var (
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
 )
 
+// ErrAgentAccountNeedsDeveloperMode joins ErrAgentAccountUnshared when Windows
+// refused the link because its Developer Mode is off.
+var ErrAgentAccountNeedsDeveloperMode = errors.New("the account's links need Windows Developer Mode")
+
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
 // folders. home is empty for the computer's own folder. Implementations ask the
 // CLI itself; none of them reads a token.
