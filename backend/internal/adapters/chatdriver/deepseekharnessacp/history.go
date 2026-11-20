@@ -144,14 +144,15 @@ func (h *nativeReplay) observe(e deepseekharness.NativeHistoryEvent) error {
 
 func (h *nativeReplay) updates(e deepseekharness.NativeHistoryEvent) ([]map[string]any, error) {
 	var m nativeReplayMessage
-	if e.Type == "user/message" {
+	switch e.Type {
+	case "user/message":
 		if err := json.Unmarshal(e.Data, &m); err != nil {
 			return nil, err
 		}
 		if m.Source.Kind != "user" {
 			return nil, nil
 		}
-	} else if e.Type == "assistant/message" || e.Type == "tool/result" {
+	case "assistant/message", "tool/result":
 		var data struct {
 			Message nativeReplayMessage `json:"message"`
 		}
@@ -159,7 +160,7 @@ func (h *nativeReplay) updates(e deepseekharness.NativeHistoryEvent) ([]map[stri
 			return nil, err
 		}
 		m = data.Message
-	} else {
+	default:
 		return nil, nil
 	}
 	if m.ID == "" {

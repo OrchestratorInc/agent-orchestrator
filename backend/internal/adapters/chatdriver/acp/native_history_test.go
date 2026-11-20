@@ -1,9 +1,10 @@
 package acp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"reflect"
 	"testing"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -18,7 +19,7 @@ func TestNativeHistoryUsesReplayNormalizerAndStableIdentities(t *testing.T) {
 		}
 		return []acpsdk.SessionNotification{replayUserChunk(id, "u1", "remember plum"), replayAgentChunk(id, "a1", "plum remembered")}, true, nil
 	}}}
-	var previous []ports.ChatEvent
+	var previous []byte
 	for range 2 {
 		c := replayConversation()
 		if err := d.replayNativeHistory(context.Background(), c, LaunchConfig{WorkspacePath: "/worktree"}, "native-id"); err != nil {
@@ -39,10 +40,14 @@ func TestNativeHistoryUsesReplayNormalizerAndStableIdentities(t *testing.T) {
 		if !user || !assistant {
 			t.Fatalf("missing native messages: %#v", history)
 		}
-		if previous != nil && !reflect.DeepEqual(previous, history) {
+		serialized, err := json.Marshal(history)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if previous != nil && !bytes.Equal(previous, serialized) {
 			t.Fatal("reopening the same native history changed normalized events")
 		}
-		previous = history
+		previous = serialized
 	}
 }
 
