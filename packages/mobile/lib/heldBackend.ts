@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
 import { isUnreachableError, UnreachableError } from "./connectionError";
 import type { FilesBackend } from "./files/backend";
@@ -245,6 +245,30 @@ export function afterVerified(backend: Verifiable | null | undefined, fn: () => 
 		return;
 	}
 	backend.whenVerified(signal).then(() => { if (!signal?.aborted) fn(); }, () => {});
+}
+
+/**
+ * `afterVerified` for a Retry button: `retry(fn)` runs `fn` now with a verified
+ * connection, else once it is verified again, and only while the view still
+ * shows what Retry was pressed for, `target` on `backend`. A view reused for
+ * another file drops a Retry still waiting, as unmounting does, and so does a
+ * second press; one that wakes for an earlier target does nothing.
+ */
+export function useRetryAfterVerified(backend: Verifiable | null | undefined, target: string): (fn: () => void) => void {
+	const pending = useRef<AbortController | null>(null);
+	const current = useRef({ backend, target });
+	current.current = { backend, target };
+	useEffect(() => () => pending.current?.abort(), [backend, target]);
+	return useCallback((fn: () => void) => {
+		pending.current?.abort();
+		const controller = new AbortController();
+		pending.current = controller;
+		const pressedFor = current.current;
+		afterVerified(pressedFor.backend, () => {
+			if (current.current.backend !== pressedFor.backend || current.current.target !== pressedFor.target) return;
+			fn();
+		}, controller.signal);
+	}, []);
 }
 
 /**

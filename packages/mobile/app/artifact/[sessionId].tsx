@@ -27,7 +27,7 @@ import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
 import { useReviewSender } from "../../lib/files/useReviewSender";
 import { useFilesBackend } from "../../lib/files/useFilesBackend";
 import { haptics } from "../../lib/haptics";
-import { afterVerified, sourceKey, useVerifiedFor, useVerifiedOnMount } from "../../lib/heldBackend";
+import { sourceKey, useRetryAfterVerified, useVerifiedFor, useVerifiedOnMount } from "../../lib/heldBackend";
 import { findHost } from "../../lib/hosts";
 import { hostRouteMatches, machineState } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
@@ -635,8 +635,9 @@ function ArtifactWeb({ backend, file, version, page }: {
 	const verified = useVerifiedFor(backend, source ? sourceKey(source) : "unresolved");
 	// Retry loads the page again as a fresh view, from the source built then.
 	const [attempt, setAttempt] = useState(0);
-	const retrying = useRef<AbortController | null>(null);
-	useEffect(() => () => retrying.current?.abort(), []);
+	// Bound to this file: a link to another file reuses this view, and a Retry
+	// still waiting must not reload (and scroll back up) that file's page.
+	const retryAfterVerified = useRetryAfterVerified(backend, `${file.sessionId}\n${file.path}`);
 	// A machine's page is drawn with the files it links inlined. Cloud's loads
 	// from its signed address, as the desktop frames it: that keeps the control
 	// plane's sandbox on it, and its own links work.
@@ -701,12 +702,13 @@ function ArtifactWeb({ backend, file, version, page }: {
 					<Text style={styles.webErrorText}>{error}</Text>
 					<Pressable onPress={() => {
 						renewed.current = false;
-						setError(undefined);
-						retrying.current?.abort();
-						retrying.current = new AbortController();
 						// Not a reload of the address on screen: once verified, the page is
-						// built again from the address the machine answered on.
-						afterVerified(backend, () => setAttempt((n) => n + 1), retrying.current.signal);
+						// built again from the address the machine answered on. The error
+						// and its Retry stay up until then, since nothing reloads before.
+						retryAfterVerified(() => {
+							setError(undefined);
+							setAttempt((n) => n + 1);
+						});
 					}}><Text style={styles.retryText}>Retry</Text></Pressable>
 				</View>
 			) : null}

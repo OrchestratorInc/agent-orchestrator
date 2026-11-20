@@ -71,7 +71,12 @@ describe("retained-stack host routes", () => {
 		expectBefore(web, "const source = backend.webSource(file.sessionId, file.path);", "const verified = useVerifiedFor(backend, source ? sourceKey(source) : \"unresolved\");");
 		expect(web).toContain("if (!source || !verified ||");
 		// Retry is a fresh view built once verified, not a reload of the address on screen.
-		expect(web).toContain("afterVerified(backend, () => setAttempt((n) => n + 1), retrying.current.signal);");
+		// Bound to the file on screen, and the error with its Retry stays until the reload starts.
+		expect(web).toContain("const retryAfterVerified = useRetryAfterVerified(backend, `${file.sessionId}\\n${file.path}`);");
+		const retry = between(web, "retryAfterVerified(() => {", "});");
+		expect(retry).toContain("setError(undefined);");
+		expect(retry).toContain("setAttempt((n) => n + 1);");
+		expect(between(web, "<Pressable onPress={() => {", "retryAfterVerified(() => {")).not.toContain("setError(undefined)");
 		expect(web).toContain("key={`${version}|${inlined.html ? \"inline\" : \"url\"}|${attempt}`}");
 		expect(web).not.toContain("web.current?.reload()");
 		expect(artifact).not.toMatch(/<ArtifactWeb[^>]*source=/);

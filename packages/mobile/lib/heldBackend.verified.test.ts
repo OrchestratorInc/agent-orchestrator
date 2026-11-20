@@ -9,7 +9,7 @@ vi.mock("./config", () => ({}));
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
 import type { FilesBackend } from "./files/backend";
 import { UnreachableError } from "./connectionError";
-import { afterVerified, createLiveSlot, HELD_WAIT_MS, holdArtifactsBackend, holdFilesBackend, resolveWhenVerified, retryWhenVerified, sourceKey, useVerifiedFor, useVerifiedOnMount } from "./heldBackend";
+import { afterVerified, createLiveSlot, HELD_WAIT_MS, holdArtifactsBackend, holdFilesBackend, resolveWhenVerified, retryWhenVerified, sourceKey, useRetryAfterVerified, useVerifiedFor, useVerifiedOnMount } from "./heldBackend";
 
 // While the app reconnects, a machine's last address may answer as another
 // device until the identity probe says otherwise. What is on screen stays, but
@@ -360,5 +360,82 @@ describe("resolveWhenVerified", () => {
 		const resolve = vi.fn(async () => ({ uri: "data:image/png;base64,AA" }));
 		expect(await resolveWhenVerified({}, resolve)).toEqual({ uri: "data:image/png;base64,AA" });
 		expect(resolve).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("useRetryAfterVerified", () => {
+	let retry: (fn: () => void) => void = () => {};
+	function RetryButton({ backend, target }: { backend: ArtifactsBackend; target: string }) {
+		retry = useRetryAfterVerified(backend, target);
+		return null;
+	}
+	const machineAway = () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		slot.set(null);
+		return { slot, held };
+	};
+	const settle = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+	it("runs at once with a verified connection", async () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const reload = vi.fn();
+		retry(reload);
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("waits for the connection, then runs for the file it was pressed for", async () => {
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const reload = vi.fn();
+		retry(reload);
+		await settle();
+		expect(reload).not.toHaveBeenCalled();
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await settle();
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
+	// Following a link from unlisted file A to B reuses the same view: A's
+	// Retry must not reload B's page once the connection comes back.
+	it("drops a waiting retry when the view moves to another file or machine", async () => {
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const forA = vi.fn();
+		retry(forA);
+		await act(async () => { renderer!.update(createElement(RetryButton, { backend: held, target: "s\nb.html" })); });
+		const other = machineAway();
+		const forB = vi.fn();
+		retry(forB);
+		await act(async () => { renderer!.update(createElement(RetryButton, { backend: other.held, target: "s\nb.html" })); });
+		await act(async () => { slot.set(daemon("tunnel")); other.slot.set(daemon("tunnel")); });
+		await settle();
+		expect(forA).not.toHaveBeenCalled();
+		expect(forB).not.toHaveBeenCalled();
+	});
+
+	it("keeps only the latest press, and drops it on unmount", async () => {
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const first = vi.fn();
+		const second = vi.fn();
+		retry(first);
+		retry(second);
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await settle();
+		expect(first).not.toHaveBeenCalled();
+		expect(second).toHaveBeenCalledTimes(1);
+		slot.set(null);
+		const afterUnmount = vi.fn();
+		retry(afterUnmount);
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		slot.set(daemon("lan"));
+		await settle();
+		expect(afterUnmount).not.toHaveBeenCalled();
 	});
 });
