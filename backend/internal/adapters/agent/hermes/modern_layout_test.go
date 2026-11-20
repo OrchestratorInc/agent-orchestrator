@@ -78,7 +78,7 @@ func TestModernLayoutComposerActivity(t *testing.T) {
 			if got, ok := New().DetectTerminalActivity(screen); !ok || got != tt.want {
 				t.Fatalf("DetectTerminalActivity = %s/%v, want %s", got, ok, tt.want)
 			}
-			if err := New().ValidateTerminalMessage("task", screen); (err == nil) != tt.sends {
+			if err := New().ValidateTerminalMessage(screen, "task"); (err == nil) != tt.sends {
 				t.Fatalf("message admission = %v, want allowed %v", err, tt.sends)
 			}
 		})
