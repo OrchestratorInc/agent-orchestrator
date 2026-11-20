@@ -40,8 +40,7 @@ test("@P0 video controls stay clickable in a 300 px preview", async ({ page }) =
 		element.muted = true;
 		element.pause();
 	});
-	// The compact layout leaves out the skip buttons and the volume slider.
-	for (const name of ["Back 5 seconds", "Forward 5 seconds"]) await expect(page.getByRole("button", { name })).toBeHidden();
+	// The compact layout leaves out the volume slider.
 	await expect(page.getByRole("slider", { name: "Volume" })).toBeHidden();
 	const player = await page.locator("[data-video-player]").boundingBox();
 	const names = ["Play", "Unmute", "Playback speed", "Loop", "Full screen"];

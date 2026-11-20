@@ -2796,8 +2796,6 @@
 	"files.error.loadFile": "No se pudo cargar este archivo.",
 	"files.video.play": "Reproducir",
 	"files.video.pause": "Pausar",
-	"files.video.back": "Retroceder 5 segundos",
-	"files.video.forward": "Avanzar 5 segundos",
 	"files.video.mute": "Silenciar",
 	"files.video.unmute": "Activar sonido",
 	"files.video.volume": "Volumen",

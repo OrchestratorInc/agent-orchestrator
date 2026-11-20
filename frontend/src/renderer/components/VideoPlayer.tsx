@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Maximize2, Minimize2, Pause, Play, Repeat, SkipBack, SkipForward, Volume2, VolumeX } from "@/components/app-icons";
+import { Check, Maximize2, Minimize2, Pause, Play, Repeat, Volume2, VolumeX } from "@/components/app-icons";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from "./ui/option-menu";
@@ -258,18 +258,12 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 						value={seekable ? Math.min(time, duration) : 0}
 						valueText={t("files.video.time", { current: formatMediaTime(time), duration: formatMediaTime(duration) })}
 					/>
-					{/* Narrow previews, such as a 300 px inspector, drop the skip buttons
-					    and volume slider (the arrows and mute still cover them); the row
-					    wraps rather than clip if it is narrower still. */}
+					{/* Narrow previews, such as a 300 px inspector, drop the volume
+					    slider (mute still covers it); the row wraps rather than clip if it
+					    is narrower still. ←/→ skip 5 s; there are no skip buttons. */}
 					<div className="flex min-w-0 flex-wrap items-center gap-1">
 						<ControlButton label={playing ? t("files.video.pause") : t("files.video.play")} onClick={togglePlay} portal={portal}>
 							{playing ? <Pause /> : <Play />}
-						</ControlButton>
-						<ControlButton className={COMPACT_HIDDEN} disabled={!seekable} label={t("files.video.back")} onClick={() => skip(-SKIP_SECONDS)} portal={portal}>
-							<SkipBack />
-						</ControlButton>
-						<ControlButton className={COMPACT_HIDDEN} disabled={!seekable} label={t("files.video.forward")} onClick={() => skip(SKIP_SECONDS)} portal={portal}>
-							<SkipForward />
 						</ControlButton>
 						<ControlButton label={level === 0 ? t("files.video.unmute") : t("files.video.mute")} onClick={toggleMute} portal={portal}>
 							{level === 0 ? <VolumeX /> : <Volume2 />}

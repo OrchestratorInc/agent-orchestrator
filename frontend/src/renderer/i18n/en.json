@@ -3225,8 +3225,6 @@
 	"files.error.loadFile": "Unable to load this file.",
 	"files.video.play": "Play",
 	"files.video.pause": "Pause",
-	"files.video.back": "Back 5 seconds",
-	"files.video.forward": "Forward 5 seconds",
 	"files.video.mute": "Mute",
 	"files.video.unmute": "Unmute",
 	"files.video.volume": "Volume",

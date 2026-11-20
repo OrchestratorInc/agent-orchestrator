@@ -2746,8 +2746,6 @@
 	"files.error.loadFile": "このファイルを読み込めません。",
 	"files.video.play": "再生",
 	"files.video.pause": "一時停止",
-	"files.video.back": "5秒戻る",
-	"files.video.forward": "5秒進む",
 	"files.video.mute": "ミュート",
 	"files.video.unmute": "ミュート解除",
 	"files.video.volume": "音量",

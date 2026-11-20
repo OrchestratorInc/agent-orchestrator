@@ -34,8 +34,11 @@ describe("VideoPlayer", () => {
 		expect(video).toHaveAttribute("autoplay");
 		expect(video).toHaveAttribute("src", "http://127.0.0.1:3001/demo.mp4");
 		expect(video).toHaveAttribute("crossorigin", "anonymous");
-		for (const name of ["Play", "Back 5 seconds", "Forward 5 seconds", "Mute", "Loop", "Playback speed"]) {
+		for (const name of ["Play", "Mute", "Loop", "Playback speed"]) {
 			expect(screen.getByRole("button", { name })).toBeInTheDocument();
+		}
+		for (const name of ["Back 5 seconds", "Forward 5 seconds"]) {
+			expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
 		}
 		expect(screen.getByRole("slider", { name: "Seek" })).toBeDisabled();
 		expect(screen.getByText("0:00 / 0:00")).toBeInTheDocument();
@@ -127,8 +130,7 @@ describe("VideoPlayer", () => {
 		}
 	});
 
-	it("seeks from the scrubber, the skip buttons, and the arrow keys", async () => {
-		const user = userEvent.setup();
+	it("seeks from the scrubber and the arrow keys", () => {
 		const video = renderPlayer();
 		loadMetadata(video, 30);
 		const scrubber = screen.getByRole("slider", { name: "Seek" });
@@ -136,17 +138,13 @@ describe("VideoPlayer", () => {
 		fireEvent.change(scrubber, { target: { value: "12" } });
 		expect(video.currentTime).toBe(12);
 		expect(screen.getByText("0:12 / 0:30")).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Forward 5 seconds" }));
-		expect(video.currentTime).toBe(17);
-		await user.click(screen.getByRole("button", { name: "Back 5 seconds" }));
-		expect(video.currentTime).toBe(12);
 		fireEvent.keyDown(video, { key: "ArrowLeft" });
 		expect(video.currentTime).toBe(7);
 		fireEvent.keyDown(video, { key: "ArrowRight" });
 		fireEvent.keyDown(video, { key: "ArrowRight" });
 		expect(video.currentTime).toBe(17);
 		// Skipping stops at either end.
-		for (let press = 0; press < 3; press++) await user.click(screen.getByRole("button", { name: "Forward 5 seconds" }));
+		for (let press = 0; press < 3; press++) fireEvent.keyDown(video, { key: "ArrowRight" });
 		expect(video.currentTime).toBe(30);
 	});
 

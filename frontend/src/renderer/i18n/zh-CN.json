@@ -2816,8 +2816,6 @@
 	"files.error.loadFile": "无法加载此文件。",
 	"files.video.play": "播放",
 	"files.video.pause": "暂停",
-	"files.video.back": "后退 5 秒",
-	"files.video.forward": "前进 5 秒",
 	"files.video.mute": "静音",
 	"files.video.unmute": "取消静音",
 	"files.video.volume": "音量",

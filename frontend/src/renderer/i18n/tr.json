@@ -3225,8 +3225,6 @@
 	"files.error.loadFile": "Bu dosya yüklenemiyor.",
 	"files.video.play": "Oynat",
 	"files.video.pause": "Duraklat",
-	"files.video.back": "5 saniye geri",
-	"files.video.forward": "5 saniye ileri",
 	"files.video.mute": "Sesi kapat",
 	"files.video.unmute": "Sesi aç",
 	"files.video.volume": "Ses düzeyi",

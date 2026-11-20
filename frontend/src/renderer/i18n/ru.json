@@ -3341,8 +3341,6 @@
 	"files.error.loadFile": "Не удалось загрузить этот файл.",
 	"files.video.play": "Воспроизвести",
 	"files.video.pause": "Пауза",
-	"files.video.back": "Назад на 5 секунд",
-	"files.video.forward": "Вперёд на 5 секунд",
 	"files.video.mute": "Выключить звук",
 	"files.video.unmute": "Включить звук",
 	"files.video.volume": "Громкость",

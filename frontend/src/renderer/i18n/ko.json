@@ -2746,8 +2746,6 @@
 	"files.error.loadFile": "이 파일을 불러올 수 없습니다.",
 	"files.video.play": "재생",
 	"files.video.pause": "일시정지",
-	"files.video.back": "5초 뒤로",
-	"files.video.forward": "5초 앞으로",
 	"files.video.mute": "음소거",
 	"files.video.unmute": "음소거 해제",
 	"files.video.volume": "볼륨",

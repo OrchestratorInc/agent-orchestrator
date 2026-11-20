@@ -119,8 +119,6 @@ import {
 	ShieldCheck as MynaShieldCheck,
 	ShieldX as MynaShieldX,
 	Shuffle as MynaShuffle,
-	SkipBack as MynaSkipBack,
-	SkipForward as MynaSkipForward,
 	Sparkles as MynaSparkles,
 	Spinner as MynaSpinner,
 	Square as MynaSquare,
@@ -475,8 +473,6 @@ export const ShieldCheck = fromMyna(MynaShieldCheck, "shield-check");
 export const ShieldQuestion = fromLucide(LucideShieldQuestion, "shield-question");
 export const ShieldX = fromMyna(MynaShieldX, "shield-x");
 export const Shuffle = fromMyna(MynaShuffle, "shuffle");
-export const SkipBack = fromMyna(MynaSkipBack, "skip-back");
-export const SkipForward = fromMyna(MynaSkipForward, "skip-forward");
 export const SlidersHorizontal = fromLucide(LucideSlidersHorizontal, "sliders-horizontal");
 export const Smartphone = fromMyna(MynaMobile, "smartphone");
 export const Split = fromLucide(LucideSplit, "split");

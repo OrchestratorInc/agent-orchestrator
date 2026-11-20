@@ -2746,8 +2746,6 @@
 	"files.error.loadFile": "Diese Datei konnte nicht geladen werden.",
 	"files.video.play": "Abspielen",
 	"files.video.pause": "Pause",
-	"files.video.back": "5 Sekunden zurück",
-	"files.video.forward": "5 Sekunden vor",
 	"files.video.mute": "Stummschalten",
 	"files.video.unmute": "Ton an",
 	"files.video.volume": "Lautstärke",
