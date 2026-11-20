@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +12,7 @@ import (
 
 	_ "modernc.org/sqlite" // read-only SQLite driver for KiloCode's session store
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -52,8 +52,7 @@ func kiloCodeDB(root string) (*sql.DB, error) {
 		return nil, err
 	}
 	// mode=ro never creates or migrates; busy_timeout rides out KiloCode's writes.
-	dbURL := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
-	return sql.Open("sqlite", dbURL.String()+"?mode=ro&_pragma=busy_timeout(2000)")
+	return sql.Open("sqlite", nativeconfig.KiloReadOnlyDatabaseURI(path))
 }
 
 // discoverKiloCode lists top-level, non-archived conversations newest first. A

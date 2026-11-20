@@ -43,6 +43,8 @@ func TestKiloImportedHookRejectsProjectDatabaseBeforeWorkspaceWrites(t *testing.
 }
 
 func TestKiloImportedRestorePinsStableDatabase(t *testing.T) {
+	t.Setenv("KILO_WORKSPACE_ID", "")
+	t.Setenv("KILO_DB", "")
 	p := &Plugin{resolvedBinary: "kilo"}
 	cmd, ok, err := p.GetRestoreCommand(t.Context(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "ses_imported", ports.MetadataKeyImportConfigDir: "/native/kilo"}}})
 	if err != nil || !ok || !slices.Contains(cmd, "KILO_DB=kilo.db") {

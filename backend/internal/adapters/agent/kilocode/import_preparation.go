@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +16,7 @@ import (
 
 	_ "modernc.org/sqlite" // read-only native identity and collision checks
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -75,8 +75,7 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 		return ports.NativeSessionRef{}, err
 	}
 	defer func() { _ = os.RemoveAll(temp) }()
-	dbURL := url.URL{Scheme: "file", Path: filepath.ToSlash(filepath.Join(r.ConfigDir, "kilo.db"))}
-	db, err := sql.Open("sqlite", dbURL.String()+"?mode=ro&_pragma=busy_timeout(2000)")
+	db, err := sql.Open("sqlite", nativeconfig.KiloReadOnlyDatabaseURI(filepath.Join(r.ConfigDir, "kilo.db")))
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}

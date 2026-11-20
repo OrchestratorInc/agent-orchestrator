@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -77,8 +77,7 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 		}
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
-	dbURL := url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath)}
-	db, err := sql.Open("sqlite", dbURL.String()+"?mode=ro&_pragma=busy_timeout(2000)")
+	db, err := sql.Open("sqlite", nativeconfig.KiloReadOnlyDatabaseURI(dbPath))
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
