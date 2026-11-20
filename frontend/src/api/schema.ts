@@ -7365,6 +7365,10 @@ export interface components {
         InstallProgress: {
             /** @description The installer's latest output line. */
             detail?: string;
+            /** @description Current installer download attempt, before it runs. */
+            downloadAttempt?: number;
+            /** @description Maximum installer download attempts. */
+            downloadAttempts?: number;
             /** @description Progress through the current phase, present only when the installer's output states sizes or counts. */
             percent?: null | number;
             /**
@@ -7372,6 +7376,8 @@ export interface components {
              * @enum {string}
              */
             phase?: "downloading" | "installing";
+            /** @description Seconds until the next installer download attempt. */
+            retryInSeconds?: number;
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
