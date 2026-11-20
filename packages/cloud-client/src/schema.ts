@@ -5448,6 +5448,19 @@ export interface components {
             githubLogin?: string;
             avatarUrl?: string;
         };
+        /** @description Whether the person AO merges this pull request as may merge it, and where. An older control plane omits it; a client then treats it as unknown and shows merging as before. */
+        PullRequestMergeAccess: {
+            /**
+             * @description That person's permission on the pull request's repository, as GitHub last reported it: write (write, maintain or admin), read (read or triage: they can't merge), or unknown (not read yet, or no GitHub token could read it).
+             * @enum {string}
+             */
+            permission: "write" | "read" | "unknown";
+            /**
+             * @description Where they can merge it: ao (AO can merge it as them, so the client offers Merge), github (only on GitHub: AO can't write to the repository as them, for example its GitHub App isn't installed there), or none (they don't have write access: a maintainer has to merge it).
+             * @enum {string}
+             */
+            via: "ao" | "github" | "none";
+        };
         PullRequestSummary: {
             url: string;
             htmlUrl?: string;
@@ -5468,6 +5481,7 @@ export interface components {
             ci: components["schemas"]["PullRequestCISummary"];
             review: components["schemas"]["PullRequestReviewSummary"];
             mergeability: components["schemas"]["PullRequestMergeabilitySummary"];
+            mergeAccess?: components["schemas"]["PullRequestMergeAccess"];
             /** Format: date-time */
             stateChangedAt?: string;
             /** Format: date-time */
