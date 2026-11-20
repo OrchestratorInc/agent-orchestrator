@@ -1,7 +1,7 @@
 ---
 title: 简介
 description: 了解 Orchestrator 能做什么、适合在什么时候使用，以及从哪里开始。
-translatedFrom: bbe596d4eaad
+translatedFrom: da7ebc21d346
 ---
 
 Orchestrator 是一款用于监督 AI 编程代理的桌面应用。它为每个 worker 提供隔离的工作区，让它的对话或终端随时可用，并把 Git 工作与拉取请求、CI、代码审查和合并冲突关联起来。
@@ -53,7 +53,7 @@ add project -> start session -> isolated worktree -> pull request -> CI/review -
 
 <span id="local-by-design" />
 
-桌面应用在 `127.0.0.1` 上运行一个 Go 后台服务，并通过本地 API 与其通信。Orchestrator 默认把应用数据和工作树元数据存放在 `~/.ao` 下。大多数集成使用你电脑上已有的编程代理和源代码管理凭据；Orchestrator 不会捆绑外部代理或它们的凭据。Unreal Agent 是 macOS 和 Linux 上内置的、仅用于 Chat 的适配器。
+桌面应用在 `127.0.0.1` 上运行一个 Go 后台服务，并通过本地 API 与其通信。Orchestrator 默认把应用数据和工作树元数据存放在 `~/.ao` 下。大多数集成使用你电脑上已有的编程代理和源代码管理凭据；Orchestrator 不会捆绑外部代理或它们的凭据。
 
 Connect Mobile 是一个独立的、需要主动开启的监听器，并由连接密码保护。本地配对和安全的远程配对请参阅 [Connect Mobile](/configuration/remote-access)。
 
@@ -64,7 +64,7 @@ Connect Mobile 是一个独立的、需要主动开启的监听器，并由连�
 <span id="supported-agents" />
 ## 支持的代理
 
-Orchestrator 支持 Claude Code、Codex、Cursor、Aider、OpenCode、Droid、Kimi Code 和 GitHub Copilot 等编程代理。它们对 worker、Chat 和审查者角色的支持各不相同。详情请查看[代理目录](/plugins/agents)。Cloud 提供的[提供方](/guides/cloud#before-you-start)较少。
+代理对 worker、Chat 和审查者角色的支持各不相同。详情请查看[代理目录](/plugins/agents)。Cloud 提供的[提供方](/guides/cloud#before-you-start)较少。
 
 GitHub 和 GitLab 提供源代码管理的观察和 issue 导入。导入需要主动开启，并且对 issue 跟踪器是只读的；不支持 Linear 和旧版 Node 插件包。
 

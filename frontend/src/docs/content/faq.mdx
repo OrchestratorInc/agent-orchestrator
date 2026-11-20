@@ -8,8 +8,8 @@ description: Common questions about the current Orchestrator desktop product.
 		Orchestrator adds isolated worktrees, durable session identity, Chat or TUI control, pull-request observation, lifecycle reactions, review runs, notifications, and browser previews around those agents.
 	</Accordion>
 
-	<Accordion title="Do I have to use Claude Code?">
-		No. Orchestrator includes adapters for more than twenty harnesses, including Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and others. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Unreal Agent is Chat-only; most remaining harnesses also have terminal interfaces.
+	<Accordion title="Can I choose my coding agent?">
+		Yes. See the [agent catalog](/plugins/agents) for supported agents and interfaces. Chat support depends on the agent and installed version.
 	</Accordion>
 
 	<Accordion title="Does Orchestrator merge pull requests?">
@@ -53,7 +53,7 @@ description: Common questions about the current Orchestrator desktop product.
 	</Accordion>
 
 	<Accordion title="Can Chat and Terminal UI run at the same time for one session?">
-		No. A session commits to one controller at a time. Compatible Claude Code and Codex sessions can hand off between interfaces, but Orchestrator drains or interrupts the old controller before activating the new one.
+		No. A session commits to one controller at a time. Compatible sessions can hand off between interfaces, but Orchestrator drains or interrupts the old controller before activating the new one.
 	</Accordion>
 
 	<Accordion title="How do I uninstall Orchestrator?">
