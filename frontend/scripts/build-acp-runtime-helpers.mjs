@@ -6,7 +6,7 @@ const BIN_BUILD_TOOLS = ["corepack", "npm", "npx"];
 const BUILD_ONLY_CONTENT = ["include", "lib", "node_modules", "share", "CHANGELOG.md", "README.md"];
 
 export function runtimeSourceFiles() {
-	return ["package.json", "package-lock.json", "acp-server.mjs"];
+	return ["package.json", "package-lock.json", "acp-server.mjs", "connection-owner.mjs"];
 }
 
 export function createWorkDirectory(outputRoot) {

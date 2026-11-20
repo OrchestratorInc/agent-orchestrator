@@ -52,6 +52,7 @@ describe("runtimeSourceFiles", () => {
 			"package.json",
 			"package-lock.json",
 			"acp-server.mjs",
+			"connection-owner.mjs",
 		]);
 	});
 });
