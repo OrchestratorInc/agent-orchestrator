@@ -511,8 +511,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		return err
 	}
 
-	m.awaitUsageReactivation(ctx, id)
-	finalizeSessionUsage(ctx, id, terminationLaunch, terminationRevision, finalizer)
+	m.finalizeUsage(ctx, id, terminationLaunch, terminationRevision, finalizer)
 
 	terminated := false
 	var beforeEnd domain.SessionRecord
@@ -1673,27 +1672,32 @@ func (m *Manager) markSpawned(
 	return nil
 }
 
-// usageReactivationWait bounds how long termination waits for a spawn's usage
-// reactivation, so a stuck usage lookup cannot keep a session from stopping.
+// usageReactivationWait bounds termination's usage work while a spawn's usage
+// reactivation is pending, so a stuck usage lookup cannot keep a session from
+// stopping.
 var usageReactivationWait = 5 * time.Second
 
-// awaitUsageReactivation waits for a spawn's background usage reactivation, so
-// it cannot reopen a binding that termination has started to finalize.
-func (m *Manager) awaitUsageReactivation(ctx context.Context, id domain.SessionID) {
+// finalizeUsage finalizes a terminating session's usage. While a spawn's usage
+// reactivation is pending it first waits for it, so the reactivation cannot
+// reopen a finalized binding. The reactivation holds the usage collector's
+// semaphore, which finalizing also needs, so the wait and the finalize share
+// one bound. The termination write that follows keeps the caller's context.
+func (m *Manager) finalizeUsage(ctx context.Context, id domain.SessionID, launchID string, revision int64, finalizer sessionUsageFinalizer) {
 	m.mu.Lock()
-	done := m.usageReactivations[id]
+	pending := m.usageReactivations[id]
 	m.mu.Unlock()
-	if done == nil {
+	if pending == nil {
+		finalizeSessionUsage(ctx, id, launchID, revision, finalizer)
 		return
 	}
-	timer := time.NewTimer(usageReactivationWait)
-	defer timer.Stop()
+	usageCtx, cancel := context.WithTimeout(ctx, usageReactivationWait)
+	defer cancel()
 	select {
-	case <-done:
-	case <-ctx.Done():
-	case <-timer.C:
-		slog.Default().Warn("lifecycle: finalizing usage before the spawn's usage reactivation ended", "session", id, "waited", usageReactivationWait)
+	case <-pending:
+	case <-usageCtx.Done():
+		slog.Default().Warn("lifecycle: spawn's usage reactivation did not end before termination", "session", id, "waited", usageReactivationWait)
 	}
+	finalizeSessionUsage(usageCtx, id, launchID, revision, finalizer)
 }
 
 // CommitControllerEpoch atomically changes which controller owns a live
@@ -1867,8 +1871,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 		m.mu.Lock()
 		finalizer := m.usageFinalizer
 		m.mu.Unlock()
-		m.awaitUsageReactivation(ctx, id)
-		finalizeSessionUsage(ctx, id, launchID, sessionRevision, finalizer)
+		m.finalizeUsage(ctx, id, launchID, sessionRevision, finalizer)
 
 		const (
 			terminationChanged = iota

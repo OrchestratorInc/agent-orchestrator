@@ -2108,7 +2108,33 @@ func TestMarkTerminatedWaitsForEveryPendingSpawnReactivation(t *testing.T) {
 	}
 }
 
-func TestMarkTerminatedStopsWaitingForAStuckUsageReactivation(t *testing.T) {
+// sharedLockUsage reactivates and finalizes under one lock, as the usage
+// collector's semaphore does. Its reactivation takes the lock and keeps it.
+type sharedLockUsage struct {
+	lock  chan struct{}
+	held  chan struct{}
+	stuck chan struct{}
+}
+
+func (u *sharedLockUsage) ReactivateSession(context.Context, domain.SessionID, string) error {
+	u.lock <- struct{}{}
+	close(u.held)
+	<-u.stuck
+	<-u.lock
+	return nil
+}
+
+func (u *sharedLockUsage) FinalizeSession(ctx context.Context, _ domain.SessionID, _ string, _ int64) error {
+	select {
+	case u.lock <- struct{}{}:
+		<-u.lock
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestMarkTerminatedIsNotHeldByAReactivationThatKeepsTheUsageLock(t *testing.T) {
 	defer func(wait time.Duration) { usageReactivationWait = wait }(usageReactivationWait)
 	usageReactivationWait = 50 * time.Millisecond
 	m, st, _ := newManager()
@@ -2119,12 +2145,13 @@ func TestMarkTerminatedStopsWaitingForAStuckUsageReactivation(t *testing.T) {
 		Activity:     domain.Activity{State: domain.ActivityExited},
 		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
 	}
-	stuck := make(chan struct{})
-	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}, release: stuck}
+	usage := &sharedLockUsage{lock: make(chan struct{}, 1), held: make(chan struct{}), stuck: make(chan struct{})}
+	defer close(usage.stuck)
 	m.SetUsageFinalizer(usage)
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
 		t.Fatal(err)
 	}
+	<-usage.held
 	terminated := make(chan error, 1)
 	go func() { terminated <- m.MarkTerminated(ctx, "mer-1") }()
 	select {
@@ -2133,12 +2160,11 @@ func TestMarkTerminatedStopsWaitingForAStuckUsageReactivation(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("termination waited for a usage reactivation that never ended")
+		t.Fatal("termination stayed blocked on the usage lock held by the spawn's reactivation")
 	}
-	if usage.calls != 1 || !st.sessions["mer-1"].IsTerminated {
-		t.Fatalf("finalize calls=%d terminated=%v", usage.calls, st.sessions["mer-1"].IsTerminated)
+	if !st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session was not terminated")
 	}
-	close(stuck)
 }
 
 func TestApplyActivitySignalNativeSessionIDReactivatesUsageDiscovery(t *testing.T) {
