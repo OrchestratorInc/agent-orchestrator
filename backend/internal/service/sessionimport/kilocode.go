@@ -130,7 +130,7 @@ func kiloCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 	textByMessage := map[string]string{}
 	shortened := false
 	// As Claude and Pi do, drop the oldest text once the held text passes
-	// maxClaudeHeld, so a huge session is not held whole; the opening message
+	// maxHeldText, so a huge session is not held whole; the opening message
 	// stays, and a dropped message's later parts stay dropped.
 	var order []string
 	dropped := map[string]bool{}
@@ -163,7 +163,7 @@ func kiloCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 			held += len(chunk)
 			order = append(order, messageID)
 		}
-		for ; held > maxClaudeHeld && drop < len(order); drop++ {
+		for ; held > maxHeldText && drop < len(order); drop++ {
 			if drop == 0 {
 				continue // the opening message stays
 			}
