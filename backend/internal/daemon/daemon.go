@@ -1965,12 +1965,13 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
 	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
-	// An API key account's key is checked with Anthropic before it is saved.
+	// An account's API key is checked with its provider before it is saved.
 	accounts.SetKeyCheck(func(ctx context.Context, p domain.AgentAccountProvider, key string) error {
-		if p != domain.AgentAccountProviderClaude {
+		name := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "ANTHROPIC_API_KEY", domain.AgentAccountProviderCodex: "OPENAI_API_KEY"}[p]
+		if name == "" {
 			return ports.ErrAgentAccountProviderMismatch
 		}
-		result, err := providerkeys.Check(ctx, "ANTHROPIC_API_KEY", key)
+		result, err := providerkeys.Check(ctx, name, key)
 		switch {
 		case err != nil:
 			return err
@@ -1979,7 +1980,7 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		case result.Status == providerkeys.CheckInvalid:
 			return ports.ErrAgentAccountKeyRejected
 		default:
-			return fmt.Errorf("anthropic key check: %s", result.Status)
+			return fmt.Errorf("%s check: %s", name, result.Status)
 		}
 	})
 	return accounts

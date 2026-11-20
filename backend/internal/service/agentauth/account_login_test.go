@@ -3,9 +3,13 @@ package agentauth
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
+	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 // An account folder signs in only through the CLI's own sign-in: never a key
@@ -67,5 +71,44 @@ func TestReserveLoginKeepsAccountSignInsApart(t *testing.T) {
 	_, err = running(false).reserveLogin(context.Background(), "claude-code")
 	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" || apiErr.Details["operationId"] != "op-1" {
 		t.Fatalf("harness sign-in in progress: err = %+v", err)
+	}
+}
+
+// An account folder's sign-in leaves the computer's own login alone: an earlier
+// setup token and an API key saved from Claude Code's panel both stay.
+func TestAccountSignInKeepsTheComputersOwnLogin(t *testing.T) {
+	svc := loginTestService(t, "succeed")
+	svc.executables = executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil })
+	svc.dataDir = t.TempDir()
+	if err := claudecode.SaveLocalOAuthToken(svc.dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
+		t.Fatal(err)
+	}
+	claimAnthropicKeyForClaude(t, svc.dataDir)
+	started, err := svc.StartAccountLogin(t.Context(), "claude-code", "browser", "", map[string]string{"CLAUDE_CONFIG_DIR": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snapshot, pollErr := svc.Login(t.Context(), "claude-code", started.ID)
+		if pollErr != nil {
+			t.Fatal(pollErr)
+		}
+		if snapshot.Status != "running" {
+			if snapshot.Status != "succeeded" {
+				t.Fatalf("snapshot=%+v", snapshot)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("account sign-in did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(svc.dataDir)); err != nil {
+		t.Fatalf("an account sign-in removed the computer's setup token: %v", err)
+	}
+	if inject, withhold, err := providerkeys.ForSession(svc.dataDir, "claude-code"); err != nil || inject["ANTHROPIC_API_KEY"] != "sk-ant-api03-earlier" || len(withhold) != 0 {
+		t.Fatalf("an account sign-in released Claude Code's key: inject=%v withhold=%v err=%v", inject, withhold, err)
 	}
 }

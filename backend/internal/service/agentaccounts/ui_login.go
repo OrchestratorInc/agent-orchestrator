@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -101,6 +102,13 @@ func (s *Service) startUILogin(ctx context.Context, p domain.AgentAccountProvide
 	}
 	if req.Method == setupTokenMethod {
 		return s.saveSetupToken(ctx, p, account, req)
+	}
+	// Codex saves an API key without asking OpenAI, so a mistyped one would
+	// only fail at the first turn.
+	if p == domain.AgentAccountProviderCodex && req.Method == "api_key" {
+		if err := s.checkKey(ctx, p, strings.TrimSpace(req.Secret)); err != nil {
+			return LoginStart{}, err
+		}
 	}
 	s.mu.Lock()
 	ui := s.uiLogin

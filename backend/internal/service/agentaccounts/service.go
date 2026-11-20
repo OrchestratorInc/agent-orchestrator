@@ -780,7 +780,9 @@ func (s *Service) StartSignInAgain(ctx context.Context, accountID string, req Lo
 	if account.APIKey() {
 		return LoginStart{}, ports.ErrAgentAccountKindMismatch
 	}
-	if req.Method == "" && account.SetupToken() {
+	// A terminal sign-in can pick any login, so its kind is unknown: a Console
+	// account signed in there as a subscription would keep its metered kind.
+	if req.Method == "" && (account.SetupToken() || account.Kind == domain.AgentAccountKindMetered) {
 		return LoginStart{}, ports.ErrAgentAccountKindMismatch
 	}
 	if req.Method != "" {
@@ -996,8 +998,24 @@ func (s *Service) CancelLogin(ctx context.Context, operationID string) error {
 	if op == nil || !s.claimLogin(op) {
 		return ports.ErrAgentAccountLoginUnknown
 	}
+	// A saved account's folder stays, but its background sign-in still stops:
+	// left running, it holds the harness's sign-in and a late approval would
+	// still write into the folder. endLogin stops a new folder's itself.
+	if op.account != nil {
+		s.stopUILogin(ctx, op)
+	}
 	s.endLogin(ctx, op, op.account == nil)
 	return nil
+}
+
+// stopUILogin cancels op's sign-in running in the background, if any.
+func (s *Service) stopUILogin(ctx context.Context, op *login) {
+	s.mu.Lock()
+	ui := s.uiLogin
+	s.mu.Unlock()
+	if op.authOp != "" && ui != nil {
+		_ = ui.CancelAccountLogin(context.WithoutCancel(ctx), harnessOf(op.provider), op.authOp)
+	}
 }
 
 // endLogin closes a sign-in. discard signs its folder out, so a refused login's
@@ -1009,14 +1027,13 @@ func (s *Service) endLogin(ctx context.Context, op *login, discard bool) {
 	s.mu.Unlock()
 	s.mu.Lock()
 	terminals := s.terminals
-	ui := s.uiLogin
 	s.mu.Unlock()
 	if op.terminal != "" && terminals != nil {
 		_ = terminals.CloseShellTerminal(context.WithoutCancel(ctx), op.terminal)
 	}
 	// A sign-in still running in the background stops with its folder.
-	if discard && op.authOp != "" && ui != nil {
-		_ = ui.CancelAccountLogin(context.WithoutCancel(ctx), harnessOf(op.provider), op.authOp)
+	if discard {
+		s.stopUILogin(ctx, op)
 	}
 	if discard {
 		// A refused duplicate is signed in; signing out first keeps its token

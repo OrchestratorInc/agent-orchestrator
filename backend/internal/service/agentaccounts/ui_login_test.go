@@ -220,3 +220,74 @@ func TestSetupTokenReplacement(t *testing.T) {
 		t.Fatalf("token after replace = %q", token)
 	}
 }
+
+// Cancelling a saved account's sign-in again stops its background sign-in
+// even though its folder stays, so a late approval cannot write into it. A
+// metered account cannot sign in again in a terminal: that sign-in can pick a
+// subscription, and the account would keep its metered kind.
+func TestCancelSignInAgainStopsTheBackgroundSignIn(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, apiKey: map[string]bool{}}
+	svc, _, ui := newUILoginService(t, claude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{Method: "console"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := ui.started[0].env["CLAUDE_CONFIG_DIR"]
+	claude.apiKey[home], claude.signedInAs[home] = true, "console@example.com"
+	_, view, err := svc.VerifyLogin(ctx, start.OperationID)
+	if err != nil || view == nil {
+		t.Fatalf("verify = %+v, %v", view, err)
+	}
+
+	if _, err := svc.StartSignInAgain(ctx, view.Account.ID, LoginRequest{}); !errors.Is(err, ports.ErrAgentAccountKindMismatch) {
+		t.Fatalf("terminal sign-in again of a metered account: err = %v", err)
+	}
+	again, err := svc.StartSignInAgain(ctx, view.Account.ID, LoginRequest{Method: "console"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CancelLogin(ctx, again.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if len(ui.cancelled) != 1 || ui.cancelled[0] != again.AuthOperationID {
+		t.Fatalf("cancelled = %v, want [%s]", ui.cancelled, again.AuthOperationID)
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Fatalf("cancelling a sign-in again removed the saved folder: %v", err)
+	}
+}
+
+// A Codex API key is checked with OpenAI before its sign-in starts.
+func TestCodexAPIKeyIsCheckedBeforeSignIn(t *testing.T) {
+	ctx := context.Background()
+	codex := &fakeCodex{fakeClaude: fakeClaude{signedInAs: map[string]string{}}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{codex}, t.TempDir(), fakeTerminals{}, nil)
+	ui := &fakeUILogin{}
+	svc.SetUILogin(ui)
+	var checked []string
+	svc.SetKeyCheck(func(_ context.Context, p domain.AgentAccountProvider, key string) error {
+		checked = append(checked, string(p)+":"+key)
+		if key == "sk-bad" {
+			return ports.ErrAgentAccountKeyRejected
+		}
+		return nil
+	})
+
+	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderCodex, LoginRequest{Method: "api_key", Secret: " sk-bad "}); !errors.Is(err, ports.ErrAgentAccountKeyRejected) {
+		t.Fatalf("a rejected key: err = %v", err)
+	}
+	if len(ui.started) != 0 {
+		t.Fatalf("a rejected key started a sign-in: %+v", ui.started)
+	}
+	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderCodex, LoginRequest{Method: "api_key", Secret: "sk-good"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderCodex, LoginRequest{Method: "browser"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(checked) != 2 || checked[0] != "codex:sk-bad" || checked[1] != "codex:sk-good" || len(ui.started) != 2 {
+		t.Fatalf("checked = %v, started = %d", checked, len(ui.started))
+	}
+}

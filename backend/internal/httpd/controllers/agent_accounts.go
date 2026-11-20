@@ -342,7 +342,7 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ports.ErrAgentAccountKeyRejected):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_KEY_REJECTED", "The provider did not accept this key or token. Check it and try again.", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyUnchecked):
-		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_KEY_UNCHECKED", "Orchestrator could not reach Anthropic to check this API key. Try again in a moment.", nil)
+		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_KEY_UNCHECKED", "Orchestrator could not reach the provider to check this API key. Try again in a moment.", nil)
 	case errors.Is(err, ports.ErrAgentAccountKindMismatch):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_KIND_MISMATCH", "This account does not support that action", nil)
 	case errors.Is(err, ports.ErrAgentAccountMethodInvalid):
