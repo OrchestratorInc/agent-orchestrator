@@ -100,6 +100,7 @@ func TestImportArchiveRefusesUnsupportedAndActiveSources(t *testing.T) {
 		{"identity", "UPDATE trajectory_meta SET cascade_id='other'", false},
 		{"subtrajectory", "UPDATE steps SET has_subtrajectory=1", false},
 		{"empty", "DELETE FROM steps", false},
+		{"unknown table", "CREATE TABLE sqliteXunexpected(secret TEXT)", false},
 		{"wal", "", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

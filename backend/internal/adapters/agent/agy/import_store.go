@@ -190,7 +190,7 @@ func readImportArchive(ctx context.Context, root, path string, immutable bool) (
 	}
 	// Unknown tables may contain state outside the audited conversation layout.
 	var totalTables, knownTables int
-	if err := db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(name IN ('trajectory_meta','steps','gen_metadata','executor_metadata','parent_references','trajectory_metadata_blob','battle_mode_infos')),0) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&totalTables, &knownTables); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(name IN ('trajectory_meta','steps','gen_metadata','executor_metadata','parent_references','trajectory_metadata_blob','battle_mode_infos')),0) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'`).Scan(&totalTables, &knownTables); err != nil {
 		return a, err
 	}
 	if totalTables != 7 || knownTables != 7 {
