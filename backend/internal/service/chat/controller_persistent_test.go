@@ -83,6 +83,7 @@ func TestPersistentProjectionNeverAcknowledgesPastFailedOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			h.activity.failNextExited(2)
 			conv.emit(
 				ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.ProviderTurnID},
 				ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "output", Delta: "retained answer"},
@@ -125,6 +126,19 @@ func TestPersistentProjectionNeverAcknowledgesPastFailedOutput(t *testing.T) {
 			snapshot, err := h.st.LoadConversationSnapshot(context.Background(), h.ctrl.ConversationID())
 			if err != nil || len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
 				t.Fatalf("failed projection falsely settled turn: %+v, %v", snapshot.Turns, err)
+			}
+			exited := func() bool {
+				for _, signal := range h.activity.snapshot() {
+					if signal.State == domain.ActivityExited && signal.Event == "chat.controller.stopped" {
+						return true
+					}
+				}
+				return false
+			}
+			for deadline := time.Now().Add(3 * time.Second); !exited(); time.Sleep(20 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("detached session never reported exited once the store accepted it")
+				}
 			}
 			if err := h.svc.Stop(context.Background(), testSession); err != nil || h.hostStops.Load() != 1 {
 				t.Fatalf("explicit stop after failed attachment did not destroy host: calls=%d err=%v", h.hostStops.Load(), err)
