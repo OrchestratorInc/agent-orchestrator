@@ -81,15 +81,25 @@ async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
 const PICKER = /Agent, model and reasoning effort/;
 type Clicker = Pick<typeof userEvent, "click">;
 
-/** The picker's Agent, Model or Effort row, with its menu open. */
-async function pickerRow(user: Clicker, dialog: HTMLElement, row: "Agent" | "Model" | "Effort") {
-	if (!screen.queryByRole("menuitem", { name: /^Agent/ })) await user.click(await within(dialog).findByRole("button", { name: PICKER }));
-	return screen.findByRole("menuitem", { name: new RegExp(`^${row}`) });
+/** Opens the picker's menu, unless it is open already. */
+async function openPicker(user: Clicker, dialog: HTMLElement) {
+	if (!screen.queryByRole("radiogroup", { name: "Agents" })) await user.click(await within(dialog).findByRole("button", { name: PICKER }));
 }
 
-/** Picks one choice from the picker's Agent, Model or Effort row. */
+/** The agent chosen on the picker's rail of agents. */
+async function chosenAgent(user: Clicker, dialog: HTMLElement) {
+	await openPicker(user, dialog);
+	return within(screen.getByRole("radiogroup", { name: "Agents" })).getByRole("radio", { checked: true });
+}
+
+/** Picks an agent from the picker's rail, a model from its list, or a level from its Effort row. */
 async function choose(user: Clicker, dialog: HTMLElement, row: "Agent" | "Model" | "Effort", choice: string | RegExp) {
-	await user.click(await pickerRow(user, dialog, row));
+	await openPicker(user, dialog);
+	if (row === "Agent") {
+		fireEvent.click(within(screen.getByRole("radiogroup", { name: "Agents" })).getByRole("radio", { name: choice }));
+		return;
+	}
+	if (row === "Effort") await user.click(await screen.findByRole("menuitem", { name: /^Effort/ }));
 	fireEvent.click(await screen.findByRole("menuitemradio", { name: choice }));
 }
 
@@ -163,7 +173,7 @@ describe("AutomationsView", () => {
 		await openBlankCreate(userEvent);
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		expect(await pickerRow(userEvent, dialog, "Agent")).toHaveTextContent("Codex");
+		expect(await chosenAgent(userEvent, dialog)).toHaveAccessibleName("Codex");
 		expect(await within(dialog).findByRole("button", { name: PICKER })).toHaveTextContent("GPT-5");
 		expect(screen.queryByRole("option", { name: "Project default" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Session kind" })).not.toBeInTheDocument();
@@ -196,7 +206,7 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("Morning triage");
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue("Review");
 		expect(within(dialog).getByRole("button", { name: /^Project:/ })).toBeDisabled();
-		expect(await pickerRow(userEvent, dialog, "Agent")).toHaveTextContent("Codex");
+		expect(await chosenAgent(userEvent, dialog)).toHaveAccessibleName("Codex");
 		expect(within(dialog).getByLabelText("Time")).toHaveValue("09:30");
 
 		const name = within(dialog).getByRole("textbox", { name: "Name" });
@@ -336,7 +346,8 @@ describe("AutomationsView", () => {
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
 		await waitFor(() => expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Project model"));
 		expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Minimal");
-		await user.click(await pickerRow(user, dialog, "Effort"));
+		await openPicker(user, dialog);
+		await user.click(await screen.findByRole("menuitem", { name: /^Effort/ }));
 		expect(screen.queryByRole("menuitemradio", { name: "High" })).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -582,7 +593,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("button", { name: "Edit Inherited worker" }));
 
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		expect(await pickerRow(userEvent, dialog, "Agent")).toHaveTextContent("Codex");
+		expect(await chosenAgent(userEvent, dialog)).toHaveAccessibleName("Codex");
 		const name = within(dialog).getByRole("textbox", { name: "Name" });
 		await user.clear(name);
 		await user.type(name, "Renamed inherited worker");

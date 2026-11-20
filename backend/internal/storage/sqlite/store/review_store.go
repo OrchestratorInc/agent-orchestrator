@@ -239,20 +239,22 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 		r.TriggerSource = domain.ReviewTriggerManual
 	}
 	err := s.qw.InsertReviewRun(ctx, gen.InsertReviewRunParams{
-		ID:               r.ID,
-		ReviewID:         r.ReviewID,
-		SessionID:        r.SessionID,
-		BatchID:          r.BatchID,
-		Harness:          r.Harness,
-		TriggerSource:    r.TriggerSource,
-		PRURL:            r.PRURL,
-		TargetSha:        r.TargetSHA,
-		Status:           r.Status,
-		Verdict:          r.Verdict,
-		Body:             r.Body,
-		GithubReviewID:   r.GithubReviewID,
-		CreatedAt:        r.CreatedAt,
-		AutoInjectReview: r.AutoInjectReview,
+		ID:                 r.ID,
+		ReviewID:           r.ReviewID,
+		SessionID:          r.SessionID,
+		BatchID:            r.BatchID,
+		Harness:            r.Harness,
+		RequesterSessionID: r.RequesterSessionID,
+		TriggerSource:      r.TriggerSource,
+		PRURL:              r.PRURL,
+		TargetSha:          r.TargetSHA,
+		Status:             r.Status,
+		Verdict:            r.Verdict,
+		Body:               r.Body,
+		GithubReviewID:     r.GithubReviewID,
+		CreatedAt:          r.CreatedAt,
+		AutoInjectReview:   r.AutoInjectReview,
+		ReviewerModel:      r.ReviewerModel,
 	})
 	if isSQLiteUnique(err) {
 		return fmt.Errorf("insert review run for session %s pr %s sha %s: %w", r.SessionID, r.PRURL, r.TargetSHA, domain.ErrDuplicateReviewRun)
@@ -277,6 +279,7 @@ func (s *Store) TransitionReviewRun(ctx context.Context, id string, from []domai
 		Body:               p.body,
 		GithubReviewID:     p.githubReviewID,
 		AutoInjectReview:   p.autoInjectReview,
+		ReviewerModel:      p.reviewerModel,
 		FailureReason:      p.failureReason,
 		CancelledBy:        p.cancelledBy,
 		LaunchID:           p.launchID,
@@ -388,6 +391,7 @@ type reviewRunPatchSQL struct {
 	body               sql.NullString
 	githubReviewID     sql.NullString
 	autoInjectReview   sql.NullBool
+	reviewerModel      sql.NullString
 	failureReason      string
 	cancelledBy        string
 	launchID           string
@@ -414,6 +418,9 @@ func reviewRunPatchParams(p domain.ReviewRunPatch) reviewRunPatchSQL {
 	}
 	if p.AutoInjectReview != nil {
 		out.autoInjectReview = sql.NullBool{Bool: *p.AutoInjectReview, Valid: true}
+	}
+	if p.ReviewerModel != nil {
+		out.reviewerModel = sql.NullString{String: *p.ReviewerModel, Valid: true}
 	}
 	out.launchingAt = timePtrToNullTime(p.LaunchingAt)
 	out.startedAt = timePtrToNullTime(p.StartedAt)
@@ -529,6 +536,86 @@ func (s *Store) ListReviewRunsByBatch(ctx context.Context, id domain.SessionID, 
 	return out, nil
 }
 
+// ListPendingReviewRunNotices returns a worker's final review passes that
+// still owe it a "review done" message, oldest first.
+func (s *Store) ListPendingReviewRunNotices(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	rows, err := s.qr.ListPendingReviewRunNoticesBySession(ctx, gen.ListPendingReviewRunNoticesBySessionParams{SessionID: id, MaxAttempts: domain.ReviewWorkerNoticeMaxAttempts})
+	if err != nil {
+		return nil, fmt.Errorf("list pending review notices for session %s: %w", id, err)
+	}
+	out := make([]domain.ReviewRun, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, reviewRunFromRow(row))
+	}
+	return out, nil
+}
+
+// ListSessionsWithPendingReviewRunNotices returns every worker that is still
+// owed at least one "review done" message.
+func (s *Store) ListSessionsWithPendingReviewRunNotices(ctx context.Context) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListSessionsWithPendingReviewRunNotices(ctx, domain.ReviewWorkerNoticeMaxAttempts)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions with pending review notices: %w", err)
+	}
+	return ids, nil
+}
+
+// MarkReviewRunNoticeSent records that a pass's "review done" message reached
+// the worker. It reports false when the notice was not pending.
+func (s *Store) MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkReviewRunNoticeSent(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ReviewNoticeChatDelivery returns the state, error and whether the Chat turn
+// carrying clientMessageID started. found=false means no such message exists
+// in the worker's conversation.
+func (s *Store) ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (state domain.TurnState, failure string, started, found bool, err error) {
+	row, err := s.qr.SelectReviewNoticeChatDelivery(ctx, gen.SelectReviewNoticeChatDeliveryParams{
+		ClientMessageID: clientMessageID,
+		SessionID:       &sessionID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, false, nil
+	}
+	if err != nil {
+		return "", "", false, false, fmt.Errorf("review notice chat delivery for %s: %w", sessionID, err)
+	}
+	return row.State, row.ErrorMessage, row.Started, true, nil
+}
+
+// reviewWorkerNotice derives the failed state: a pending notice whose sends
+// failed ReviewWorkerNoticeMaxAttempts times has given up.
+func reviewWorkerNotice(stored string, attempts int64) domain.ReviewWorkerNotice {
+	notice := domain.ReviewWorkerNotice(stored)
+	if notice == domain.ReviewWorkerNoticePending && attempts >= domain.ReviewWorkerNoticeMaxAttempts {
+		return domain.ReviewWorkerNoticeFailed
+	}
+	return notice
+}
+
+// RecordReviewRunNoticeFailure records a failed attempt to deliver a pass's
+// "review done" message and keeps it pending. It reports false when the
+// notice was not pending.
+func (s *Store) RecordReviewRunNoticeFailure(ctx context.Context, id, sendErr string, at time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.RecordReviewRunNoticeFailure(ctx, gen.RecordReviewRunNoticeFailureParams{
+		WorkerNoticeError:       sendErr,
+		WorkerNoticeAttemptedAt: sql.NullTime{Time: at, Valid: true},
+		ID:                      id,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func reviewFromGetReviewBySessionRow(r gen.GetReviewBySessionRow) domain.Review {
 	return domain.Review{
 		ID:                     r.ID,
@@ -624,29 +711,35 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		deliveredAt = &t
 	}
 	return domain.ReviewRun{
-		FailureReason:     r.FailureReason,
-		CancelledBy:       r.CancelledBy,
-		LaunchID:          r.LaunchID,
-		LaunchingAt:       nullTimeToTimePtr(r.LaunchingAt),
-		StartedAt:         nullTimeToTimePtr(r.StartedAt),
-		FirstActivityAt:   nullTimeToTimePtr(r.FirstActivityAt),
-		CancelRequestedAt: nullTimeToTimePtr(r.CancelRequestedAt),
-		EndedAt:           nullTimeToTimePtr(r.EndedAt),
-		ID:                r.ID,
-		ReviewID:          r.ReviewID,
-		SessionID:         r.SessionID,
-		BatchID:           r.BatchID,
-		Harness:           r.Harness,
-		TriggerSource:     r.TriggerSource,
-		PRURL:             r.PRURL,
-		TargetSHA:         r.TargetSha,
-		Status:            r.Status,
-		Verdict:           r.Verdict,
-		Body:              r.Body,
-		GithubReviewID:    r.GithubReviewID,
-		CreatedAt:         r.CreatedAt,
-		DeliveredAt:       deliveredAt,
-		AutoInjectReview:  r.AutoInjectReview,
+		FailureReason:           r.FailureReason,
+		CancelledBy:             r.CancelledBy,
+		LaunchID:                r.LaunchID,
+		LaunchingAt:             nullTimeToTimePtr(r.LaunchingAt),
+		StartedAt:               nullTimeToTimePtr(r.StartedAt),
+		FirstActivityAt:         nullTimeToTimePtr(r.FirstActivityAt),
+		CancelRequestedAt:       nullTimeToTimePtr(r.CancelRequestedAt),
+		EndedAt:                 nullTimeToTimePtr(r.EndedAt),
+		ID:                      r.ID,
+		ReviewID:                r.ReviewID,
+		SessionID:               r.SessionID,
+		BatchID:                 r.BatchID,
+		Harness:                 r.Harness,
+		RequesterSessionID:      r.RequesterSessionID,
+		TriggerSource:           r.TriggerSource,
+		PRURL:                   r.PRURL,
+		TargetSHA:               r.TargetSha,
+		Status:                  r.Status,
+		Verdict:                 r.Verdict,
+		Body:                    r.Body,
+		GithubReviewID:          r.GithubReviewID,
+		CreatedAt:               r.CreatedAt,
+		DeliveredAt:             deliveredAt,
+		AutoInjectReview:        r.AutoInjectReview,
+		ReviewerModel:           r.ReviewerModel,
+		WorkerNotice:            reviewWorkerNotice(r.WorkerNotice, r.WorkerNoticeAttempts),
+		WorkerNoticeAttempts:    int(r.WorkerNoticeAttempts),
+		WorkerNoticeError:       r.WorkerNoticeError,
+		WorkerNoticeAttemptedAt: nullTimePtr(r.WorkerNoticeAttemptedAt),
 	}
 }
 

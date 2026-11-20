@@ -85,11 +85,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 		for j, column := range group {
 			names[j] = column.column
 		}
-		var schema string
-		if err := reader.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&schema); err != nil {
-			return result, err
-		}
-		signature := "v1\x00" + strings.Join(names, "\x00") + "\x00" + schema
+		signature := "v2\x00" + strings.Join(names, "\x00")
 		generation, completed, err := beginTimestampProgress(ctx, db, table, signature)
 		if err != nil {
 			return result, err
@@ -242,6 +238,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		defer func() { _ = stmt.Close() }()
 		var repaired, deleted int
 		var bindingDrops []*timestampBindingDrop
+		skippedBefore := state.Skipped
 		err = timestamps.PreserveRepresentation(ctx, tx, func() (int64, error) {
 			// Most batches have no constraints. Save one batch instead of creating
 			// and measuring a savepoint for every successfully normalized row.
@@ -347,6 +344,13 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		})
 		if err != nil {
 			return 0, false, err
+		}
+		if state.Skipped > skippedBefore {
+			// Publish rejection with the batch so intervening canonical writes
+			// cannot hide a conflict that became repairable before completion.
+			if _, err := tx.ExecContext(ctx, `UPDATE timestamp_repair_progress SET rejected=1 WHERE table_name=? AND rejected=0`, columns[0].table); err != nil {
+				return 0, false, err
+			}
 		}
 		if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
 			return 0, false, err

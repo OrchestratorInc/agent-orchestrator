@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
@@ -35,6 +36,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -50,6 +52,7 @@ var Derivers = map[string]DeriveFunc{
 	// deriver; the rest share the name-only StandardDeriveActivityState.
 	"claude-code":      claudecode.DeriveActivityState,
 	"command-code":     commandcode.DeriveActivityState,
+	"mastra-code":      mastracode.DeriveActivityState,
 	"open-interpreter": openinterpreter.DeriveActivityState,
 	"grok":             claudecode.DeriveActivityState,
 	"muse":             muse.DeriveActivityState,
@@ -68,6 +71,7 @@ var Derivers = map[string]DeriveFunc{
 	"memcode":          memcode.DeriveActivityState,
 	"amp":              amp.DeriveActivityState,
 	"pi":               pi.DeriveActivityState,
+	"tau":              tau.DeriveActivityState,
 	"auggie":           auggie.DeriveActivityState,
 	"goose":            activitystate.StandardDeriveActivityState,
 	"openhands":        activitystate.StandardDeriveActivityState,

@@ -7,6 +7,7 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactsView } from "./ArtifactsView";
 import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
+import type { CloudCpSharedArtifact } from "../lib/cloud-cp";
 import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -58,6 +59,17 @@ const mocks = vi.hoisted(() => ({
 	/** Who each published link opens for, as the link list says. */
 	shareAccess: new Map<string, "restricted" | "anyone">(),
 	kept: [] as KeptArtifactSet[],
+	/** Links other people published that open for this person. */
+	shared: [] as CloudCpSharedArtifact[],
+	sharedFailed: false,
+	refetchShared: vi.fn(),
+}));
+vi.mock("../hooks/useSharedArtifacts", () => ({
+	sharedArtifactsQueryKey: ["shared-artifacts"],
+	useSharedArtifacts: () => ({ data: mocks.sharedFailed ? undefined : mocks.shared, isError: mocks.sharedFailed, refetch: mocks.refetchShared }),
+}));
+vi.mock("./SharedArtifactFrame", () => ({
+	SharedArtifactFrame: ({ linkId, title }: { linkId: string; title: string }) => <iframe data-link-id={linkId} data-testid="shared-artifact-preview" title={title} />,
 }));
 vi.mock("../hooks/useKeptArtifacts", () => ({
 	keptArtifactsQueryKey: ["kept-artifacts"],
@@ -192,6 +204,16 @@ function artifactList() {
 }
 
 /** Search sits behind its icon until opened. */
+/** Opens the Filter menu's submenu whose row starts with `row`, returning that submenu. */
+async function openFilterMenu(user: ReturnType<typeof userEvent.setup>, row: string) {
+	if (screen.queryAllByRole("menu").length === 0) await user.click(screen.getByRole("button", { name: "Filter" }));
+	// By keyboard: jsdom has no layout, so moving the pointer off a submenu row closes its submenu.
+	act(() => screen.getByRole("menuitem", { name: new RegExp(`^${row}`) }).focus());
+	await user.keyboard("{ArrowRight}");
+	const menus = await screen.findAllByRole("menu");
+	return within(menus[menus.length - 1]!);
+}
+
 async function openSearch(user: ReturnType<typeof userEvent.setup>) {
 	await user.click(screen.getByRole("button", { name: "Search artifacts" }));
 	return screen.getByRole("searchbox", { name: "Search artifacts" });
@@ -225,6 +247,9 @@ describe("ArtifactsView", () => {
 	beforeEach(() => {
 		mocks.shareAccess = new Map();
 		mocks.kept = [];
+		mocks.shared = [];
+		mocks.sharedFailed = false;
+		mocks.refetchShared.mockReset();
 		window.localStorage.removeItem("ao.artifacts.view");
 		useArtifactsViewStore.setState({ view: "gallery", collapsedSections: [], pinnedArtifactIds: [] });
 		vi.stubGlobal("IntersectionObserver", class {
@@ -257,7 +282,7 @@ describe("ArtifactsView", () => {
 		useUiStore.getState().clearGlobalToast();
 	});
 
-	it("lists every artifact once, newest first, with its project and session, in no sections", () => {
+	it("lists every artifact once, newest first, with its machine and owner, in no sections", () => {
 		renderView();
 
 		expect(screen.getByRole("heading", { level: 1, name: "Artifacts" })).not.toHaveClass("sr-only");
@@ -269,9 +294,7 @@ describe("ArtifactsView", () => {
 			expect.stringContaining("pricing.md"),
 			expect.stringContaining("caching-options.md"),
 		]);
-		expect(gallery.getByText("agent-orchestrator · Design the Artifacts entry point")).toBeInTheDocument();
-		expect(gallery.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
-		expect(gallery.getByText("Sessions · Compare caching options")).toBeInTheDocument();
+		expect(gallery.getAllByText("On this machine · Yours")).toHaveLength(3);
 		expect(screen.queryByRole("button", { name: /team/i })).not.toBeInTheDocument();
 	});
 
@@ -286,8 +309,8 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		const gallery = within(artifactList());
-		expect(gallery.getByText("No project · Removed work · Project removed")).toBeInTheDocument();
-		expect(gallery.getByText("agent-orchestrator · Old report · Session deleted")).toBeInTheDocument();
+		expect(gallery.getByText("On this machine · Yours · Project removed")).toBeInTheDocument();
+		expect(gallery.getByText("On this machine · Yours · Session deleted")).toBeInTheDocument();
 		expect(gallery.queryByRole("button", { name: "Open in session: plan.md" })).not.toBeInTheDocument();
 
 		await userEvent.click(gallery.getByRole("button", { name: "Start a session with this: plan.md" }));
@@ -300,11 +323,10 @@ describe("ArtifactsView", () => {
 	it("narrows the one list by project, then clears the filters", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getByRole("button", { name: "Filter" }));
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Sessions" }));
+		await user.click((await openFilterMenu(user, "Project")).getByRole("menuitemcheckbox", { name: "Sessions" }));
 		await user.keyboard("{Escape}");
-		expect(within(artifactList()).getAllByRole("listitem")).toHaveLength(1);
-		expect(within(artifactList()).getByText("Sessions · Compare caching options")).toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+		expect(within(artifactList()).getAllByRole("listitem")).toEqual([expect.objectContaining({ textContent: expect.stringContaining("caching-options.md") })]);
 		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("data-active", "true");
 		expect(screen.getByRole("button", { name: "Remove filter Project: Sessions" })).toBeInTheDocument();
@@ -330,8 +352,14 @@ describe("ArtifactsView", () => {
 		}];
 		renderView();
 		await user.click(screen.getByRole("button", { name: "Filter" }));
-		expect(screen.getAllByRole("menuitemcheckbox").map((item) => item.textContent)).toEqual([
-			"All projects", "agent-orchestrator", "All types", "All images", "All videos", "All documents", "Public", "Shared privately", "Not shared", "All",
+		// Sort by, then one row per filter with its current value, then Pinned.
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Sort byLast updated", "OwnerAnyone", "ProjectAll projects", "TypeAll types", "SharingAll",
+		]);
+		expect(screen.getByRole("menuitemcheckbox", { name: "Pinned" })).toHaveAttribute("aria-checked", "false");
+		const typeMenu = await openFilterMenu(user, "Type");
+		expect(typeMenu.getAllByRole("menuitemcheckbox").map((item) => item.textContent)).toEqual([
+			"All types", "All images", "All videos", "All documents",
 		]);
 		const names = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
 		// The menu stays open, so several types are picked in one go.
@@ -348,8 +376,7 @@ describe("ArtifactsView", () => {
 		expect(names()).toHaveLength(3);
 
 		// All clears its filter.
-		await user.click(screen.getByRole("button", { name: "Filter" }));
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "All images" }));
+		await user.click((await openFilterMenu(user, "Type")).getByRole("menuitemcheckbox", { name: "All images" }));
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "All types" }));
 		expect(names()).toHaveLength(3);
 		expect(screen.getByRole("menuitemcheckbox", { name: "All types" })).toHaveAttribute("aria-checked", "true");
@@ -360,7 +387,8 @@ describe("ArtifactsView", () => {
 		mocks.cloudArtifacts = false;
 		const { unmount } = renderView();
 		const location = within(screen.getByRole("group", { name: "Artifact location" }));
-		expect(location.getAllByRole("button").map((button) => button.textContent)).toEqual(["All", "On this machine"]);
+		// Each location shows how many artifacts it holds.
+		expect(location.getAllByRole("button").map((button) => button.textContent)).toEqual(["All3", "On this machine3"]);
 		expect(location.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
 		unmount();
 
@@ -375,8 +403,7 @@ describe("ArtifactsView", () => {
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 		expect(screen.getByText("cloud-notes.md")).toBeInTheDocument();
 		// The project menu lists only projects with artifacts in that location.
-		await user.click(screen.getByRole("button", { name: "Filter" }));
-		expect(screen.getAllByRole("menuitemcheckbox").slice(0, 2).map((item) => item.textContent)).toEqual(["All projects", "Cloud project"]);
+		expect((await openFilterMenu(user, "Project")).getAllByRole("menuitemcheckbox").map((item) => item.textContent)).toEqual(["All projects", "Cloud project"]);
 		await user.keyboard("{Escape}");
 
 		await user.click(withCloud.getByRole("button", { name: "On this machine" }));
@@ -430,7 +457,7 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByText("pricing.md")).not.toBeInTheDocument();
 	});
 
-	it("names a single project's artifacts by project and session, with no heading, in either view", async () => {
+	it("names a single project's artifacts by machine and owner, with no heading, in either view", async () => {
 		const user = userEvent.setup();
 		mocks.workspaces = [withArtifacts[0]];
 		// A section collapsed before sections were removed hides nothing.
@@ -438,10 +465,10 @@ describe("ArtifactsView", () => {
 		renderView();
 		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
-		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
+		expect(screen.getAllByText("On this machine · Yours")).toHaveLength(2);
 		await user.click(screen.getByRole("button", { name: "List view" }));
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
-		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
+		expect(screen.getAllByText("On this machine · Yours")).toHaveLength(2);
 	});
 
 	it("lists a remote machine's artifacts under its own location, and deletes them on that machine", async () => {
@@ -460,12 +487,12 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		const location = screen.getByRole("group", { name: "Artifact location" });
-		expect(within(location).getAllByRole("button").map((button) => button.textContent)).toEqual(["All", "On this machine", "build-vm"]);
+		expect(within(location).getAllByRole("button").map((button) => button.textContent)).toEqual(["All4", "On this machine3", "build-vm1"]);
 		await user.click(within(location).getByRole("button", { name: "build-vm" }));
 		const rows = within(artifactList()).getAllByRole("listitem");
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toHaveTextContent("bench.md");
-		expect(rows[0]).toHaveTextContent("agent-orchestrator · build-vm · Benchmark on the VM");
+		expect(rows[0]).toHaveTextContent("build-vm · Yours");
 		// Pinned by its machine's key.
 		expect(within(rows[0]!).getByRole("img", { name: "Pinned" })).toBeInTheDocument();
 
@@ -630,6 +657,94 @@ describe("ArtifactsView", () => {
 		await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete 1 artifact" }));
 		await waitFor(() => expect(mocks.deleteCloudArtifact).toHaveBeenCalledTimes(1));
 		expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "mine.md");
+	});
+
+	it("filters by owner and pinned from the Filter menu, sorts by name, and clears from the menu", async () => {
+		const user = userEvent.setup();
+		const mine = session("cloud-1", "My notes", [{ name: "zeta.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		mine.cloud = { orgId: "org-1", createdByUserId: "me-1" };
+		const theirs = session("cloud-2", "Their notes", [{ name: "alpha.md", updatedAt: "2026-10-10T10:00:00Z" }]);
+		theirs.cloud = { orgId: "org-1", createdByUserId: "someone-else" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [mine, theirs] }];
+		useArtifactsViewStore.setState({ pinnedArtifactIds: [JSON.stringify(["cloud-1", "zeta.md"])] });
+		renderView();
+		const rows = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
+		expect(screen.getByText("Cloud · Shared with you")).toBeInTheDocument();
+
+		await user.click((await openFilterMenu(user, "Owner")).getByRole("menuitemradio", { name: "Shared with me" }));
+		expect(rows()).toEqual([expect.stringContaining("alpha.md")]);
+		expect(screen.getByRole("button", { name: "Remove filter Owner: Shared with me" })).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Remove filter Owner: Shared with me" }));
+		expect(rows()).toHaveLength(2);
+
+		await user.click(screen.getByRole("button", { name: "Filter" }));
+		await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+		expect(rows()).toEqual([expect.stringContaining("zeta.md")]);
+		await user.click(screen.getByRole("menuitem", { name: "Clear filters" }));
+		expect(rows()).toHaveLength(2);
+
+		// Name order keeps pinned artifacts on top.
+		useArtifactsViewStore.setState({ pinnedArtifactIds: [] });
+		await user.click((await openFilterMenu(user, "Sort by")).getByRole("menuitemradio", { name: "Name" }));
+		expect(rows()).toEqual([expect.stringContaining("alpha.md"), expect.stringContaining("zeta.md")]);
+		expect(useArtifactsViewStore.getState().sort).toBe("name");
+		useArtifactsViewStore.setState({ sort: "updated" });
+	});
+
+	it("lists links shared with this person under Cloud, view only, and previews them from their link", async () => {
+		const user = userEvent.setup();
+		mocks.cloudArtifacts = false;
+		mocks.shared = [{
+			linkId: "q3-report", name: "q3-report.html", contentType: "text/html", size: 10, updatedAt: "2030-01-01T00:00:00Z",
+			access: "restricted", via: "direct", teams: [], sharedAt: "2030-01-01T00:00:00Z", viewerUrl: "https://orchestrator.inc/artifact/q3-report",
+		}];
+		renderView();
+		// Cloud is offered for them even where the control plane keeps no session artifacts.
+		const location = within(screen.getByRole("group", { name: "Artifact location" }));
+		expect(location.getAllByRole("button").map((button) => button.textContent)).toEqual(["All4", "On this machine3", "Cloud1"]);
+		await user.click(location.getByRole("button", { name: "Cloud" }));
+		const card = within(artifactList()).getByRole("listitem");
+		expect(card).toHaveTextContent("q3-report.html");
+		expect(card).toHaveTextContent("Cloud · Shared with you");
+		// Someone else's link has no actions of its own here.
+		expect(within(card).queryByRole("button", { name: "More actions: q3-report.html" })).not.toBeInTheDocument();
+
+		await user.click(within(card).getByRole("button", { name: /^q3-report\.html/ }));
+		const dialog = within(screen.getByRole("dialog", { name: "q3-report.html" }));
+		expect(dialog.getByTestId("shared-artifact-preview")).toHaveAttribute("data-link-id", "q3-report");
+		expect(dialog.getByRole("link", { name: "Open in browser" })).toHaveAttribute("href", "https://orchestrator.inc/artifact/q3-report");
+		expect(dialog.queryByRole("button", { name: "Open in session" })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+
+		// The owner filter keeps them with what is shared; selecting skips them.
+		await user.click(location.getByRole("button", { name: "All" }));
+		await user.click((await openFilterMenu(user, "Owner")).getByRole("menuitemradio", { name: "Me" }));
+		expect(screen.queryByText("q3-report.html")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Remove filter Owner: Me" }));
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByRole("checkbox", { name: "Select q3-report.html" })).toBeDisabled();
+	});
+
+	it("says when the links shared with this person did not load, keeping the rest listed", async () => {
+		const user = userEvent.setup();
+		mocks.sharedFailed = true;
+		renderView();
+		const alert = within(screen.getByRole("alert"));
+		expect(alert.getByText("Couldn't load artifacts shared with you.")).toBeInTheDocument();
+		expect(within(artifactList()).getAllByRole("listitem").length).toBeGreaterThan(0);
+		await user.click(alert.getByRole("button", { name: "Retry" }));
+		expect(mocks.refetchShared).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens a shared link sent from its web page in the preview", async () => {
+		renderView();
+		act(() => useArtifactsViewStore.getState().requestOpenSharedArtifact({
+			linkId: "roadmap", name: "roadmap.md", contentType: "text/markdown", updatedAt: "2030-01-01T00:00:00Z",
+			access: "anyone", viewerUrl: "https://orchestrator.inc/artifact/roadmap",
+		}));
+		const dialog = within(await screen.findByRole("dialog", { name: "roadmap.md" }));
+		expect(dialog.getByTestId("shared-artifact-preview")).toHaveAttribute("data-link-id", "roadmap");
+		expect(useArtifactsViewStore.getState().openSharedArtifact).toBeNull();
 	});
 
 	it("does not let a bundle be selected, since deleting it would remove only one of its files", async () => {
@@ -815,10 +930,10 @@ describe("ArtifactsView", () => {
 		renderView();
 		const rows = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
 
-		await user.click(screen.getByRole("button", { name: "Filter" }));
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Shared privately" }));
+		const sharing = await openFilterMenu(user, "Sharing");
+		await user.click(sharing.getByRole("menuitemcheckbox", { name: "Shared privately" }));
 		expect(rows()).toEqual([expect.stringContaining("pricing.md")]);
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Public" }));
+		await user.click(sharing.getByRole("menuitemcheckbox", { name: "Public" }));
 		expect(rows()).toEqual([expect.stringContaining("pricing.md"), expect.stringContaining("roadmap.md")]);
 	});
 
@@ -831,15 +946,15 @@ describe("ArtifactsView", () => {
 		renderView();
 		const rows = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
 
-		await user.click(screen.getByRole("button", { name: "Filter" }));
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Public" }));
+		const sharing = await openFilterMenu(user, "Sharing");
+		await user.click(sharing.getByRole("menuitemcheckbox", { name: "Public" }));
 		expect(rows()).toEqual([expect.stringContaining("pricing.md")]);
 		expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("data-active", "true");
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Public" }));
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Not shared" }));
+		await user.click(sharing.getByRole("menuitemcheckbox", { name: "Public" }));
+		await user.click(sharing.getByRole("menuitemcheckbox", { name: "Not shared" }));
 		expect(rows()).toEqual([expect.stringContaining("artifacts-user-flow.html"), expect.stringContaining("caching-options.md")]);
 		// Filters narrow together: unshared artifacts of the Scratchpad.
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Sessions" }));
+		await user.click((await openFilterMenu(user, "Project")).getByRole("menuitemcheckbox", { name: "Sessions" }));
 		expect(rows()).toEqual([expect.stringContaining("caching-options.md")]);
 		await user.keyboard("{Escape}");
 		expect(screen.getByRole("button", { name: "Remove filter Project: Sessions" })).toBeInTheDocument();
@@ -1131,8 +1246,8 @@ describe("ArtifactsView", () => {
 			expect.stringContaining("artifacts-user-flow.html"),
 			expect.stringContaining("caching-options.md"),
 		]);
-		// Named like every other artifact: its project, then its session.
-		expect(project.getByText("agent-orchestrator · Orchestrator")).toBeInTheDocument();
+		// Named like every other artifact: its machine, then whose it is.
+		expect(project.getAllByText("On this machine · Yours")).toHaveLength(3);
 		await user.click(project.getByRole("button", { name: /^weekly-status\.html/ }));
 		await user.click(within(screen.getByRole("dialog", { name: "weekly-status.html" })).getByRole("button", { name: "Open in session" }));
 

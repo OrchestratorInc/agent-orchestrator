@@ -29,6 +29,7 @@ vi.mock("../ThemeProvider", () => ({
 }));
 
 import { ChatLinkProvider, ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
+import { FilesNavigationContext } from "../files/navigation";
 import { parseBlocks } from "./markdownBlocks";
 import * as androidSelection from "./useAndroidResponseSelection";
 
@@ -323,6 +324,83 @@ it.each([false, true])("opens an orchestrator's ao://sessions links as sessions,
 	expect(textOf(renderer.root)).toContain("Fix table rendering. Also");
 	act(() => links[0]!.props.onPress());
 	expect(onLinkOpen).toHaveBeenCalledWith("ao://sessions/proj/ao-259");
+	act(() => renderer.unmount());
+});
+
+it.each([false, true])("opens a file link at the line it cites (continuous: %s)", (continuousSelection) => {
+	const openFile = vi.fn();
+	const onLinkOpen = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen}>
+			<FilesNavigationContext.Provider value={{ openChanges: vi.fn(), openFile }}>
+				<ChatMarkdown continuousSelection={continuousSelection} text={"See [browser-view-host.ts:1748](frontend/src/main/browser-view-host.ts:1748) and [mail](mailto:a@example.com)."} />
+			</FilesNavigationContext.Provider>
+		</ChatLinkProvider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(links.map(textOf)).toEqual(["browser-view-host.ts:1748"]);
+	// Neither a page nor a file: the Markdown stays as written.
+	expect(textOf(renderer.root)).toContain("[mail](mailto:a@example.com)");
+	act(() => links[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("frontend/src/main/browser-view-host.ts", undefined, 1748);
+	expect(onLinkOpen).not.toHaveBeenCalled();
+	act(() => renderer.unmount());
+});
+
+it("keeps a route group's parentheses in a file link", () => {
+	const openFile = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<FilesNavigationContext.Provider value={{ openChanges: vi.fn(), openFile }}>
+			<ChatMarkdown text={"See [index.tsx:12](app/(tabs)/index.tsx:12) here."} />
+		</FilesNavigationContext.Provider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(links.map(textOf)).toEqual(["index.tsx:12"]);
+	expect(textOf(renderer.root)).toContain("See index.tsx:12 here.");
+	act(() => links[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("app/(tabs)/index.tsx", undefined, 12);
+	act(() => renderer.unmount());
+});
+
+it("links a bare file name only when the session has that file", () => {
+	const openFile = vi.fn();
+	const wantBareFile = vi.fn();
+	const files = (bareFile: (name: string) => string | null | undefined) => ({ openChanges: vi.fn(), openFile, bareFile, wantBareFile });
+	const text = "See [README.md:3](README.md:3) and [docs](example.com).";
+	const links = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	let renderer!: ReactTestRenderer;
+	// Until the file list loads, both stay words and the list is asked for.
+	act(() => { renderer = create(<FilesNavigationContext.Provider value={files(() => undefined)}><ChatMarkdown text={text} /></FilesNavigationContext.Provider>); });
+	expect(links(renderer)).toEqual([]);
+	expect(wantBareFile).toHaveBeenCalledWith("README.md");
+	act(() => renderer.update(<FilesNavigationContext.Provider value={files((name) => name === "README.md" ? "docs/README.md" : null)}><ChatMarkdown text={text} /></FilesNavigationContext.Provider>));
+	expect(links(renderer).map(textOf)).toEqual(["README.md:3"]);
+	expect(textOf(renderer.root)).toContain("and docs.");
+	act(() => links(renderer)[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("docs/README.md", undefined, 3);
+	act(() => renderer.unmount());
+});
+
+it("keeps prose around an unopenable file link as one native text on iOS", () => {
+	platform.OS = "ios";
+	let renderer!: ReactTestRenderer;
+	// The Review screen, say: no session's files to open, so the link is words
+	// and the paragraphs stay one range to select, as before file links existed.
+	act(() => { renderer = create(<ChatMarkdown text={"First, [api.ts:12](lib/api.ts:12).\n\nSecond paragraph."} />); });
+	const selectable = renderer.root.findAll((node) => node.props.selectable === true);
+	expect(selectable).toHaveLength(1);
+	expect(selectable[0].props.uiTextView).toBe(true);
+	expect(textOf(selectable[0])).toBe("First, api.ts:12.\n\nSecond paragraph.");
+	act(() => renderer.unmount());
+});
+
+it("shows a file link's label as words where no session can open it", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text="See [api.ts:12](lib/api.ts:12) now" />); });
+	expect(renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link")).toEqual([]);
+	expect(textOf(renderer.root)).toContain("See api.ts:12 now");
 	act(() => renderer.unmount());
 });
 
