@@ -16,6 +16,7 @@ import (
 
 	_ "modernc.org/sqlite" // read-only native identity and collision checks
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -24,7 +25,8 @@ import (
 var _ ports.AgentImportedSessionPreparer = (*Plugin)(nil)
 
 // PrepareImportedSession exports and imports an independent native identity in
-// the AO worktree. S2 checkpoints it before launch, so retries do not fork again.
+// the AO worktree. A durable reservation precedes native publication, so a lost
+// S2 checkpoint reuses that identity instead of forking another conversation.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
 	return p.prepareKiloImport(ctx, r, func(ctx context.Context, cwd, root string, args ...string) ([]byte, error) {
 		return p.runKiloImportCommand(ctx, cwd, root, r.Env, args...)
@@ -66,6 +68,7 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
+	reservationDir := filepath.Join(root, "native-imports", "kilo")
 	root = filepath.Join(root, "tmp", "native-import")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -95,72 +98,99 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 	if !regexp.MustCompile(`^7\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$`).Match(bytes.TrimSpace(version)) {
 		return ports.NativeSessionRef{}, errors.New("kilo native import requires a supported v7 binary")
 	}
-	exported, err := run(ctx, cwd, r.ConfigDir, "export", r.NativeSessionID)
+	if err := os.MkdirAll(reservationDir, 0o700); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	reservations, err := os.OpenRoot(reservationDir)
 	if err != nil {
-		return ports.NativeSessionRef{}, fmt.Errorf("export kilo history: %w", err)
+		return ports.NativeSessionRef{}, err
+	}
+	defer func() { _ = reservations.Close() }()
+	name := kiloReservationName(r.ConfigDir, r.NativeSessionID, cwd, r.SourceFingerprint)
+	reservation, err := readKiloReservation(ctx, reservations, name)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ports.NativeSessionRef{}, err
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		exported, err := run(ctx, cwd, r.ConfigDir, "export", r.NativeSessionID)
+		if err != nil {
+			return ports.NativeSessionRef{}, fmt.Errorf("export kilo history: %w", err)
+		}
+		after, err := kiloSourceDigest(ctx, db, r.NativeSessionID)
+		if err != nil || before != after {
+			return ports.NativeSessionRef{}, errors.New("kilo source session rows changed during native export")
+		}
+		if err := os.WriteFile(filepath.Join(temp, "original.json"), exported, 0o600); err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		now := time.Now().UnixMilli()
+		if now < 0 {
+			return ports.NativeSessionRef{}, errors.New("kilo import timestamp is before the provider epoch")
+		}
+		gen := kiloImportID{timestamp: uint64(now), random: rand.Reader}
+		remapped, nativeID, err := remapKiloExport(exported, r.NativeSessionID, cwd, gen.next, func(id string) (bool, error) {
+			return kiloImportIDExists(ctx, db, id)
+		})
+		if err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		reservation = kiloImportReservation{SourceID: r.NativeSessionID, ConfigDir: r.ConfigDir, CWD: cwd, SourceFingerprint: r.SourceFingerprint, SourceDigest: before, NativeID: nativeID, Export: remapped}
+		body, err := json.Marshal(reservation)
+		if err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		if len(body) > kiloReservationLimit || len(reservation.Export) > 64<<20 {
+			return ports.NativeSessionRef{}, errors.New("kilo import reservation exceeds private history limit")
+		}
+		// Publish ownership and ALL generated IDs before the native import. If
+		// another attempt won the reservation, use its graph rather than ours.
+		if err := importcopy.WriteOnce(ctx, reservations, name, body); errors.Is(err, os.ErrExist) {
+			reservation, err = readKiloReservation(ctx, reservations, name)
+			if err != nil {
+				return ports.NativeSessionRef{}, err
+			}
+		} else if err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+	}
+	if reservation.SourceID != r.NativeSessionID || reservation.ConfigDir != r.ConfigDir || reservation.CWD != cwd || reservation.SourceFingerprint != r.SourceFingerprint || reservation.SourceDigest != before {
+		return ports.NativeSessionRef{}, errors.New("kilo import reservation does not match the unchanged selected source and worktree")
+	}
+	expected, ids, err := reservation.history()
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	nativeID := reservation.NativeID
+	var published bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT id FROM session WHERE id = ?)`, nativeID).Scan(&published); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if !published {
+		// A reserved but unpublished graph keeps its IDs. Partial publication
+		// or a collision is refused; never overwrite or generate another copy.
+		for _, id := range ids {
+			present, err := kiloImportIDExists(ctx, db, id)
+			if err != nil {
+				return ports.NativeSessionRef{}, err
+			}
+			if present {
+				return ports.NativeSessionRef{}, errors.New("reserved kilo destination identity already exists")
+			}
+		}
+		exportPath := filepath.Join(temp, "native.json")
+		if err := os.WriteFile(exportPath, reservation.Export, 0o600); err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		if _, err := run(ctx, cwd, r.ConfigDir, "import", exportPath); err != nil {
+			return ports.NativeSessionRef{}, fmt.Errorf("import kilo history: %w", err)
+		}
 	}
 	after, err := kiloSourceDigest(ctx, db, r.NativeSessionID)
 	if err != nil || before != after {
-		return ports.NativeSessionRef{}, errors.New("kilo source session rows changed during native export")
-	}
-	if err := os.WriteFile(filepath.Join(temp, "original.json"), exported, 0o600); err != nil {
-		return ports.NativeSessionRef{}, err
-	}
-	now := time.Now().UnixMilli()
-	if now < 0 {
-		return ports.NativeSessionRef{}, errors.New("kilo import timestamp is before the provider epoch")
-	}
-	gen := kiloImportID{timestamp: uint64(now), random: rand.Reader}
-	remapped, nativeID, err := remapKiloExport(exported, r.NativeSessionID, cwd, gen.next, func(id string) (bool, error) {
-		var present bool
-		err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT id FROM session WHERE id = ? UNION ALL SELECT id FROM message WHERE id = ? UNION ALL SELECT id FROM part WHERE id = ? UNION ALL SELECT id FROM session_message WHERE id = ?)`, id, id, id, id).Scan(&present)
-		return present, err
-	})
-	if err != nil {
-		return ports.NativeSessionRef{}, err
-	}
-	exportPath := filepath.Join(temp, "native.json")
-	if err := os.WriteFile(exportPath, remapped, 0o600); err != nil {
-		return ports.NativeSessionRef{}, err
-	}
-	if _, err := run(ctx, cwd, r.ConfigDir, "import", exportPath); err != nil {
-		return ports.NativeSessionRef{}, fmt.Errorf("import kilo history: %w", err)
-	}
-	after, err = kiloSourceDigest(ctx, db, r.NativeSessionID)
-	if err != nil || before != after {
 		return ports.NativeSessionRef{}, errors.New("kilo source session rows changed during native import")
 	}
-	var directory string
-	var workspace sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT directory, workspace_id FROM session WHERE id = ?`, nativeID).Scan(&directory, &workspace); err != nil {
-		return ports.NativeSessionRef{}, fmt.Errorf("confirm imported kilo identity: %w", err)
-	}
-	if filepath.Clean(directory) != cwd || (workspace.Valid && workspace.String != "") {
-		return ports.NativeSessionRef{}, errors.New("imported kilo execution location does not match the worktree")
-	}
-	var expected struct {
-		Messages []struct {
-			Info struct {
-				ID string `json:"id"`
-			} `json:"info"`
-			Parts []struct {
-				ID string `json:"id"`
-			} `json:"parts"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(remapped, &expected); err != nil {
+	if err := verifyKiloPublishedImport(ctx, db, nativeID, cwd, expected); err != nil {
 		return ports.NativeSessionRef{}, err
-	}
-	for _, message := range expected.Messages {
-		var count int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message WHERE id = ? AND session_id = ?`, message.Info.ID, nativeID).Scan(&count); err != nil || count != 1 {
-			return ports.NativeSessionRef{}, errors.New("imported kilo message history was not confirmed")
-		}
-		for _, part := range message.Parts {
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM part WHERE id = ? AND session_id = ? AND message_id = ?`, part.ID, nativeID, message.Info.ID).Scan(&count); err != nil || count != 1 {
-				return ports.NativeSessionRef{}, errors.New("imported kilo part history was not confirmed")
-			}
-		}
 	}
 	return ports.NativeSessionRef{NativeSessionID: nativeID, ConfigDir: r.ConfigDir, TranscriptPath: filepath.Join(r.ConfigDir, "kilo.db", nativeID)}, nil
 }
