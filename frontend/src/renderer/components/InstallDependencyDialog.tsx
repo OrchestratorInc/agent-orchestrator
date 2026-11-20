@@ -8,6 +8,9 @@ import { apiClient } from "../lib/api-client";
 import { apiErrorException } from "../lib/api-error-exception";
 import { aoBridge } from "../lib/bridge";
 import { installerProgress } from "../lib/installer-progress";
+import type { OnboardingStep } from "../lib/onboarding-steps";
+import type { OnboardingAction } from "../lib/onboarding-telemetry-schema";
+import { apiErrorCode, finishOnboardingAction, installJobOutcome, startOnboardingAction } from "../lib/onboarding-telemetry";
 import { cn } from "../lib/utils";
 import type { SystemRequirement } from "./SystemRequirementsChecklist";
 import { Button } from "./ui/button";
@@ -65,11 +68,14 @@ export async function checkRequirementsAgain(onRefetchRequirements: () => Promis
 	await onRefetchRequirements();
 }
 
+/** How an install reports to the onboarding funnel, or undefined to report nothing. */
+export type InstallTelemetry = { action: Extract<OnboardingAction, "dependency_install" | "gh_install">; step: OnboardingStep };
+
 /** Sequential single-target install job runner: POST to start, GET on an
  *  interval while running. One target is ever in flight at a time — this
  *  gate only ever needs one, and serializing keeps the UI unambiguous about
- *  which command is running. */
-export function useInstallRunner(onSucceeded: () => void) {
+ *  which command is running. `telemetry` is read as each install starts. */
+export function useInstallRunner(onSucceeded: () => void, telemetry?: () => InstallTelemetry | undefined) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
 	const [job, setJob] = useState<InstallJobWithNotice | undefined>(undefined);
 	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJobWithNotice>>>({});
@@ -78,9 +84,26 @@ export function useInstallRunner(onSucceeded: () => void) {
 	const [startError, setStartError] = useState<string | undefined>(undefined);
 	const [succeededTargets, setSucceededTargets] = useState<ReadonlySet<InstallTarget>>(new Set());
 	const pollRef = useRef<number | null>(null);
+	// Bumped on every install start: a poll answer from an earlier attempt,
+	// still in flight, must not settle (or stop polling for) the new one.
+	const generationRef = useRef(0);
 	const inspectedRef = useRef(new Set<InstallTarget>());
 	const onSucceededRef = useRef(onSucceeded);
 	onSucceededRef.current = onSucceeded;
+	const telemetryRef = useRef(telemetry);
+	telemetryRef.current = telemetry;
+	// The action the install in flight reports as; undefined when it reports nothing.
+	const reportingRef = useRef<InstallTelemetry | undefined>(undefined);
+	const settleTelemetry = (doneTarget: InstallTarget, status: string | undefined, startFailed?: { errorCode?: string }) => {
+		const reporting = reportingRef.current;
+		if (!reporting) return;
+		if (startFailed) {
+			finishOnboardingAction(reporting.action, "failed", { target: doneTarget, reason: "start_failed", errorCode: startFailed.errorCode });
+			return;
+		}
+		const end = installJobOutcome(status);
+		if (end) finishOnboardingAction(reporting.action, end.outcome, { target: doneTarget, reason: end.reason });
+	};
 	const markSucceeded = (doneTarget: InstallTarget) => {
 		setSucceededTargets((current) => new Set(current).add(doneTarget));
 		onSucceededRef.current();
@@ -96,15 +119,18 @@ export function useInstallRunner(onSucceeded: () => void) {
 
 	const poll = (polledTarget: InstallTarget) => {
 		stopPolling();
+		const generation = generationRef.current;
 		pollRef.current = window.setInterval(() => {
 			void (async () => {
 				const { data, error } = await apiClient.GET("/api/v1/system/install/{target}", {
 					params: { path: { target: polledTarget } },
 				});
+				if (generation !== generationRef.current) return;
 				if (error || !data) return; // transient — try again next tick
 				setJob(data as InstallJobWithNotice);
 				if (isActiveInstallJob(data)) return;
 				stopPolling();
+				settleTelemetry(polledTarget, data.status);
 				if (data.status === "succeeded") markSucceeded(polledTarget);
 			})();
 		}, POLL_INTERVAL_MS);
@@ -135,20 +161,32 @@ export function useInstallRunner(onSucceeded: () => void) {
 		// One install request at a time: a second click before the daemon answers does nothing.
 		if (startingRef.current) return;
 		startingRef.current = true;
+		generationRef.current += 1;
 		stopPolling();
 		setTarget(nextTarget);
 		setJob(undefined);
 		setStartError(undefined);
 		setIsStarting(true);
+		const reporting = telemetryRef.current?.();
+		reportingRef.current = reporting;
+		if (reporting) startOnboardingAction(reporting.action, { target: nextTarget, step: reporting.step });
 		try {
 			const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", {
 				params: { path: { target: nextTarget } },
 			});
-			if (error || !data) throw apiErrorException(error, "Could not start the install.");
+			if (error || !data) {
+				settleTelemetry(nextTarget, undefined, { errorCode: apiErrorCode(error) });
+				throw apiErrorException(error, "Could not start the install.");
+			}
 			setJob(data as InstallJobWithNotice);
 			if (isActiveInstallJob(data)) poll(nextTarget);
-			else if (data.status === "succeeded") markSucceeded(nextTarget);
+			else {
+				settleTelemetry(nextTarget, data.status);
+				if (data.status === "succeeded") markSucceeded(nextTarget);
+			}
 		} catch (err) {
+			// A request that never answered (the refusal above already reported).
+			if (reporting) finishOnboardingAction(reporting.action, "failed", { target: nextTarget, reason: "request_failed" });
 			setStartError(err instanceof Error ? err.message : "Could not start the install.");
 		} finally {
 			startingRef.current = false;
@@ -163,17 +201,25 @@ export function useInstallRunner(onSucceeded: () => void) {
 	return { target, startError, running, isStarting, start, inspect, jobFor, inspectionFinished, succeeded };
 }
 
+const DEPENDENCY_INSTALL_TELEMETRY: InstallTelemetry = { action: "dependency_install", step: "dependencies" };
+
 export function InstallDependencyDialog({
 	requirements,
 	onRefetchRequirements,
+	reportToOnboarding = false,
 }: {
 	requirements: SystemRequirement[];
 	onRefetchRequirements: () => Promise<unknown> | void;
+	/** Onboarding is still pending, so installs count toward its funnel. */
+	reportToOnboarding?: boolean;
 }) {
 	const { t } = useTranslation();
 	const [isCheckingAgain, setIsCheckingAgain] = useState(false);
 	const [checkAgainError, setCheckAgainError] = useState<string | undefined>();
-	const install = useInstallRunner(() => void onRefetchRequirements());
+	const install = useInstallRunner(
+		() => void onRefetchRequirements(),
+		() => (reportToOnboarding ? DEPENDENCY_INSTALL_TELEMETRY : undefined),
+	);
 
 	const byId = new Map(requirements.map((requirement) => [requirement.id, requirement]));
 	const git = byId.get("git");

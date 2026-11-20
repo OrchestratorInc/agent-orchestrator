@@ -334,6 +334,64 @@ describe("CloudSessionChatSurface", () => {
 		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, isTerminated: true, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeUndefined();
 	});
+	it("reports an accepted send as waiting for its turn until the chat reads its event, for that session only", async () => {
+		const userMessage = { sessionId: session.id, sequence: 7, type: "chat.user_message", payload: { text: "Ship it", turnId: "turn-sent" }, createdAt: "2026-09-22T00:01:00Z" } satisfies CloudCpClientEvent;
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: userMessage });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const surface = (id: string) => <QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, id, cloud: { orgId: "org-1" } }} /></QueryClientProvider>;
+		const view = render(surface(session.id));
+		const lastProps = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(lastProps()).toBeDefined());
+		expect(lastProps().sendAwaitingTurn).toBe(false);
+
+		await act(async () => { await lastProps().onSend("Ship it", undefined, "sent-1"); });
+		// Accepted, but every read so far ends before its event.
+		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(true));
+
+		// The surface stays mounted for another session, whose chat is not waiting on it.
+		view.rerender(surface("session-2"));
+		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(false));
+		view.rerender(surface(session.id));
+		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(true));
+
+		// The read that brings its event brings its turn too, already in flight: with
+		// nothing else running, the projection shows the first waiting send as the
+		// active request.
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [userMessage], hasMore: false, nextAfter: 7 });
+		await act(async () => { await queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", "org-1", session.id] }); });
+		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(false));
+		expect(lastProps().snapshot.turns).toContainEqual(expect.objectContaining({ id: "turn-sent", state: "running" }));
+	});
+
+	it("keeps an accepted send waiting for its turn when a later send is refused", async () => {
+		const userMessage = { sessionId: session.id, sequence: 7, type: "chat.user_message", payload: { text: "Ship it", turnId: "turn-sent" }, createdAt: "2026-09-22T00:01:00Z" } satisfies CloudCpClientEvent;
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValueOnce({ event: userMessage }).mockRejectedValueOnce(new Error("offline"));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const lastProps = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(lastProps()).toBeDefined());
+		await act(async () => { await lastProps().onSend("Ship it", undefined, "accepted-1"); });
+		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(true));
+
+		await act(async () => { await expect(lastProps().onSend("And this", undefined, "refused-2")).rejects.toThrow("offline"); });
+		expect(lastProps().sendAwaitingTurn).toBe(true);
+	});
+
+	it("does not report a refused send as waiting for a turn", async () => {
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockRejectedValue(new Error("offline"));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const lastProps = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(lastProps()).toBeDefined());
+		await act(async () => { await expect(lastProps().onSend("Ship it", undefined, "refused-1")).rejects.toThrow("offline"); });
+		expect(lastProps().sendAwaitingTurn).toBe(false);
+	});
 	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({events:[],hasMore:false,nextAfter:0});
 		cloudMocks.listChatModels.mockResolvedValue({models:[]});
