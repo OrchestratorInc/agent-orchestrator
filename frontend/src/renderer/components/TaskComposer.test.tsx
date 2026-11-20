@@ -4562,6 +4562,29 @@ describe("useTaskLaunch on the new chat page", () => {
 		},
 	);
 
+	it("gives the new chat page a project-pinned model the catalog lacks, noted, and never as its default", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }], allowCustom: false, refreshRecommended: false } };
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } } } } };
+		});
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() {
+			task = useTaskLaunch({ projectId: "proj-1" });
+			return null;
+		}
+		render(<Wrap><Launcher /></Wrap>);
+		const pinned = { id: "gpt-5.4-mini", displayName: "gpt-5.4-mini", default: false, hint: "Set for this project · Codex doesn't list it for this account" };
+		await waitFor(() => expect(task.chatModels).toEqual([expect.objectContaining({ id: "gpt-5.1", default: true }), pinned]));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.1" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.1"));
+		expect(task.chatModels).toContainEqual(pinned);
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.4-mini" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+	});
+
 	it("says at once that Scratchpad has no ready agent", async () => {
 		h.agentCatalog = { agents: [agentReadiness("goose", "Goose", { authentication: "unauthorized" })] };
 		render(<Wrap><LoadError /></Wrap>);

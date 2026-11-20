@@ -108,6 +108,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(initialValues);
 	const saved = useRef(JSON.stringify(initialValues));
+	// What the project holds now, so a pick that fails to save leaves the saved one offered.
+	const [savedValues, setSavedValues] = useState(initialValues);
 	const failedKey = useRef<string | undefined>(undefined);
 	const [error, setError] = useState<string>();
 	const [replacementError, setReplacementError] = useState<string>();
@@ -119,6 +121,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		onSuccess: (result, values) => {
 			const normalized = result.values ?? values;
 			saved.current = JSON.stringify(normalized);
+			setSavedValues(normalized);
 			failedKey.current = undefined;
 			setDraft((current) => JSON.stringify(current) === JSON.stringify(values) ? normalized : current);
 			setReplacementError(result.replacementError ?? undefined);
@@ -203,6 +206,9 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					// model and effort when that agent is also the reviewer. Show that, and
 					// keep it when the user pins the reviewer by editing one field.
 					const inheritsWorker = role === "reviewer" && !selectedAgent && agent !== "" && agent === draft.workerAgent;
+					const savedModel = savedValues[fields.agent] !== selectedAgent ? ""
+						: inheritsWorker ? (savedValues.workerAgent === agent ? savedValues.workerModel : "")
+						: savedValues[fields.model];
 					const updateConfig = (key: RoleFields["model"] | RoleFields["mode"] | RoleFields["effort"] | RoleFields["permissions"], value: string) => setDraft((current) => ({
 						...current,
 						...(role === "reviewer" && !current.reviewerHarness && agent
@@ -220,7 +226,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
 						{/* A warning wraps onto its own line under the whole row, starting at the label. Top-aligned, so it grows the row downward and moves nothing; the control-height label box keeps "Agent" level with the pickers. */}
 						<ProjectSettingsRow label={t("settings.project.agent")} className="flex-wrap items-start justify-end gap-x-2 gap-y-1.5 [&>:first-child]:mr-auto [&>:first-child]:min-h-control-md [&>:last-child]:contents"><div className="contents"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
-						<div className="contents"><AgentModelField warningClassName="order-last basis-full px-0" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
+						<div className="contents"><AgentModelField warningClassName="order-last basis-full px-0" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} savedModel={savedModel} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
 							emptyLabel={capabilities.runtimeDefaults && agent === "" ? t("settings.cloudProject.sessionModel") : undefined}
