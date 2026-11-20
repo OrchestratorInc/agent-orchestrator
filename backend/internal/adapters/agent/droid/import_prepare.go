@@ -367,9 +367,9 @@ func (p *Plugin) validateImportedRuntime(ctx context.Context, cfg ports.Workspac
 	if cfg.ImportConfigDir == "" {
 		return nil
 	}
-	if err := p.verifyImportVersion(ctx, cfg.Env); err != nil {
-		return err
-	}
+	// The exact version pin protects preparation's JSONL rewrite. A prepared
+	// conversation must remain resumable after a native CLI update; its receipt,
+	// profile and history bindings are verified below on every open.
 	if err := p.verifyImportProfile(ctx, cfg.ImportConfigDir, cfg.Env); err != nil {
 		return err
 	}
