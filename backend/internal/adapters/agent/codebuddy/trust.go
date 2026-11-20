@@ -61,7 +61,7 @@ func ensureTrusted(settingsPath, workspacePath string) error {
 		return fmt.Errorf("codebuddy: read %s: %w", settingsPath, err)
 	}
 	settings := map[string]json.RawMessage{}
-	if len(strings.TrimSpace(string(data))) > 0 {
+	if strings.TrimSpace(string(data)) != "" {
 		if err := json.Unmarshal(data, &settings); err != nil || settings == nil {
 			return nil //nolint:nilerr // Leave unsupported settings untouched; CodeBuddy owns the fallback prompt.
 		}
