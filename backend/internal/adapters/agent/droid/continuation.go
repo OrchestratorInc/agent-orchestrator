@@ -109,11 +109,29 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	}
 	sessionsDir := filepath.Join(configDir, "sessions")
 	file := sessionID + ".jsonl"
+	found := ""
+	check := func(path string) error {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("droid: native conversation is not a regular file")
+		}
+		if found != "" {
+			return errors.New("droid: duplicate native conversation identity")
+		}
+		found = path
+		return nil
+	}
 
 	// Flat and "btw" locations first, matching Droid's own resolver order.
 	for _, candidate := range []string{filepath.Join(sessionsDir, file), filepath.Join(sessionsDir, "btw", file)} {
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-			return candidate, true, nil
+		if err := check(candidate); err != nil {
+			return "", false, err
 		}
 	}
 
@@ -132,17 +150,11 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 			continue
 		}
 		path := filepath.Join(sessionsDir, folder.Name(), file)
-		info, err := os.Stat(path)
-		switch {
-		case err == nil && info.Mode().IsRegular():
-			return path, true, nil
-		case errors.Is(err, os.ErrNotExist):
-			continue
-		case err != nil:
+		if err := check(path); err != nil {
 			return "", false, fmt.Errorf("droid: stat transcript: %w", err)
 		}
 	}
-	return "", false, nil
+	return found, found != "", nil
 }
 
 func canonicalDroidNativeSessionID(value string) (string, error) {

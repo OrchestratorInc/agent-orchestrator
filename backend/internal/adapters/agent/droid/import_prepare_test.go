@@ -184,11 +184,18 @@ func TestImportedDroidRestoreRefusesMissingHistoryWrongWorkspaceAndProfile(t *te
 	if err != nil || !exists {
 		t.Fatalf("strict preflight: %v %v", exists, err)
 	}
-	for _, kind := range []string{"workspace", "profile", "missing", "tampered"} {
+	for _, kind := range []string{"workspace", "profile", "missing", "tampered", "duplicate"} {
 		t.Run(kind, func(t *testing.T) {
 			copyCfg := cfg
 			copyCfg.Env = map[string]string{"HOME": r.Env["HOME"], factoryHomeEnv: ""}
 			switch kind {
+			case "duplicate":
+				data, _ := os.ReadFile(ref.TranscriptPath)
+				other := filepath.Join(ref.ConfigDir, "sessions", ref.NativeSessionID+".jsonl")
+				if err := os.WriteFile(other, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = os.Remove(other) }()
 			case "workspace":
 				copyCfg.Session.WorkspacePath = t.TempDir()
 			case "profile":

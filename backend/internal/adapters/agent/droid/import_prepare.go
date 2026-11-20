@@ -193,6 +193,13 @@ func verifyDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (d
 	if err != nil {
 		return r, err
 	}
+	resolved, found, err := New().LocateTranscript(ctx, ports.NativeSessionRef{ConfigDir: config, NativeSessionID: id})
+	if err != nil {
+		return r, err
+	}
+	if !found || resolved != r.Path {
+		return r, errors.New("droid: native resolver differs from prepared conversation")
+	}
 	start := bytes.IndexByte(data, '\n') + 1
 	if start == 0 || len(data)-start < r.PrefixBytes || NativeHistoryFingerprint(data[start:start+r.PrefixBytes]) != r.PrefixHash {
 		return r, errors.New("droid: prepared native history changed or is incomplete")
