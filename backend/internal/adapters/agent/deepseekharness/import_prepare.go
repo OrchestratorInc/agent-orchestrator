@@ -73,7 +73,9 @@ func (p *Plugin) checkImportVersion(ctx context.Context) error {
 	return nil
 }
 
-func privateImportNamespace(root string) bool {
+// IsPreparedImportHome recognizes the reserved path namespace. Callers must
+// still validate its proof, native identity, workspace and history before use.
+func IsPreparedImportHome(root string) bool {
 	parent := filepath.Dir(filepath.Clean(root))
 	return filepath.IsAbs(root) && filepath.Base(parent) == adapterID && filepath.Base(filepath.Dir(parent)) == "native-imports"
 }
@@ -121,7 +123,7 @@ func readImportProof(root string) (importProof, error) {
 }
 
 func validatePrivateImport(ctx context.Context, root, id, cwd string) (string, error) {
-	if !privateImportNamespace(root) || !importID.MatchString(id) {
+	if !IsPreparedImportHome(root) || !importID.MatchString(id) {
 		return "", ports.ErrNativeHistoryUnavailable
 	}
 	info, err := os.Lstat(root)
@@ -355,7 +357,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 
 // ProbeNativeSession only treats a proof-bound private root as authoritative.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if !privateImportNamespace(ref.ConfigDir) {
+	if !IsPreparedImportHome(ref.ConfigDir) {
 		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	proof, err := readImportProof(ref.ConfigDir)
@@ -371,7 +373,7 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 
 // LocateTranscript returns only the already prepared native copy.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
-	if !privateImportNamespace(ref.ConfigDir) {
+	if !IsPreparedImportHome(ref.ConfigDir) {
 		return "", false, nil
 	}
 	proof, err := readImportProof(ref.ConfigDir)
@@ -397,7 +399,7 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 // ValidateImportedACP guards proof-bound private homes on every Chat open.
 // A missing ID or store never falls through to session/new.
 func ValidateImportedACP(ctx context.Context, root, id, cwd string) error {
-	if !privateImportNamespace(root) {
+	if !IsPreparedImportHome(root) {
 		return nil
 	}
 	if _, err := validatePrivateImport(ctx, root, id, cwd); err != nil {

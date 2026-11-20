@@ -425,6 +425,29 @@ func importProjectKey(cwd string) string {
 // validatePrivateNativeLog checks evolved native history in bounded row memory.
 // The one-time source admission budget must not lock out later valid turns.
 func validatePrivateNativeLog(ctx context.Context, root, path, id, cwd string) error {
+	return walkPrivateNativeLog(ctx, root, path, id, cwd, nil)
+}
+
+// NativeHistoryEvent is one validated native V4 row. Data remains provider
+// vocabulary; the Chat binding owns its conversion to the ACP timeline.
+type NativeHistoryEvent struct {
+	Type      string
+	Seq       int64
+	Data      json.RawMessage
+	SurfaceOp json.RawMessage
+}
+
+// VisitPrivateHistory streams the proof-bound prepared log without applying
+// source admission limits or retaining request/context and model stream blobs.
+func VisitPrivateHistory(ctx context.Context, root, id, cwd string, visit func(NativeHistoryEvent) error) error {
+	path, err := validatePrivateImport(ctx, root, id, cwd)
+	if err != nil {
+		return err
+	}
+	return walkPrivateNativeLog(ctx, root, path, id, cwd, visit)
+}
+
+func walkPrivateNativeLog(ctx context.Context, root, path, id, cwd string, visit func(NativeHistoryEvent) error) error {
 	root, rel, err := importPath(root, path)
 	if err != nil {
 		return err
@@ -471,6 +494,11 @@ func validatePrivateNativeLog(ctx context.Context, root, path, id, cwd string) e
 				if m.Source.Kind == "user" && b.Type == "text" && strings.TrimSpace(b.Text) != "" {
 					hasUser = true
 				}
+			}
+		}
+		if visit != nil {
+			if err := visit(NativeHistoryEvent{Type: e.Type, Seq: *e.Seq, Data: e.Data, SurfaceOp: e.SurfaceOp}); err != nil {
+				return err
 			}
 		}
 	}
