@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useBackgroundTaskReadings, useBackgroundTasks, useStopBackgroundTask } from "./useBackgroundTasks";
+import { useBackgroundTaskOutput, useBackgroundTaskReadings, useBackgroundTasks, useStopBackgroundTask } from "./useBackgroundTasks";
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: getMock, POST: postMock } }));
@@ -90,6 +90,38 @@ describe("background task queries", () => {
 		expect(getMock).toHaveBeenCalledTimes(1);
 		view.unmount();
 		client.clear();
+	});
+});
+
+describe("a background task's output", () => {
+	beforeEach(() => vi.clearAllMocks());
+	function Output() {
+		const query = useBackgroundTaskOutput("s", "dev", { enabled: true, live: false });
+		return <span>{query.data ? `${query.data.availability}:${query.data.output}:${query.data.lastRead ? "last" : "live"}` : "loading"}</span>;
+	}
+
+	it("keeps the last output read when the daemon no longer has it, across remounts", async () => {
+		const reply = (availability: string, output: string) => ({ data: { sessionId: "s", taskId: "dev", availability, output } });
+		getMock.mockResolvedValueOnce(reply("ready", "ready on :3000"));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
+		await screen.findByText("ready:ready on :3000:live");
+		// The chat ended: the daemon answers unavailable.
+		getMock.mockResolvedValue(reply("unavailable", ""));
+		await client.refetchQueries();
+		await screen.findByText("ready:ready on :3000:last");
+		// Reopening the task later still shows it.
+		view.unmount();
+		const again = render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
+		await client.refetchQueries();
+		await screen.findByText("ready:ready on :3000:last");
+		again.unmount();
+		client.clear();
+		// Nothing read before: unavailable stays unavailable.
+		const fresh = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={fresh}><Output /></QueryClientProvider>);
+		await screen.findByText("unavailable::live");
+		fresh.clear();
 	});
 });
 

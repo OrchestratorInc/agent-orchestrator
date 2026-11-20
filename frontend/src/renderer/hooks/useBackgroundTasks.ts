@@ -79,18 +79,22 @@ export function useStopBackgroundTask(sessionId: string) {
 	});
 }
 
-export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"];
+/** `lastRead`: the daemon no longer has this output, so it is the last one read. */
+export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"] & { lastRead?: boolean };
 
 export const backgroundTaskOutputQueryKey = (sessionId: string, taskId: string) => ["background-task-output", sessionId, taskId] as const;
 
 /**
  * One task's latest output (the daemon keeps the last 200 lines). Polls every
  * second while `live`; otherwise reads once. Unchanged output keeps the same
- * object, so an idle task does not re-render its tab.
+ * object, so an idle task does not re-render its tab. Output the daemon no
+ * longer has, after the chat ends or the daemon restarts, stays as last read.
  */
 export function useBackgroundTaskOutput(sessionId: string, taskId: string, { enabled, live }: { enabled: boolean; live: boolean }) {
+	const queryClient = useQueryClient();
+	const queryKey = backgroundTaskOutputQueryKey(sessionId, taskId);
 	return useQuery({
-		queryKey: backgroundTaskOutputQueryKey(sessionId, taskId),
+		queryKey,
 		enabled,
 		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
@@ -100,7 +104,11 @@ export function useBackgroundTaskOutput(sessionId: string, taskId: string, { ena
 			if (!data || typeof data.output !== "string" || (data.availability !== "ready" && data.availability !== "unavailable")) {
 				throw new Error("Invalid background task output response");
 			}
-			return data;
+			const previous = queryClient.getQueryData<BackgroundTaskOutput>(queryKey);
+			if (data.availability === "unavailable" && previous?.availability === "ready" && previous.output) {
+				return previous.lastRead ? previous : { ...previous, lastRead: true };
+			}
+			return data as BackgroundTaskOutput;
 		},
 		refetchInterval: live ? 1_000 : false,
 		retry: false,

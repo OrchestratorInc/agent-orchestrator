@@ -102,19 +102,14 @@ describe("background task panel", () => {
 		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: true });
 	});
 
-	it("keeps the last output read when the chat stops reporting the task", () => {
+	it("shows the last output read once the chat stops reporting the task", () => {
 		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
-		// The chat ended: the task reads as ended, and its output as unavailable.
-		outputMock.mockReturnValue(outputOf("", { availability: "unavailable" }));
+		const region = screen.getByRole("region", { name: "Output" });
+		outputMock.mockReturnValue(outputOf("> vite\n  Local: http://localhost:3000/", { lastRead: true }));
 		rerender(<Panel isVisible sessionId="s" tab={{ task: task(), ended: true }} />);
-		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("Local: http://localhost:3000/");
+		expect(screen.getByRole("region", { name: "Output" })).toBe(region);
+		expect(region).toHaveTextContent("Local: http://localhost:3000/");
 		expect(screen.getByText("The chat stopped reporting this task. This is the last output read.")).toBeVisible();
-		expect(screen.queryByText("This agent doesn't report this task's output")).toBeNull();
-		// A reading that answers again replaces it.
-		outputMock.mockReturnValue(outputOf("restarted"));
-		rerender(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
-		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("restarted");
-		expect(screen.queryByText(/last output read/)).toBeNull();
 	});
 
 	it("says the chat stopped reporting a task whose output was never read", () => {

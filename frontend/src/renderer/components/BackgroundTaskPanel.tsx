@@ -215,13 +215,8 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 	const now = useNow(live ? [task] : []);
 	const { stopping, failed, stop } = useTaskStops(sessionId, live ? task.id : "");
 	const output = useBackgroundTaskOutput(sessionId, task.id, { enabled: isVisible, live: live && isVisible && !stale });
-	// An ended chat or a restarted daemon answers "unavailable" for output it no
-	// longer has: keep the last output read rather than replace it with nothing.
-	const read = output.data?.availability === "ready" ? output.data : undefined;
-	const [lastRead, setLastRead] = useState(read);
-	if (read && read !== lastRead) setLastRead(read);
-	const kept = !read && lastRead?.output ? lastRead : undefined;
-	const shown = read ?? kept;
+	// Output the chat no longer reports stays as last read (`lastRead`).
+	const shown = output.data?.availability === "ready" ? output.data : undefined;
 	// The last lines land after the task ends: read once more when it does.
 	const { refetch } = output;
 	const wasLive = useRef(live);
@@ -313,7 +308,7 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 					<p className="px-3 py-2.5 text-xs text-muted-foreground">{t("backgroundTasks.output.error")}</p>
 				) : shown ? (
 					<>
-						{kept ? <p className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">{t("backgroundTasks.output.lastRead")}</p> : null}
+						{shown.lastRead ? <p className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">{t("backgroundTasks.output.lastRead")}</p> : null}
 						{output.isError ? <p role="status" className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">{t("backgroundTasks.output.error")}</p> : null}
 						{shown.output === "" ? (
 							<p className="px-3 py-2.5 text-xs text-muted-foreground">
