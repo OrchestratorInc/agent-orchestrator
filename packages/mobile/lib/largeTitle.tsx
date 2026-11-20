@@ -75,8 +75,13 @@ export function largeTitleCollapsed(y: number): boolean {
  * it did when the line was in the page, and its live region announces changes.
  * The twin also makes room for the line in the same layout pass, so the line
  * never draws over the first row; `topInset` includes its height.
+ *
+ * `resetKey` is the key a page replaces its scroll view by, as the board does
+ * for each filter. A new list starts at its top without reporting a scroll, so
+ * the title and the seam go back to their resting state when the key changes
+ * instead of describing the list that was replaced.
  */
-export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accessory, backdrop = "frost" }: { accessory?: ReactNode; backdrop?: LargeTitleBackdrop } = {}): {
+export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accessory, backdrop = "frost", resetKey }: { accessory?: ReactNode; backdrop?: LargeTitleBackdrop; resetKey?: string } = {}): {
 	header: ReactElement | null;
 	edge: ReactElement | null;
 	onScroll: ScrollHandler | undefined;
@@ -101,6 +106,16 @@ export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accesso
 	// A solid bar's seam: up while the list is off the top.
 	const scrolled = useSharedValue(0);
 	const lastScrolled = useRef(0);
+	const shownKey = useRef(resetKey);
+	useLayoutEffect(() => {
+		if (shownKey.current === resetKey) return;
+		shownKey.current = resetKey;
+		if (!android) return;
+		if (last.current !== 0) collapsed.value = 0;
+		if (lastScrolled.current !== 0) scrolled.value = 0;
+		last.current = 0;
+		lastScrolled.current = 0;
+	}, [android, collapsed, resetKey, scrolled]);
 	useLayoutEffect(() => {
 		if (!android) return;
 		// Set once: the title reads the shared value, so collapsing never

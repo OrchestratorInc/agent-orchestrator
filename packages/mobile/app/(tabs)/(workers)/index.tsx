@@ -243,7 +243,7 @@ export default function FleetScreen() {
 	// The title's accessory: under the large title on iOS, pinned under the bar
 	// on Android. The Android bar is solid rather than frosted: the frost's tail
 	// lay over the machine chips and dimmed them at rest.
-	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine, backdrop: "solid" });
+	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine, backdrop: "solid", resetKey: boardIdentityKey });
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}

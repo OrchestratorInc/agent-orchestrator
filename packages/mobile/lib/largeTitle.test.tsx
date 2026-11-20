@@ -268,3 +268,42 @@ describe("a solid bar", () => {
 		expect(result.current.edge).toBeNull();
 	});
 });
+
+describe("a replaced list", () => {
+	function renderKeyed(key: string, backdrop: "frost" | "solid" = "solid"): { current: Result; rekey(next: string): void } {
+		const ref = { current: undefined as unknown as Result, rekey: (_next: string) => {} };
+		function Probe({ k }: { k: string }) {
+			ref.current = useLargeTitle("Workers", undefined, { backdrop, resetKey: k });
+			return null;
+		}
+		act(() => { renderer = create(<Probe k={key} />); });
+		ref.rekey = (next) => act(() => renderer!.update(<Probe k={next} />));
+		return ref;
+	}
+
+	// The board keys its list by filter; the new list starts at its top without a scroll event.
+	it("lowers the seam and settles the title when the list's key changes", () => {
+		const hook = renderKeyed("all|all");
+		hook.current.onScroll!(scrollTo(60));
+		expect(fixtures.writes).toEqual(["title:1", "seam:1"]);
+		hook.rekey("mac|all");
+		expect(fixtures.writes).toEqual(["title:1", "seam:1", "title:0", "seam:0"]);
+		// The new list's first move raises the seam again.
+		hook.current.onScroll!(scrollTo(4));
+		expect(fixtures.writes).toEqual(["title:1", "seam:1", "title:0", "seam:0", "seam:1"]);
+	});
+
+	it("writes nothing on mount, on a render with the same key, or when the list was already at rest", () => {
+		const hook = renderKeyed("all|all");
+		hook.rekey("all|all");
+		hook.rekey("mac|all");
+		expect(fixtures.writes).toEqual([]);
+	});
+
+	it("leaves iOS alone", () => {
+		fixtures.platform = "ios";
+		const hook = renderKeyed("all|all");
+		hook.rekey("mac|all");
+		expect(fixtures.writes).toEqual([]);
+	});
+});
