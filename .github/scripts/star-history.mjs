@@ -153,9 +153,10 @@ export async function fetchStargazers(repo, token) {
 	return { createdAt: info.created_at, starredAt: [...starredAt.values()] };
 }
 
-export async function run({ repo, token, outDir, now = Date.now() }) {
+export async function run({ repo, token, outDir, now }) {
 	const { createdAt, starredAt } = await fetchStargazers(repo, token);
-	const series = dailySeries(starredAt, { createdAt, now });
+	// Read the clock after fetching so a run that crosses midnight UTC keeps the new day.
+	const series = dailySeries(starredAt, { createdAt, now: now ?? Date.now() });
 	await mkdir(outDir, { recursive: true });
 	await writeFile(join(outDir, "star-history.svg"), renderSvg(series, { repo, theme: "light" }));
 	await writeFile(join(outDir, "star-history-dark.svg"), renderSvg(series, { repo, theme: "dark" }));
