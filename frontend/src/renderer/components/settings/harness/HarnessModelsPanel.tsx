@@ -130,7 +130,11 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
 	const currentPage = Math.min(page, pageCount - 1);
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
-	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE);
+	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE).map((model) => {
+		const label = agentModelDisplayLabel(agentId, model.label);
+		const idHint = !families && isConcreteModelID(model.id) && model.id !== label ? model.id : undefined;
+		return { model, label, idHint };
+	});
 	const error = (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
 	const showConfiguredGroups = !data?.stale && providers.some((provider) => provider.configured);
 	const renderProviderOption = (id: string, label: string, inMenu: boolean) => {
@@ -189,12 +193,13 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		{catalog.isPending ? null
 			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : acceptsDirectModel ? "settings.harness.models.directEntry" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
-				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
+				{visibleModels.map(({ model, label, idHint }) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
 					<span className="min-w-0 flex-1">
 						<span className="flex flex-wrap items-center gap-2 text-sm leading-5 text-settings-label">
-							{agentModelDisplayLabel(agentId, model.label)}
+							{label}
 							{model.isDefault ? <span className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-caption text-settings-muted">{t("settings.harness.models.default")}</span> : null}
 						</span>
+						{idHint ? <code className="block wrap-anywhere text-xs text-settings-muted">{idHint}</code> : null}
 						{/* Only facts the harness reports; nothing is shown in place of a missing value. */}
 						{model.contextWindow ? <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
@@ -204,7 +209,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
 					</span> : null}
 					{isConcreteModelID(model.id) ? <Switch
-						aria-label={t("settings.harness.models.toggleModel", { model: agentModelDisplayLabel(agentId, model.label) })}
+						aria-label={t("settings.harness.models.toggleModel", { model: idHint ? `${label} (${idHint})` : label })}
 						checked={idsOf(model.id).some(isModelEnabled)}
 						disabled={idsOf(model.id).some(isModelEnabled) && enabledCount <= idsOf(model.id).filter(isModelEnabled).length}
 						onCheckedChange={(on) => setModelsEnabled(idsOf(model.id), on)}

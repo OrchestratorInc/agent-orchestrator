@@ -40,6 +40,7 @@ import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
+import { ModelChoiceName, modelChoiceIDHint } from "../settings/ModelChoiceName";
 import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
@@ -837,6 +838,7 @@ function ModelEffortPicker({
 								<OptionMenuItem
 									key={model.id}
 									id={optionID?.(model.id)}
+									aria-description={modelChoiceIDHint(model.id, model.displayName)}
 									active={model.id === settings.model}
 									searchActive={model.id === searchActiveID}
 									radio
@@ -844,7 +846,7 @@ function ModelEffortPicker({
 									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
 								>
-									<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
+									<UnavailableLabel label={model.displayName} reason={model.unavailableReason} idHint={modelChoiceIDHint(model.id, model.displayName)} />
 								</OptionMenuItem>
 							))}
 						</ModelMenuChoices>
@@ -1318,7 +1320,10 @@ function ConfigModelChoices({
 }
 
 /** A model row's name, with why it cannot be picked beneath it when it cannot. */
-function UnavailableLabel({ label, reason }: { label: string; reason?: string }) {
+function UnavailableLabel({ label, reason, idHint }: { label: string; reason?: string; idHint?: string }) {
+	if (idHint) return <ModelChoiceName label={label} idHint={idHint}>
+		{reason ? <span className="block whitespace-normal text-[10px] text-muted-foreground">{reason}</span> : null}
+	</ModelChoiceName>;
 	if (!reason) return <>{label}</>;
 	return (
 		<span className="block min-w-0">
@@ -1369,6 +1374,7 @@ function ConfigOptionChoices({
 		<>
 			{option.choices.map((choice, index) => {
 				const previousGroup = index > 0 ? option.choices[index - 1]?.group : undefined;
+				const idHint = isModelOption(option) ? modelChoiceIDHint(choice.value, choice.name) : undefined;
 				return (
 					<Fragment key={choice.value}>
 						{choice.group && choice.group !== previousGroup ? (
@@ -1378,6 +1384,7 @@ function ConfigOptionChoices({
 						) : null}
 						<OptionMenuItem
 							id={optionID?.(choice.value)}
+							aria-description={idHint}
 							active={choice.value === option.currentValue}
 							searchActive={choice.value === searchActiveID}
 							radio
@@ -1385,16 +1392,16 @@ function ConfigOptionChoices({
 							onSelect={() => onChange({ value: choice.value })}
 							className={cn("text-xs")}
 						>
-							<span className="flex w-full items-baseline gap-2">
+							<span className="flex w-full min-w-0 items-baseline gap-2">
 								<span
 									className={cn(
-										"text-xs",
+										"min-w-0 text-xs",
 										choice.value === option.currentValue
 											? "text-foreground"
 											: "text-muted-foreground",
 									)}
 								>
-									<UnavailableLabel label={choice.name} reason={choice.unavailableReason} />
+									<UnavailableLabel label={choice.name} reason={choice.unavailableReason} idHint={idHint} />
 								</span>
 							</span>
 						</OptionMenuItem>

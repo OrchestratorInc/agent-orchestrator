@@ -20,6 +20,7 @@ import { cn } from "../lib/utils";
 import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentSelectMenuItem } from "./settings/AgentSelectMenuItem";
+import { ModelChoiceName, modelChoiceIDHint } from "./settings/ModelChoiceName";
 import {
 	OptionMenu,
 	OptionMenuContent,
@@ -294,6 +295,7 @@ function ReviewerHarnessOption({
 					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
 				) : null}
 				{options.map((option) => {
+					const idHint = option.kind === "model" ? modelChoiceIDHint(option.value, option.label) : undefined;
 					const config = option.value === defaultModel ? {} : option.kind === "mode" ? { mode: option.value } : { model: option.value };
 					const selected =
 						isCurrentHarness &&
@@ -303,11 +305,12 @@ function ReviewerHarnessOption({
 					return (
 						<OptionMenuItem
 							key={`${option.kind}:${option.value}`}
+							aria-description={idHint}
 							onSelect={() => onSelect(persistHarness, config)}
 							active={selected}
 						>
-							<span className="flex min-w-0 items-center justify-between gap-3">
-								<span className="min-w-0 truncate">{option.label}</span>
+							<span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+								<ModelChoiceName label={option.label} idHint={idHint} />
 								{selected ? <Check aria-hidden="true" className="size-4" /> : null}
 							</span>
 						</OptionMenuItem>

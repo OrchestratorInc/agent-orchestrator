@@ -1,7 +1,6 @@
 import { Check, ChevronDown, Loader2, RefreshCw, Search } from "@/components/app-icons";
 import { Fragment, type ReactNode, useMemo, useRef, useState } from "react";
 import { useUiStore } from "../../stores/ui-store";
-import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
@@ -11,6 +10,7 @@ import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelV
 import { cn } from "../../lib/utils";
 import { ToggleRow } from "../chat/AgentSwitchPicker";
 import { EffortPicker, formatEffortLabel } from "./EffortPicker";
+import { ModelChoiceName, modelChoiceIDHint } from "./ModelChoiceName";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
 import { Pressable } from "../ui/pressable";
@@ -181,6 +181,7 @@ export function AgentModelCombobox({
 	const allowDirectCustom = entryMode === "direct";
 	const [search, setSearch] = useState("");
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [insideModal, setInsideModal] = useState(false);
 	const [effortMenuOpen, setEffortMenuOpen] = useState(false);
 	const [awaitingEffort, setAwaitingEffort] = useState(false);
 	const [refreshFailed, setRefreshFailed] = useState(false);
@@ -247,15 +248,18 @@ export function AgentModelCombobox({
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
 	// With no identified model, nothing is selected and the menu just lists models.
 	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
+	const triggerRef = useRef<HTMLButtonElement>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
-	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
-	const selectModel = (picked: string, want?: Partial<ModelVariant>) => {
+	const selectedIDFor = (picked: string, want?: Partial<ModelVariant>) => {
 		// A Cursor model keeps the current effort, thinking and speed where it has them.
 		const family = families?.find((entry) => entry.id === picked) ?? (want ? variant?.family : undefined);
-		const modelID = family ? pickModelVariant(family, { ...(variant?.variant ?? family.defaultVariant), ...want }).id : picked;
+		return family ? pickModelVariant(family, { ...(variant?.variant ?? family.defaultVariant), ...want }).id : picked;
+	};
+	const selectModel = (picked: string, want?: Partial<ModelVariant>) => {
+		const modelID = selectedIDFor(picked, want);
 		if (recentScope) {
 			const next = rememberRecentModel(recentScope, modelID);
 			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
@@ -287,9 +291,13 @@ export function AgentModelCombobox({
 	const menu = (
 		<DropdownMenu
 			open={menuOpen}
+			modal={insideModal || undefined}
 			onOpenChange={(open) => {
 				setMenuOpen(open);
 				if (open) {
+					// A menu portalled out of a modal is outside its scroll lock. Give the
+					// open menu its own lock so it can scroll without unlocking the dialog.
+					setInsideModal(Boolean(triggerRef.current?.closest('[role="dialog"][aria-modal="true"]')));
 					setSearch("");
 					setOtherOpen(false);
 				} else {
@@ -301,6 +309,7 @@ export function AgentModelCombobox({
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
 				<Pressable
+					ref={triggerRef}
 					className={cn(
 						"group/agent-model-trigger settings-option-trigger max-w-full min-w-0 hover:text-settings-label",
 						disabled && "cursor-not-allowed opacity-50",
@@ -341,7 +350,8 @@ export function AgentModelCombobox({
 						setSearch((current) => current + event.key);
 					}
 				}}
-				className={cn("settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)", menuClassName)}
+				style={{ maxHeight: "min(var(--size-select-menu-max), var(--radix-dropdown-menu-content-available-height, 100dvh))" }}
+				className={cn("settings-menu-surface w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)", menuClassName)}
 			>
 				{(showSearch || showManualRefresh) && (
 					<div className="flex shrink-0 items-center gap-1">
@@ -419,10 +429,10 @@ export function AgentModelCombobox({
 					</div>
 				)}
 
-				<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
+				<div className="relative grid min-h-0 flex-auto grid-rows-[minmax(0,1fr)] overflow-hidden">
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
+						className="model-picker-scrollbar min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain"
 					>
 						{onUseDefault && normalizedSearch === "" && (
 							<>
@@ -438,21 +448,20 @@ export function AgentModelCombobox({
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
 								{!compact && <DropdownMenuLabel className="normal-case tracking-normal">{group.label}</DropdownMenuLabel>}
-								{group.models.map((item) => (
-									<Fragment key={item.id}>
+								{group.models.map((item) => {
+									const idHint = modelChoiceIDHint(selectedIDFor(item.id), item.label);
+									return <Fragment key={item.id}>
 									{compact ? (
 										<DropdownMenuItem
 											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
 											aria-current={tuning && item.id === shownModel ? true : undefined}
+											aria-description={idHint}
 										>
-											<div className="min-w-0 flex-1">
-												<span className="truncate text-settings-label">{item.label}</span>
-												{item.model.unavailableReason && (
-													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
-												)}
-											</div>
+											<ModelChoiceName label={item.label} idHint={idHint} className="text-settings-label">
+												{item.model.unavailableReason && <span className="block text-xs text-settings-muted">{item.model.unavailableReason}</span>}
+											</ModelChoiceName>
 											{modelHint?.id === item.id && (
 												<span className="ml-2 shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
 											)}
@@ -463,17 +472,12 @@ export function AgentModelCombobox({
 											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
+											aria-description={idHint}
 										>
 										<div className="flex min-w-0 flex-1 items-center gap-3">
-											<div className="min-w-0 flex-1">
-												<span className="truncate text-settings-label">{item.label}</span>
-													{shouldShowModelID(item, visibleModels, normalizedSearch) && (
-														<p className="truncate text-xs text-settings-muted">{item.id}</p>
-													)}
-													{item.model.unavailableReason && (
-														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
-													)}
-												</div>
+											<ModelChoiceName label={item.label} idHint={idHint} className="text-settings-label">
+												{item.model.unavailableReason && <span className="block text-xs text-settings-muted">{item.model.unavailableReason}</span>}
+											</ModelChoiceName>
 												{modelHint?.id === item.id && (
 													<span className="shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
 												)}
@@ -492,8 +496,8 @@ export function AgentModelCombobox({
 											{t("settings.models.updateClaudeCode", { defaultValue: "Update Claude Code" })}
 										</DropdownMenuItem>
 									)}
-									</Fragment>
-								))}
+									</Fragment>;
+								})}
 							</div>
 						))}
 
@@ -697,18 +701,6 @@ function rememberRecentModel(scope: string, modelID: string): string[] {
 		// Recents are optional polish; model selection must still work without storage.
 	}
 	return next;
-}
-
-function shouldShowModelID(item: IndexedModel, siblings: IndexedModel[], search: string): boolean {
-	if (item.id === item.label) return false;
-
-	const label = normalizeSearch(item.label);
-	const duplicateLabel = siblings.some(
-		(candidate) => candidate.id !== item.id && normalizeSearch(candidate.label) === label,
-	);
-	if (duplicateLabel) return true;
-
-	return search !== "" && normalizeSearch(item.id).includes(search) && !label.includes(search);
 }
 
 function providerFromModelID(modelID: string): string {
