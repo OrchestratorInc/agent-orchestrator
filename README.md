@@ -208,10 +208,10 @@ Join [Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor d
 
 ## Star history
 
-<a href="https://www.star-history.com/#OrchestratorInc/agent-orchestrator&Date">
+<a href="https://github.com/OrchestratorInc/agent-orchestrator/stargazers">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date&theme=dark" />
-    <img src="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date" alt="Star history chart for OrchestratorInc/agent-orchestrator" width="100%" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/star-history/star-history-dark.svg" />
+    <img src="https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/star-history/star-history.svg" alt="Star history chart for OrchestratorInc/agent-orchestrator" width="100%" />
   </picture>
 </a>
 
