@@ -383,6 +383,7 @@ type ListSessionsQuery struct {
 	Kind             string `query:"kind,omitempty" enum:"worker,orchestrator" description:"Session kind filter. worker keeps every session that is not an orchestrator."`
 	Limit            int    `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned."`
 	Cursor           string `query:"cursor,omitempty" description:"Opaque cursor returned by the previous page. Requires limit."`
+	PRState          string `query:"prState,omitempty" enum:"open,draft,merged,closed" description:"Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total."`
 }
 
 // CleanupSessionsQuery is the query string accepted by POST /api/v1/sessions/cleanup.
@@ -663,6 +664,15 @@ type ListSessionsResponse struct {
 	// same project and kind filters would have matched, so a client can show
 	// the archive's size without downloading it.
 	Archived *SessionArchiveSummary `json:"archived,omitempty"`
+	// PRState echoes the prState filter the list applied, so a client can tell
+	// a daemon that filtered from one that ignored the parameter.
+	PRState domain.PRState `json:"prState,omitempty" enum:"open,draft,merged,closed"`
+	// Total is present with prState: how many sessions match across all pages.
+	Total *int `json:"total,omitempty"`
+	// Version is present with prState and names the whole filtered list (its
+	// sessions and when each PR reached the state). Equal versions mean the
+	// same list, so one page tells a client whether anything moved.
+	Version string `json:"version,omitempty"`
 }
 
 // SessionArchiveSummary sizes the archive behind an active-only session list.
@@ -683,7 +693,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,open-interpreter"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau"`
 	Branch          string                 `json:"branch,omitempty"`
 	// BaseBranch starts the session's branch from this branch instead of the
 	// project's default, to stack its work on another pull request.
@@ -1517,7 +1527,7 @@ type DelegateTaskRequest struct {
 	// BaseBranch starts the worker from this branch instead of the project's
 	// default, to stack its work on another pull request.
 	BaseBranch string              `json:"baseBranch,omitempty" maxLength:"255"`
-	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,open-interpreter,fake"`
+	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,fake"`
 	Model      string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -2822,8 +2832,18 @@ type ShellTerminalResponse struct {
 	Title      string `json:"title"`
 	// TerminalTitle is present only when the running program's title should
 	// label the tab instead of Title.
-	TerminalTitle string    `json:"terminalTitle,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	TerminalTitle string     `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	EndedAt       *time.Time `json:"endedAt,omitempty" description:"When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached."`
+	ResumeHarness string     `json:"resumeHarness,omitempty" description:"For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes."`
+}
+
+// ReopenShellTerminalRequest is the body of POST /api/v1/shell-terminals/{handleId}/reopen.
+type ReopenShellTerminalRequest struct {
+	Shell       string `json:"shell,omitempty" description:"Shell to launch, as for opening a shell terminal."`
+	ResumeAgent bool   `json:"resumeAgent,omitempty" description:"Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed."`
+	Cols        int    `json:"cols,omitempty" description:"Initial terminal columns, as for opening a shell terminal."`
+	Rows        int    `json:"rows,omitempty" description:"Initial terminal rows. See cols."`
 }
 
 // ListShellTerminalsResponse is the body of GET /api/v1/shell-terminals.
@@ -3465,6 +3485,7 @@ type ProviderSwitchRequest struct {
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	Force          bool   `json:"force,omitempty"`
 	// Message is sent to the new agent as its first turn once the switch
 	// completes, in the same request. Attachments are sent separately.
 	Message *SendConversationMessageRequest `json:"message,omitempty"`
@@ -3473,8 +3494,13 @@ type ProviderSwitchRequest struct {
 // ProviderSwitchResponse reports a completed switch, and the send of a message
 // that came with it.
 type ProviderSwitchResponse struct {
-	Status  string                           `json:"status"`
-	Message *SendConversationMessageResponse `json:"message,omitempty"`
+	Status                  string                           `json:"status"`
+	Message                 *SendConversationMessageResponse `json:"message,omitempty"`
+	StoppedTurn             bool                             `json:"stoppedTurn,omitempty"`
+	CancelledQueuedMessages int                              `json:"cancelledQueuedMessages,omitempty"`
+	FailedPendingApprovals  bool                             `json:"failedPendingApprovals,omitempty"`
+	SettingsUpdated         bool                             `json:"settingsUpdated,omitempty"`
+	Warnings                []string                         `json:"warnings,omitempty"`
 }
 
 // SessionHistoryQuery pages GET /api/v1/sessions/{sessionId}/history.
@@ -4408,12 +4434,14 @@ func capabilityNames(caps ports.ChatCapabilities) []string {
 // TriggerReviewRequest is the optional body of the review trigger route. An
 // empty harness keeps the project's configured reviewer; setting one overrides
 // it for this pass only, without editing project config, so one session's choice
-// cannot change what another session in the project runs.
+// cannot change what another session in the project runs. A pass-only override
+// reviewer retires from the session's reviewer pane once its pass ends.
 type TriggerReviewRequest struct {
-	Harness       domain.ReviewerHarness       `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
-	AgentConfig   domain.AgentConfig           `json:"agentConfig,omitempty"`
-	InterfaceMode domain.ReviewerInterfaceMode `json:"interfaceMode,omitempty" enum:"chat,tui"`
-	PRURL         string                       `json:"prUrl,omitempty" description:"Restrict the pass to this pull request, attaching it to the session first if AO does not track it yet (never from another active session). Omit to review every eligible PR on the session."`
+	Harness            domain.ReviewerHarness       `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
+	AgentConfig        domain.AgentConfig           `json:"agentConfig,omitempty"`
+	InterfaceMode      domain.ReviewerInterfaceMode `json:"interfaceMode,omitempty" enum:"chat,tui"`
+	PRURL              string                       `json:"prUrl,omitempty" description:"Restrict the pass to this pull request, attaching it to the session first if AO does not track it yet (never from another active session). Omit to review every eligible PR on the session."`
+	RequesterSessionID domain.SessionID             `json:"requesterSessionId,omitempty" description:"Agent session that requested the pass and should receive its final outcome."`
 	// Source labels who asked for the pass. Omitted means a person (manual).
 	Source string `json:"source,omitempty" enum:"manual,agent" description:"Who requested the pass: manual (a person, the default) or agent (an AO session through the CLI)."`
 	// RejectReviewedHead is the CLI's same-commit policy. Omitting it keeps the
@@ -4582,7 +4610,16 @@ type AgentAccountResponse struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	// Device marks the computer's own login, which AO launches with the CLI's
 	// config folder untouched.
-	Device  bool   `json:"device"`
+	Device bool `json:"device"`
+	// Kind is how the account signs its CLI in: a subscription, a subscription
+	// setup token, an API key, or a metered (per-token) sign-in such as
+	// Anthropic Console. API key and metered accounts bill per token, have no
+	// limits, and are never moved to or from at a usage limit.
+	Kind domain.AgentAccountKind `json:"kind" enum:"subscription,setup_token,api_key,metered"`
+	// Name is the label of an API key account; KeyHint is its key's last four
+	// characters. The key itself is never sent.
+	Name    string `json:"name,omitempty"`
+	KeyHint string `json:"keyHint,omitempty"`
 	Email   string `json:"email,omitempty"`
 	Plan    string `json:"plan,omitempty"`
 	Default bool   `json:"default"`
@@ -4606,16 +4643,53 @@ type AgentAccountsResponse struct {
 	Accounts []AgentAccountResponse `json:"accounts"`
 }
 
-// StartAgentAccountLoginRequest asks to add an account of a provider.
+// StartAgentAccountLoginRequest asks to add an account of a provider. Without
+// a method, the CLI's own sign-in runs in a terminal; with one, it runs in the
+// background and the app follows it as a UI login (its authOperationId). A
+// setup token is saved at once.
 type StartAgentAccountLoginRequest struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// Method is the sign-in method; Secret its credential when it takes one
+	// (a setup token, an OpenAI API key or access token).
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+	// Name labels a new account that has no email of its own.
+	Name string `json:"name,omitempty"`
+}
+
+// SignInAgentAccountAgainRequest picks how a saved account signs in again,
+// with a method that makes its own kind of account. An empty body opens the
+// CLI's own sign-in in a terminal.
+type SignInAgentAccountAgainRequest struct {
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+}
+
+// AddAgentAccountAPIKeyRequest adds an account that launches the provider's
+// CLI with an API key. The key is checked with the provider before it is saved.
+type AddAgentAccountAPIKeyRequest struct {
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude"`
+	// Name labels the account; empty shows a default label.
+	Name   string `json:"name,omitempty"`
+	APIKey string `json:"apiKey"`
+}
+
+// ReplaceAgentAccountAPIKeyRequest saves a new key for an API key account.
+type ReplaceAgentAccountAPIKeyRequest struct {
+	APIKey string `json:"apiKey"`
 }
 
 // StartAgentAccountLoginResponse is a sign-in running in a terminal.
 type StartAgentAccountLoginResponse struct {
-	OperationID   string                            `json:"operationId"`
-	Provider      domain.AgentAccountProvider       `json:"provider" enum:"claude,codex"`
-	ShellTerminal CodexAccountLoginTerminalResponse `json:"shellTerminal"`
+	// OperationID verifies or cancels the sign-in; empty when Account is set.
+	OperationID string                      `json:"operationId,omitempty"`
+	Provider    domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// ShellTerminal is a sign-in running in a terminal. AuthOperationID is one
+	// running in the background, read and answered through the harness's
+	// /auth/operations routes. Account is the account a setup token saved.
+	ShellTerminal   *CodexAccountLoginTerminalResponse `json:"shellTerminal,omitempty"`
+	AuthOperationID string                             `json:"authOperationId,omitempty"`
+	Account         *AgentAccountResponse              `json:"account,omitempty"`
 }
 
 // VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login

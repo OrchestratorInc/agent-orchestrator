@@ -103,6 +103,11 @@ import (
 // are healed on this cadence even when no event or hook fires.
 const usageReconcileTick = 3 * time.Minute
 
+// previewIdlePollInterval is how often the preview poller re-lists sessions
+// while it watches no preview. A session change brings it back to its 250 ms
+// interval at once, so this only backs that up.
+const previewIdlePollInterval = 5 * time.Second
+
 const chatHibernateSweepTick = 30 * time.Second
 
 // workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
@@ -636,7 +641,7 @@ func Run(buildVersion string) (retErr error) {
 	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
 		DataDir: cfg.DataDir,
-		Cache:   store, Discoverer: modelDiscoverer, Sessions: store, Context: ctx, Logger: log,
+		Cache:   store, Discoverer: modelDiscoverer, Sessions: store, Context: ports.WithAgentAuthDataDir(ctx, cfg.DataDir), Logger: log,
 		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
 		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
 		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),
@@ -797,6 +802,14 @@ func Run(buildVersion string) (retErr error) {
 	}); ok {
 		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}
+	if resume, ok := sessMgr.(interface {
+		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
+	}); ok {
+		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			_, err := resume.ResumeAgentWithMode(ctx, id)
+			return err
+		})
+	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
@@ -839,8 +852,9 @@ func Run(buildVersion string) (retErr error) {
 		Delivery: reportSemanticDelivery{chat: chatSvc, sessions: reportSessions, store: store},
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
-	reportDeliveryDone := reportCoordinator.Start(ctx)
+	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
 	defer func() {
+		unsubscribeReportActivity()
 		stop()
 		<-reportDeliveryDone
 	}()
@@ -981,6 +995,8 @@ func Run(buildVersion string) (retErr error) {
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
+		shellAgents.SetHarnessRecorder(shellTermSvc.RecordShellAgent)
+		shellTermSvc.SetForegroundReader(shellAgents)
 		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
@@ -996,12 +1012,14 @@ func Run(buildVersion string) (retErr error) {
 	defer agentAuthSvc.Close()
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
+	agentAccountSvc.SetUILogin(accountUILogin{auth: agentAuthSvc})
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
 	sessMgr.SetShellTerminalCloser(shellTermSvc)
 	var (
 		usageCollector *usagesvc.Collector
+		usageHookQueue *usagesvc.HookQueue
 		usagePipeline  *usagepipeline.Pipeline
 		usagePricing   *usagePricingRuntime
 	)
@@ -1080,7 +1098,15 @@ func Run(buildVersion string) (retErr error) {
 				}
 			}
 		}()
-		lcStack.LCM.SetUsageFinalizer(usageCollector)
+		// The agent waits for every hook, and a usage scan can hold the
+		// collector for seconds, so hooks only queue their usage signal.
+		// Termination finalizes through the queue to record those signals first.
+		usageHookQueue = usagesvc.NewHookQueue(usageCollector, log)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			usageHookQueue.Run(ctx)
+		}()
+		lcStack.LCM.SetUsageFinalizer(usageHookQueue)
 		if wired, ok := sessMgr.(interface {
 			SetBackgroundTaskUsage(sessionmanager.BackgroundTaskUsage)
 		}); ok {
@@ -1146,6 +1172,7 @@ func Run(buildVersion string) (retErr error) {
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
+	lcStack.reviewDoneDone = lcStack.LCM.StartReviewDoneSweep(ctx, 0)
 	// Push-device registry: persisted phones that receive OS push notifications.
 	// A load failure must not block boot — degrade to no push rather than refusing
 	// to start the daemon. pushRegistry (interface) is assigned only when load
@@ -1272,6 +1299,10 @@ func Run(buildVersion string) (retErr error) {
 	// Terminal hooks pass the hook process gate: a Claude process other than
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
+	var usageHooks controllers.UsageHookRecorder = usageCollector
+	if usageHookQueue != nil {
+		usageHooks = usageHookQueue
+	}
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
@@ -1316,7 +1347,8 @@ func Run(buildVersion string) (retErr error) {
 		Activity:           hookActivity,
 		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
-		UsageHooks:         usageCollector,
+		TerminalReplies:    agents,
+		UsageHooks:         usageHooks,
 		UsageSummary:       freshUsageSummary{usagesvc.NewSummaryReader(store), usagePipeline},
 		UsageReport:        freshUsageReport{usageReportReader(store, usagePricing), usagePipeline},
 		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store, agentAccountSvc),
@@ -1360,7 +1392,11 @@ func Run(buildVersion string) (retErr error) {
 		return err
 	}
 	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
-	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
+	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{
+		Logger:       log,
+		Wake:         cdcPipe.sessionChanges(),
+		IdleInterval: previewIdlePollInterval,
+	}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
 	if ln, addr, err := browserruntime.Listen(cfg.RunFilePath); err != nil {
 		log.Warn("browser runtime: listener unavailable; agent browser control disabled", "err", err)
@@ -1749,6 +1785,9 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	if errors.Is(err, sessionmanager.ErrComposerBusy) {
 		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
 	}
+	if errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) || (err != nil && strings.Contains(err.Error(), "prompt submission was not observed")) {
+		return fmt.Errorf("%w: %w", reportsvc.ErrUnacknowledgedDelivery, err)
+	}
 	return err
 }
 
@@ -1916,6 +1955,21 @@ func stabilizeWorkingDirectory(dataDir string) error {
 	return nil
 }
 
+// accountUILogin runs an account folder's sign-in through the harness's
+// in-app sign-in, so adding an account shows the same link, device code and
+// code field as signing the CLI in, instead of a terminal.
+type accountUILogin struct{ auth *agentauth.Service }
+
+func (l accountUILogin) StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret string, env map[string]string) (string, error) {
+	snapshot, err := l.auth.StartAccountLogin(ctx, string(harness), method, secret, env)
+	return snapshot.ID, err
+}
+
+func (l accountUILogin) CancelAccountLogin(ctx context.Context, harness domain.AgentHarness, id string) error {
+	_, err := l.auth.CancelLogin(ctx, string(harness), id)
+	return err
+}
+
 // newAgentAccounts builds the Claude Code and Codex account catalog. Each
 // account is a config folder under the state dir; "This computer" is the CLI's
 // own folder, which AO never changes the login of.
@@ -1938,7 +1992,26 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
-	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	// An account's API key is checked with its provider before it is saved.
+	accounts.SetKeyCheck(func(ctx context.Context, p domain.AgentAccountProvider, key string) error {
+		name := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "ANTHROPIC_API_KEY", domain.AgentAccountProviderCodex: "OPENAI_API_KEY"}[p]
+		if name == "" {
+			return ports.ErrAgentAccountProviderMismatch
+		}
+		result, err := providerkeys.Check(ctx, name, key)
+		switch {
+		case err != nil:
+			return err
+		case result.Status == providerkeys.CheckValid:
+			return nil
+		case result.Status == providerkeys.CheckInvalid:
+			return ports.ErrAgentAccountKeyRejected
+		default:
+			return fmt.Errorf("%s check: %s", name, result.Status)
+		}
+	})
+	return accounts
 }
 
 // claudeModelGate marks Claude models the installed Claude Code is too old to

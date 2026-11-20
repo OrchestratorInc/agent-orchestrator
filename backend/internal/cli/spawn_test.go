@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 )
 
 func authorizedAgentsJSON(agent string) string {
@@ -62,6 +64,18 @@ func TestSpawnHelpListsOpenInterpreterHarness(t *testing.T) {
 	}
 	if !strings.Contains(out, "stakpak, open-interpreter") {
 		t.Fatalf("spawn help does not list open-interpreter:\n%s", out)
+	}
+}
+
+func TestSpawnHelpListsEveryRegisteredHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range registry.Harnessed() {
+		if id := string(harness.Harness); !strings.Contains(out, id) {
+			t.Errorf("spawn help does not list registered harness %q:\n%s", id, out)
+		}
 	}
 }
 

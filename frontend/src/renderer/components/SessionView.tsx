@@ -2063,6 +2063,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				label: shell?.title ?? key,
 				icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" />,
 				agentHandleId: tracksAgent ? key : undefined,
+				resumeHarness: shell?.resumeHarness,
 			};
 	}, [centerFileRequestsBySession, closePane, reviewerHarness, selectTab, sessionLabel, sessionProvider, shellTerminals, t, uiSessionId]);
 	// Pressing a file pane's title bar moves keyboard focus into that file.
@@ -2833,7 +2834,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		hasInspector,
 	);
-	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); }, hasInspector);
 	useSessionShortcut("dictate", toggleComposerDictation, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);

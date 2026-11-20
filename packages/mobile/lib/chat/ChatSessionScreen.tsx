@@ -2,8 +2,8 @@ import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { useSharedValue } from "react-native-reanimated";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
@@ -28,13 +28,15 @@ import { headerBackOptions } from "../headerBack";
 import { HeaderPill, HeaderPillButton, pillBackOptions } from "../headerPill";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, type ForkOptions } from "./api";
+import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, resolveWorkspacePath, type ForkOptions } from "./api";
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { KeyboardFollower } from "./KeyboardFollower";
+import { KeyboardMotionScope } from "./keyboardMotion";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
+import { useFlag } from "./flag";
 import { McpServerNotice } from "./McpServerNotice";
 import { ProviderSwitchLine } from "./ProviderSwitchMarker";
 import { useChatKeyboard } from "./useChatKeyboard";
@@ -70,7 +72,10 @@ import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAge
 import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { isAbsoluteFileReference, matchBareFile } from "./fileLinks";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
+import { TurnRecoveryContext, type TurnRecovery } from "./UsageLimitNotice";
+import { usageLimitedTurn } from "./usageLimit";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
@@ -150,6 +155,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const restoreRequest = useCallback(() => setDismissedRequest(undefined), []);
 	const [filePaths, setFilePaths] = useState<string[]>([]);
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
+	// Whether `filePaths` has been read: a bare file name in a reply waits for it.
+	const [filePathsLoaded, setFilePathsLoaded] = useState(false);
+	const loadFilePaths = useRef<() => void>(() => {});
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
 	const [resuming, setResuming] = useState(false);
@@ -159,24 +167,30 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
 	// keyboard-controller's early events, corrected by React Native's when it
 	// misses a transition. See useChatKeyboard.
-	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });
+	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER, floating: true });
 	const headerOverlap = useGlassHeaderOverlap();
 	// On iOS 26 the banners float under the header, over the list's top, and the
 	// list starts below them.
 	const [bannersHeight, setBannersHeight] = useState(0);
 	const [composerHeight, setComposerHeight] = useState(0);
 	// The jump back to the newest message steps aside while the composer is open.
-	const [composerOpen, setComposerOpen] = useState(false);
+	// The composer's open state, for the jump to the newest message alone (see Flag).
+	const composerOpen = useFlag();
 	// The composer springs open and closed, and its height changes every frame
 	// of that. The timeline takes the height once it settles, rather than
 	// re-rendering the conversation for each frame.
 	const composerSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => () => clearTimeout(composerSettle.current), []);
+	// The conversation is padded for the pill fully open and one line tall;
+	// the pill opening and lines typed move it on the UI thread instead
+	// (ChatTimeline's `composerGrowth`), so neither waits on React.
+	const composerDeficit = useSharedValue(0);
+	const composerFieldGrowth = useSharedValue(0);
 	const measureComposer = useCallback((event: LayoutChangeEvent) => {
-		const height = Math.round(event.nativeEvent.layout.height);
+		const height = event.nativeEvent.layout.height;
 		clearTimeout(composerSettle.current);
-		composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);
-	}, []);
+		composerSettle.current = setTimeout(() => setComposerHeight(Math.round(height + composerDeficit.value - composerFieldGrowth.value)), COMPOSER_SETTLE_MS);
+	}, [composerDeficit, composerFieldGrowth]);
 	const keyboardVisible = chatKeyboard.keyboardVisible;
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
@@ -192,15 +206,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Agent switching, from the model menu's "Other agents" (the new task's
 	// menu). As on desktop, a pick only records the agent the next message goes
-	// to; the send then switches and sends in one request. Not offered to
-	// orchestrators or terminated sessions, which desktop leaves out too.
-	const isWorker = !("projectName" in session);
+	// to; the send then switches and sends in one request. Orchestrators switch
+	// too, as on desktop, including once their agent has stopped at a usage
+	// limit: the daemon wakes it to hand over. Not offered to terminated
+	// sessions, which must be restored first.
 	const currentHarness = conversation.snapshot?.harness || "";
 	const agentSwitchMenu = useAgentSwitchMenu({
 		cfg: config,
 		current: currentHarness,
 		projectId: session.projectId,
-		enabled: isWorker && !terminated && Boolean(currentHarness),
+		enabled: !terminated && Boolean(currentHarness),
 	});
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
 	const pendingSwitch = pendingSwitchFor(chosenSwitch, currentHarness || undefined);
@@ -303,10 +318,38 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.
+	// A file action placed by the daemon lands only if it is still the latest one
+	// and the reader is still on this chat: a newer tap, or leaving, drops it.
+	const fileOpenRequest = useRef(0);
+	const fileOpenStillHere = useStillHere(`${currentHostId ?? ""}|${session.id}`, () => navigation.isFocused?.() !== false);
 	const filesNavigation = useMemo<FilesNavigation>(() => ({
-		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
-		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
-	}), [currentHostId, router, session.id, sessionName]);
+		openChanges: () => {
+			fileOpenRequest.current++;
+			router.push(filesRoute(session.id, currentHostId, sessionName));
+		},
+		openFile: (path, previousPath, line) => {
+			const request = ++fileOpenRequest.current;
+			// Agents also cite absolute paths (`/…/worktree/src/a.ts:12`): the
+			// daemon places those, in the worktree or among the session's artifacts.
+			if (!config || !isAbsoluteFileReference(path)) {
+				router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+				return;
+			}
+			const here = fileOpenStillHere();
+			const current = () => request === fileOpenRequest.current && here();
+			void resolveWorkspacePath(config, session.id, path).then((resolved) => {
+				if (!current()) return;
+				if (resolved.kind === "workspace" && resolved.path) router.push(fileRoute(session.id, resolved.path, currentHostId, previousPath, line));
+				else if (resolved.kind === "artifact" && resolved.path) router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: session.id, path: resolved.path, hostId: currentHostId } });
+				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
+			}, () => {
+				if (current()) router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+			});
+		},
+		bareFile: (name) => filePathsLoaded ? matchBareFile(name, filePaths, !filePathsTruncated) : undefined,
+		// One list answers every bare name, so any name loads all of it once.
+		wantBareFile: () => loadFilePaths.current(),
+	}), [config, currentHostId, fileOpenStillHere, filePaths, filePathsLoaded, filePathsTruncated, router, session.id, sessionName]);
 	// The artifacts a turn made, drawn as cards under its reply.
 	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
@@ -430,6 +473,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			.then((result) => {
 				setFilePaths(result.paths);
 				setFilePathsTruncated(result.truncated);
+				setFilePathsLoaded(true);
 				return result;
 			})
 			.catch(() => ({ paths: filePaths, truncated: filePathsTruncated }))
@@ -437,6 +481,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		filePathsRequest.current = request;
 		return request;
 	}, [config, conversation.snapshot, filePaths, filePathsTruncated, session.id]);
+	loadFilePaths.current = () => { void loadWorkspaceFiles(); };
 
 	const openShell = useCallback(async () => {
 		if (!config || openingShell) return;
@@ -603,6 +648,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
 	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
 	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
+	const limitedTurnId = useMemo(() => conversation.snapshot ? usageLimitedTurn(conversation.snapshot)?.id : undefined, [conversation.snapshot]);
+	const { retryTurn, setTurnAutoResume } = conversation;
+	const turnRecovery = useMemo((): TurnRecovery => ({
+		limitedTurnId,
+		resume: retryTurn,
+		setAutoResume: setTurnAutoResume,
+		accountLabel: (accountId) => {
+			const account = agentAccounts.accounts.find((candidate) => candidate.id === accountId);
+			return account ? agentAccountLabel(account, agentAccounts.accounts) : undefined;
+		},
+	}), [agentAccounts.accounts, limitedTurnId, retryTurn, setTurnAutoResume]);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -876,23 +932,21 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		</>
 	);
 
+	// One keyboard handler for the composer, its follower and the conversation
+	// (see KeyboardMotionScope).
 	return (
+		<KeyboardMotionScope>
 		<View style={styles.screen}>
-		{/* keyboard-controller's avoider, not React Native's. Both do the same
-		    arithmetic; this one interpolates the padding with the keyboard's own
-		    animation. RN's re-renders once per keyboard event on the JS thread,
-		    which is the single-frame jump up when the keyboard opens. */}
-		<KeyboardAvoidingView
-			style={[styles.screen, chatKeyboard.rootStyle]}
-			behavior={chatKeyboard.behavior}
-			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
-		>
+		{/* Not padded for the keyboard: the timeline moves its content with the
+		    keyboard on the UI thread (ChatTimeline's `keyboardOffset`). */}
+		<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
 			{headerItems}
 			{CLEAR_HEADER ? null : banners}
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<TurnArtifactsContext.Provider value={turnArtifacts}>
+				<TurnRecoveryContext.Provider value={turnRecovery}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -913,8 +967,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					underHeader={headerOverlap}
 					topInset={bannersHeight}
 					bottomInset={composerHeight}
+					keyboardOffset={chatKeyboard.listKeyboardOffset}
+					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
 				/>
+				</TurnRecoveryContext.Provider>
 				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
@@ -957,7 +1014,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			) : null}
 			</View>
 			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
-		</KeyboardAvoidingView>
+		</View>
 		{/* The composer floats over the conversation, which scrolls on under its
 		    glass; the timeline leaves its measured height clear at the end. It is
 		    out of the padded root above and rides the keyboard by a transform: the
@@ -975,7 +1032,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					reviewPR={reviewPromptPR}
 					reviewPRSummary={reviewPromptSummary}
 					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
-					onExpandedChange={setComposerOpen}
+					onExpandedChange={composerOpen.set}
 					sessionId={session.id}
 					config={config}
 					machine={machine}
@@ -1011,6 +1068,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onConfigOption={conversation.setConfigOption}
 					otherAgents={otherAgents}
 					restingInset={chatKeyboard.restingInset}
+					openDeficit={composerDeficit}
+					fieldGrowth={composerFieldGrowth}
 					dockRiseOverride={chatKeyboard.dockRiseOverride}
 					openingTurnId={startupView?.openingTurnId}
 					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
@@ -1018,6 +1077,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			</View>
 		</KeyboardFollower>
 		</View>
+		</KeyboardMotionScope>
 	);
 }
 

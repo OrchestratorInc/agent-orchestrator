@@ -19,6 +19,9 @@ type AgentAccount struct {
 	Email     string
 	Plan      string
 	CreatedAt time.Time
+	Kind      string
+	Name      string
+	KeyHint   string
 }
 
 type AgentAccountDefault struct {
@@ -658,23 +661,24 @@ type Project struct {
 }
 
 type Report struct {
-	ID                 string
-	SessionID          string
-	ProjectID          string
-	State              string
-	Note               string
-	Message            string
-	CreatedAt          time.Time
-	DeliveryState      string
-	AvailableAt        time.Time
-	SettlementDeadline sql.NullTime
-	RepeatCount        int64
-	ClaimToken         string
-	ClaimedAt          sql.NullTime
-	DeliveryAttempts   int64
-	AcknowledgedAt     sql.NullTime
-	LastError          string
-	DeliveryBatchID    string
+	ID                     string
+	SessionID              string
+	ProjectID              string
+	State                  string
+	Note                   string
+	Message                string
+	CreatedAt              time.Time
+	DeliveryState          string
+	AvailableAt            time.Time
+	SettlementDeadline     sql.NullTime
+	RepeatCount            int64
+	ClaimToken             string
+	ClaimedAt              sql.NullTime
+	DeliveryAttempts       int64
+	AcknowledgedAt         sql.NullTime
+	LastError              string
+	DeliveryBatchID        string
+	UnacknowledgedAttempts int64
 }
 
 type ReportOutput struct {
@@ -716,29 +720,35 @@ type Review struct {
 }
 
 type ReviewRun struct {
-	ID                string
-	ReviewID          string
-	SessionID         domain.SessionID
-	Harness           domain.ReviewerHarness
-	PRURL             string
-	TargetSha         string
-	Status            domain.ReviewRunStatus
-	Verdict           domain.ReviewVerdict
-	Body              string
-	CreatedAt         time.Time
-	GithubReviewID    string
-	DeliveredAt       sql.NullTime
-	BatchID           string
-	AutoInjectReview  bool
-	TriggerSource     domain.ReviewTriggerSource
-	FailureReason     domain.ReviewFailureReason
-	CancelledBy       domain.ReviewCancelledBy
-	LaunchID          string
-	LaunchingAt       sql.NullTime
-	StartedAt         sql.NullTime
-	FirstActivityAt   sql.NullTime
-	CancelRequestedAt sql.NullTime
-	EndedAt           sql.NullTime
+	ID                      string
+	ReviewID                string
+	SessionID               domain.SessionID
+	Harness                 domain.ReviewerHarness
+	PRURL                   string
+	TargetSha               string
+	Status                  domain.ReviewRunStatus
+	Verdict                 domain.ReviewVerdict
+	Body                    string
+	CreatedAt               time.Time
+	GithubReviewID          string
+	DeliveredAt             sql.NullTime
+	BatchID                 string
+	AutoInjectReview        bool
+	TriggerSource           domain.ReviewTriggerSource
+	ReviewerModel           string
+	WorkerNotice            string
+	WorkerNoticeAttempts    int64
+	WorkerNoticeError       string
+	WorkerNoticeAttemptedAt sql.NullTime
+	FailureReason           domain.ReviewFailureReason
+	CancelledBy             domain.ReviewCancelledBy
+	LaunchID                string
+	LaunchingAt             sql.NullTime
+	StartedAt               sql.NullTime
+	FirstActivityAt         sql.NullTime
+	CancelRequestedAt       sql.NullTime
+	EndedAt                 sql.NullTime
+	RequesterSessionID      domain.SessionID
 }
 
 type Session struct {
@@ -995,6 +1005,9 @@ type ShellTerminal struct {
 	CommandOwner              string
 	TitleExplicit             bool
 	AppTitle                  string
+	EndedAt                   sql.NullTime
+	LastAgentHarness          string
+	AgentConversationID       string
 }
 
 type TelemetryEvent struct {

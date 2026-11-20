@@ -30,6 +30,15 @@ describe("configured harness authentication summary", () => {
 			expect(summary(agentId, "provider_validation", code)).toBe("settings.harness.health.authUnverified");
 		}
 	});
+
+	// Mastra Code reports credentials it could not confirm with the selected
+	// provider, including a provider limit, without claiming a signed-in state.
+	it("keeps unconfirmed Mastra Code provider checks unverified", () => {
+		for (const code of ["provider_unreachable", "provider_unsupported", "provider_rate_limited", "provider_quota_exhausted"]) {
+			expect(summary("mastra-code", "provider_validation", code)).toBe("settings.harness.health.authUnverified");
+		}
+		expect(summary("mastra-code", "model_selection", "model_selection_unresolved")).toBe("settings.harness.health.authUnverified");
+	});
 });
 
 // The Account and Health tabs both read this tone, so they never disagree.

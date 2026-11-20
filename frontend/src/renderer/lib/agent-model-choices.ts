@@ -5,6 +5,14 @@ export function isConcreteModelID(id: string): boolean {
 }
 
 /**
+ * Whether a local New Task may take a typed model ID. Mastra Code lists no
+ * models and selects its native model by ID; other harnesses keep their catalog.
+ */
+export function acceptsLocalModelID(agentId: string, catalog?: { customModelEntry?: string }): boolean {
+	return agentId === "mastra-code" && catalog?.customModelEntry === "direct";
+}
+
+/**
  * Leaves out the models switched off in Settings → Harness → Models. An empty
  * or unset list means every model, and models a catalog adds later are offered.
  * Ids in `keep` (a model a project, draft, or session already uses) stay listed

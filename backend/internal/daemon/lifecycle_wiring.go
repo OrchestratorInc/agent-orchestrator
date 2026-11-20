@@ -64,6 +64,7 @@ type lifecycleStack struct {
 	turnFailureDone  <-chan struct{}
 	artifactsDone    <-chan struct{}
 	autoReviewDone   <-chan struct{}
+	reviewDoneDone   <-chan struct{}
 	scmDone          <-chan struct{}
 	trackerDone      <-chan struct{}
 	herdr            *herdr.Server
@@ -229,6 +230,9 @@ func (l *lifecycleStack) Stop() {
 	if l.autoReviewDone != nil {
 		<-l.autoReviewDone
 	}
+	if l.reviewDoneDone != nil {
+		<-l.reviewDoneDone
+	}
 	if l.scmDone != nil {
 		<-l.scmDone
 	}
@@ -279,6 +283,7 @@ type sessionLifecycle interface {
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	StopTUITurn(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	SendWithClientMessageID(ctx context.Context, id domain.SessionID, message, clientMessageID string) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
 	// is built after Session Manager during boot (see startShellTerminals), so
@@ -317,6 +322,9 @@ type sessionLifecycleMessenger struct {
 }
 
 func (m sessionLifecycleMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
+	if clientMessageID := ports.ClientMessageIDFromContext(ctx); clientMessageID != "" {
+		return m.SendWithClientMessageID(ctx, id, message, clientMessageID)
+	}
 	return m.sessionLifecycle.Send(ctx, id, message, nil)
 }
 
@@ -454,6 +462,9 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		reviewsvc.WithNotificationSink(notifications),
 		reviewsvc.WithCodexAccountOperationGate(codexOperationGate),
 	}
+	if lcm != nil {
+		reviewOpts = append(reviewOpts, reviewsvc.WithReviewDoneNotifier(lcm))
+	}
 	if scmProvider != nil {
 		reviewOpts = append(reviewOpts,
 			reviewsvc.WithReviewRequester(scmProvider),
@@ -540,7 +551,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				}
 				admission.pending = ""
 			}
-			if err := policy.ValidateTerminalMessage(message, screen); err != nil {
+			if err := policy.ValidateTerminalMessage(screen, message); err != nil {
 				return err
 			}
 			current, exists, err := m.store.GetSession(ctx, id)
@@ -813,8 +824,8 @@ func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
-func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness) error {
-	return c.svc.PreflightChat(ctx, harness, ports.PermissionModeAuto)
+func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness, workspacePath string) error {
+	return c.svc.PreflightReviewChat(ctx, harness, workspacePath)
 }
 
 func (c chatLauncher) StartReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart) (string, error) {

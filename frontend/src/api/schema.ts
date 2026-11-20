@@ -346,6 +346,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/accounts/{accountId}/api-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save a new key for an API key account, once the provider accepts it */
+        put: operations["replaceAgentAccountAPIKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/accounts/{accountId}/default": {
         parameters: {
             query?: never;
@@ -397,6 +414,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/accounts/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add an account that runs the provider's CLI with an API key, once the provider accepts the key */
+        post: operations["addAgentAccountAPIKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/accounts/login": {
         parameters: {
             query?: never;
@@ -406,7 +440,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Add an account by running the provider's own sign-in in a terminal */
+        /** Add an account by running the provider's own sign-in, in the background or in a terminal */
         post: operations["startAgentAccountLogin"];
         delete?: never;
         options?: never;
@@ -5002,6 +5036,23 @@ export interface paths {
         patch: operations["renameShellTerminal"];
         trace?: never;
     };
+    "/api/v1/shell-terminals/{handleId}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace an ended shell terminal with a fresh shell in the same tab */
+        post: operations["reopenShellTerminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/side-chats/launch/claim": {
         parameters: {
             query?: never;
@@ -5391,8 +5442,12 @@ export interface components {
             device: boolean;
             email?: string;
             id: string;
+            keyHint?: string;
+            /** @enum {string} */
+            kind: "subscription" | "setup_token" | "api_key" | "metered";
             limits?: components["schemas"]["AgentAccountLimits"];
             loggedIn: boolean;
+            name?: string;
             orgId?: string;
             orgName?: string;
             plan?: string;
@@ -6497,6 +6552,12 @@ export interface components {
         ContainerReapConfig: {
             disabled?: boolean;
         };
+        ControllersAddAgentAccountAPIKeyRequest: {
+            apiKey: string;
+            name?: string;
+            /** @enum {string} */
+            provider: "claude";
+        };
         ControllersBrowserChromeChannel: {
             available: boolean;
             manifestPath: string;
@@ -6678,6 +6739,9 @@ export interface components {
             hostKey: string;
             token: string;
         };
+        ControllersReplaceAgentAccountAPIKeyRequest: {
+            apiKey: string;
+        };
         ControllersRequestRereviewRequest: {
             /** @description Tracked pull request URL. Required when the session has multiple PRs. */
             pullRequestUrl?: string;
@@ -6826,6 +6890,11 @@ export interface components {
         };
         ControllersSetSessionAutoReviewRequest: {
             enabled: boolean;
+        };
+        ControllersSignInAgentAccountAgainRequest: {
+            /** @enum {string} */
+            method?: "browser" | "console" | "sso" | "setup_token" | "device_code" | "api_key" | "access_token";
+            secret?: string;
         };
         ConversationAccountPayload: {
             authFailureId?: string;
@@ -7266,7 +7335,7 @@ export interface components {
         DelegateTaskRequest: {
             accountId?: string;
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
@@ -7561,7 +7630,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "cloudflared" | "cua-driver";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "cloudflared" | "cua-driver";
             /** Format: date-time */
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
@@ -7570,6 +7639,10 @@ export interface components {
         InstallProgress: {
             /** @description The installer's latest output line. */
             detail?: string;
+            /** @description Current installer download attempt, before it runs. */
+            downloadAttempt?: number;
+            /** @description Maximum installer download attempts. */
+            downloadAttempts?: number;
             /** @description Progress through the current phase, present only when the installer's output states sizes or counts. */
             percent?: null | number;
             /**
@@ -7577,6 +7650,8 @@ export interface components {
              * @enum {string}
              */
             phase?: "downloading" | "installing";
+            /** @description Seconds until the next installer download attempt. */
+            retryInSeconds?: number;
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
@@ -7711,7 +7786,11 @@ export interface components {
         ListSessionsResponse: {
             archived?: components["schemas"]["SessionArchiveSummary"];
             nextCursor?: string;
+            /** @enum {string} */
+            prState?: "open" | "draft" | "merged" | "closed";
             sessions: components["schemas"]["ControllersSessionView"][];
+            total?: null | number;
+            version?: string;
         };
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
@@ -8101,6 +8180,7 @@ export interface components {
             autoCompactWindow?: "200k" | "1m";
             effort?: string;
             fastMode?: boolean;
+            force?: boolean;
             idempotencyKey?: string;
             message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
@@ -8110,8 +8190,13 @@ export interface components {
             ultracode?: boolean;
         };
         ProviderSwitchResponse: {
+            cancelledQueuedMessages?: number;
+            failedPendingApprovals?: boolean;
             message?: components["schemas"]["SendConversationMessageResponse"];
+            settingsUpdated?: boolean;
             status: string;
+            stoppedTurn?: boolean;
+            warnings?: string[];
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -8229,6 +8314,16 @@ export interface components {
             /** @enum {string} */
             level: "debug" | "log" | "warning" | "error";
             text: string;
+        };
+        ReopenShellTerminalRequest: {
+            /** @description Initial terminal columns, as for opening a shell terminal. */
+            cols?: number;
+            /** @description Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed. */
+            resumeAgent?: boolean;
+            /** @description Initial terminal rows. See cols. */
+            rows?: number;
+            /** @description Shell to launch, as for opening a shell terminal. */
+            shell?: string;
         };
         ReorderQueuedConversationTurnsRequest: {
             turnIds: string[];
@@ -8361,6 +8456,12 @@ export interface components {
             /** @enum {string} */
             triggerSource: "manual" | "agent" | "auto";
             verdict: string;
+            /** @enum {string} */
+            workerNotice?: "" | "pending" | "sent" | "failed";
+            /** Format: date-time */
+            workerNoticeAttemptedAt?: null | string;
+            workerNoticeAttempts?: number;
+            workerNoticeError?: string;
         };
         ReviewRunResponse: {
             review: components["schemas"]["ReviewRun"];
@@ -8822,6 +8923,7 @@ export interface components {
             /** @enum {string} */
             kind: "title" | "user" | "assistant" | "tool" | "command" | "path";
             messageId?: string;
+            namedForQuery?: boolean;
             projectId: string;
             projectName?: string;
             /** Format: double */
@@ -9034,8 +9136,15 @@ export interface components {
         ShellTerminalResponse: {
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached.
+             */
+            endedAt?: null | string;
             handleId: string;
             projectId?: string;
+            /** @description For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes. */
+            resumeHarness?: string;
             sessionId?: string;
             terminalTitle?: string;
             title: string;
@@ -9094,6 +9203,9 @@ export interface components {
             mainConversationId: string;
             manualLabel?: boolean;
             model?: string;
+            /** Format: date-time */
+            openingStartedAt?: null | string;
+            openingTurnId?: string;
             recreateRequired?: boolean;
             selectedText?: string;
             sessionId: string;
@@ -9180,8 +9292,11 @@ export interface components {
         SideRecoveryTurn: {
             content?: components["schemas"]["SideContent"][];
             dispatchAttempt?: number;
+            effort?: string;
+            model?: string;
             providerTurnId?: string;
             referenceContexts: string[];
+            settingsFrozen?: boolean;
             turn: components["schemas"]["SideTurn"];
         };
         SideSettingsRequest: {
@@ -9237,7 +9352,7 @@ export interface components {
             displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -9266,13 +9381,19 @@ export interface components {
         };
         StartAgentAccountLoginRequest: {
             /** @enum {string} */
-            provider: "claude" | "codex";
-        };
-        StartAgentAccountLoginResponse: {
-            operationId: string;
+            method?: "browser" | "console" | "sso" | "setup_token" | "device_code" | "api_key" | "access_token";
+            name?: string;
             /** @enum {string} */
             provider: "claude" | "codex";
-            shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
+            secret?: string;
+        };
+        StartAgentAccountLoginResponse: {
+            account?: components["schemas"]["AgentAccountResponse"];
+            authOperationId?: string;
+            operationId?: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            shellTerminal?: components["schemas"]["CodexAccountLoginTerminalResponse"];
         };
         StartAgentAuthResponse: {
             action: string;
@@ -9478,6 +9599,8 @@ export interface components {
             prUrl?: string;
             /** @description Return 409 instead of reusing when every open PR head is already being reviewed or already has a review. */
             rejectReviewedHead?: boolean;
+            /** @description Agent session that requested the pass and should receive its final outcome. */
+            requesterSessionId?: string;
             /** @description Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead. */
             rerun?: boolean;
             /**
@@ -11193,6 +11316,78 @@ export interface operations {
             };
         };
     };
+    replaceAgentAccountAPIKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account identifier; device-claude and device-codex are this computer's own logins. */
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersReplaceAgentAccountAPIKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     setDefaultAgentAccount: {
         parameters: {
             query?: never;
@@ -11244,7 +11439,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersSignInAgentAccountAgainRequest"];
+            };
+        };
         responses: {
             /** @description Accepted */
             202: {
@@ -11253,6 +11452,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StartAgentAccountLoginResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
@@ -11275,6 +11483,15 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11338,6 +11555,66 @@ export interface operations {
             };
         };
     };
+    addAgentAccountAPIKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersAddAgentAccountAPIKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     startAgentAccountLogin: {
         parameters: {
             query?: never;
@@ -11369,8 +11646,26 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19725,6 +20020,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor returned by the previous page. Requires limit. */
                 cursor?: string;
+                /** @description Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total. */
+                prState?: "open" | "draft" | "merged" | "closed";
             };
             header?: never;
             path?: never;
@@ -28615,6 +28912,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    reopenShellTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Shell terminal runtime handle identifier. */
+                handleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ReopenShellTerminalRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellTerminalEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

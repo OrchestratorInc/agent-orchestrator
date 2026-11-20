@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import type { CloudShareAccess, CloudShareGrant, CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
+import type { CloudShareAccess, CloudShareGrant, CloudShareGrants, CloudShareInvite, CloudShareLink, CloudShareLinks, CloudShareSubjectGrant } from "../shared/cloud-share";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -525,14 +525,40 @@ export function setShareLinkAccess(api: CloudShareApi, baseUrl: string, shareId:
 	return callApi<CloudShareLink>(api, baseUrl, "PATCH", shareLinkPath(shareId), { access });
 }
 
-/** The emails a link is shared with. */
-export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrant[]> {
-	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`)).grants;
+interface ShareGrantsBody {
+	grants: CloudShareGrant[];
+	teams?: CloudShareSubjectGrant[];
+	workspaces?: CloudShareSubjectGrant[];
 }
 
-/** Shares a link with emails at once, and returns everyone it is shared with now. */
-export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, emails: string[]): Promise<CloudShareGrant[]> {
-	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, { emails })).grants;
+/** A control plane that predates team sharing lists only people. */
+function shareGrants(body: ShareGrantsBody): CloudShareGrants {
+	return { people: body.grants, teams: body.teams ?? [], workspaces: body.workspaces ?? [] };
+}
+
+/** Everyone a link is shared with: people, teams and workspaces. */
+export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrants> {
+	return shareGrants(await callApi<ShareGrantsBody>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`));
+}
+
+/**
+ * Shares a link with people, teams and a workspace at once, and returns
+ * everyone it is shared with now. Only the fields set are sent, so sharing
+ * with people alone works on a control plane that predates team sharing.
+ */
+export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, invite: CloudShareInvite): Promise<CloudShareGrants> {
+	const teamIds = invite.teamIds ?? [];
+	const subjects = teamIds.length > 0 || invite.workspace === true;
+	if (subjects && (!invite.orgId || !UUID_PATTERN.test(invite.orgId) || !teamIds.every((id) => UUID_PATTERN.test(id)))) {
+		throw new CloudShareError("invalid_request", "Not a team or workspace to share with.");
+	}
+	const body = {
+		...(invite.emails && invite.emails.length > 0 ? { emails: invite.emails } : {}),
+		...(subjects ? { orgId: invite.orgId } : {}),
+		...(teamIds.length > 0 ? { teamIds } : {}),
+		...(invite.workspace === true ? { workspace: true } : {}),
+	};
+	return shareGrants(await callApi<ShareGrantsBody>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, body));
 }
 
 export async function removeShareGrant(api: CloudShareApi, baseUrl: string, shareId: string, grantId: string): Promise<void> {
