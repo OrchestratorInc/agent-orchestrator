@@ -452,6 +452,7 @@ export const aoBridge: AoBridge =
 			install: async () => undefined,
 			isPostUpdateRelaunch: async () => false,
 			relaunch: async () => undefined,
+			shellShown: () => undefined,
 			onStatus: () => () => undefined,
 			onTelemetry: () => () => undefined,
 		},

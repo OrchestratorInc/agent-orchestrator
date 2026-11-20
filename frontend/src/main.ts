@@ -4332,18 +4332,24 @@ ipcMain.handle("notifications:setBadge", (_event, count: number) => {
 
 ipcMain.on(TRAY_SET_ATTENTION_STATE_CHANNEL, (event, state) => trayLifecycle.handleSetAttentionState(event, state));
 
+// The React shell has rendered its first frame (the startup loader counts), so
+// the user can see Orchestrator again and the macOS update helper may exit.
+// Loading the HTML or merely observing a new PID is not success.
+ipcMain.on("updates:shellShown", (event) => {
+	if (!app.isPackaged || process.platform !== "darwin" || event.sender !== getShellWebContents()) return;
+	const runFile = runFilePath();
+	if (!runFile) return;
+	void acknowledgeMacUpdateRestart({
+		stateDir: path.dirname(runFile),
+		appPath: resolveBundlePath(),
+		version: app.getVersion(),
+	}).then((acknowledged) => {
+		if (acknowledged) lifecycleLog("update_restart_acknowledged");
+	});
+});
+
 ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 	trayLifecycle.handleRendererReady(event);
-	// This existing handshake comes from TrayRuntime after the React shell has
-	// mounted. Loading the HTML or merely observing a new PID is not success.
-	if (app.isPackaged && process.platform === "darwin" && event.sender === getShellWebContents()) {
-		const runFile = runFilePath();
-		if (runFile) void acknowledgeMacUpdateRestart({
-			stateDir: path.dirname(runFile),
-			appPath: resolveBundlePath(),
-			version: app.getVersion(),
-		});
-	}
 
 	if (pendingFolderPath && event.sender === getShellWebContents()) {
 		event.sender.send(OPEN_FOLDER_PATH_CHANNEL, pendingFolderPath);

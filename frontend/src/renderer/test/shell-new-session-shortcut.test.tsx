@@ -74,6 +74,7 @@ const shellMocks = vi.hoisted(() => {
 		}),
 		resolveQuitConfirm: vi.fn(),
 		reportSessionsShown: vi.fn(),
+		shellShown: vi.fn(),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
@@ -194,6 +195,7 @@ vi.mock("../lib/bridge", () => ({
 			onOpenSession: () => () => undefined,
 		},
 		remotes: { list: shellMocks.listRemoteHosts },
+		updates: { shellShown: shellMocks.shellShown },
 	},
 }));
 
@@ -565,6 +567,14 @@ describe("shell workspace startup", () => {
 		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(shellMocks.reportSessionsShown).not.toHaveBeenCalled();
+	});
+
+	it("acknowledges an update restart while the startup loader is up", async () => {
+		shellMocks.shellShown.mockClear();
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		expect(shellMocks.shellShown).toHaveBeenCalledTimes(1);
 	});
 
 	it("opens the shared Project settings dialog for the selected remote host", async () => {

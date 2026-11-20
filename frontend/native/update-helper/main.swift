@@ -76,7 +76,10 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
     func legacyEvidence(now: Double) -> LegacyLaunchEvidence? {
         guard !processAlive(request.parentPID) else { return nil }
         let markerURL = attempt.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("app-state.json")
-        guard let marker = readJSON(LegacyAppMarker.self, at: markerURL), marker.matchesLegacyLaunch(request, now: now) else { return nil }
+        let marker = readJSON(LegacyAppMarker.self, at: markerURL).flatMap { $0.matchesLegacyLaunch(request, now: now) ? $0 : nil }
+        // New clients acknowledge on their own. Look for their window only once
+        // that has stalled (see UpdateProgressState.stage).
+        guard marker != nil || now - state.waitingSince >= stallBudgetMs else { return nil }
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.processIdentifier != request.parentPID && !$0.isTerminated && $0.isFinishedLaunching &&
             $0.bundleURL?.standardizedFileURL.path == request.appPath
@@ -95,7 +98,15 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         }) ?? false
         return LegacyLaunchEvidence(marker: marker, pid: app.processIdentifier,
                                     appPath: app.bundleURL?.standardizedFileURL.path,
-                                    finishedLaunching: app.isFinishedLaunching, visibleWindow: visible)
+                                    finishedLaunching: app.isFinishedLaunching, visibleWindow: visible,
+                                    bundleVersion: bundleVersion(app.bundleURL))
+    }
+
+    // Read Info.plist fresh each time: Bundle caches per process, and a read
+    // taken mid-install would pin the old version.
+    func bundleVersion(_ url: URL?) -> String? {
+        guard let url, let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")) else { return nil }
+        return info["CFBundleShortVersionString"] as? String
     }
 
     // Bring the window on screen. Called only on the stall/failure paths

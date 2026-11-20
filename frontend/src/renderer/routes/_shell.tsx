@@ -361,6 +361,10 @@ function ShellLayout() {
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
+	// The shell is on screen (even if only its startup loader), so a pending
+	// macOS update restart is done. Waiting for the workspace to load let a slow
+	// startup run past the update helper's budget and surface its window.
+	useEffect(() => aoBridge.updates.shellShown(), []);
 	useWorkspacePolling();
 	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
