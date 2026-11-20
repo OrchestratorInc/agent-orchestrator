@@ -2,8 +2,10 @@ import { Eraser, Import, MoreHorizontal, Pencil, Plus, Star, Trash2, UserRound }
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { BrowserProfileUsage } from "../../../shared/browser-profiles";
+import type { AutomaticBrowserMode } from "../../../shared/ui-locale";
 import type { AoBridge } from "../../../preload";
 import { aoBridge } from "../../lib/bridge";
+import { useAutomaticBrowserStore } from "../../stores/automatic-browser-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import {
@@ -15,6 +17,7 @@ import {
 } from "../ui/dropdown-menu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { BrowserImportDialog } from "./BrowserImportDialog";
 
 type ProfileBridge = AoBridge["browserProfiles"];
@@ -29,6 +32,13 @@ type DestructiveAction = { kind: "clear" | "delete"; profile: Profile };
 
 export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
+	const { mode, saving, error: browserPolicyError, loadError: browserPolicyLoadError, loaded: browserPolicyLoaded, load: loadBrowserPolicy, setMode } = useAutomaticBrowserStore();
+	const browserPolicyLabel = t("settings.automaticBrowser");
+	const browserPolicyOptions: SettingsOption<AutomaticBrowserMode>[] = [
+		{ value: "internal", label: t("settings.automaticBrowser.internal") },
+		{ value: "external", label: t("settings.automaticBrowser.external") },
+		{ value: "blocked", label: t("settings.automaticBrowser.blocked") },
+	];
 	const bridge = (aoBridge as Partial<AoBridge>).browserProfiles as ProfileBridge | undefined;
 	const [profiles, setProfiles] = useState<Profile[]>([]);
 	const [defaultProfileId, setDefaultProfileIdState] = useState<string | null>(null);
@@ -44,6 +54,10 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	const [usageError, setUsageError] = useState("");
 	const [usageRevision, setUsageRevision] = useState(0);
 	const [importOpen, setImportOpen] = useState(false);
+
+	useEffect(() => {
+		if (!browserPolicyLoaded) void loadBrowserPolicy();
+	}, [browserPolicyLoaded, loadBrowserPolicy]);
 
 	const refresh = async () => {
 		if (!bridge) return;
@@ -175,6 +189,9 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				titleHidden={titleHidden}
 				grouped
 			>
+				<SettingsRow label={browserPolicyLabel} description={browserPolicyError ? t("settings.automaticBrowser.saveFailed") : browserPolicyLoadError ? t("settings.automaticBrowser.loadFailed") : t("settings.automaticBrowser.description")}>
+					<SettingsOptionMenu aria-label={browserPolicyLabel} value={mode} options={browserPolicyOptions} disabled={saving} onChange={(next) => void setMode(next)} />
+				</SettingsRow>
 				<SettingsRow label={t("settings.browserImport.rowLabel")}>
 					<Button
 						disabled={!bridge}

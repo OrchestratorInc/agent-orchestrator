@@ -50,7 +50,7 @@ function runSettingsOperation<T>(operation: () => Promise<T>): Promise<T> {
 
 /** Read UI settings, tolerating a missing or corrupt file (returns defaults). */
 export async function readUiSettings(stateDir: string): Promise<UiSettings> {
-	return readUiSettingsUnlocked(stateDir);
+	return runSettingsOperation(() => readUiSettingsUnlocked(stateDir));
 }
 
 /** Atomically and serially merge-write UI settings (temp file + rename). */

@@ -17,6 +17,7 @@ import type {
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
+import { useAutomaticBrowserStore } from "../stores/automatic-browser-store";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
@@ -168,6 +169,11 @@ const EMPTY_PROFILE_STATE: BrowserProfileViewState = {
 };
 
 type PreviewTrigger = { revision: number | null; target: string; origin: string; sessionEnded: boolean };
+type PendingPreviewTrigger = { sessionId: string; trigger: PreviewTrigger };
+
+function samePreviewTrigger(a: PreviewTrigger, b: PreviewTrigger): boolean {
+	return a.revision === b.revision && a.target === b.target && a.origin === b.origin && a.sessionEnded === b.sessionEnded;
+}
 
 // The native view survives React session switches, so remember which preview
 // trigger was already consumed for each session. This prevents switching back
@@ -331,6 +337,9 @@ export function useBrowserView({
 	previewUrl,
 	previewRevision,
 }: UseBrowserViewOptions): BrowserViewModel {
+	const automaticBrowser = useAutomaticBrowserStore((state) => state.mode);
+	const automaticBrowserLoaded = useAutomaticBrowserStore((state) => state.loaded);
+	useEffect(() => { void useAutomaticBrowserStore.getState().load(); }, []);
 	const lifecycleRef = useRef({ sessionId, terminated });
 	lifecycleRef.current = { sessionId, terminated };
 	const [viewId, setViewId] = useState("");
@@ -366,6 +375,7 @@ export function useBrowserView({
 	const scrollOnlyMeasureRef = useRef(false);
 	const observerRef = useRef<ResizeObserver | null>(null);
 	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
+	const pendingPreviewTriggerRef = useRef<PendingPreviewTrigger | null>(null);
 	const tabNoticeTimerRef = useRef<number | null>(null);
 	const tabsStateRef = useRef(tabsState);
 	const hasNativeBrowser = Boolean(window.ao?.browser);
@@ -537,6 +547,7 @@ export function useBrowserView({
 		// switches, so seed from the per-session consumed trigger to avoid
 		// reasserting previewUrl over manual navigation on switch-back.
 		previewTriggerRef.current = hasNativeBrowser ? (consumedPreviewTriggers.get(sessionId) ?? null) : null;
+		pendingPreviewTriggerRef.current = null;
 		const cached = hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
 		// The view this run owns, so its cleanup never hides or clears the next
 		// session's view, which the switch below may already have shown.
@@ -1276,33 +1287,63 @@ export function useBrowserView({
 		// During a session switch React still renders once with the prior
 		// viewId state, while the cleanup has already cleared viewIdRef. Do not
 		// consume the new session's preview revision against that stale view.
-		if (!viewId || viewIdRef.current !== viewId || terminated) return;
+		if (!automaticBrowserLoaded || !viewId || viewIdRef.current !== viewId || terminated) return;
 		const target = previewUrl?.trim() ?? "";
 		const source = origin ? `${origin.hostId}:${origin.sessionId}:${origin.proxyBase}` : "local";
 		const revision = typeof previewRevision === "number" ? previewRevision : null;
 		const previous = previewTriggerRef.current;
+		const pending = pendingPreviewTriggerRef.current;
+		const samePending = pending?.sessionId === sessionId && samePreviewTrigger(pending.trigger, {
+			revision,
+			target,
+			origin: source,
+			sessionEnded: Boolean(sessionEnded),
+		});
 		// Reassert once after daemon teardown, but preserve manual navigation when
 		// revisiting an already-ended artifact session.
 		const sameLifecycle = previous?.sessionEnded === Boolean(sessionEnded);
 		if (sameLifecycle && previous?.revision === revision && previous.target === target && previous.origin === source) return;
 		if (sameLifecycle && revision !== null && previous?.revision === revision && previous.origin === source) return;
 		const consumed: PreviewTrigger = { revision, target, origin: source, sessionEnded: Boolean(sessionEnded) };
-		previewTriggerRef.current = consumed;
-		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
+		const settleTrigger = () => {
+			previewTriggerRef.current = consumed;
+			if (pendingPreviewTriggerRef.current?.sessionId === sessionId) pendingPreviewTriggerRef.current = null;
+			if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
+		};
 		if (target) {
 			let cancelled = false;
+			const mode = automaticBrowser;
+			if (mode === "blocked") {
+				settleTrigger();
+				return undefined;
+			}
+			if (!samePending) pendingPreviewTriggerRef.current = { sessionId, trigger: consumed };
 			const resolved = origin
 				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
 				: Promise.resolve(target);
 			void resolved.then((url) => {
-				return cancelled ? undefined : showPreview(url);
+				if (cancelled) return undefined;
+				if (mode !== "external") {
+					settleTrigger();
+					return showPreview(url);
+				}
+				const externalUrl = origin
+					? aoBridge.remotes.externalUrl(origin.hostId, url).catch(() => url)
+					: Promise.resolve(url);
+				return externalUrl.then((targetUrl) => {
+					if (cancelled) return undefined;
+					settleTrigger();
+					return aoBridge.app.openExternal(targetUrl);
+				});
 			}).catch((error) => console.warn("Unable to open browser preview", error));
 			return () => { cancelled = true; };
-		} else if ((revision !== null && revision > 0) || previous?.target) {
+		}
+		settleTrigger();
+		if ((revision !== null && revision > 0) || previous?.target) {
 			void clear();
 		}
 		return undefined;
-	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
+	}, [automaticBrowser, automaticBrowserLoaded, clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;
