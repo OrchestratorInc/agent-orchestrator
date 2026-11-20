@@ -61,7 +61,7 @@ type ConversationService interface {
 	RetryTurn(ctx context.Context, session domain.SessionID, turnID string) (domain.ConversationTurn, error)
 	SetTitle(ctx context.Context, session domain.SessionID, title string) (string, error)
 	ReloadMCPServers(ctx context.Context, session domain.SessionID) ([]domain.ConversationMCPServer, error)
-	SwitchProvider(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest) error
+	SwitchProviderReport(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error)
 	SwitchProviderAndSend(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest, msg ports.ChatUserMessage) (domain.ConversationTurn, bool, error)
 	SessionHistory(ctx context.Context, session domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error)
 }
@@ -88,11 +88,7 @@ type turnAutoResumeService interface {
 	SetTurnAutoResume(context.Context, domain.SessionID, string, bool) error
 }
 
-// ConversationsController owns the Chat routes for a session.
-//
-// Every route dispatches from the session's persisted mode inside the service, so
-// a client cannot reach the Chat path for a session that was created in TUI mode
-// even by calling these URLs directly. UI visibility is not the boundary.
+// ConversationsController owns the Chat routes and the explicit Stop turn route.
 type ConversationsController struct {
 	Svc ConversationService
 	// UserMessages counts accepted human steers for product telemetry. Nil
@@ -102,6 +98,12 @@ type ConversationsController struct {
 	Renders *attachmentstore.Store
 	// Search serves chat search. Nil answers the search route 501.
 	Search ConversationSearch
+	Models SwitchModelCatalog
+}
+
+// SwitchModelCatalog reads an agent's cached model catalog.
+type SwitchModelCatalog interface {
+	ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
 }
 
 // Register mounts the conversation routes under a session.
@@ -138,6 +140,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
 	r.Post("/sessions/{sessionId}/conversation/inputs/{requestId}/resolve", c.resolveInput)
 	r.Post("/sessions/{sessionId}/conversation/interrupt", c.interrupt)
+	r.Post("/sessions/{sessionId}/stop-turn", c.stopTurn)
 	r.Post("/sessions/{sessionId}/conversation/steer", c.steer)
 	r.Post("/sessions/{sessionId}/conversation/steer-or-send", c.steerOrSend)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/steer", c.promoteQueuedTurn)
@@ -1084,7 +1087,7 @@ func chatUserMessage(req SendConversationMessageRequest, sessionID string) (port
 	for _, excerpt := range req.Excerpts {
 		excerpts = append(excerpts, ports.ChatExcerptReference{
 			ConversationID: excerpt.ConversationID, MessageID: excerpt.MessageID,
-			Revision: excerpt.Revision, Text: excerpt.Text, ID: excerpt.ID, Order: excerpt.Order, Snapshot: excerpt.Snapshot,
+			Revision: excerpt.Revision, Text: excerpt.Text, ID: excerpt.ID, Order: excerpt.Order, Snapshot: excerpt.Snapshot, Comment: excerpt.Comment,
 		})
 	}
 	return ports.ChatUserMessage{
@@ -1217,6 +1220,21 @@ func (c *ConversationsController) resolveInput(w http.ResponseWriter, r *http.Re
 		requestID,
 		ports.ChatInputResponse{Action: action, Content: req.Content},
 	); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (c *ConversationsController) stopTurn(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(interface {
+		StopTurn(context.Context, domain.SessionID) error
+	})
+	if !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/stop-turn")
+		return
+	}
+	if err := svc.StopTurn(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId"))); err != nil {
 		writeConversationError(w, r, err)
 		return
 	}
@@ -1631,6 +1649,7 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 				summary.AnnotationID = block.Excerpt.Reference.ID
 				summary.AnnotationOrder = block.Excerpt.Reference.Order
 				summary.Text = block.Excerpt.SelectedText
+				summary.Comment = block.Excerpt.Reference.Comment
 				summary.SourceConversationID = block.Excerpt.Reference.ConversationID
 				summary.SourceMessageID = block.Excerpt.Reference.MessageID
 				summary.SourceRevision = &block.Excerpt.Reference.Revision

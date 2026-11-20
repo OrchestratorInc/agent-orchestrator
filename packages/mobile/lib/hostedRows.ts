@@ -53,17 +53,12 @@ export function hostedSessionKey(session: DashboardSession): string {
 	return hostId ? hostedRowKey(hostId, session.id) : `${session.projectId}:${session.id}`;
 }
 
-/**
- * Build each host's project rows separately so matching project IDs never share
- * workers or an orchestrator. `offline` marks the machine's name, decided by the
- * caller with the rule every screen uses (spawnHostState): never a bare closed
- * connection, which the app drops on every app switch.
- */
+/** Build each host's project rows separately so matching project IDs never share workers or an orchestrator. */
 export function hostedProjectSections(hosts: readonly {
 	hostId: string;
 	name: string;
 	appearance?: MachineAppearance;
-	offline?: boolean;
+	connection?: "closed" | "connecting" | "open";
 	projects: readonly ProjectInfo[];
 	sessions: readonly DashboardSession[];
 	orchestrators: readonly OrchestratorLink[];
@@ -77,7 +72,9 @@ export function hostedProjectSections(hosts: readonly {
 				project: {
 					...row.project,
 					hostId: host.hostId,
-					hostName: `${host.name}${host.offline ? " (offline)" : ""}`,
+					// The name alone: the machine's state is its freshness dot, which
+					// waits out a blip, where " (offline)" appeared on one failed poll.
+					hostName: host.name,
 					hostAppearance: machineAppearance({ id: host.hostId, name: host.name, appearance: host.appearance }),
 				},
 			})));

@@ -175,10 +175,12 @@ describe("retained-stack host routes", () => {
 
 	// Each machine's projects keep their rows through an app switch, so a bare
 	// closed connection marked every one "(offline)", in the app-switcher snapshot too.
-	it("marks a machine's projects offline by the shared rule, never for a closed connection", () => {
-		expect(source("./hostedRows.ts")).not.toContain('connection === "closed"');
+	// A machine's state is its freshness dot now, which waits out a blip.
+	it("never marks a machine's projects offline for a closed connection", () => {
+		const rows = source("./hostedRows.ts");
+		expect(rows).not.toContain('connection === "closed"');
+		expect(rows).toContain("hostName: host.name,");
 		const projects = source("../app/(tabs)/(projects)/projects.tsx");
-		expect(projects).toContain("offline: spawnHostState(host, phoneNetwork, now) !== \"ok\"");
-		expect(projects).toContain("hostedProjectSections(cloud ? [...hosts, cloud] : hosts)");
+		expect(projects).toContain("freshness={showMachine ? freshness.get(item.project.hostId) : undefined}");
 	});
 });

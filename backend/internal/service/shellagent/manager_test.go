@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -276,5 +278,138 @@ func TestManagerRestartsAGivenUpWatchForANewSubscriber(t *testing.T) {
 	}
 	if got := int(rt.dials.Load()); got <= maxWatchFailures {
 		t.Fatalf("dials = %d after a new subscriber, want the watch restarted", got)
+	}
+}
+
+func TestManagerRecordsHarnessOncePerChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
+	m := NewManager(ctx, rt, nil, nil)
+	recorded := make(chan domain.AgentHarness, 4)
+	m.SetHarnessRecorder(func(_ context.Context, handleID string, harness domain.AgentHarness) {
+		if handleID == "shell-1" {
+			recorded <- harness
+		}
+	})
+	m.TrackShellTerminal("shell-1")
+	defer m.SubscribeShellAgents(func(json.RawMessage) {})()
+	for _, fg := range []ports.TerminalForeground{
+		{Argv: []string{"claude"}, Busy: true},
+		{Argv: []string{"claude"}, Busy: true},
+		{Argv: []string{"zsh"}},
+		{Argv: []string{"codex"}, Busy: true},
+	} {
+		rt.readings <- fg
+	}
+	want := []domain.AgentHarness{domain.HarnessClaudeCode, "", domain.HarnessCodex}
+	for _, harness := range want {
+		select {
+		case got := <-recorded:
+			if got != harness {
+				t.Fatalf("recorded %q, want %q", got, harness)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("harness %q not recorded", harness)
+		}
+	}
+	select {
+	case extra := <-recorded:
+		t.Fatalf("recorded %q again", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+type fakeAgents struct{ agent ports.Agent }
+
+func (f fakeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return f.agent, f.agent != nil }
+
+type conversationAgent struct {
+	ports.Agent
+	id      string
+	history bool
+	pid     int
+}
+
+func (c *conversationAgent) ProcessConversationID(_ context.Context, pid int) (string, bool, error) {
+	c.pid = pid
+	return c.id, c.id != "", nil
+}
+
+func (c *conversationAgent) NativeConversationExists(context.Context, ports.SessionRef, string, map[string]string) (bool, error) {
+	return c.history, nil
+}
+
+func TestReadShellForegroundNamesFolderAgentAndConversation(t *testing.T) {
+	ctx := context.Background()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f"
+	for _, tc := range []struct {
+		name     string
+		argv     []string
+		history  bool
+		wantH    domain.AgentHarness
+		wantConv string
+	}{
+		{"agent with history", []string{"claude"}, true, domain.HarnessClaudeCode, id},
+		{"agent never prompted", []string{"claude"}, false, domain.HarnessClaudeCode, ""},
+		{"shell prompt", []string{"-zsh"}, true, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRuntime{readings: make(chan ports.TerminalForeground, 1)}
+			agent := &conversationAgent{id: id, history: tc.history}
+			m := NewManager(ctx, rt, fakeAgents{agent}, nil)
+			rt.readings <- ports.TerminalForeground{PGID: os.Getpid(), Argv: tc.argv}
+			dir, harness, conversation, ok := m.ReadShellForeground(ctx, "shell-1")
+			if !ok || harness != tc.wantH || conversation != tc.wantConv {
+				t.Fatalf("read = %q %q %q %v", dir, harness, conversation, ok)
+			}
+			if goruntime.GOOS == "darwin" || goruntime.GOOS == "linux" {
+				gotDir, _ := filepath.EvalSymlinks(dir)
+				wantDir, _ := filepath.EvalSymlinks(wd)
+				if gotDir != wantDir {
+					t.Fatalf("dir = %q, want %q", dir, wd)
+				}
+			}
+			if tc.wantH != "" && agent.pid != os.Getpid() {
+				t.Fatalf("conversation asked for pid %d", agent.pid)
+			}
+		})
+	}
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
+	m := NewManager(ctx, rt, nil, nil)
+	foregroundReadTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { foregroundReadTimeout = 3 * time.Second })
+	if _, _, _, ok := m.ReadShellForeground(ctx, "shell-1"); ok {
+		t.Fatal("a terminal that never answered was read")
+	}
+}
+
+func TestManagerRecordsFirstReadingWithoutAgent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
+	m := NewManager(ctx, rt, nil, nil)
+	recorded := make(chan domain.AgentHarness, 4)
+	m.SetHarnessRecorder(func(_ context.Context, _ string, harness domain.AgentHarness) { recorded <- harness })
+	m.TrackShellTerminal("shell-1")
+	defer m.SubscribeShellAgents(func(json.RawMessage) {})()
+	rt.readings <- ports.TerminalForeground{Argv: []string{"zsh"}}
+	rt.readings <- ports.TerminalForeground{Argv: []string{"zsh"}}
+	select {
+	case got := <-recorded:
+		if got != "" {
+			t.Fatalf("recorded %q, want \"\"", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first reading not recorded")
+	}
+	select {
+	case extra := <-recorded:
+		t.Fatalf("recorded %q again", extra)
+	case <-time.After(50 * time.Millisecond):
 	}
 }

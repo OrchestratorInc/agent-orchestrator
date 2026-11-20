@@ -628,8 +628,13 @@ const (
 // ConversationFailureCode identifies a provider failure with a known recovery path.
 type ConversationFailureCode string
 
-// ConversationFailureProviderKeyMissing means the provider route lacks a configured API key.
-const ConversationFailureProviderKeyMissing ConversationFailureCode = "provider_key_missing"
+const (
+	// ConversationFailureProviderKeyMissing means the provider route lacks a configured API key.
+	ConversationFailureProviderKeyMissing ConversationFailureCode = "provider_key_missing"
+	// ConversationFailureAuthRequired means the provider refused the agent's
+	// login, so signing in again is the way to recover the turn.
+	ConversationFailureAuthRequired ConversationFailureCode = "auth_required"
+)
 
 // ConversationTurnDiff is the turn's changed-file summary.
 //

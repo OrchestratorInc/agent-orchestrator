@@ -32,6 +32,8 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
+import { agentAccountLabel, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
+import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
@@ -49,14 +51,27 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const queryClient = useQueryClient();
 	// A Cloud task's session starts spinning up as the page opens (not Coder's).
 	const task = useTaskLaunch({ projectId, hostId });
+	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
+	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
+	const accountRows = oneRowPerLogin(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
+	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
+		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !row.signedIn })),
+		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
+		onPick: task.account.choose,
+		disabled: accountRows.length < 2,
+	} : undefined;
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
+	const stalePick = Boolean(task.account?.value && hostAccounts.data && !accountRows.some((row) => row.id === task.account?.value && row.signedIn));
+	useEffect(() => {
+		if (stalePick) taskRef.current.account?.choose(undefined);
+	}, [stalePick]);
 	// The page this render shows. A send is bound to the page it started on.
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
-	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); });
 	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -103,7 +118,12 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		// The worktree is still being created when the id arrives; ask again until it
 		// exists, backing off so a stalled preparation is not polled every 1.5s.
 		refetchInterval: (query) => (query.state.data ? 30_000 : Math.min(1_500 * 2 ** query.state.errorUpdateCount, 15_000)),
+		// Each read restarts the host's expiry for this preparation, so keep
+		// reading while the window is hidden: the page still holds the worktree.
+		refetchIntervalInBackground: true,
 		queryFn: async () => {
+			// The host restarts the expiry as the read arrives, so time it from its start.
+			const readAt = Date.now();
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: preparedId as string } },
 			});
@@ -111,9 +131,17 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			return {
 				paths: (data?.files ?? []).filter((file) => file.status !== "deleted").map((file) => file.path),
 				truncated: Boolean(data?.truncated),
+				readAt,
 			};
 		},
 	});
+	// A read that answered restarted the host's expiry; the next visit offers a
+	// kept preparation by its time.
+	const { notePreparationUsed } = task;
+	const lastReadAt = workspaceFiles.data?.readAt;
+	useEffect(() => {
+		if (preparedId && lastReadAt) notePreparationUsed(preparedId, lastReadAt);
+	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
 	// the first message of its Chat session, up to the size one upload may be.
@@ -138,15 +166,20 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		writeChatAttachments(draftScope, []);
 	}
 	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
-	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId), [hostId, task.agent.value, task.isCloudProject]);
+	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId, projectId), [hostId, projectId, task.agent.value, task.isCloudProject]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
 	);
 	// A session of this agent already reported its own settings: draw exactly those
 	// controls, holding this chat's choices, so the bar never changes on handoff.
+	// Those are this computer's agent's. A Cloud task's agent runs in its sandbox,
+	// and its session's bar lists Cloud's own models, so the bar here does too.
 	const harness = task.agent.value;
-	const template = useMemo(() => readChatSettingsTemplate(harness, hostId), [harness, hostId]);
+	const template = useMemo(
+		() => task.isCloudProject ? undefined : readChatSettingsTemplate(harness, hostId),
+		[harness, hostId, task.isCloudProject],
+	);
 	const barFor = (settings: TurnSettings): LaunchSettings => {
 		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.approvalModes) : undefined;
 		return {
@@ -491,6 +524,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 								onPendingChange: (next) => {
 									if (next) task.switchAgent(next.harness, { model: next.model, effort: next.effort ?? next.shownEffort });
 								},
+								account: accountChoice,
 							}}
 							autoSelectEffortOnOpen
 						/>
@@ -512,13 +546,18 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
 	if (!model) return undefined;
+	// The agent's own rows, as its session's bar is given them. The bar folds a
+	// Default row into the model its description names; folded here as well, that
+	// model's row would be gone before the bar sees it (Fable, where it is this
+	// agent's default).
+	const rows = options.find((option) => option.id === model.id)?.choices ?? model.choices;
 	// A saved template predates the live catalog: a model it does not list means it
 	// can no longer show every choice, so AO's own controls take over.
-	const listed = (item: ChatModel) => model.choices.some((choice) =>
+	const listed = (item: ChatModel) => rows.some((choice) =>
 		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
 	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
 	// Only choices a new task can start with: those AO's model list also has.
-	const modelChoices = model.choices.flatMap((choice) => {
+	const modelChoices = rows.flatMap((choice) => {
 		const listed = catalogModelFor(choice, harness, models);
 		return listed ? [listed.hint ? { ...choice, hint: listed.hint } : choice] : [];
 	});
