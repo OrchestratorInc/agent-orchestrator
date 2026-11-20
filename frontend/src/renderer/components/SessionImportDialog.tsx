@@ -398,6 +398,7 @@ function ChatRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm">{chat.title}</span>
 				<span className="block truncate text-xs text-muted-foreground">
+					{chat.source ? `${t("sessionImport.fromApp", { app: agentLabel(chat.source) })} · ` : null}
 					{agentLabel(chat.harness)} · {t("sessionImport.messages", { count: chat.messageCount })} · <When at={chat.lastActivity} />
 					{block ? <span className="text-warning"> · {t(block === "signed_out" ? "sessionImport.agentSignedOut" : "sessionImport.agentMissing")}</span> : null}
 				</span>

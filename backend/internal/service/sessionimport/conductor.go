@@ -37,7 +37,12 @@ func conductorRoot(home string) string {
 }
 
 func conductorDB(root string) (*sql.DB, error) {
-	path := filepath.Join(root, "conductor.db")
+	return openReadOnlySQLite(filepath.Join(root, "conductor.db"))
+}
+
+// openReadOnlySQLite opens another app's database for reading only. It
+// returns nil, nil when the file does not exist.
+func openReadOnlySQLite(path string) (*sql.DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -47,9 +52,9 @@ func conductorDB(root string) (*sql.DB, error) {
 	dsn := opencode.ReadOnlyDSN(path, 2000)
 	if _, err := os.Stat(path + "-wal"); errors.Is(err, os.ErrNotExist) {
 		// A mode=ro open of a closed WAL database creates -wal and -shm files
-		// in Conductor's folder; with no -wal file every commit is in the main
+		// in the app's folder; with no -wal file every commit is in the main
 		// file, so read it as immutable instead.
-		// ponytail: a checkpoint by a Conductor that starts during the read can
+		// ponytail: a checkpoint by the app starting during the read can
 		// tear it; copy the file first if that is ever seen.
 		dsn += "&immutable=1"
 	}
@@ -232,7 +237,7 @@ func claudeTranscripts(root string) map[string]string {
 	return ids
 }
 
-func conductorClaudeRoot() string {
+func homeClaudeRoot() string {
 	home, _ := os.UserHomeDir()
 	return canonical(claudeRoot(home))
 }
@@ -254,7 +259,7 @@ func discoverConductor(ctx context.Context, root string) ([]sourceFiles, error) 
 	}
 	// paths[0] is Conductor's session; the rest is the agent's own history,
 	// whose size and time then key the scan cache.
-	claude := claudeTranscripts(conductorClaudeRoot())
+	claude := claudeTranscripts(homeClaudeRoot())
 	codex, err := walkSources(domain.HarnessCodex, "sessions", codexKey)(ctx, conductorCodexRoot())
 	if err != nil {
 		return nil, err
@@ -415,7 +420,7 @@ func readConductorTranscript(ctx context.Context, root string, paths ...string) 
 		// Cloud chats turn up without it.
 		return t, errNoReadableConversation
 	case len(native) > 0:
-		return named(readClaudeTranscript(ctx, conductorClaudeRoot(), native...))
+		return named(readClaudeTranscript(ctx, homeClaudeRoot(), native...))
 	case !filepath.IsAbs(chat.cwd):
 		return t, errNoReadableConversation
 	}
@@ -485,7 +490,7 @@ type claudeLine struct {
 // Claude Code can continue it. A tool call without its result, or a result
 // without its call, is left out: the Claude API rejects either one.
 func writeConductorTranscript(ctx context.Context, t transcript) (transcript, error) {
-	root := conductorClaudeRoot()
+	root := homeClaudeRoot()
 	if claudeTranscripts(root)[t.nativeID] != "" {
 		return t, errClaudeHasConversation
 	}
@@ -509,55 +514,73 @@ func writeConductorTranscript(ctx context.Context, t transcript) (transcript, er
 	if err != nil {
 		return t, err
 	}
-	// ponytail: Claude Code hashes folder names over 200 characters; such a
-	// transcript still resumes by id, only Claude's own picker misses it.
-	dir := filepath.Join(root, "projects", claudeProjectDirChars.ReplaceAllString(t.cwd, "-"))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return t, err
-	}
-	file, err := os.CreateTemp(dir, ".conductor-import-*")
+	path, err := publishClaudeTranscript(root, t.cwd, t.nativeID, func(encoder *json.Encoder) error {
+		var parent *string
+		seen := map[string]bool{}
+		_, err := eachConductorRecord(ctx, db, t.paths[0], func(r conductorRecord) error {
+			if r.blocks != nil {
+				kept := r.blocks[:0]
+				for _, block := range r.blocks {
+					switch rawString(block["type"]) {
+					case "tool_use":
+						if !results[rawString(block["id"])] {
+							continue
+						}
+					case "tool_result":
+						if !calls[rawString(block["tool_use_id"])] {
+							continue
+						}
+					}
+					kept = append(kept, block)
+				}
+				if len(kept) == 0 {
+					return nil
+				}
+				r.message["content"], _ = json.Marshal(kept)
+			}
+			id := r.uuid
+			if uuid.Validate(id) != nil || seen[id] {
+				id = uuid.NewString()
+			}
+			seen[id] = true
+			message, err := json.Marshal(r.message)
+			if err != nil {
+				return err
+			}
+			line := claudeLine{ParentUUID: parent, UserType: "external", CWD: t.cwd, SessionID: t.nativeID, Version: version, Type: r.role, Message: message, UUID: id, Timestamp: claudeTimestamp(r.at)}
+			parent = &id
+			return encoder.Encode(line)
+		})
+		return err
+	})
 	if err != nil {
 		return t, err
 	}
+	t.harness, t.root, t.path, t.paths = domain.HarnessClaudeCode, root, path, []string{path}
+	return t, nil
+}
+
+func claudeTimestamp(at time.Time) string {
+	return at.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// publishClaudeTranscript writes a new Claude Code transcript named id in
+// cwd's Claude project folder; write supplies its records. It never replaces
+// a transcript Claude Code already holds.
+func publishClaudeTranscript(root, cwd, id string, write func(*json.Encoder) error) (string, error) {
+	// ponytail: Claude Code hashes folder names over 200 characters; such a
+	// transcript still resumes by id, only Claude's own picker misses it.
+	dir := filepath.Join(root, "projects", claudeProjectDirChars.ReplaceAllString(cwd, "-"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	file, err := os.CreateTemp(dir, ".ao-import-*")
+	if err != nil {
+		return "", err
+	}
 	defer func() { _ = os.Remove(file.Name()) }()
 	out := bufio.NewWriter(file)
-	encoder := json.NewEncoder(out)
-	var parent *string
-	seen := map[string]bool{}
-	_, err = eachConductorRecord(ctx, db, t.paths[0], func(r conductorRecord) error {
-		if r.blocks != nil {
-			kept := r.blocks[:0]
-			for _, block := range r.blocks {
-				switch rawString(block["type"]) {
-				case "tool_use":
-					if !results[rawString(block["id"])] {
-						continue
-					}
-				case "tool_result":
-					if !calls[rawString(block["tool_use_id"])] {
-						continue
-					}
-				}
-				kept = append(kept, block)
-			}
-			if len(kept) == 0 {
-				return nil
-			}
-			r.message["content"], _ = json.Marshal(kept)
-		}
-		id := r.uuid
-		if uuid.Validate(id) != nil || seen[id] {
-			id = uuid.NewString()
-		}
-		seen[id] = true
-		message, err := json.Marshal(r.message)
-		if err != nil {
-			return err
-		}
-		line := claudeLine{ParentUUID: parent, UserType: "external", CWD: t.cwd, SessionID: t.nativeID, Version: version, Type: r.role, Message: message, UUID: id, Timestamp: r.at.UTC().Format("2006-01-02T15:04:05.000Z")}
-		parent = &id
-		return encoder.Encode(line)
-	})
+	err = write(json.NewEncoder(out))
 	if err == nil {
 		err = out.Flush()
 	}
@@ -565,15 +588,14 @@ func writeConductorTranscript(ctx context.Context, t transcript) (transcript, er
 		err = closeErr
 	}
 	if err != nil {
-		return t, err
+		return "", err
 	}
-	path := filepath.Join(dir, t.nativeID+".jsonl")
+	path := filepath.Join(dir, id+".jsonl")
 	if err := os.Link(file.Name(), path); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return t, errClaudeHasConversation
+			return "", errClaudeHasConversation
 		}
-		return t, err
+		return "", err
 	}
-	t.harness, t.root, t.path, t.paths = domain.HarnessClaudeCode, root, path, []string{path}
-	return t, nil
+	return path, nil
 }
