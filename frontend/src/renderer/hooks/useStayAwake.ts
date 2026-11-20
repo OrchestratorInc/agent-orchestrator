@@ -155,10 +155,18 @@ export function useStayAwake(enabled = true) {
 				await confirmLid();
 			} else {
 				await ensureDesktop();
+				// Bounded: this request holds the shared scope, so a hung status read
+				// must not delay a later Off click. Unknown means not remembered.
 				const noBattery = async () => {
-					const status = cache.getQueryData<MobileStatus>(mobileStatusQueryKey)
-						?? await cache.fetchQuery<MobileStatus>({ queryKey: mobileStatusQueryKey }).catch(() => undefined);
-					return status?.keepAwake?.hasBattery === false;
+					let status = cache.getQueryData<MobileStatus>(mobileStatusQueryKey);
+					if (!status && isLatest()) {
+						let timeout: number | undefined;
+						status = await Promise.race([
+							cache.fetchQuery<MobileStatus>({ queryKey: mobileStatusQueryKey }).catch(() => undefined),
+							new Promise<undefined>((resolve) => { timeout = window.setTimeout(resolve, 3_000); }),
+						]).finally(() => window.clearTimeout(timeout));
+					}
+					return isLatest() && status?.keepAwake?.hasBattery === false;
 				};
 				if (change.rememberMobile || (change.rememberIfNoBattery && await noBattery())) await updateMobile(true, false);
 			}
