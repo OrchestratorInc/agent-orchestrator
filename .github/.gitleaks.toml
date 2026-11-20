@@ -249,4 +249,8 @@ title = "gitleaks config"
         "a4180fb84c7c16835eadfddbb1c12f17a8cc3a8e",
         "cd08f63c2b567557abe59a4d2b53a1452d5aa49c",
         "8a07eb618e978840adcab4340667054f5154bb75",
+        # Fake OpenSSH key header in the render-images test
+        # (backend/internal/cli/render_images_test.go), split in #8550;
+        # this #6378 merge of main from before that split still carries it.
+        "fc3d1db67f311a03187807b4f4a7f15601f06144",
     ]

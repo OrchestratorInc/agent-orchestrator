@@ -19,7 +19,8 @@ const (
 	ReviewStateUpToDate = contract.AOReviewUpToDate
 	// ReviewStateChangesRequested means AO requested changes on the PR's current head.
 	ReviewStateChangesRequested = contract.AOReviewChangesRequested
-	// ReviewStateIneligible means the PR is closed, merged, or missing required facts.
+	// ReviewStateIneligible means the PR is closed, merged, missing required facts,
+	// or a draft excluded from automatic review.
 	ReviewStateIneligible = contract.AOReviewIneligible
 )
 
@@ -35,8 +36,8 @@ type PRReviewState struct {
 }
 
 // Plan computes per-PR review work from the currently observed PRs and existing
-// review runs. It is pure so the trigger path and API list path share exactly
-// the same eligibility/status rules.
+// review runs for explicit triggers and the API read model. Automatic review
+// paths must use PlanAuto to apply the draft policy.
 func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 	latest := latestRunsByPRAndSHA(runs)
 	reviews := make([]PRReviewState, 0, len(prs))
@@ -81,6 +82,22 @@ func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 		}
 		return reviews[i].PRURL < reviews[j].PRURL
 	})
+	return reviews
+}
+
+// PlanAuto is the planner for every automatic review path. It excludes draft PRs
+// from new work while retaining active passes.
+func PlanAuto(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
+	reviews := Plan(prs, runs)
+	drafts := make(map[string]bool, len(prs))
+	for _, pr := range prs {
+		drafts[pr.URL] = pr.Draft
+	}
+	for i := range reviews {
+		if drafts[reviews[i].PRURL] && reviews[i].Status != ReviewStateRunning {
+			reviews[i].Status = ReviewStateIneligible
+		}
+	}
 	return reviews
 }
 

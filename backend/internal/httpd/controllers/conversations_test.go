@@ -40,6 +40,7 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 type fakeConversationService struct {
 	switchRequest     domain.ProviderSwitchRequest
 	switchErr         error
+	switchResult      domain.ProviderSwitchResult
 	history           []domain.HandoffTurn
 	historyTotal      int
 	historyOffset     int
@@ -258,15 +259,15 @@ func (f *fakeConversationService) ReloadMCPServers(
 	return f.mcpServers, f.reloadErr
 }
 
-func (f *fakeConversationService) SwitchProvider(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) error {
+func (f *fakeConversationService) SwitchProviderReport(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error) {
 	f.switchRequest = request
 	f.switchCtxErr = ctx.Err()
-	return f.switchErr
+	return f.switchResult, f.switchErr
 }
 
 // SwitchProviderAndSend is the service's: a retry after the switch went through finds the target active.
 func (f *fakeConversationService) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, message ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
-	if err := f.SwitchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+	if _, err := f.SwitchProviderReport(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
 		return domain.ConversationTurn{}, false, err
 	}
 	turn, err := f.Send(ctx, id, message)

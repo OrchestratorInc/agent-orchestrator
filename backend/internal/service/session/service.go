@@ -54,6 +54,7 @@ type Store interface {
 	GetDisplayPRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, bool, error)
 	ListPRFactsForSession(ctx context.Context, id domain.SessionID) ([]domain.PRFacts, error)
 	ListPRFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error)
+	ListPRStateTimes(ctx context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error)
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
 	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
@@ -83,6 +84,11 @@ type ListFilter struct {
 	// order, as before paging.
 	Limit  int
 	Cursor string
+	// PRState keeps the sessions owning a pull request in that state, ordered
+	// by when their newest such PR reached it rather than pinned-then-updated,
+	// and has the page report how many sessions match. Empty keeps every
+	// session.
+	PRState domain.PRState
 }
 
 // commander is the command-side surface Service delegates to: the
@@ -119,6 +125,13 @@ type interfaceTransitionCommander interface {
 // service fakes while production delegates to Session Manager.
 type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
+}
+
+// taskPreparationRenewer keeps a held task preparation alive while the new
+// chat page uses its worktree. Optional so focused service fakes need not
+// implement it.
+type taskPreparationRenewer interface {
+	RenewTaskPreparation(domain.TaskPreparationToken)
 }
 
 // agentAccountCommander keeps account moves optional for focused service fakes.
@@ -286,6 +299,17 @@ type Service struct {
 	// githubRepos lets ClaimPR accept a PR on the repository a github.com
 	// origin was renamed or transferred to. Nil keeps exact origin matching.
 	githubRepos ports.GitHubRepositoryResolver
+}
+
+// renewTaskPreparation extends a hidden preparation's expiry when its files
+// are read or staged, which only the page holding it does.
+func (s *Service) renewTaskPreparation(rec domain.SessionRecord) {
+	if !rec.IsTaskPreparation {
+		return
+	}
+	if renewer, ok := s.manager.(taskPreparationRenewer); ok {
+		renewer.RenewTaskPreparation(domain.TaskPreparationToken(rec.ID))
+	}
 }
 
 // SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow
@@ -1656,6 +1680,8 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 // filter.Limit is set, and reports the archive an active-only list left out.
 // The page is chosen from the stored rows before any read-model facts are
 // loaded, so a page of an archive of thousands costs a page's worth of reads.
+// A PR-state filter adds one narrow read of the PR table (session and time
+// only), not the card facts of every candidate.
 func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, error) {
 	recoveryRevision := s.statusRecoveryRevision()
 	if filter.Limit < 0 || filter.Limit > MaxListLimit {
@@ -1678,8 +1704,26 @@ func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, er
 	}
 	matched, archive := selectSessionRecords(recs, filter)
 	page := ListPage{Archived: archive}
+	keyOf := pageKeyOf
+	if filter.PRState != "" {
+		var reachedAt map[domain.SessionID]time.Time
+		matched, reachedAt, err = s.selectByPRState(ctx, matched, filter.PRState)
+		if err != nil {
+			return ListPage{}, err
+		}
+		total := len(matched)
+		page.Total = &total
+		// The archive summary sizes a list without the PR filter; with it the
+		// total is the count that matters.
+		page.Archived = nil
+		keyOf = func(rec domain.SessionRecord) listPageKey {
+			return listPageKey{updatedAt: reachedAt[rec.ID], id: rec.ID}
+		}
+		sortSessionRecords(matched, keyOf)
+		page.Version = prStateListVersion(matched, reachedAt)
+	}
 	if filter.Limit > 0 {
-		matched, page.NextCursor = pageSessionRecords(matched, after, filter.Limit)
+		matched, page.NextCursor = pageSessionRecords(matched, keyOf, after, filter.Limit)
 	}
 	page.Sessions, err = s.sessionsFromRecords(ctx, matched, recoveryRevision)
 	if err != nil {

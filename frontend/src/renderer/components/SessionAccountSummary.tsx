@@ -121,12 +121,14 @@ function LocalSessionAccountSummary({ session, hostId }: { session: WorkspaceSes
 			<p className="text-xs text-muted-foreground">{t("settings.agentAccounts.sessionAccount")}</p>
 			<div className="flex min-w-0 items-center gap-2">
 				{moving ? <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
-				<Select value={choice.value ?? ""} disabled={choice.disabled} onValueChange={choice.onPick}>
-					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
-					<SelectContent align="end">
-						{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>{option.label}</SelectItem>)}
-					</SelectContent>
-				</Select>
+				{choice.options.length < 2
+					? <p className="max-w-56 truncate text-sm text-secondary-foreground">{choice.options.find((option) => option.id === choice.value)?.label}</p>
+					: <Select value={choice.value ?? ""} disabled={choice.disabled} onValueChange={choice.onPick}>
+						<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
+						<SelectContent align="end">
+							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>{option.label}</SelectItem>)}
+						</SelectContent>
+					</Select>}
 			</div>
 		</div>
 		{error ? <p className="mt-2 text-xs text-muted-foreground" role="status">{error}</p> : null}
@@ -226,12 +228,14 @@ function SessionAccountPicker({ session, transition, currentId, options, label, 
 			<p className="text-xs text-muted-foreground">{t("settings.agentAccounts.sessionAccount")}</p>
 			<div className="flex min-w-0 items-center gap-2">
 				{moving ? <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
-				<Select value={currentId ?? ""} disabled={moving || options.length < 2} onValueChange={(value) => void move(value)}>
-					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
-					<SelectContent align="end">
-						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.selectable}>{option.name}</SelectItem>)}
-					</SelectContent>
-				</Select>
+				{options.length < 2
+					? <p className="max-w-56 truncate text-sm text-secondary-foreground">{options.find((option) => option.id === currentId)?.name}</p>
+					: <Select value={currentId ?? ""} disabled={moving} onValueChange={(value) => void move(value)}>
+						<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
+						<SelectContent align="end">
+							{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.selectable}>{option.name}</SelectItem>)}
+						</SelectContent>
+					</Select>}
 			</div>
 		</div>
 		{status ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}

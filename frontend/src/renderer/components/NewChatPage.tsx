@@ -71,7 +71,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
-	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); });
 	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -118,7 +118,12 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		// The worktree is still being created when the id arrives; ask again until it
 		// exists, backing off so a stalled preparation is not polled every 1.5s.
 		refetchInterval: (query) => (query.state.data ? 30_000 : Math.min(1_500 * 2 ** query.state.errorUpdateCount, 15_000)),
+		// Each read restarts the host's expiry for this preparation, so keep
+		// reading while the window is hidden: the page still holds the worktree.
+		refetchIntervalInBackground: true,
 		queryFn: async () => {
+			// The host restarts the expiry as the read arrives, so time it from its start.
+			const readAt = Date.now();
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: preparedId as string } },
 			});
@@ -126,9 +131,17 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			return {
 				paths: (data?.files ?? []).filter((file) => file.status !== "deleted").map((file) => file.path),
 				truncated: Boolean(data?.truncated),
+				readAt,
 			};
 		},
 	});
+	// A read that answered restarted the host's expiry; the next visit offers a
+	// kept preparation by its time.
+	const { notePreparationUsed } = task;
+	const lastReadAt = workspaceFiles.data?.readAt;
+	useEffect(() => {
+		if (preparedId && lastReadAt) notePreparationUsed(preparedId, lastReadAt);
+	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
 	// the first message of its Chat session, up to the size one upload may be.

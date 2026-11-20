@@ -165,6 +165,8 @@ type ConversationDispatchTrackingBySession = Record<string, ConversationDispatch
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
+	/** A retained receipt can fail locally or have an uncertain dispatch. */
+	delivery?: "failed" | "uncertain";
 	/** A continue after a stop, drawn as a marker while it is sent. */
 	continuation?: boolean;
 	createdAt: string;
@@ -358,7 +360,8 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 	void queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
-const CONVERSATION_PAGE_SIZE = 200;
+const LOCAL_INITIAL_PAGE_SIZE = 30;
+const LOCAL_OLDER_PAGE_SIZE = 200;
 // A remote page crosses a tunnel, often on the host's upload: a small live page,
 // larger pages on scroll, and each tool output cut to its head and tail.
 const REMOTE_LIVE_PAGE_SIZE = 30;
@@ -425,7 +428,7 @@ async function fetchConversationWire(sessionId: string, hostId: string | undefin
 }
 
 function conversationPageQuery(hostId: string | undefined, beforeSequence?: number): ConversationPageQuery {
-	if (!hostId) return { beforeSequence, limit: CONVERSATION_PAGE_SIZE };
+	if (!hostId) return { beforeSequence, limit: beforeSequence ? LOCAL_OLDER_PAGE_SIZE : LOCAL_INITIAL_PAGE_SIZE };
 	return { beforeSequence, limit: beforeSequence ? REMOTE_OLDER_PAGE_SIZE : REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT };
 }
 
@@ -484,8 +487,10 @@ export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: C
 export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
 	const key = conversationQueryKey(sessionId, hostId);
 	let latest: ConversationSnapshot;
+	let priorControllerState: string | undefined;
 	try {
 		const prior = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages[0];
+		priorControllerState = prior?.controller.state;
 		const floor = prior ? remoteConversationFloor(prior) : 0;
 		if (prior && floor >= 1) {
 			const wire = await fetchConversationWire(sessionId, hostId, { afterSequence: floor, limit: REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT });
@@ -496,6 +501,10 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			if (merged && current) {
 				queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+				forgetRereadsOnControllerChange(queryClient, sessionId, hostId, priorControllerState, merged.controller.state);
+				// The tail covered every row above the floor, which is below every
+				// running row of the live page, so only older pages can be stale.
+				await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, floor + 1);
 				return;
 			}
 			latest = wire.afterSequence ? await fetchConversationPage(sessionId, hostId) : tail;
@@ -511,6 +520,93 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 	applyLiveConversationPage(queryClient, key, latest);
+	forgetRereadsOnControllerChange(queryClient, sessionId, hostId, priorControllerState, latest.controller.state);
+	// Rows that slid out of the new page stay in the live page uncovered.
+	await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, latest.oldestSequence);
+}
+
+/** At most this many uncovered rows are reread per refresh. */
+const REMOTE_UNCOVERED_UNSETTLED_LIMIT = 20;
+
+/**
+ * Rows a reread found unchanged, as `id:revision`, per open remote chat. A row
+ * the host keeps in progress (an older daemon that never settles it, an AO action
+ * still in flight, an old pending approval) is then read once, not on every
+ * refresh of a streaming turn. Opening the chat, reconnecting its host's stream,
+ * or its controller starting (when a daemon settles stranded rows) reads it again.
+ */
+const unchangedRemoteRereads = new WeakMap<QueryClient, Map<string, Set<string>>>();
+const rereadChatKey = (hostId: string, sessionId: string) => `${hostId}\u0000${sessionId}`;
+
+function unchangedRereadsFor(queryClient: QueryClient, sessionId: string, hostId: string): Set<string> {
+	let chats = unchangedRemoteRereads.get(queryClient);
+	if (!chats) unchangedRemoteRereads.set(queryClient, (chats = new Map()));
+	let rows = chats.get(rereadChatKey(hostId, sessionId));
+	if (!rows) chats.set(rereadChatKey(hostId, sessionId), (rows = new Set()));
+	return rows;
+}
+
+/** Reads every in-progress row of a host's chats, or of one chat, again on its next refresh. */
+export function forgetRemoteConversationRereads(queryClient: QueryClient, hostId: string, sessionId?: string): void {
+	const chats = unchangedRemoteRereads.get(queryClient);
+	if (!chats) return;
+	if (sessionId !== undefined) {
+		chats.delete(rereadChatKey(hostId, sessionId));
+		return;
+	}
+	for (const key of [...chats.keys()]) if (key.startsWith(rereadChatKey(hostId, ""))) chats.delete(key);
+}
+
+function forgetRereadsOnControllerChange(queryClient: QueryClient, sessionId: string, hostId: string, before: string | undefined, after: string | undefined): void {
+	if (before !== undefined && before !== after) forgetRemoteConversationRereads(queryClient, hostId, sessionId);
+}
+
+/**
+ * A refresh reads the live page or its tail, never the rows below what that read
+ * covered: older pages, and rows that slid out of a new live page but stay in it.
+ * A row there held as still in progress keeps that status after the host settles
+ * it, and a daemon's startup repair settles exactly such rows (running notices
+ * stranded on finished turns, which sit in history). Rereads just those rows, one
+ * sequence each, and patches the ones that changed; rows at or after `coveredFrom`
+ * in the live page came with the read and are left alone. Best effort: a row
+ * that cannot be read keeps what its page held.
+ */
+async function rereadUncoveredUnsettledActivities(queryClient: QueryClient, key: QueryKey, sessionId: string, hostId: string, coveredFrom: number): Promise<void> {
+	const pages = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages ?? [];
+	const unchanged = unchangedRereadsFor(queryClient, sessionId, hostId);
+	const unsettled = pages
+		.flatMap((page, index) => index === 0 ? page.items.filter((item) => item.sequence < coveredFrom) : page.items)
+		.filter((item): item is ConversationActivity => item.kind === "activity" && (item.status === "running" || item.status === "pending"))
+		.filter((item) => !unchanged.has(`${item.id}:${item.revision}`))
+		.slice(0, REMOTE_UNCOVERED_UNSETTLED_LIMIT);
+	if (!unsettled.length) return;
+	const fresh = new Map<string, ConversationItem>();
+	await Promise.all(unsettled.map(async (item) => {
+		try {
+			const wire = await fetchConversationWire(sessionId, hostId, {
+				beforeSequence: item.sequence + 1, afterSequence: item.sequence > 1 ? item.sequence - 1 : undefined, limit: 1, outputLimit: REMOTE_OUTPUT_LIMIT,
+			});
+			const row = toSnapshot(wire).items.find((candidate) => candidate.id === item.id);
+			if (row?.kind === "activity" && (row.status !== item.status || row.revision !== item.revision)) fresh.set(item.id, row);
+			// Unchanged, or no longer shown: not worth reading again on every refresh.
+			else unchanged.add(`${item.id}:${item.revision}`);
+		} catch {
+			// The row keeps what its page held; the next refresh tries again.
+		}
+	}));
+	if (!fresh.size) return;
+	// Another refresh may have committed a newer revision while these reads ran,
+	// so a read row only replaces an older revision of what the cache holds now.
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (current) => current && {
+		...current,
+		pages: current.pages.map((page) => ({
+			...page,
+			items: page.items.map((item) => {
+				const read = fresh.get(item.id);
+				return read && read.revision > item.revision ? read : item;
+			}),
+		})),
+	});
 }
 
 /**
@@ -533,6 +629,49 @@ function applyLiveConversationPage(queryClient: QueryClient, key: QueryKey, late
 			: latest;
 		return { ...previous, pages: [live, ...previous.pages.slice(1)] };
 	});
+}
+
+/**
+ * Refresh an open local chat the way a remote one refreshes: read only the rows
+ * above its floor and merge them into the live page, instead of refetching every
+ * loaded page on each event of a streaming turn. Answers false, having written
+ * nothing, when the tail cannot replace those rows (a turn started or settled, an
+ * undo, a branch switch, compaction, a read that failed) or when anything wrote
+ * the live page during the read; the caller then refetches the chat as before.
+ */
+export async function refreshLocalConversationTail(queryClient: QueryClient, sessionId: string): Promise<boolean> {
+	// The open read of a chat that changed while it was closed writes a whole live
+	// page when it lands, possibly one read before this event. A tail merged first
+	// would be overwritten by it, while a full reload started now lands after it.
+	if (localConversationRefreshes.get(queryClient)?.has(sessionId)) return false;
+	const key = conversationQueryKey(sessionId);
+	const loaded = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages;
+	const prior = loaded?.[0];
+	const floor = prior ? remoteConversationFloor(prior) : 0;
+	if (!prior || floor < 1) return false;
+	// The tail holds only rows above the live page's floor. A turn long enough to
+	// span pages, or an unsettled row on an older loaded page, can still change
+	// below it, so such a chat reads every page as before.
+	if (loaded.length > 1 && remoteConversationFloor(mergeConversationPages(loaded) ?? prior) < prior.oldestSequence - 1) return false;
+	let wire: WireSnapshot;
+	try {
+		// The live page's size: the rows above its floor fit in it, and a tail that
+		// does not reach the floor is refused below.
+		wire = await fetchConversationWire(sessionId, undefined, { afterSequence: floor, limit: LOCAL_INITIAL_PAGE_SIZE });
+	} catch {
+		return false;
+	}
+	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
+	// A refetch or an optimistic edit that landed during the read is newer than
+	// this tail's view of the page, so the tail must not overwrite it. A chat
+	// marked stale during the read (it closed and an event arrived) keeps the
+	// mark: writing data would clear it, and its next open would skip the read
+	// that catches it up.
+	if (wire.afterSequence !== floor || current?.pages[0] !== prior || queryClient.getQueryState(key)?.isInvalidated) return false;
+	const merged = mergeRemoteConversationTail(prior, toSnapshot(wire), floor);
+	if (!merged) return false;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+	return true;
 }
 
 const remoteConversationRefreshes = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
@@ -699,12 +838,17 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		if (cached?.data === undefined) return;
 		// A cached remote page (an earlier visit, a prefetch, or the disk copy) shows
 		// at once; the open reads what changed since.
-		if (hostId) refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		if (hostId) {
+			forgetRemoteConversationRereads(queryClient, hostId, sessionId);
+			refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		}
 		// A cached local chat is current unless an event marked it stale while closed.
 		else if (cached.isInvalidated) refreshLocalConversationOnce(queryClient, sessionId);
 	}, [hostId, queryClient, sessionId]);
 
-	if (query.error && (!hostId || !query.data)) {
+	// An older page that failed leaves the pages already loaded usable: the chat
+	// stays, and the button above its first turn asks for that page again.
+	if (query.error && (!query.data || (!hostId && !query.isFetchNextPageError))) {
 		const code = apiErrorCode(query.error);
 		// The session is currently owned by Terminal UI (or its Chat controller is
 		// absent). A deliberate interface switch can change that later, but this
@@ -734,9 +878,15 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
 		// A live refresh may be in flight; cancelling it would drop the newest
-		// page for good. The older page then loads on the next scroll or click.
+		// page for good. Asking during it joins the refresh, which loads no older
+		// page, so the older page is asked for again once the refresh lands.
 		loadOlder: () => {
-			const fetchOlder = () => void query.fetchNextPage({ cancelRefetch: false });
+			const fetchOlder = () => {
+				const state = sessionId ? queryClient.getQueryState(conversationQueryKey(sessionId, hostId)) : undefined;
+				const refreshing = state?.fetchStatus === "fetching" && !state.fetchMeta?.fetchMore;
+				const asked = query.fetchNextPage({ cancelRefetch: false });
+				if (refreshing) void asked.then(() => query.fetchNextPage({ cancelRefetch: false }));
+			};
 			// A local chat's open read is not a query fetch to join. An older-page fetch
 			// started during it copies the cached pages as it starts and writes them
 			// back over the live page the read puts in, so it waits for the read.
