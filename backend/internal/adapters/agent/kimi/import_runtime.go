@@ -68,7 +68,14 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	if json.Unmarshal(b, &proof) != nil || proof.ID != id || proof.Home != filepath.Base(home) || proof.Source == "" || proof.CWD == "" {
 		return fail()
 	}
-	current, err := ReadImportedSession(ctx, home, id)
+	legacyProof := proof.WireBytes == 0 && proof.WireHash == ""
+	if legacyProof {
+		proof, err = recoverKimiRuntimeProof(ctx, home, proof)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	currentModel, err := verifyKimiRuntimeHistory(ctx, root, proof)
 	if err != nil {
 		return nil, true, err
 	}
@@ -76,8 +83,17 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	if err != nil {
 		return fail()
 	}
-	if current.CWD != proof.CWD || canonicalWorkspace != proof.CWD {
+	if canonicalWorkspace != proof.CWD {
 		return fail()
+	}
+	if legacyProof {
+		data, err := json.Marshal(proof)
+		if err != nil {
+			return nil, true, err
+		}
+		if err := hookutil.AtomicWriteFile(filepath.Join(home, ".ao-import.json"), data, 0o600); err != nil {
+			return nil, true, err
+		}
 	}
 	source, err := os.OpenRoot(proof.Source)
 	if err != nil {
@@ -93,7 +109,7 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 		return fail()
 	}
 	if model == "" {
-		model = current.Model
+		model = currentModel
 	}
 	if model == "" {
 		model = proof.Model

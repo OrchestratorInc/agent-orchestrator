@@ -43,6 +43,29 @@ type ImportedSession struct {
 func kimiSessionDirForWire(path string) string { return filepath.Dir(filepath.Dir(filepath.Dir(path))) }
 
 func readKimiFile(ctx context.Context, root *os.Root, name string, limit int64) ([]byte, error) {
+	f, err := openKimiRegularFile(ctx, root, name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if st.Size() > limit {
+		return nil, errors.New("kimi: native state exceeds supported limits")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, errors.New("kimi: native state exceeds supported limits")
+	}
+	return b, ctx.Err()
+}
+
+func openKimiRegularFile(ctx context.Context, root *os.Root, name string) (*os.File, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -70,22 +93,16 @@ func readKimiFile(ctx context.Context, root *os.Root, name string, limit int64) 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
+		_ = f.Close()
 		return nil, err
 	}
-	if !st.Mode().IsRegular() || st.Size() > limit {
-		return nil, errors.New("kimi: native state exceeds supported limits")
+	if !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errors.New("kimi: native state is not a regular file")
 	}
-	b, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(b)) > limit {
-		return nil, errors.New("kimi: native state exceeds supported limits")
-	}
-	return b, ctx.Err()
+	return f, nil
 }
 
 // ReadImportedSession reads only sessions/*/<exact-id>/state.json and the main
@@ -164,6 +181,11 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 	if err != nil {
 		return result, err
 	}
+	result = ImportedSession{Path: filepath.Join(home, base, "agents", "main", "wire.jsonl"), State: state, Wire: wire, Blobs: blobs, CWD: metadata.CWD, Model: model, Fingerprint: kimiSnapshotFingerprint(state, wire, blobs)}
+	return result, nil
+}
+
+func kimiSnapshotFingerprint(state, wire []byte, blobs map[string][]byte) string {
 	h := sha256.New()
 	_, _ = h.Write(state)
 	_, _ = h.Write([]byte{0})
@@ -177,16 +199,22 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 		_, _ = h.Write([]byte("\x00" + key + "\x00"))
 		_, _ = h.Write(blobs[key])
 	}
-	result = ImportedSession{Path: filepath.Join(home, base, "agents", "main", "wire.jsonl"), State: state, Wire: wire, Blobs: blobs, CWD: metadata.CWD, Model: model, Fingerprint: fmt.Sprintf("kimi:v1:%x", h.Sum(nil))}
-	return result, nil
+	return fmt.Sprintf("kimi:v1:%x", h.Sum(nil))
 }
 
 func validateKimiWire(wire []byte, cwd, id string) (string, error) {
-	scan := bufio.NewScanner(bytes.NewReader(wire))
+	return validateKimiWireReader(context.Background(), bytes.NewReader(wire), cwd, id)
+}
+
+func validateKimiWireReader(ctx context.Context, wire io.Reader, cwd, id string) (string, error) {
+	scan := bufio.NewScanner(wire)
 	scan.Buffer(make([]byte, 4096), kimiImportBudget)
 	metadata, prompt, binding := false, false, false
 	model := ""
 	for scan.Scan() {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if len(bytes.TrimSpace(scan.Bytes())) == 0 {
 			continue
 		}
