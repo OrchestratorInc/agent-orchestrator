@@ -4,8 +4,10 @@ import { Directory, File, Paths } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
 import type { ConversationPage } from "./snapshot";
 import type { ConversationItem, ConversationTurn } from "./types";
-import { DEFAULT_CONFIG, hostMachineIdentity, machineIdentity } from "../config";
 import type { HostMetadata } from "../hosts";
+import { forgetSavedChatMachines, savedChatForgotten, savedConversationMachines } from "./savedChatMachines";
+
+export { savedConversationMachines };
 
 // Each recent chat's newest page, saved on the phone. The in-memory page cache
 // makes reopening a chat instant, but it dies with the app: after the phone
@@ -250,6 +252,8 @@ async function writeSaved(key: string, page: ConversationPage, now: number): Pro
 	const encryptionKey = await savedPagesKey(true);
 	if (!encryptionKey) return;
 	const sealed = await aesEncryptAsync(plain, encryptionKey, boundTo(key));
+	// Its machine was forgotten while the page was being sealed.
+	if (savedChatForgotten(key)) return;
 	const directory = savedDirectory();
 	if (!directory.exists) directory.create({ intermediates: true, idempotent: true });
 	// Written whole beside the old page, then moved over it (see the top of this
@@ -334,11 +338,13 @@ export function createConversationSaver(
 		pending.delete(key);
 		const now = Date.now();
 		lastWrite.set(key, now);
-		chain = chain.then(() => write(key, page, now)).catch(() => {});
+		// Its machine may have been forgotten while the write waited its turn.
+		chain = chain.then(() => (savedChatForgotten(key) ? undefined : write(key, page, now))).catch(() => {});
 	};
 	return {
 		schedule(key: string, page: ConversationPage) {
-			if (!key) return;
+			// A forgotten machine's read that answered late is not saved (see savedChatMachines).
+			if (!key || savedChatForgotten(key)) return;
 			pending.set(key, page);
 			if (timers.has(key)) return;
 			// Never at once: a chat that just opened, or is streaming, settles first.
@@ -350,10 +356,12 @@ export function createConversationSaver(
 		},
 		/**
 		 * Drops the saved chats of `machines` (every machine for null): the writes
-		 * still waiting are cancelled, and the removal runs after any write already
-		 * under way, so none of them lands after it.
+		 * still waiting are cancelled, the removal runs after any write already
+		 * under way, so none of them lands after it, and nothing of theirs is
+		 * saved again until they are paired again.
 		 */
 		forget(machines: readonly string[] | null): Promise<void> {
+			forgetSavedChatMachines(machines);
 			const matches = (key: string) => machines === null || machines.some((machine) => key.startsWith(`${machine}/`));
 			for (const [key, timer] of [...timers]) {
 				if (!matches(key)) continue;
@@ -370,16 +378,6 @@ export function createConversationSaver(
 }
 
 export const conversationSaver = createConversationSaver();
-
-/** Every key a machine's chats may be saved under (see conversationPageCacheKey). */
-export function savedConversationMachines(host: HostMetadata): string[] {
-	const machines = new Set<string>();
-	if (host.id) machines.add(hostMachineIdentity(host.id));
-	for (const endpoint of host.endpoints) {
-		machines.add(machineIdentity({ ...DEFAULT_CONFIG, host: endpoint.host, httpPort: String(endpoint.port), secure: endpoint.secure }));
-	}
-	return [...machines];
-}
 
 /** Removes a forgotten machine's chats from the phone; with no machine named, every saved chat. */
 export function forgetSavedConversations(host: HostMetadata | null): Promise<void> {

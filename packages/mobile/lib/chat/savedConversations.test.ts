@@ -27,6 +27,7 @@ import {
 	savedPageEvictions,
 	savedPageView,
 } from "./savedConversations";
+import { pairSavedChatMachines, resetSavedChatMachines } from "./savedChatMachines";
 import { disk, interruptedWrites, resetSavedChatFakes, savedFileNames, secrets, undeletable } from "./savedConversations.fakes";
 import type { ConversationPage } from "./snapshot";
 import { streamingCursorMessageId } from "./timelineModel";
@@ -47,6 +48,7 @@ async function save(key: string, value: ConversationPage) {
 beforeEach(() => {
 	stored.clear();
 	resetSavedChatFakes();
+	resetSavedChatMachines();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -290,6 +292,60 @@ describe("forgetting a machine", () => {
 		expect(order).toEqual(["write:host.a/under-way", "remove:host.a/x:false", "write:host.b/kept"]);
 	});
 
+	it("saves nothing of it from a read that answers after, and still saves other machines' chats", async () => {
+		await save("host.h_one/s1", page("one"));
+		await forgetSavedConversations(host);
+
+		// A refresh under way when the machine was forgotten answers now.
+		await save("host.h_one/s1", page("late"));
+		await save("http.host-one.3011/s2", page("late"));
+		await save("host.h_two/s3", page("two"));
+
+		expect(savedKeys()).toEqual(["host.h_two/s3"]);
+	});
+
+	it("drops a write that waited behind another when the machine was forgotten", async () => {
+		const saver = createConversationSaver();
+		saver.schedule("host.h_two/first", page("two"));
+		saver.schedule("host.h_one/s1", page("one"));
+		// Both are queued, one behind the other, when the machine is forgotten.
+		const flushed = saver.flush();
+		void forgetSavedConversations(host);
+		await flushed;
+		await saver.flush();
+
+		expect(savedKeys()).toEqual(["host.h_two/first"]);
+	});
+
+	it("leaves no file from a write already under way when the machine was forgotten", async () => {
+		vi.useFakeTimers();
+		let finishWrite!: () => void;
+		const writing = new Promise<void>((resolve) => { finishWrite = resolve; });
+		// The native write lands only after the forget began; the removal still runs after it.
+		const saver = createConversationSaver(async (key) => {
+			await writing;
+			disk.set(fileOf(key), { bytes: new Uint8Array([1]), modified: Date.now() });
+		});
+		saver.schedule("host.h_one/s1", page("one"));
+		await vi.advanceTimersByTimeAsync(2_500);
+		const forgotten = saver.forget(savedConversationMachines(host));
+		finishWrite();
+		await forgotten;
+
+		expect(savedFileNames()).toEqual([]);
+	});
+
+	it("saves its chats again once it is paired again", async () => {
+		await forgetSavedConversations(host);
+		await save("host.h_one/s1", page("late"));
+		expect(savedKeys()).toEqual([]);
+
+		pairSavedChatMachines(savedConversationMachines(host));
+		await save("host.h_one/s1", page("paired again"));
+
+		expect((await loadSavedConversation("host.h_one/s1"))?.items[0]).toMatchObject({ text: "paired again" });
+	});
+
 	it("deletes the rest of the machine's chats when one file will not go, then reports it", async () => {
 		await save("host.h_one/s1", page("one"));
 		await save("host.h_one/s2", page("one"));
@@ -316,10 +372,18 @@ describe("forgetting a machine", () => {
 		expect(savedKeys()).toEqual([]);
 		expect(secrets.size).toBe(0);
 
+		// Nothing is saved again until a machine is paired again, and then only its chats.
+		saver.schedule("host.h_one/s1", page("late"));
+		await saver.flush();
+		expect(savedKeys()).toEqual([]);
+		(await import("./savedChatMachines")).pairSavedChatMachines(["host.h_one"]);
+
 		// The next save makes a new key.
 		saver.schedule("host.h_one/s1", page("again"));
+		saver.schedule("host.h_two/s3", page("late"));
 		await saver.flush();
 		expect(secrets.size).toBe(1);
+		expect(savedKeys()).toEqual(["host.h_one/s1"]);
 		expect(await fresh.loadSavedConversation("host.h_one/s1")).not.toBeNull();
 	});
 });
