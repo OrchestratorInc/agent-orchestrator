@@ -105,6 +105,16 @@ func TestDetectTerminalActivityTreatsCompactionAsActive(t *testing.T) {
 	}
 }
 
+// A finished answer whose rows start with a moon or braille glyph is not a
+// live spinner row.
+func TestDetectTerminalActivityIgnoresGlyphLedTranscriptRows(t *testing.T) {
+	output := " ● The moon phases are:\n   🌕 Full moon\n   🌘 Waning crescent\n ⠧ sparkline\n" +
+		" ╭──────────────╮\n │ >            │\n ╰──────────────╯\n lab-model  ~/project\n          context: 1% (163/128k)\n"
+	if got, ok := (&Plugin{}).DetectTerminalActivity(output); !ok || got != domain.ActivityIdle {
+		t.Fatalf("DetectTerminalActivity = (%q, %v), want (idle, true)", got, ok)
+	}
+}
+
 // Kimi redraws rows in place, so the observer must read the rendered screen.
 func TestTerminalActivityOptionsPreferRenderedScreen(t *testing.T) {
 	if !(&Plugin{}).TerminalActivityOptions().PreferStyledOutput {

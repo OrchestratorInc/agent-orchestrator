@@ -5,19 +5,19 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// kimiChildSignal keeps a Kimi child agent's failure from ending its parent's
-// turn, and reports whether it consumed the signal. Kimi runs its hooks per
-// agent and names no agent in the payload, so a child's StopFailure reads
-// exactly like the parent's. Kimi runs SubagentStart before each child and
-// SubagentStop after one that succeeds; a child that fails reports only its
-// StopFailure. A StopFailure while a child is open is therefore that child's,
-// and the parent, still working, must neither go idle nor close its turn.
-func (m *Manager) kimiChildSignal(id domain.SessionID, s ports.ActivitySignal) bool {
+// kimiChildSignalLocked keeps a Kimi child agent's failure from ending its
+// parent's turn, and reports whether it consumed the signal. Kimi runs its
+// hooks per agent and names no agent in the payload, so a child's StopFailure
+// reads exactly like the parent's. Kimi runs SubagentStart before each child
+// and SubagentStop after one that succeeds; a child that fails reports only
+// its StopFailure. A StopFailure while a child is open is therefore that
+// child's, and the parent, still working, must neither go idle nor close its
+// turn. The caller holds m.mu and has already passed the launch fence, so a
+// superseded runtime's hooks never change the count.
+func (m *Manager) kimiChildSignalLocked(id domain.SessionID, s ports.ActivitySignal) bool {
 	if s.ExpectedHarness != domain.HarnessKimi {
 		return false
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	switch s.Event {
 	case "subagent-start":
 		m.kimiChildren[id]++

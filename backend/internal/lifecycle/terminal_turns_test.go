@@ -168,6 +168,29 @@ func TestKimiChildStopFailureKeepsTheParentWorking(t *testing.T) {
 	}
 }
 
+// A superseded runtime's late subagent-start must not count a child, or the
+// current runtime's own stop-failure would be taken for that child's.
+func TestKimiStaleLaunchSubagentStartDoesNotSwallowStopFailure(t *testing.T) {
+	store := &turnRecordingStore{fakeStore: newFakeStore()}
+	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-2", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch-2"}}
+	manager := New(store, nil)
+	apply := func(launch string, signal ports.ActivitySignal) {
+		t.Helper()
+		signal.Valid, signal.LaunchID, signal.ExpectedHarness = signal.State != "", launch, domain.HarnessKimi
+		signal.AgentSessionID = "kimi-1"
+		if err := manager.ApplyActivitySignal(context.Background(), "s-1", signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply("launch-2", ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"})
+	apply("launch-1", ports.ActivitySignal{Event: "subagent-start"})
+	apply("launch-2", ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity after the current launch's stop-failure = %q, want idle", got)
+	}
+}
+
 // After a provider switch the previous agent's hook config can still be in the
 // workspace. A signal that names an agent the session no longer runs is dropped
 // before it can record a turn or change activity.

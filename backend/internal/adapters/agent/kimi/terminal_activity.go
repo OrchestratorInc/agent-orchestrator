@@ -62,6 +62,10 @@ func (*Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
 // A composer at the bottom with no spinner above it is idle, a spinner is
 // active, and an approval panel is waiting_input. Anything else, such as the
 // folder-trust dialog at startup, is not authoritative.
+//
+// Kimi does not opt into waiting recovery, so the observer stops sampling once
+// it records waiting_input. Leaving that state relies on Kimi's
+// PermissionResult hook (installed as permission-resolved) or a later turn hook.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := terminalui.PlainTerminalLines(strings.ReplaceAll(output, "\r\n", "\n"))
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
@@ -118,13 +122,18 @@ func kimiBorder(line, left, right string) bool {
 	return inner != "" && strings.Trim(inner, "─") == ""
 }
 
-// kimiActivityLine reports a row led by a spinner frame, or the compaction
-// status, which blinks a bullet instead of spinning.
+// kimiActivityLine reports a live spinner row, or the compaction status, which
+// blinks a bullet instead of spinning. A spinner row is the frame alone or
+// followed by a "…" label ("⠧ Working…", a swarm's "🌒 Orchestrating…") or a
+// " · " hint ("🌒 · Tip: …", "🌒 Retrying (1/3) · …"). Transcript text that
+// merely starts with a moon or braille glyph is not.
 func kimiActivityLine(line string) bool {
 	line = strings.TrimSpace(line)
-	r, _ := utf8.DecodeRuneInString(line)
+	r, size := utf8.DecodeRuneInString(line)
 	if r != utf8.RuneError && strings.ContainsRune(kimiSpinnerFrames, r) {
-		return true
+		rest := line[size:]
+		return rest == "" || strings.HasPrefix(rest, " ") &&
+			(strings.Contains(rest, "…") || strings.Contains(rest, " · "))
 	}
 	return strings.HasPrefix(strings.TrimPrefix(line, "● "), "Compacting context…")
 }
