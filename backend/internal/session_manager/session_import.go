@@ -879,12 +879,27 @@ func importChanges(ctx context.Context, repo string) ([]string, error) {
 	var paths []string
 	for _, path := range strings.Split(string(tracked)+string(untracked), "\x00") {
 		// A nested repository is listed as a directory.
-		if path != "" && !strings.HasSuffix(path, "/") {
+		if path != "" && !strings.HasSuffix(path, "/") && !importNativeDatabasePath(path) {
 			paths = append(paths, filepath.FromSlash(path))
 		}
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths), nil
+}
+
+// Native Crush databases are prepared separately, selecting one conversation.
+// Transferring the raw store would leak unrelated history and block preparation.
+func importNativeDatabasePath(path string) bool {
+	path = filepath.FromSlash(path)
+	if filepath.Base(filepath.Dir(path)) != ".crush" {
+		return false
+	}
+	switch filepath.Base(path) {
+	case "crush.db", "crush.db-wal", "crush.db-shm", "crush.db-journal":
+		return true
+	default:
+		return false
+	}
 }
 
 // importFacts records each changed path as it is now; a path missing from the
@@ -1017,7 +1032,9 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		if err != nil {
 			return err
 		}
-		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD")
+		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD", "--", ".",
+			":(glob,exclude)**/.crush/crush.db", ":(glob,exclude)**/.crush/crush.db-wal",
+			":(glob,exclude)**/.crush/crush.db-shm", ":(glob,exclude)**/.crush/crush.db-journal")
 		if err != nil {
 			return err
 		}
