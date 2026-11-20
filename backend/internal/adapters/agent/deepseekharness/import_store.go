@@ -27,8 +27,12 @@ const maxImportFile = 64 << 20
 const maxImportDecoded = 256 << 20
 const maxImportVisible = 32 << 20
 
-var importID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var importID = regexp.MustCompile(`^(?:session-)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var historicalImportFile = regexp.MustCompile(`^session(?:\.v[123])?\.jsonl(?:\.zstd)?$`)
+
+// IsImportSessionID accepts the native headless default session-UUID and
+// caller-assigned UUID identities. Both spellings are preserved verbatim.
+func IsImportSessionID(id string) bool { return importID.MatchString(id) }
 
 // CheckImportSource rechecks canonical generations before a cached preview is
 // reused. Unknown/newer or competing encodings must not be silently ignored.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,13 +34,18 @@ func importTestUser(text, kind string) map[string]any {
 
 func importFixture(t *testing.T, compressed bool) (root, path, cwd string) {
 	t.Helper()
+	return importFixtureWithID(t, compressed, importTestID)
+}
+
+func importFixtureWithID(t *testing.T, compressed bool, id string) (root, path, cwd string) {
+	t.Helper()
 	root, cwd = t.TempDir(), t.TempDir()
 	var err error
 	cwd, err = filepath.EvalSymlinks(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	header, err := json.Marshal(map[string]any{"type": "session", "version": 4, "id": importTestID, "cwd": cwd, "createdAt": 1790000000000, "isSeeded": false, "delegationDepth": 0})
+	header, err := json.Marshal(map[string]any{"type": "session", "version": 4, "id": id, "cwd": cwd, "createdAt": 1790000000000, "isSeeded": false, "delegationDepth": 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +66,7 @@ func importFixture(t *testing.T, compressed bool) (root, path, cwd string) {
 		// Native storage uses one header frame and later event-batch frames.
 		data = append(enc.EncodeAll(header, nil), enc.EncodeAll(body, nil)...)
 	}
-	path = filepath.Join(root, "sessions", importProjectKey(cwd), importTestID, name)
+	path = filepath.Join(root, "sessions", importProjectKey(cwd), id, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -558,5 +564,75 @@ func TestPreparedDeepSeekReopenAndRetrySurviveCLIUpgrade(t *testing.T) {
 	r.DataDir = t.TempDir()
 	if _, err := p.PrepareImportedSession(ctx, r); err == nil {
 		t.Fatal("new preparation accepted unknown CLI")
+	}
+}
+
+func TestHeadlessDefaultIDSurvivesPrivatePreparationAndReopen(t *testing.T) {
+	ctx := context.Background()
+	id := "session-" + importTestID
+	root, path, cwd := importFixtureWithID(t, true, id)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := ReadImportArchive(ctx, root, path)
+	if err != nil || archive.ID != id {
+		t.Fatalf("native default ID rejected or rewritten: %+v,%v", archive, err)
+	}
+	p := &Plugin{resolvedBinary: "fake-dsh", importVersion: func(context.Context) (string, error) { return supportedImportVersion, nil }}
+	request := ports.ImportedSessionRelocation{NativeSessionID: id, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: archive.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}, Chat: true}
+	ref, err := p.PrepareImportedSession(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.NativeSessionID != id || filepath.Base(filepath.Dir(ref.TranscriptPath)) != id {
+		t.Fatalf("private ID changed: %+v", ref)
+	}
+	if err := ValidateImportedACP(ctx, ref.ConfigDir, id, request.LaunchCWD); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PrepareRuntimeLaunch(ctx, ports.WorkspaceHookConfig{NativeSessionID: id, ImportConfigDir: ref.ConfigDir, WorkspacePath: request.LaunchCWD, Env: map[string]string{"DSH_HOME": ref.ConfigDir}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: request.LaunchCWD, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id, ports.MetadataKeyImportSourceNativeID: id, ports.MetadataKeyImportConfigDir: ref.ConfigDir}}, Prompt: "continue"}
+	argv, ok, err := p.GetRestoreCommand(ctx, cfg)
+	if err != nil || !ok || !slices.Contains(argv, id) {
+		t.Fatalf("prefixed native restore=%v,%v,%v", argv, ok, err)
+	}
+	events := 0
+	if err := VisitPrivateHistory(ctx, ref.ConfigDir, id, request.LaunchCWD, func(NativeHistoryEvent) error { events++; return nil }); err != nil || events != 4 {
+		t.Fatalf("prefixed native replay=%d,%v", events, err)
+	}
+	if retry, err := p.PrepareImportedSession(ctx, request); err != nil || retry != ref {
+		t.Fatalf("retry changed native identity: %+v,%v", retry, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("source changed: %v", err)
+	}
+}
+
+func TestImportNativeIdentityAllowsOnlyKnownSpellings(t *testing.T) {
+	for _, id := range []string{importTestID, "session-" + importTestID} {
+		if !IsImportSessionID(id) {
+			t.Fatalf("rejected native identity %q", id)
+		}
+	}
+	for _, id := range []string{"session-", "session-not-a-uuid", "session-session-" + importTestID, "prefix-" + importTestID, "session-" + importTestID + "-extra", "../session-" + importTestID} {
+		if IsImportSessionID(id) {
+			t.Fatalf("accepted unsupported identity %q", id)
+		}
+	}
+	root, path, _ := importFixtureWithID(t, false, "session-"+importTestID)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = bytes.Replace(b, []byte(`"id":"session-`+importTestID+`"`), []byte(`"id":"`+importTestID+`"`), 1)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadImportArchive(context.Background(), root, path); err == nil {
+		t.Fatal("accepted directory/header identity mismatch")
 	}
 }

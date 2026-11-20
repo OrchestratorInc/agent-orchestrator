@@ -74,7 +74,7 @@ func discoverDeepSeek(ctx context.Context, root string) ([]sourceFiles, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			if !session.IsDir() || session.Type()&os.ModeSymlink != 0 || !nativeIDPattern.MatchString(session.Name()) {
+			if !session.IsDir() || session.Type()&os.ModeSymlink != 0 || !deepseekharness.IsImportSessionID(session.Name()) {
 				continue
 			}
 			for _, name := range []string{"session.v4.jsonl.zstd", "session.v4.jsonl"} {
