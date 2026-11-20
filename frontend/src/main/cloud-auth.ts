@@ -114,6 +114,41 @@ let loopbackServer: Server | null = null;
 
 let activeProviderAuthAbort: AbortController | null = null;
 
+/**
+ * Why this app deleted the saved Cloud sign-in. Recorded every time it does,
+ * so an unexpected "Sign in" can be traced to its cause afterwards.
+ * - signed_out: the person signed out.
+ * - refresh_rejected: WorkOS refused the saved refresh token; detail says how.
+ * - unusable_file: the file decrypted but held no sign-in this app can read.
+ */
+export type CloudSignInClearedReason = "signed_out" | "refresh_rejected" | "unusable_file";
+/** How WorkOS refused a refresh token. Never carries the token or the raw error. */
+export type RefreshRejection = "consumed" | "expired" | "revoked" | "invalid_grant";
+export interface CloudSignInCleared {
+  reason: CloudSignInClearedReason;
+  detail?: RefreshRejection;
+}
+
+let recordSignInClearedFn: ((cleared: CloudSignInCleared) => void) | null = null;
+
+/** Sets where the reason for each deleted Cloud sign-in is recorded. */
+export function setCloudSignInClearedRecorder(
+  record: ((cleared: CloudSignInCleared) => void) | null,
+): void {
+  recordSignInClearedFn = record;
+}
+
+function recordSignInCleared(cleared: CloudSignInCleared): void {
+  console.warn(
+    `Orchestrator Cloud sign-in cleared: ${cleared.reason}${cleared.detail ? ` (${cleared.detail})` : ""}`,
+  );
+  try {
+    recordSignInClearedFn?.(cleared);
+  } catch {
+    // Recording the reason must never change what happens to the sign-in.
+  }
+}
+
 export interface StoredSession extends CloudAccount {
   accessToken: string;
   // WorkOS sessions carry a rotating refresh token; local (opaque-token)
@@ -310,6 +345,7 @@ async function readStoreFile(dataDir: string): Promise<AuthStore | null> {
     // The file decrypts but holds no store this app can use, so no later
     // read can recover a login from it.
     await rm(storePath(dataDir), { force: true });
+    recordSignInCleared({ reason: "unusable_file" });
     return emptyStore();
   }
 }
@@ -549,9 +585,11 @@ function tokenExpiresSoon(token: string): boolean {
   return typeof exp !== "number" || Date.now() >= exp * 1000 - 60_000;
 }
 
-function isTerminalRefreshFailure(error: unknown): boolean {
+// How WorkOS refused the refresh token, or null when the failure may clear
+// (a network error, an outage) and the saved sign-in must be kept.
+function terminalRefreshFailure(error: unknown): RefreshRejection | null {
   if (!error || typeof error !== "object") {
-    return String(error).toLowerCase().includes("refresh token already consumed");
+    return String(error).toLowerCase().includes("refresh token already consumed") ? "consumed" : null;
   }
   const candidate = error as {
     code?: unknown;
@@ -570,12 +608,11 @@ function isTerminalRefreshFailure(error: unknown): boolean {
     .filter((value): value is string => typeof value === "string")
     .join(" ")
     .toLowerCase();
-  return (
-    details.includes("invalid_grant") ||
-    details.includes("refresh token already consumed") ||
-    details.includes("refresh token expired") ||
-    details.includes("refresh token revoked")
-  );
+  if (details.includes("refresh token already consumed")) return "consumed";
+  if (details.includes("refresh token expired")) return "expired";
+  if (details.includes("refresh token revoked")) return "revoked";
+  if (details.includes("invalid_grant")) return "invalid_grant";
+  return null;
 }
 
 export async function getCloudSession(
@@ -710,7 +747,8 @@ async function refreshCloudSession(
       return publicAccount(session);
     });
   } catch (error) {
-    if (!isTerminalRefreshFailure(error)) {
+    const rejection = terminalRefreshFailure(error);
+    if (rejection === null) {
       return publicAccount(storedSession);
     }
     const sessionCleared = await withAuthMutation(dataDir, async () => {
@@ -720,6 +758,7 @@ async function refreshCloudSession(
         currentStore.session?.refreshToken === storedSession.refreshToken
       ) {
         await removeAuthStore(dataDir);
+        recordSignInCleared({ reason: "refresh_rejected", detail: rejection });
         return true;
       }
       return false;
@@ -933,6 +972,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
 export async function signOutCloud(dataDir: string): Promise<void> {
   invalidateAuthOperations(dataDir);
   await withAuthMutation(dataDir, () => removeAuthStore(dataDir));
+  recordSignInCleared({ reason: "signed_out" });
 }
 
 function signInFailureDetail(error: unknown): string {
