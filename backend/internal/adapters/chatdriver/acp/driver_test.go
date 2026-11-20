@@ -898,15 +898,18 @@ type fakeAgent struct {
 }
 
 type legacyKimiAgent struct {
-	mu                 sync.Mutex
-	currentModel       string
-	availableModels    []legacyModelInfo
-	rejectUnknownModel bool
-	model              string
-	modelCalls         int
-	mode               string
-	modeCalls          int
-	configCalls        int
+	mu                  sync.Mutex
+	currentModel        string
+	availableModels     []legacyModelInfo
+	newConfig           []acpsdk.SessionConfigOption
+	options             map[string]string
+	setConfigOptionHook func(configID, value string) []acpsdk.SessionConfigOption
+	rejectUnknownModel  bool
+	model               string
+	modelCalls          int
+	mode                string
+	modeCalls           int
+	configCalls         int
 }
 
 func fakeLegacyKimiSpawn(agent *legacyKimiAgent) spawnFunc {
@@ -963,7 +966,7 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 					ModelID: "kimi-code/kimi-for-coding", Name: "Kimi for Coding",
 				}}
 			}
-			result = map[string]any{
+			res := map[string]any{
 				"sessionId": "kimi-session-1",
 				"models": map[string]any{
 					"currentModelId":  currentModel,
@@ -976,6 +979,10 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 					}},
 				},
 			}
+			if agent.newConfig != nil {
+				res["configOptions"] = agent.newConfig
+			}
+			result = res
 		case "session/set_model":
 			var params struct {
 				ModelID string `json:"modelId"`
@@ -1006,10 +1013,27 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 			agent.modeCalls++
 			agent.mu.Unlock()
 		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
 			agent.mu.Lock()
 			agent.configCalls++
+			if agent.newConfig != nil {
+				if agent.options == nil {
+					agent.options = map[string]string{}
+				}
+				agent.options[params.ConfigID] = params.Value
+				if agent.setConfigOptionHook != nil {
+					if updated := agent.setConfigOptionHook(params.ConfigID, params.Value); len(updated) > 0 {
+						result = map[string]any{"configOptions": updated}
+					}
+				}
+			} else {
+				responseError = map[string]any{"code": -32601, "message": "Method not found"}
+			}
 			agent.mu.Unlock()
-			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		default:
 			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		}
@@ -6313,6 +6337,127 @@ func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
 			defer agent.mu.Unlock()
 			if agent.model != "auto:model" {
 				t.Fatalf("Hermes selected %q, want auto:model", agent.model)
+			}
+		})
+	}
+}
+
+func TestAgyCombinedModelUsesSeparateACPOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		thoughtOptID   string
+		requestedModel string
+		wantModel      string
+		wantThought    string
+	}{
+		{
+			name:           "thought_level option",
+			thoughtOptID:   "thought_level",
+			requestedModel: "gemini-3.8-flash-low",
+			wantModel:      "gemini-3.8-flash",
+			wantThought:    "low",
+		},
+		{
+			name:           "thinking_level option",
+			thoughtOptID:   "thinking_level",
+			requestedModel: "gemini-3.8-flash-low",
+			wantModel:      "gemini-3.8-flash",
+			wantThought:    "low",
+		},
+		{
+			name:           "native hyphenated model ID preserved",
+			thoughtOptID:   "thought_level",
+			requestedModel: "gpt-oss-120b-medium",
+			wantModel:      "gpt-oss-120b-medium",
+			wantThought:    "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &legacyKimiAgent{
+				newConfig: []acpsdk.SessionConfigOption{
+					selectConfigOption("model", "Model", "model", "gemini-4-argon", "gemini-4-argon", "gemini-3.8-flash", "gpt-oss-120b-medium"),
+					selectConfigOption(tc.thoughtOptID, "Thought Level", "thought_level", "high", "low", "medium", "high"),
+				},
+			}
+			driver := New(Config{
+				Harness: domain.HarnessAgy,
+				Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+					return []SessionOption{{ID: "model", Value: settings.Model}}
+				},
+			}, slog.New(slog.DiscardHandler))
+			driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: tc.requestedModel})
+			if err != nil {
+				t.Fatalf("start with model %q: %v", tc.requestedModel, err)
+			}
+			defer opened.Close()
+			agent.mu.Lock()
+			defer agent.mu.Unlock()
+			if agent.options["model"] != tc.wantModel || agent.options[tc.thoughtOptID] != tc.wantThought {
+				t.Fatalf("options = %#v, want model=%q %s=%q", agent.options, tc.wantModel, tc.thoughtOptID, tc.wantThought)
+			}
+		})
+	}
+}
+
+func TestAgyCombinedModelUnlocksDynamicThoughtLevelAfterModelSwitch(t *testing.T) {
+	agent := &legacyKimiAgent{
+		newConfig: []acpsdk.SessionConfigOption{
+			selectConfigOption("model", "Model", "model", "gemini-4-argon", "gemini-4-argon", "gemini-4-hydrogen"),
+			selectConfigOption("thought_level", "Thought Level", "thought_level", "high", "low", "medium", "high"),
+		},
+	}
+	agent.setConfigOptionHook = func(configID, value string) []acpsdk.SessionConfigOption {
+		if configID == "model" && value == "gemini-4-hydrogen" {
+			return []acpsdk.SessionConfigOption{
+				selectConfigOption("model", "Model", "model", "gemini-4-hydrogen", "gemini-4-argon", "gemini-4-hydrogen"),
+				selectConfigOption("thought_level", "Thought Level", "thought_level", "medium", "low", "medium", "high", "xhigh"),
+			}
+		}
+		return nil
+	}
+	driver := New(Config{
+		Harness: domain.HarnessAgy,
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: "gemini-4-hydrogen-xhigh"})
+	if err != nil {
+		t.Fatalf("start with model-dependent xhigh: %v", err)
+	}
+	defer opened.Close()
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["model"] != "gemini-4-hydrogen" || agent.options["thought_level"] != "xhigh" {
+		t.Fatalf("options = %#v, want model=gemini-4-hydrogen thought_level=xhigh", agent.options)
+	}
+}
+
+func TestAgyCombinedModelRejectsUnavailableChoice(t *testing.T) {
+	for _, model := range []string{"gemini-unknown-low", "gemini-4-argon-xhigh"} {
+		t.Run(model, func(t *testing.T) {
+			agent := &legacyKimiAgent{newConfig: []acpsdk.SessionConfigOption{
+				selectConfigOption("model", "Model", "model", "gemini-4-argon", "gemini-4-argon"),
+				selectConfigOption("thought_level", "Thought Level", "thought_level", "high", "low", "medium", "high"),
+			}}
+			driver := New(Config{
+				Harness: domain.HarnessAgy,
+				Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+					return []SessionOption{{ID: "model", Value: settings.Model}}
+				},
+			}, slog.New(slog.DiscardHandler))
+			driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: model})
+			if opened != nil {
+				defer opened.Close()
+			}
+			if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+				t.Fatalf("start with %q: err=%v, want ErrChatConfigOptionInvalid", model, err)
 			}
 		})
 	}

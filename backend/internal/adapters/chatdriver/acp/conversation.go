@@ -645,6 +645,14 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	if optionsFor != nil {
 		options = optionsFor(settings)
 	}
+	var translatedThoughtOption SessionOption
+	if c.harness == domain.HarnessAgy && !legacyModel {
+		var err error
+		options, translatedThoughtOption, err = c.translateAgyTurnOptions(options, configOptions)
+		if err != nil {
+			return err
+		}
+	}
 	// A setting the session already has is skipped (some agents take seconds
 	// per change) unless session/set_model made the list stale.
 	catalogStale := false
@@ -741,6 +749,12 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	}
 	for _, option := range options {
 		if option.ID != "model" {
+			if translatedThoughtOption.ID != "" && option.ID == translatedThoughtOption.ID {
+				if offered, known := c.configOptionOffers(option.ID, option.Value); known && !offered {
+					return fmt.Errorf("%w: ACP session option %q does not offer %q",
+						ports.ErrChatConfigOptionInvalid, option.ID, option.Value)
+				}
+			}
 			if err := applyOption(option); err != nil {
 				return err
 			}
@@ -752,6 +766,60 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		c.mu.Unlock()
 	}
 	return nil
+}
+
+// translateAgyTurnOptions splits combined <model>-<effort> IDs (used when
+// switching agents or configuring a role from the Agy CLI model catalog) into
+// the separate model and thought-level ACP config options exposed by `agy acp`.
+// Native hyphenated IDs directly offered by the model option (such as
+// gpt-oss-120b-medium) stay intact, and effort availability is checked after
+// applying the model because `agy acp` updates thought-level choices per model.
+func (c *conversation) translateAgyTurnOptions(
+	options []SessionOption,
+	configOptions []ports.ChatConfigOption,
+) ([]SessionOption, SessionOption, error) {
+	thoughtOptionID := findThoughtLevelOptionID(configOptions)
+	var translatedThought SessionOption
+	for i := range options {
+		if options[i].ID != "model" || options[i].Value == "" {
+			continue
+		}
+		offered, known := c.configOptionOffers("model", options[i].Value)
+		if !known {
+			continue
+		}
+		if !offered && thoughtOptionID != "" {
+			for _, level := range []string{"minimal", "low", "medium", "high", "xhigh"} {
+				candidate, ok := strings.CutSuffix(options[i].Value, "-"+level)
+				if !ok || candidate == "" {
+					continue
+				}
+				if baseOffered, _ := c.configOptionOffers("model", candidate); baseOffered {
+					options[i].Value = candidate
+					translatedThought = SessionOption{ID: thoughtOptionID, Value: level}
+					if !slices.ContainsFunc(options, func(opt SessionOption) bool { return opt.ID == thoughtOptionID }) {
+						options = append(options, translatedThought)
+					}
+					break
+				}
+			}
+		}
+		if offered, known := c.configOptionOffers("model", options[i].Value); known && !offered {
+			return nil, SessionOption{}, fmt.Errorf("%w: ACP session model does not offer %q",
+				ports.ErrChatConfigOptionInvalid, options[i].Value)
+		}
+	}
+	return options, translatedThought, nil
+}
+
+func findThoughtLevelOptionID(options []ports.ChatConfigOption) string {
+	for _, option := range options {
+		if option.Type == ports.ChatConfigOptionSelect &&
+			(option.Category == "thought_level" || option.ID == "thought_level" || option.ID == "thinking_level") {
+			return option.ID
+		}
+	}
+	return ""
 }
 
 // applySessionOptions sets config options that are fixed for the whole session

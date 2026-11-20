@@ -30,7 +30,9 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 				? [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }]
 				: agent === "cursor"
 					? ["claude-opus-4-8-high", "claude-opus-4-8-thinking-high"].map((id) => ({ id, label: id }))
-					: [],
+					: agent === "agy"
+						? [{ id: "gemini-4-argon-high", label: "Gemini 4 Argon High" }]
+						: [],
 		}),
 	}),
 }));
@@ -567,4 +569,24 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.getByRole("menuitem", { name: /^Account.*me@work/ })).toBeInTheDocument();
 	});
+
+	it("offers Agy in the Chat agent switcher and lists its models when picked", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
+		const agy = await screen.findByRole("menuitemradio", { name: /agy/i });
+		fireEvent.click(agy);
+		expect(onPendingChange).toHaveBeenCalledWith({ harness: "agy" });
+	});
+
+	it("searches Agy models and picks Agy with that model in Chat", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "argon");
+		await user.click(await screen.findByRole("menuitemradio", { name: /Gemini 4 Argon.*agy/i }));
+		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "agy", model: "gemini-4-argon-high" }));
+	});
 });
+
