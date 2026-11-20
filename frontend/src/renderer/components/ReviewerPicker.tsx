@@ -12,6 +12,7 @@ import { KNOWN_REVIEWER_HARNESS_IDS } from "../lib/reviewer-harnesses";
 import { cn } from "../lib/utils";
 import { CHAT_PICKER_DIVIDER, CHAT_PICKER_SUB_CLASS, CHAT_PICKER_TRIGGER_CLASS } from "./chat/AgentSwitchPicker";
 import { ModelMenuChoices } from "./chat/ModelMenuChoices";
+import { ModelChoiceName, modelChoiceIDHint } from "./settings/ModelChoiceName";
 import { ProviderMark } from "./chat/ProviderMark";
 import { REVIEWER_AGENT_PRIORITY_RANK } from "./ReviewerSelect";
 import { effortDisplayLabel, EffortMenuItems } from "./settings/EffortPicker";
@@ -153,10 +154,12 @@ export function ReviewerPicker({
 	}, [disabled]);
 
 	const defaultHarnessLabel = ranked.find((agent) => agent.id === defaultHarness)?.label || agentLabel(defaultHarness);
-	const modelRow = (row: { id: string; label: string; unavailableReason?: string }, optionId?: string, searchActive?: boolean) => (
-		<OptionMenuItem
+	const modelRow = (row: { id: string; label: string; unavailableReason?: string }, optionId?: string, searchActive?: boolean) => {
+		const idHint = isMode ? undefined : modelChoiceIDHint(row.id, row.label);
+		return <OptionMenuItem
 			key={row.id}
 			id={optionId}
+			aria-description={idHint}
 			active={row.id === runsWith}
 			searchActive={searchActive}
 			radio
@@ -165,15 +168,12 @@ export function ReviewerPicker({
 			className="text-xs text-foreground"
 		>
 			{/* As in the chat model menu: the reason sits under the name. */}
-			{row.unavailableReason ? (
-				<span className="min-w-0">
-					<span className="block truncate">{row.label}</span>
-					<span className="block whitespace-normal text-[10px] text-muted-foreground">{row.unavailableReason}</span>
-				</span>
-			) : <span className="min-w-0 truncate">{row.label}</span>}
+			<ModelChoiceName label={row.label} idHint={idHint}>
+				{row.unavailableReason ? <span className="block whitespace-normal text-[10px] text-muted-foreground">{row.unavailableReason}</span> : null}
+			</ModelChoiceName>
 			{row.id === defaultID ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{t("agentSwitch.defaultModel")}</span> : null}
-		</OptionMenuItem>
-	);
+		</OptionMenuItem>;
+	};
 
 	return (
 		<OptionMenu open={open} onOpenChange={(next) => setOpen(next && !disabled)} modal={false}>
