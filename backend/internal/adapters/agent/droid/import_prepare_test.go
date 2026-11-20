@@ -148,6 +148,9 @@ func TestDroidRecoversReservedPublicationBeforeNativeCopy(t *testing.T) {
 	if err := os.Remove(ref.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(droidReceiptPath(r.DataDir, ref.NativeSessionID) + ".verified"); err != nil {
+		t.Fatal(err)
+	}
 	again, err := p.PrepareImportedSession(context.Background(), r)
 	if err != nil || again != ref {
 		t.Fatalf("reserved publication did not recover: %+v %v", again, err)
@@ -160,7 +163,7 @@ func TestDroidCancellationCannotOrphanNativeTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{ref.TranscriptPath, droidReceiptPath(r.DataDir, ref.NativeSessionID)} {
+	for _, path := range []string{ref.TranscriptPath, droidReceiptPath(r.DataDir, ref.NativeSessionID), droidReceiptPath(r.DataDir, ref.NativeSessionID) + ".verified"} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -174,13 +177,63 @@ func TestDroidCancellationCannotOrphanNativeTranscript(t *testing.T) {
 	if _, err := os.Stat(droidReceiptPath(r.DataDir, ref.NativeSessionID)); err != nil {
 		t.Fatalf("publication lost ownership proof: %v", err)
 	}
-	if err := os.Remove(r.TranscriptPath); err != nil {
-		t.Fatal(err)
-	}
 	again, err := p.PrepareImportedSession(context.Background(), r)
 	if err != nil || again != ref {
 		t.Fatalf("interrupted publication did not recover: %+v %v", again, err)
 	}
+	if err := os.Remove(r.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.PrepareImportedSession(context.Background(), r); err != nil {
+		t.Fatalf("verified checkpoint recovery needs original: %v", err)
+	}
+}
+
+func TestDroidSourceChangeRejectionSurvivesRetry(t *testing.T) {
+	p, r, body := importFixture(t)
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{ref.TranscriptPath, droidReceiptPath(r.DataDir, ref.NativeSessionID), droidReceiptPath(r.DataDir, ref.NativeSessionID) + ".verified"} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mutating := &changeDroidSourceAfterPublication{Context: context.Background(), target: ref.TranscriptPath, source: r.TranscriptPath, body: append(body, []byte("\n ")...)}
+	if _, err := p.PrepareImportedSession(mutating, r); err == nil || !strings.Contains(err.Error(), "source changed") {
+		t.Fatalf("concurrent change accepted: %v", err)
+	}
+	if mutating.err != nil {
+		t.Fatal(mutating.err)
+	}
+	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
+		t.Fatal("retry bypassed detected source change")
+	}
+	if err := os.Remove(r.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
+		t.Fatal("missing source promoted rejected publication")
+	}
+}
+
+type changeDroidSourceAfterPublication struct {
+	context.Context
+	target, source string
+	body           []byte
+	changed        bool
+	err            error
+}
+
+func (c *changeDroidSourceAfterPublication) Err() error {
+	if !c.changed {
+		if _, err := os.Stat(c.target); err == nil {
+			c.changed = true
+			c.err = os.WriteFile(c.source, c.body, 0o600)
+		}
+	}
+	return c.Context.Err()
 }
 
 // Cancel at the first context check after the native file becomes visible.

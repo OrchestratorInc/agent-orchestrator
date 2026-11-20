@@ -60,22 +60,38 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	target := uuid.NewSHA1(uuid.NameSpaceOID, []byte(config+"\x00"+id+"\x00"+launch+"\x00"+r.SourceFingerprint)).String()
 	receiptPath := droidReceiptPath(r.DataDir, target)
 	var planned *droidImportReceipt
+	var published *droidImportReceipt
 	if _, err := os.Lstat(receiptPath); err == nil {
-		receipt, err := verifyDroidReceipt(ctx, r.DataDir, config, target, launch)
+		receipt, err := readDroidReceipt(ctx, r.DataDir, config, target, launch)
 		if err != nil && (!errors.Is(err, os.ErrNotExist) || receipt.TargetID != target) {
 			return ports.NativeSessionRef{}, err
 		}
 		if receipt.SourceID != id || receipt.Fingerprint != r.SourceFingerprint {
 			return ports.NativeSessionRef{}, errors.New("droid: prepared copy does not match selected source")
 		}
-		if err == nil {
+		completed, completionErr := droidImportCompleted(r.DataDir, target, r.SourceFingerprint)
+		if completionErr != nil {
+			return ports.NativeSessionRef{}, completionErr
+		}
+		if err == nil && completed {
 			return ports.NativeSessionRef{NativeSessionID: target, ConfigDir: config, TranscriptPath: receipt.Path}, nil
 		}
-		// Ownership was durably reserved, but publication never completed. The
-		// original must still provide the exact selected bytes before recovery.
-		planned = &receipt
+		if err != nil && completed {
+			return ports.NativeSessionRef{}, err
+		}
+		// A published copy is not verified until the post-publication source
+		// check succeeds. A prior rejection must never become a fast-path success.
+		if err == nil {
+			published = &receipt
+		} else {
+			planned = &receipt
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ports.NativeSessionRef{}, err
+	} else if completed, err := droidImportCompleted(r.DataDir, target, r.SourceFingerprint); err != nil {
+		return ports.NativeSessionRef{}, err
+	} else if completed {
+		return ports.NativeSessionRef{}, errors.New("droid: verified import has lost its ownership receipt")
 	}
 	src := r.TranscriptPath
 	if src == "" {
@@ -139,9 +155,12 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if planned != nil && *planned != receipt {
 		return ports.NativeSessionRef{}, errors.New("droid: publication reservation does not match selected history")
 	}
+	if published != nil && *published != receipt {
+		return ports.NativeSessionRef{}, errors.New("droid: incomplete publication does not match selected history")
+	}
 	if _, found, err := p.LocateTranscript(ctx, ports.NativeSessionRef{ConfigDir: config, NativeSessionID: target}); err != nil {
 		return ports.NativeSessionRef{}, err
-	} else if found {
+	} else if found && published == nil {
 		return ports.NativeSessionRef{}, errors.New("droid: unproven native target already exists")
 	}
 	encoded, err := json.Marshal(receipt)
@@ -158,13 +177,15 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	defer func() { _ = receipts.Close() }()
 	// Reserve ownership BEFORE publishing any native transcript. Cancellation
 	// or a receipt-write failure can no longer orphan an unprovable native copy.
-	if planned == nil {
+	if planned == nil && published == nil {
 		if err := importcopy.WriteOnce(ctx, receipts, filepath.Base(receiptPath), encoded); err != nil {
 			return ports.NativeSessionRef{}, err
 		}
 	}
-	if err := importcopy.WriteOnce(ctx, root, rel, copyBody); err != nil {
-		return ports.NativeSessionRef{}, fmt.Errorf("droid: publish native copy: %w", err)
+	if published == nil {
+		if err := importcopy.WriteOnce(ctx, root, rel, copyBody); err != nil {
+			return ports.NativeSessionRef{}, fmt.Errorf("droid: publish native copy: %w", err)
+		}
 	}
 	// Refuse concurrent source changes before permitting any native launch.
 	after, err := ReadNativeHistory(ctx, config, src)
@@ -173,6 +194,9 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	}
 	if !bytes.Equal(after, body) {
 		return ports.NativeSessionRef{}, errors.New("droid: source changed during preparation")
+	}
+	if err := importcopy.WriteOnce(ctx, receipts, filepath.Base(receiptPath)+".verified", []byte(r.SourceFingerprint)); err != nil && !errors.Is(err, os.ErrExist) {
+		return ports.NativeSessionRef{}, err
 	}
 	if _, err := verifyDroidReceipt(ctx, r.DataDir, config, target, launch); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -185,6 +209,43 @@ func droidReceiptPath(dataDir, id string) string {
 }
 
 func verifyDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (droidImportReceipt, error) {
+	r, err := readDroidReceipt(ctx, dataDir, config, id, cwd)
+	if err != nil {
+		return r, err
+	}
+	completed, err := droidImportCompleted(dataDir, id, r.Fingerprint)
+	if err != nil {
+		return r, err
+	}
+	if !completed {
+		return r, errors.New("droid: native preparation has not completed source verification")
+	}
+	return r, nil
+}
+
+func droidImportCompleted(dataDir, id, fingerprint string) (bool, error) {
+	path := droidReceiptPath(dataDir, id) + ".verified"
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() != int64(len(fingerprint)) {
+		return false, errors.New("droid: invalid import completion record")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if string(body) != fingerprint {
+		return false, errors.New("droid: mismatched import completion record")
+	}
+	return true, nil
+}
+
+func readDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (droidImportReceipt, error) {
 	var r droidImportReceipt
 	if !filepath.IsAbs(dataDir) {
 		return r, errors.New("droid: missing prepared import state")
