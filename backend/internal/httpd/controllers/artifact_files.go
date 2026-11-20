@@ -55,7 +55,7 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 	}
 	// The session read fills in the default artifact directory for a row
 	// stored without one.
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	sess, _, err := c.artifactSession(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -210,7 +210,7 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 		apispec.NotImplemented(w, r, http.MethodDelete, artifactFilesPath)
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	sess, kept, err := c.artifactSession(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -226,6 +226,10 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 			return
 		}
 		envelope.WriteError(w, r, fmt.Errorf("delete artifact file: %w", err))
+		return
+	}
+	if kept {
+		c.forgetKeptArtifact(w, r, sess, clean)
 		return
 	}
 	if c.ArtifactVersions != nil {
@@ -443,4 +447,22 @@ func writeArtifactTemp(root *os.Root, name string, perm fs.FileMode, content []b
 		return "", err
 	}
 	return temp, nil
+}
+
+// forgetKeptArtifact finishes deleting a file kept with a deleted session and
+// answers with what is left of it: no files once the last one is gone.
+func (c *SessionsController) forgetKeptArtifact(w http.ResponseWriter, r *http.Request, sess domain.Session, clean string) {
+	svc, ok := c.Svc.(keptArtifactsService)
+	if ok {
+		if err := svc.ForgetKeptArtifact(r.Context(), sess.ID, clean); err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("forget kept artifact: %w", err))
+			return
+		}
+	}
+	updated, _, err := c.artifactSession(r.Context(), sess.ID)
+	if err != nil {
+		updated = sess
+		updated.ArtifactFiles = nil
+	}
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }
