@@ -102,6 +102,11 @@ import (
 // are healed on this cadence even when no event or hook fires.
 const usageReconcileTick = 3 * time.Minute
 
+// previewIdlePollInterval is how often the preview poller re-lists sessions
+// while it watches no preview. A session change brings it back to its 250 ms
+// interval at once, so this only backs that up.
+const previewIdlePollInterval = 5 * time.Second
+
 const chatHibernateSweepTick = 30 * time.Second
 
 // workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
@@ -1368,7 +1373,11 @@ func Run(buildVersion string) (retErr error) {
 		return err
 	}
 	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
-	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
+	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{
+		Logger:       log,
+		Wake:         cdcPipe.sessionChanges(),
+		IdleInterval: previewIdlePollInterval,
+	}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
 	if ln, addr, err := browserruntime.Listen(cfg.RunFilePath); err != nil {
 		log.Warn("browser runtime: listener unavailable; agent browser control disabled", "err", err)
