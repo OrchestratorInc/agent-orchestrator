@@ -39,6 +39,8 @@ type Archive struct {
 	RuntimeBound bool
 	RuntimeDir   string
 	RuntimeScope string
+	// ImportCopy marks snapshots carrying AO import metadata, even if invalid.
+	ImportCopy bool
 	// UnopenedCopy proves that this is still the exact unbound private copy.
 	UnopenedCopy bool
 }
@@ -153,6 +155,7 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 	if binding := doc.Metadata.RuntimeStore; binding != nil {
 		out.RuntimeBound, out.RuntimeDir, out.RuntimeScope = true, binding.DataDir, binding.Scope
 	}
+	_, out.ImportCopy = raw["ao_import"]
 	if !out.RuntimeBound {
 		var proof copyProof
 		if json.Unmarshal(raw["ao_import"], &proof) == nil && proof.SourceID != "" && copiedID(root, proof.SourceID, out.CWD) == out.ID {

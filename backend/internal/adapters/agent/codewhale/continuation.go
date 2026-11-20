@@ -169,6 +169,11 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 		return "", errors.New("codewhale restore snapshot does not match its selected workspace")
 	}
 	if !archive.RuntimeBound {
+		// Native legacy snapshots may acquire their first runtime on resume.
+		// An AO copy still needs its recorded import root and exact proof.
+		if recordedRoot == "" && !archive.ImportCopy {
+			return freshDir, nil
+		}
 		if recordedRoot != "" && archive.UnopenedCopy {
 			return freshDir, nil
 		}
