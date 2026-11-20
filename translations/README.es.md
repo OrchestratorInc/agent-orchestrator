@@ -141,7 +141,7 @@ Controla desde el teléfono los agentes que se ejecutan en tu escritorio. Instal
 
 ### Cloud Agents
 
-Ejecuta workers en espacios de trabajo alojados en lugar de en tu máquina. Elige **Clone to the cloud** y un repositorio de GitHub para empezar.
+Ejecuta workers en espacios de trabajo alojados en lugar de en tu máquina. Elige **Create a cloud project** y un repositorio de GitHub para empezar.
 
 - **Sigue funcionando.** Las tareas continúan con el portátil cerrado.
 - **Síguelo de cerca.** Abre el chat, los archivos y la terminal desde la aplicación de escritorio.
