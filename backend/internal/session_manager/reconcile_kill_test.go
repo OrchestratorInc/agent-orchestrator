@@ -117,7 +117,13 @@ func waitForStartupCheckSettled(t *testing.T, m *Manager, id domain.SessionID) s
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := m.SessionStatusReadiness(domain.SessionRecord{ID: id})
+		// Readiness compares a recorded failure with the current row, so pass
+		// the stored record rather than an ID-only one.
+		rec, found, err := m.store.GetSession(context.Background(), id)
+		if err != nil || !found {
+			t.Fatalf("read session %s: found=%v err=%v", id, found, err)
+		}
+		got := m.SessionStatusReadiness(rec)
 		if got != "checking" && !m.SessionMutationInProgress(id) {
 			return got
 		}
