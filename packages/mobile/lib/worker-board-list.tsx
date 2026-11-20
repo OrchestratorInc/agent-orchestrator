@@ -635,7 +635,7 @@ function WorkerBoard({
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
 	showMachine: boolean;
-	/** The row's machine's freshness: a dot beside its name, and a dimmed row once it can't be reached. */
+	/** The row's machine's freshness: dims the row once it can't be reached. */
 	freshness?: MachineFreshness;
 	actions: {
 		renameStart(id: string | undefined): void;
@@ -650,10 +650,8 @@ type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, freshness, ...props }: BoundWorkerRowProps) {
 	const session = props.session;
 	const rowKey = hostedSessionKey(session);
-	const machine = useMemo(() => {
-		const identity = showMachine ? sessionMachineIdentity(session) : undefined;
-		return identity && freshness ? { ...identity, freshness } : identity;
-	}, [session, showMachine, freshness]);
+	// Freshness shows once, on the machine's filter chip; rows only dim when it can't be reached.
+	const machine = useMemo(() => (showMachine ? sessionMachineIdentity(session) : undefined), [session, showMachine]);
 	const handlers = useMemo(() => ({
 		onRenameStart: () => actions.renameStart(rowKey),
 		onRenameCancel: () => actions.renameStart(undefined),
