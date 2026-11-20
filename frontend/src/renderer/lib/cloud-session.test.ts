@@ -184,4 +184,45 @@ describe("useCloudSession", () => {
       vi.doUnmock("./bridge");
     }
   });
+
+  it("reads again when a view mounts after every view left while reads were failing", async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    try {
+      const account = { authProvider: "workos", user: { id: "user-1" } };
+      const unreadable = new Error("The saved Orchestrator Cloud login could not be read (EACCES).");
+      const getSession = vi.fn()
+        .mockRejectedValueOnce(unreadable)
+        .mockRejectedValueOnce(unreadable)
+        .mockRejectedValueOnce(unreadable)
+        .mockResolvedValueOnce(account);
+      vi.doMock("./bridge", () => ({
+        aoBridge: {
+          cloud: { getSession, onSessionChanged: () => () => undefined, signIn: () => undefined, signOut: () => Promise.resolve() },
+        },
+      }));
+      const { useCloudSession } = await import("./cloud-session");
+      const view = renderHook(() => useCloudSession());
+      // Failed reads at 0, 1 and 3 seconds; the third shows signed out.
+      await act(() => vi.advanceTimersByTimeAsync(3_000));
+      expect(getSession).toHaveBeenCalledTimes(3);
+      expect(view.result.current.status).toBe("unauthenticated");
+
+      // Every view leaves, so the retry at 7 seconds finds no reader.
+      view.unmount();
+      await act(() => vi.advanceTimersByTimeAsync(4_000));
+      expect(getSession).toHaveBeenCalledTimes(3);
+
+      // A view mounting within the reuse window still reads, and recovers.
+      await act(() => vi.advanceTimersByTimeAsync(500));
+      const remounted = renderHook(() => useCloudSession());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(getSession).toHaveBeenCalledTimes(4);
+      expect(remounted.result.current.status).toBe("authenticated");
+      remounted.unmount();
+    } finally {
+      vi.useRealTimers();
+      vi.doUnmock("./bridge");
+    }
+  });
 });

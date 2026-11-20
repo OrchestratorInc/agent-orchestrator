@@ -1096,6 +1096,57 @@ describe("native WorkOS authentication", () => {
       });
     });
 
+    describe("saves a refreshed login when the read before saving it finds the saved sign-in hidden", () => {
+      const rotated = {
+        accessToken: ACCESS_TOKEN,
+        refreshToken: "refresh_456",
+        user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+      };
+
+      beforeEach(async () => {
+        mocks.authenticateWithCode.mockResolvedValueOnce({ ...rotated, accessToken: EXPIRED_ACCESS_TOKEN, refreshToken: "refresh_123" });
+        await beginCloudSignIn(dataDir);
+        await handleCloudDeepLink(
+          "ao-app://callback?code=code_456&state=state_123",
+          dataDir,
+        );
+      });
+
+      it("because the file does not decrypt", async () => {
+        mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+          mocks.decryptString.mockImplementationOnce(() => {
+            throw new Error("synthetic decrypt failure");
+          });
+          return Promise.resolve(rotated);
+        });
+
+        await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+          user: { email: "person@example.com" },
+        });
+        expect(JSON.parse(await readFile(storeFile(), "utf8"))).toMatchObject({
+          session: { accessToken: ACCESS_TOKEN, refreshToken: "refresh_456" },
+        });
+      });
+
+      it("because secure storage went out", async () => {
+        mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+          mocks.encryptionAvailable = false;
+          return Promise.resolve(rotated);
+        });
+
+        await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+          user: { email: "person@example.com" },
+        });
+        mocks.encryptionAvailable = true;
+        await expect(readAuthStore(dataDir)).resolves.toMatchObject({
+          session: { refreshToken: "refresh_456" },
+        });
+        expect(JSON.parse(await readFile(storeFile(), "utf8"))).toMatchObject({
+          session: { accessToken: ACCESS_TOKEN, refreshToken: "refresh_456" },
+        });
+      });
+    });
+
     it("says why sign-in did not open when the login cannot be read", async () => {
       const signIn = mocks.ipcHandle.mock.calls.find(
         ([channel]) => channel === "cloud:signIn",

@@ -89,7 +89,9 @@ function readSession(force = false): void {
     publish(null);
     return;
   }
-  if (reading || (!force && snapshot.status !== "loading" && Date.now() - readAt < SESSION_REUSE_MS)) return;
+  // Only an answer from main is reused. While reads are failing, a mount reads
+  // again, so recovery resumes even if the retry timer fired with no reader.
+  if (reading || (!force && !awaitingRead() && Date.now() - readAt < SESSION_REUSE_MS)) return;
   const startedAt = changes;
   reading = cloud.getSession().then((s) => {
     failedReads = 0;

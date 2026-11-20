@@ -656,16 +656,24 @@ async function refreshCloudSession(
     );
     return withAuthMutation(dataDir, async () => {
       if (authGeneration(dataDir) !== generation) return null;
+      // WorkOS has already used up the old refresh token, so the rotated one
+      // is the only login that still works. When the store cannot be read, or
+      // reads empty only because the saved sign-in is hidden (secure storage
+      // is out, or the file did not decrypt), save it without the file's other
+      // contents: at worst a pending sign-in is dropped.
+      const keepRotated = async () => {
+        await writeAuthStore(dataDir, { session, pkce: null });
+        return publicAccount(session);
+      };
       let currentStore: AuthStore;
       try {
         currentStore = await readAuthStore(dataDir);
       } catch (error) {
         if (!(error instanceof AuthStoreUnreadableError)) throw error;
-        // WorkOS has already used up the old refresh token, so the rotated
-        // one is the only login that still works. Save it without the file's
-        // other contents: at worst a pending sign-in is dropped.
-        await writeAuthStore(dataDir, { session, pkce: null });
-        return publicAccount(session);
+        return keepRotated();
+      }
+      if (currentStore.session === null && isSavedSignInHidden(dataDir)) {
+        return keepRotated();
       }
       if (
         currentStore.session?.refreshToken !== storedSession.refreshToken
