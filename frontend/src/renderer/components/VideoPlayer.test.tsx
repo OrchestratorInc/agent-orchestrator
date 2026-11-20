@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMediaTime, VideoPlayer } from "./VideoPlayer";
@@ -31,6 +31,7 @@ describe("VideoPlayer", () => {
 	it("replaces the native controls with its own", () => {
 		const video = renderPlayer({ crossOrigin: "anonymous" });
 		expect(video).not.toHaveAttribute("controls");
+		expect(video).toHaveAttribute("autoplay");
 		expect(video).toHaveAttribute("src", "http://127.0.0.1:3001/demo.mp4");
 		expect(video).toHaveAttribute("crossorigin", "anonymous");
 		for (const name of ["Play", "Back 5 seconds", "Forward 5 seconds", "Mute", "Loop", "Playback speed"]) {
@@ -50,7 +51,57 @@ describe("VideoPlayer", () => {
 		expect(pause).toHaveBeenCalledTimes(1);
 		Object.defineProperty(video, "paused", { configurable: true, value: true });
 		await user.click(video);
-		expect(play).toHaveBeenCalledTimes(2);
+		// A click on the video waits briefly in case it starts a double-click.
+		await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+	});
+
+	it("enters fullscreen on a double-click without toggling playback", async () => {
+		const user = userEvent.setup();
+		Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+		const requestFullscreen = vi.fn(() => Promise.resolve());
+		HTMLElement.prototype.requestFullscreen = requestFullscreen;
+		try {
+			const video = renderPlayer();
+			loadMetadata(video, 2);
+			video.currentTime = 1.92;
+			await user.dblClick(video);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			expect(requestFullscreen).toHaveBeenCalledTimes(1);
+			expect(play).not.toHaveBeenCalled();
+			expect(pause).not.toHaveBeenCalled();
+			expect(video.currentTime).toBe(1.92);
+		} finally {
+			delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;
+			delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
+		}
+	});
+
+	it("leaves keys typed in the fullscreen speed menu to the menu", async () => {
+		const user = userEvent.setup();
+		Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+		const exitFullscreen = vi.fn(() => Promise.resolve());
+		document.exitFullscreen = exitFullscreen;
+		try {
+			const video = renderPlayer();
+			loadMetadata(video, 30);
+			const root = video.closest("[data-video-player]")!;
+			Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => root });
+			act(() => {
+				document.dispatchEvent(new Event("fullscreenchange"));
+			});
+			await user.click(screen.getByRole("button", { name: "Playback speed" }));
+			const item = screen.getByRole("menuitemradio", { name: "1.5×" });
+			// In fullscreen the menu portals into the player itself.
+			expect(root.contains(item)).toBe(true);
+			fireEvent.keyDown(item, { key: "ArrowRight" });
+			fireEvent.keyDown(item, { key: "f" });
+			expect(video.currentTime).toBe(0);
+			expect(exitFullscreen).not.toHaveBeenCalled();
+		} finally {
+			delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;
+			delete (document as { fullscreenElement?: unknown }).fullscreenElement;
+			delete (document as { exitFullscreen?: unknown }).exitFullscreen;
+		}
 	});
 
 	it("seeks from the scrubber, the skip buttons, and the arrow keys", async () => {

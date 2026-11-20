@@ -9,6 +9,10 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 export const PLAYBACK_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const SKIP_SECONDS = 5;
 const VOLUME_STEP = 0.05;
+/** How long a click on the video waits to learn whether it starts a double-click. */
+const DOUBLE_CLICK_MS = 250;
+/** Controls a narrow player leaves out; see the controls row. */
+const COMPACT_HIDDEN = "@max-[26rem]:hidden";
 
 /** `m:ss`, or `h:mm:ss` once the time passes an hour. Unknown times read 0:00. */
 export function formatMediaTime(seconds: number): string {
@@ -41,6 +45,7 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
 	const videoRef = useRef<HTMLVideoElement>(null);
+	const clickTimer = useRef<number | undefined>(undefined);
 	const [playing, setPlaying] = useState(false);
 	const [time, setTime] = useState(0);
 	const [duration, setDuration] = useState(0);
@@ -92,6 +97,8 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 		frame = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(frame);
 	}, [playing]);
+
+	useEffect(() => () => window.clearTimeout(clickTimer.current), []);
 
 	useEffect(() => {
 		const sync = () => setFullscreen(document.fullscreenElement !== null && document.fullscreenElement === rootRef.current);
@@ -148,8 +155,9 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
 		if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
 		const target = event.target as HTMLElement;
-		// Keys typed in the speed menu bubble here through its portal; leave them to it.
-		if (!rootRef.current?.contains(target)) return;
+		// Keys typed in the speed menu bubble here through its portal, which sits
+		// inside the player while it is fullscreen; leave them to the menu.
+		if (!rootRef.current?.contains(target) || target.closest('[role="menu"]')) return;
 		const onButton = target.closest("button") !== null;
 		const onVolume = target.dataset.videoVolume !== undefined;
 		const key = event.key.toLowerCase();
@@ -168,17 +176,27 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 			ref={rootRef}
 			data-video-player=""
 			onKeyDown={onKeyDown}
-			className={cn("flex size-full min-h-0 min-w-0 flex-col [&:fullscreen]:bg-background [&:fullscreen]:p-3", className)}
+			className={cn("@container flex size-full min-h-0 min-w-0 flex-col [&:fullscreen]:bg-background [&:fullscreen]:p-3", className)}
 		>
 			<video
 				ref={videoRef}
 				aria-label={label}
+				autoPlay
 				className="min-h-0 w-full flex-1 cursor-pointer rounded-md object-contain outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 				crossOrigin={crossOrigin}
 				key={src}
 				loop={loop}
-				onClick={togglePlay}
-				onDoubleClick={toggleFullscreen}
+				onClick={(event) => {
+					// A double-click is for fullscreen: its first click waits to see
+					// whether a second follows, and the second never toggles playback.
+					window.clearTimeout(clickTimer.current);
+					if (event.detail > 1) return;
+					clickTimer.current = window.setTimeout(togglePlay, DOUBLE_CLICK_MS);
+				}}
+				onDoubleClick={() => {
+					window.clearTimeout(clickTimer.current);
+					toggleFullscreen();
+				}}
 				onDurationChange={(event) => setDuration(event.currentTarget.duration)}
 				onEnded={() => setPlaying(false)}
 				onError={onError}
@@ -211,21 +229,24 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 						value={seekable ? Math.min(time, duration) : 0}
 						valueText={t("files.video.time", { current: formatMediaTime(time), duration: formatMediaTime(duration) })}
 					/>
-					<div className="flex min-w-0 items-center gap-1">
+					{/* Narrow previews, such as a 300 px inspector, drop the skip buttons
+					    and volume slider (the arrows and mute still cover them); the row
+					    wraps rather than clip if it is narrower still. */}
+					<div className="flex min-w-0 flex-wrap items-center gap-1">
 						<ControlButton label={playing ? t("files.video.pause") : t("files.video.play")} onClick={togglePlay} portal={portal}>
 							{playing ? <Pause /> : <Play />}
 						</ControlButton>
-						<ControlButton disabled={!seekable} label={t("files.video.back")} onClick={() => skip(-SKIP_SECONDS)} portal={portal}>
+						<ControlButton className={COMPACT_HIDDEN} disabled={!seekable} label={t("files.video.back")} onClick={() => skip(-SKIP_SECONDS)} portal={portal}>
 							<SkipBack />
 						</ControlButton>
-						<ControlButton disabled={!seekable} label={t("files.video.forward")} onClick={() => skip(SKIP_SECONDS)} portal={portal}>
+						<ControlButton className={COMPACT_HIDDEN} disabled={!seekable} label={t("files.video.forward")} onClick={() => skip(SKIP_SECONDS)} portal={portal}>
 							<SkipForward />
 						</ControlButton>
 						<ControlButton label={level === 0 ? t("files.video.unmute") : t("files.video.mute")} onClick={toggleMute} portal={portal}>
 							{level === 0 ? <VolumeX /> : <Volume2 />}
 						</ControlButton>
 						<MediaSlider
-							className="w-16 shrink-0"
+							className={cn("w-16 shrink-0", COMPACT_HIDDEN)}
 							label={t("files.video.volume")}
 							max={1}
 							onChange={setLevel}
@@ -269,8 +290,9 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 	);
 }
 
-function ControlButton({ children, disabled, label, onClick, portal, pressed }: {
+function ControlButton({ children, className, disabled, label, onClick, portal, pressed }: {
 	children: ReactNode;
+	className?: string;
 	disabled?: boolean;
 	label: string;
 	onClick: () => void;
@@ -280,7 +302,7 @@ function ControlButton({ children, disabled, label, onClick, portal, pressed }: 
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<Button aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick} size="icon-sm" variant="quiet">
+				<Button aria-label={label} aria-pressed={pressed} className={className} disabled={disabled} onClick={onClick} size="icon-sm" variant="quiet">
 					{children}
 				</Button>
 			</TooltipTrigger>

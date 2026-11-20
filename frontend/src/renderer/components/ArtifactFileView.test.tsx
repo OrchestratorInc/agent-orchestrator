@@ -123,7 +123,9 @@ describe("ArtifactFileView", () => {
 		if (tag === "audio") expect(media).toHaveAttribute("controls");
 		if (tag !== "img") {
 			expect(media).toHaveAttribute("preload", "metadata");
-			expect(media).not.toHaveAttribute("autoplay");
+			// Videos start on their own in the app's player; audio waits for a press.
+			if (tag === "video") expect(media).toHaveAttribute("autoplay");
+			else expect(media).not.toHaveAttribute("autoplay");
 		}
 	});
 
