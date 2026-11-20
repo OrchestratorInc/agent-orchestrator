@@ -25,13 +25,16 @@ import { reloadIntoUpdate } from "./updateResumeStore";
 import { useReducedMotion } from "./useReducedMotion";
 
 const BAR_W = 168;
+// Gold and Ruto's own blue; deeper on a light background so the notes still read.
+const NOTE_COLORS_DARK = ["#FFE08A", "#8FD8FF"] as const;
+const NOTE_COLORS_LIGHT = ["#D99A00", "#1C9BE0"] as const;
 const SEGMENT_W = 48;
 
 /**
  * Full-screen "update ready" moment: once an over-the-air update has downloaded,
- * the mascot hops and waves its wand over a Restart button. The app restarts
- * only on that tap; Not now (or Android back) returns to the app. Mounted once
- * in the root layout; raised through updateScreenState.ts.
+ * Ruto conducts over a Restart button (tap Ruto and it reacts). The app restarts
+ * only on that tap, after Ruto's finale; Not now (or Android back) returns to
+ * the app. Mounted once in the root layout; raised through updateScreenState.ts.
  *
  * A Modal rather than an absolute overlay: Settings is a native form sheet, and
  * a view in the root hierarchy would sit underneath it.
@@ -66,8 +69,10 @@ function UpdateScreenBody({ phase }: { phase: UpdateScreenPhase }) {
 		>
 			<View style={styles.stage}>
 				<UpdateMascot
-					size={Math.min(260, width * 0.64)}
+					size={Math.min(280, width * 0.68)}
 					shadowColor={scheme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(10,11,13,0.10)"}
+					noteColors={scheme === "dark" ? NOTE_COLORS_DARK : NOTE_COLORS_LIGHT}
+					finale={restarting}
 				/>
 				<Text style={[styles.title, { color: t.textPrimary }]} accessibilityRole="header">
 					Update ready

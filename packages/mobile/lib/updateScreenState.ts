@@ -7,6 +7,8 @@
 // Restart (or Not now); `restarting` holds the mascot on screen while the app
 // reloads into the update. Nothing here restarts the app without a tap.
 
+import { FINALE_MS } from "./updateMascotPose";
+
 export type UpdateScreenPhase = "ready" | "restarting";
 
 export type UpdateScreenState = { visible: false } | { visible: true; phase: UpdateScreenPhase };
@@ -31,11 +33,10 @@ export function getUpdateScreen(): UpdateScreenState {
 }
 
 /**
- * How long the restarting screen stays up before the reload. The reload itself
- * cuts to a blank root and back, so without a hold the change of state would be
- * a one-frame flash.
+ * How long the restarting screen stays up before the reload: exactly Ruto's
+ * finale (lift, downstroke, freeze, bow, fade), so the reload follows the bow.
  */
-export const RESTART_HOLD_MS = 900;
+export const RESTART_HOLD_MS = FINALE_MS;
 
 /** Offer a downloaded update. Never replaces a restart already under way. */
 export function showUpdateReady(): void {
