@@ -12,6 +12,7 @@ import {
 } from "./shared/chat-draft-risk";
 import type {
 	BrowserAgentActivityState,
+	BrowserAgentGreeting,
 	BrowserDevToolsInput,
 	BrowserDevToolsState,
 	BrowserFindInput,
@@ -147,6 +148,8 @@ export type BrowserBoundsApplied = BrowserBoundsInput;
 export type BrowserNavigateInput = {
 	viewId: string;
 	url: string;
+	/** The session's preview target, not an address the person typed: it loads in the agent's tab. */
+	preview?: boolean;
 };
 
 export type ImportFolderMode = "project" | "workspace";
@@ -810,6 +813,13 @@ const api = {
 			ipcRenderer.on("browser:agentActivity", wrapped);
 			return () => {
 				ipcRenderer.off("browser:agentActivity", wrapped);
+			};
+		},
+		onAgentGreeting: (listener: (greeting: BrowserAgentGreeting) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, greeting: BrowserAgentGreeting) => listener(greeting);
+			ipcRenderer.on("browser:agentGreeting", wrapped);
+			return () => {
+				ipcRenderer.off("browser:agentGreeting", wrapped);
 			};
 		},
 		onRuntimeState: (listener: (state: BrowserRuntimeState) => void) => {

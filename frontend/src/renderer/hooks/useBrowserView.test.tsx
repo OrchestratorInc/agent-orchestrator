@@ -41,6 +41,7 @@ function setupBridge() {
 	const tabsListeners = new Set<TabsListener>();
 	const devtoolsListeners = new Set<DevToolsListener>();
 	const activityListeners = new Set<ActivityListener>();
+	const greetingListeners = new Set<(greeting: { viewId: string; tabId: string }) => void>();
 	const profileListeners = new Set<ProfileListener>();
 	const annotationStateListeners = new Set<AnnotationStateListener>();
 	const bridge = {
@@ -184,6 +185,10 @@ function setupBridge() {
 			activityListeners.add(listener);
 			return () => activityListeners.delete(listener);
 		}),
+		onAgentGreeting: vi.fn((listener: (greeting: { viewId: string; tabId: string }) => void) => {
+			greetingListeners.add(listener);
+			return () => greetingListeners.delete(listener);
+		}),
 		onRuntimeState: vi.fn(() => () => undefined),
 		onProfileState: vi.fn((listener: ProfileListener) => {
 			profileListeners.add(listener);
@@ -207,6 +212,9 @@ function setupBridge() {
 		},
 		emitActivity(state: Parameters<ActivityListener>[0]) {
 			activityListeners.forEach((listener) => listener(state));
+		},
+		emitGreeting(greeting: { viewId: string; tabId: string }) {
+			greetingListeners.forEach((listener) => listener(greeting));
 		},
 		emitProfile(state: Parameters<ProfileListener>[0]) {
 			profileListeners.forEach((listener) => listener(state));
@@ -273,6 +281,40 @@ describe("useBrowserView", () => {
 			),
 		).toBe(true);
 		expect(result.current.viewId).toBe("42:sess-1");
+	});
+
+	it("counts the agent's greetings in this session's view only", async () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		expect(result.current.agentGreeting).toBeNull();
+
+		act(() => bridge.emitGreeting({ viewId: "42:sess-1", tabId: "t1" }));
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1", seq: 1 });
+		act(() => bridge.emitGreeting({ viewId: "42:other", tabId: "t9" }));
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1", seq: 1 });
+		act(() => bridge.emitGreeting({ viewId: "42:sess-1", tabId: "t1" }));
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1", seq: 2 });
+	});
+
+	it("plays a greeting only in its own session, and never again after switching back", async () => {
+		const bridge = setupBridge();
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emitGreeting({ viewId: "42:sess-1", tabId: "t1" }));
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1" });
+
+		// Another session, whose tab IDs also start at t1, never shows it.
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		expect(result.current.agentGreeting).toBeNull();
+		// Back in the first session, the old greeting does not replay.
+		rerender({ sessionId: "sess-1" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		expect(result.current.agentGreeting).toBeNull();
 	});
 
 	it("marks only agent commands whose start this session saw", async () => {
@@ -584,6 +626,22 @@ describe("useBrowserView", () => {
 
 		expect(bridge.navigate).toHaveBeenCalledWith({ viewId: "42:sess-1", url: "http://localhost:5173/" });
 		expect(bridge.openTab).not.toHaveBeenCalledWith({ viewId: "42:sess-1", url: "http://localhost:5173/" });
+	});
+
+	it("opens a chat link in a tab of the person's own, never in the agent's blank tab", async () => {
+		const bridge = setupBridge();
+		bridge.getTabs.mockImplementation(async (viewId: string) => ({
+			viewId,
+			activeTabId: "t1",
+			tabs: [{ id: "t1", url: "", title: "", active: true, owner: "agent" as const }],
+		}));
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+
+		await waitFor(() => expect(result.current.tabs.map((tab) => tab.id)).toEqual(["t1"]));
+		await act(() => result.current.openLink("http://localhost:5173/"));
+
+		expect(bridge.navigate).not.toHaveBeenCalled();
+		expect(bridge.openTab).toHaveBeenCalledWith({ viewId: "42:sess-1", url: "http://localhost:5173/" });
 	});
 
 	it("selects an existing matching tab instead of opening a duplicate", async () => {
@@ -1708,6 +1766,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://localhost:5173/",
+				preview: true,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
@@ -1731,6 +1790,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "file:///tmp/preview/index.html",
+				preview: true,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(3);
@@ -1753,7 +1813,7 @@ describe("useBrowserView", () => {
 		expect(browser.navigate).not.toHaveBeenCalled();
 		rerender({ proxyBase: "http://127.0.0.1:4000/token" });
 		await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({
-			viewId: "42:remote:box-a:ao-1", url: "http://ao-preview-abc.localhost:4000/",
+			viewId: "42:remote:box-a:ao-1", url: "http://ao-preview-abc.localhost:4000/", preview: true,
 		}));
 		expect(browser.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ url: "http://localhost:5173/" }));
 	});
@@ -1962,6 +2022,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://localhost:5217/",
+				preview: true,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
@@ -2007,6 +2068,7 @@ describe("useBrowserView", () => {
 		expect(bridge.navigate).toHaveBeenLastCalledWith({
 			viewId: "42:sess-1",
 			url: "http://localhost:5217/",
+			preview: true,
 		});
 	});
 
@@ -2121,6 +2183,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://127.0.0.1:4173/",
+				preview: true,
 			}),
 		);
 
@@ -2130,6 +2193,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-2",
 				url: "http://127.0.0.1:5173/",
+				preview: true,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(2);
@@ -2155,6 +2219,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://localhost:5173/",
+				preview: true,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
@@ -2169,6 +2234,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "C:\\Users\\Lenovo\\Downloads\\sm5\\paper_explainer.html",
+				preview: true,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(2);

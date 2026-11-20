@@ -560,6 +560,7 @@
 	"home.starUs": "Ajouter une étoile",
 	"browser.agentAction": "Agent {{verb}}",
 	"browser.agentUsing": "Agent utilisant le navigateur",
+	"browser.agentTab": "Onglet de l’agent : {{title}}",
 	"browser.find.close": "Fermer la recherche",
 	"browser.find.matchCount": "{{active}} sur {{total}}",
 	"browser.find.next": "Résultat suivant",
