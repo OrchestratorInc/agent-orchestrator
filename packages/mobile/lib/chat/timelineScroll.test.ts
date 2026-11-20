@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atTail, openingRow, TAIL_SLOP } from "./timelineScroll";
+import { atTail, openingRow, RESUME_SLOP, TAIL_SLOP } from "./timelineScroll";
 
 const metrics = (offset: number) => ({ contentOffset: { x: 0, y: offset }, contentSize: { width: 390, height: 3000 }, layoutMeasurement: { width: 390, height: 800 } });
 
@@ -15,6 +15,15 @@ describe("atTail", () => {
 	it("measures from the end the list has made room to", () => {
 		expect(atTail(metrics(2200), 300)).toBe(false);
 		expect(atTail(metrics(2500), 300)).toBe(true);
+	});
+
+	// A short flick up to start reading lets go inside the thumb's slop; it must
+	// not count as resting at the newest message, or new output pulls it back.
+	it("takes a tighter slop for a scroll to rest at the newest message", () => {
+		expect(RESUME_SLOP).toBeLessThan(TAIL_SLOP);
+		expect(atTail(metrics(2200 - RESUME_SLOP + 1), 0, RESUME_SLOP)).toBe(true);
+		expect(atTail(metrics(2200 - RESUME_SLOP), 0, RESUME_SLOP)).toBe(false);
+		expect(atTail(metrics(2200 - 84), 0, RESUME_SLOP)).toBe(false);
 	});
 });
 

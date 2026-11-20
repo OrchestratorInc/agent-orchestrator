@@ -65,7 +65,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, openingRow } from "./timelineScroll";
+import { atTail, openingRow, RESUME_SLOP } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -355,7 +355,11 @@ function Timeline({
 		else listRef.current?.scrollToEnd({ animated });
 	};
 	// The follow to the newest message that output and measuring rows ask for.
+	// It runs a frame after it was asked for, so it checks again: a drag that
+	// began in between has stopped the follow, and scrolling to the end then
+	// carried the person back mid-fling.
 	const followTail = () => {
+		if (!followsTail.current || dragging.current) return;
 		if (keyboardOffset !== undefined && keyboardMoving.value) {
 			followAfterKeyboard.current = true;
 			return;
@@ -493,7 +497,7 @@ function Timeline({
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent, keyboardInset.current);
+		followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
 		setShowJump(!followsTail.current);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
@@ -556,7 +560,7 @@ function Timeline({
 								// passing the end without a drag, as a jump does, resumes it.
 								scrollOffset.current = event.nativeEvent.contentOffset.y;
 								const tail = atTail(event.nativeEvent, keyboardInset.current);
-								if (tail && !dragging.current) followsTail.current = true;
+								if (!dragging.current && atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP)) followsTail.current = true;
 								setShowJump(!followsTail.current && !tail);
 								notifyRenderViewport();
 							}}
@@ -577,7 +581,8 @@ function Timeline({
 								contentHeight.current = height;
 								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(followTail);
+								// Not while the person scrolls: a drag or its fling owns the list.
+								if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {

@@ -156,6 +156,17 @@ describe("jump to latest", () => {
 	it("lets only a drag stop following the newest message", () => {
 		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);");
 	});
+	// A follow is queued a frame ahead. Output that arrived just before a drag
+	// queued one that then ran mid-fling, carried the list back to its end, and
+	// that end restarted the follow: the reader could never scroll away.
+	it("never follows new output while the person scrolls", () => {
+		expect(source).toContain("if (!followsTail.current || dragging.current) return;");
+		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
+	});
+	it("follows again only once the person comes to rest right at the end", () => {
+		expect(source).toContain("followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
+		expect(source).toContain("if (!dragging.current && atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP)) followsTail.current = true;");
+	});
 	// Under a floating composer the list keeps its size and moves its content with the keyboard.
 	it("moves its own content with the keyboard under a floating composer", () => {
 		expect(source).toContain('keyboardLiftBehavior="always"');
@@ -382,11 +393,11 @@ describe("following the newest message", () => {
 		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}");
 		expect(source).toContain("onScrollEndDrag={settle}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
-		expect(source).toContain("if (tail && !dragging.current) followsTail.current = true;");
+		expect(source).toContain("if (!dragging.current && atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP)) followsTail.current = true;");
 		// A scroll event alone never turns the follow off: rows drawn above change
 		// the content's size mid-drag without the person having left the end.
 		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
-		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);");
+		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
 	});
 	// A follow from JS mid-keyboard jumped the list to the keyboard's end and back.
 	// A tap on a reply gives its selectable text focus; the list scrolled that
