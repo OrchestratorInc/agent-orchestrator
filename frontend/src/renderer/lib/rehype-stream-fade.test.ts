@@ -6,65 +6,64 @@ import { rehypeStreamFade } from "./rehype-stream-fade";
 
 const html = (text: string) =>
 	renderToStaticMarkup(createElement(Markdown, { rehypePlugins: [rehypeStreamFade] }, text));
-const spans = (out: string) => out.match(/class="stream-char"/g)?.length ?? 0;
+const settled = (text: string, settledOffset: number) =>
+	renderToStaticMarkup(createElement(Markdown, { rehypePlugins: [[rehypeStreamFade, { settledOffset }]] }, text));
+// Each stream-text wrapper as [settled characters, text].
+const wrappers = (out: string) =>
+	[...out.matchAll(/<span class="stream-text"(?: data-start="\d+")? data-kept="(\d+)">([^<]*)<\/span>/g)]
+		.map(([, kept, text]) => [Number(kept), text] as const);
 
 describe("rehypeStreamFade", () => {
-	it("wraps prose characters, including inside emphasis", () => {
+	it("wraps each text node, including inside emphasis", () => {
 		const out = html("a **b**");
-		expect(spans(out)).toBe(3);
+		expect(wrappers(out)).toEqual([[0, "a "], [0, "b"]]);
 		expect(out).toContain("<strong><span");
 	});
 
 	it("wraps only the last block", () => {
 		const out = html("first\n\nsecond");
 		expect(out).toContain("<p>first</p>");
-		expect(spans(out)).toBe(6);
+		expect(wrappers(out)).toEqual([[0, "second"]]);
 	});
 
 	it("leaves code untouched", () => {
 		expect(html("`x` and")).toContain("<code>x</code>");
-		expect(html("```\nfoo\n```")).not.toContain("stream-char");
-		expect(html("text\n\n```\nfoo\n```")).not.toContain("stream-char");
+		expect(html("```\nfoo\n```")).not.toContain("stream-text");
+		expect(html("text\n\n```\nfoo\n```")).not.toContain("stream-text");
 	});
 
 	it("keeps table whitespace structural", () => {
 		const out = html("|a|\n|-|\n|b|");
 		expect(out).not.toMatch(/<tr>\s*<span/);
-		expect(spans(out)).toBeGreaterThan(0);
-	});
-
-	it("keeps a grapheme cluster in one span and emoji as plain text", () => {
-		expect(spans(html("é"))).toBe(1);
-		const out = html("a👨‍👩‍👧b");
-		expect(spans(out)).toBe(2);
-		expect(out).toContain("👨‍👩‍👧");
-		expect(out).not.toMatch(/stream-char">👨/);
+		expect(wrappers(out).length).toBeGreaterThan(0);
 	});
 
 	it("leaves a block over the size cap plain", () => {
-		expect(spans(html("x".repeat(4000)))).toBe(4000);
-		expect(spans(html("x".repeat(4001)))).toBe(0);
+		expect(wrappers(html("x".repeat(1000)))).toHaveLength(1);
+		const text = "x".repeat(1001);
+		expect(html(text)).toBe(`<p>${text}</p>`);
+		expect(html(`${text} **bold**`)).toBe(`<p>${text} <strong>bold</strong></p>`);
 	});
 
-	it("leaves source text before the settled offset plain", () => {
-		const settled = (text: string, settledOffset: number) =>
-			renderToStaticMarkup(createElement(Markdown, { rehypePlugins: [[rehypeStreamFade, { settledOffset }]] }, text));
-		expect(spans(settled("hello world", 5))).toBe(" world".length);
-		expect(settled("hello world", 5)).toContain("<p>hello<span");
-		expect(spans(settled("hello", 5))).toBe(0);
-		expect(spans(settled("first\n\nsecond", 10))).toBe(3);
+	it("keeps source text before the settled offset settled", () => {
+		expect(wrappers(settled("hello world", 5))).toEqual([[5, "hello world"]]);
+		// A settled text node keeps its wrapper, so later wrappers keep their positions.
+		expect(wrappers(settled("hello", 5))).toEqual([[5, "hello"]]);
+		expect(wrappers(settled("first\n\nsecond", 10))).toEqual([[3, "second"]]);
+	});
+
+	it("keeps text with a character reference fading until its source has settled", () => {
+		// "&amp;" is five source characters but one in the text.
+		expect(wrappers(settled("&amp;xy", 5))).toEqual([[0, "&amp;xy"]]);
+		expect(wrappers(settled("&amp;xy", 7))).toEqual([[3, "&amp;xy"]]);
 	});
 
 	it("never splits a grapheme at the settled offset", () => {
-		const settled = (text: string, settledOffset: number) =>
-			renderToStaticMarkup(createElement(Markdown, { rehypePlugins: [[rehypeStreamFade, { settledOffset }]] }, text));
 		// The offset lands inside "é" (e + combining accent): the whole cluster fades.
-		const out = settled("caf\u0065\u0301 ok", 4);
-		expect(out).toContain("<p>caf<span");
-		expect(out).not.toMatch(/<p>cafe<span/);
+		expect(wrappers(settled("caf\u0065\u0301 ok", 4))).toEqual([[3, "caf\u0065\u0301 ok"]]);
 	});
 
-	it("keeps positionless text plain inside an element that was already settled", () => {
+	it("keeps positionless text settled inside an element that was already settled", () => {
 		const plugin = rehypeStreamFade({ settledOffset: 20 });
 		const tree = {
 			type: "root",
@@ -77,7 +76,7 @@ describe("rehypeStreamFade", () => {
 			}],
 		};
 		plugin(tree as never);
-		expect(JSON.stringify(tree)).not.toContain("stream-char");
+		expect(JSON.stringify(tree)).toContain('"dataKept":10');
 	});
 
 	it("never throws on a tree it does not expect", () => {

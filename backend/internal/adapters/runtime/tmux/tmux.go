@@ -643,6 +643,41 @@ func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool
 	return true, nil
 }
 
+// BoundedProcessRoots returns the pids of the session's live panes. tmux has
+// not reaped a live pane's process, so its pid cannot have been reused: the
+// roots need no start bound. A dead pane kept by remain-on-exit is skipped,
+// since its pid may now belong to another process.
+func (r *Runtime) BoundedProcessRoots(ctx context.Context, handle ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	id, err := handleID(handle)
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.runForSession(ctx, id, listLivePanePIDsArgs(id)...)
+	if err != nil {
+		if sessionMissingOutput(string(out)) || serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out)) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tmux runtime: list live pane pids %s: %w", id, err)
+	}
+	return parseLivePaneRoots(string(out)), nil
+}
+
+func parseLivePaneRoots(out string) []ports.ProcessRoot {
+	var roots []ports.ProcessRoot
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != "0" {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 1 {
+			continue
+		}
+		roots = append(roots, ports.ProcessRoot{PID: pid})
+	}
+	return roots
+}
+
 // ProcessRootPIDs returns every pane leader pid of the session so memory
 // accounting can walk their descendants. A missing session yields no pids and
 // no error; a tmux probe failure is surfaced so callers do not read it as zero.

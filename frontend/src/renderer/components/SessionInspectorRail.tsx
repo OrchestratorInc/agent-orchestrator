@@ -163,8 +163,11 @@ export function SessionInspectorRail({
 			ref={panelRef}
 			style={{ width }}
 		>
-			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
 			<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+			{/* After the content: the handle reaches into the inspector's header,
+			    which is a macOS window-drag region, and Electron applies drag and
+			    no-drag in document order, so only a later no-drag punches through. */}
+			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
 		</div>
 	</>;
 }

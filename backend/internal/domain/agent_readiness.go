@@ -269,6 +269,7 @@ func displayAccountField(value string) string {
 type AgentReadinessSnapshot struct {
 	ID                 string                         `json:"id"`
 	Label              string                         `json:"label"`
+	CanStopTurn        bool                           `json:"canStopTurn,omitempty"`
 	Installation       AgentInstallationObservation   `json:"installation"`
 	Authentication     AgentAuthenticationObservation `json:"authentication"`
 	EffectiveReadiness AgentEffectiveReadiness        `json:"effectiveReadiness" enum:"ready,not_ready,unknown"`
