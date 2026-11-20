@@ -3,7 +3,7 @@ import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Platform, StyleSheet, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
-import { BAR_SEAM, Frost, FROST_TAIL, frostStops } from "./frost";
+import { BAR_SEAM, Frost, FROST_TAIL, frostStops, SEAM_STOPS } from "./frost";
 import { useTheme } from "./ThemeProvider";
 import { font, type } from "./tokens";
 
@@ -16,6 +16,26 @@ export const LARGE_TITLE_COLLAPSE_AT = 28;
 const SCALE_MS = 200;
 /** The bar's collapsed title size, Material's top app bar title. */
 const BAR_TITLE_SIZE = 20;
+/** A solid bar's seam fades in and out this fast as the list leaves and returns to the top. */
+const SEAM_MS = 150;
+
+/**
+ * What backs the Android bar the list runs on under.
+ *
+ * `frost`: the bar's frost (see `frost`), always up, dissolving into the page
+ * over a long tail, so rows passing under it dim out.
+ *
+ * `solid`: the page's own colour, opaque, the bar's height and no deeper, so
+ * nothing at all lies over the page at rest (the board's machine chips sat in
+ * the frost's tail and read dimmed). Rows scrolling up meet the bar at a short
+ * seam that comes up only once the list has left the top: at rest there is
+ * nothing under the bar for it to soften.
+ */
+export type LargeTitleBackdrop = "frost" | "solid";
+
+export function seamShown(y: number): boolean {
+	return y > 0;
+}
 
 export function largeTitleCollapsed(y: number): boolean {
 	return y > LARGE_TITLE_COLLAPSE_AT;
@@ -31,6 +51,8 @@ export function largeTitleCollapsed(y: number): boolean {
  * `frost`): nearly opaque behind the bar's items, then fading into the page, so rows
  * passing under it dissolve rather than meet a hard edge. The frost used to
  * come up only once the list moved, and the bar read as see-through at rest.
+ * A page can back its bar with its own colour instead (`backdrop: "solid"`,
+ * see `LargeTitleBackdrop`).
  *
  * `header` goes first in the page's scroll view and holds its content clear of
  * the bar (`topInset` says how far, for anything else pinned to the page's top); `edge`
@@ -54,7 +76,7 @@ export function largeTitleCollapsed(y: number): boolean {
  * The twin also makes room for the line in the same layout pass, so the line
  * never draws over the first row; `topInset` includes its height.
  */
-export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accessory }: { accessory?: ReactNode } = {}): {
+export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accessory, backdrop = "frost" }: { accessory?: ReactNode; backdrop?: LargeTitleBackdrop } = {}): {
 	header: ReactElement | null;
 	edge: ReactElement | null;
 	onScroll: ScrollHandler | undefined;
@@ -62,6 +84,8 @@ export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accesso
 	accessory: ReactNode;
 } {
 	const android = Platform.OS === "android";
+	const solid = backdrop === "solid";
+	const t = useTheme();
 	const navigation = useNavigation();
 	const headerHeight = useHeaderHeight();
 	// The accessory's measured height (its twin's, in the header); 0 while it draws nothing.
@@ -74,6 +98,9 @@ export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accesso
 	}, []);
 	const collapsed = useSharedValue(0);
 	const last = useRef(0);
+	// A solid bar's seam: up while the list is off the top.
+	const scrolled = useSharedValue(0);
+	const lastScrolled = useRef(0);
 	useLayoutEffect(() => {
 		if (!android) return;
 		// Set once: the title reads the shared value, so collapsing never
@@ -88,8 +115,13 @@ export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accesso
 		const next = largeTitleCollapsed(event.nativeEvent.contentOffset.y) ? 1 : 0;
 		if (next !== last.current) collapsed.value = next;
 		last.current = next;
+		if (solid) {
+			const off = seamShown(event.nativeEvent.contentOffset.y) ? 1 : 0;
+			if (off !== lastScrolled.current) scrolled.value = off;
+			lastScrolled.current = off;
+		}
 		onScroll?.(event);
-	}, [collapsed, onScroll]);
+	}, [collapsed, onScroll, scrolled, solid]);
 	const header = android ? (
 		<View>
 			<View style={{ height: headerHeight }} />
@@ -104,10 +136,22 @@ export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accesso
 	) : null;
 	// Sized to the bar alone: grown to back the accessory too, its fade moved down
 	// onto the page's first row, which then read dimmed.
-	const frost = useMemo(() => (android ? <Frost from="top" stops={frostStops(headerHeight)} style={[styles.frost, { height: headerHeight + FROST_TAIL }]} /> : null), [android, headerHeight]);
+	const frost = useMemo(() => {
+		if (!android) return null;
+		if (solid) return <View pointerEvents="none" style={[styles.frost, { height: headerHeight, backgroundColor: t.bgBase }]} />;
+		return <Frost from="top" stops={frostStops(headerHeight)} style={[styles.frost, { height: headerHeight + FROST_TAIL }]} />;
+	}, [android, headerHeight, solid, t.bgBase]);
+	const seamStyle = useAnimatedStyle(() => ({ opacity: withTiming(scrolled.value, { duration: SEAM_MS }) }));
+	// Under the bar, or under the pinned line when there is one.
+	const seamTop = headerHeight + (pinned ? accessoryHeight : 0);
 	const edge = android ? (
 		<>
 			{frost}
+			{solid ? (
+				<Animated.View pointerEvents="none" style={[styles.frost, { top: seamTop, height: BAR_SEAM }, seamStyle]}>
+					<Frost from="top" stops={SEAM_STOPS} style={StyleSheet.absoluteFill} />
+				</Animated.View>
+			) : null}
 			{pinned ? (
 				// A picture for TalkBack, which reads the twin in the header; box-none so
 				// only its own controls take taps.
@@ -120,7 +164,9 @@ export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accesso
 					pointerEvents="box-none"
 					style={[styles.accessory, { top: headerHeight }]}
 				>
-					{accessoryHeight > 0 ? <Frost from="top" stops={frostStops(accessoryHeight, BAR_SEAM)} style={[styles.backing, { height: accessoryHeight + BAR_SEAM }]} /> : null}
+					{accessoryHeight > 0 ? (solid
+						? <View style={[styles.backing, { height: accessoryHeight, backgroundColor: t.bgBase }]} />
+						: <Frost from="top" stops={frostStops(accessoryHeight, BAR_SEAM)} style={[styles.backing, { height: accessoryHeight + BAR_SEAM }]} />) : null}
 					{accessory}
 				</View>
 			) : null}
