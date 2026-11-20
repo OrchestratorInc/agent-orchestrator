@@ -1144,6 +1144,14 @@ describe("SessionInspector PR section", () => {
 
   describe("merging from the PR tab", () => {
     const ready = { ci: { autoInjectCI: true, state: "passing" as const, failingChecks: [], checks: [] }, mergeability: { state: "mergeable" as const, reasons: [], prUrl: "", conflictFiles: [] }, headSha: "head-7" };
+    it("keeps the merge button with the tabs, out of the title's way, so it stays in reach down the page", async () => {
+      servePRTab(prSummary(7, "open", { url: "https://example.com/pr/7", ...ready }));
+      const pane = within(await screen.findByTestId("pr-tab-pane"));
+      const button = await pane.findByTestId("pr-action-button");
+      expect(pane.getByRole("tablist").parentElement).toContainElement(button);
+      expect(pane.getByRole("heading", { level: 2 }).parentElement).not.toContainElement(button);
+    });
+
     it("merges from the tab's header, so the sidebar can stay closed", async () => {
       servePRTab(prSummary(7, "open", { url: "https://example.com/pr/7", ...ready }));
       const pane = within(await screen.findByTestId("pr-tab-pane"));
@@ -1167,6 +1175,20 @@ describe("SessionInspector PR section", () => {
     ] as [Partial<SessionPRSummary>, string][])("names what is blocking the merge: %#", async (facts, label) => {
       servePRTab(prSummary(7, "open", { url: "https://example.com/pr/7", ...facts }));
       expect(within(await screen.findByTestId("pr-tab-side")).getByText(label)).toBeInTheDocument();
+    });
+
+    it("folds the status into one line under the title, which opens the full box", async () => {
+      servePRTab(prSummary(7, "open", { url: "https://example.com/pr/7", ci: { autoInjectCI: true, state: "failing", failingChecks: [], checks: [{ name: "lint", status: "failed" }, { name: "unit", status: "failed" }, { name: "build", status: "passed" }] } }));
+      const line = await screen.findByTestId("pr-tab-side-summary");
+      expect(line).toHaveTextContent("2 checks failing");
+      expect(line).toHaveTextContent("Checks 1/3");
+      expect(line).toHaveAttribute("aria-expanded", "false");
+      const box = document.getElementById(line.getAttribute("aria-controls") ?? "");
+      expect(box).toBe(screen.getByTestId("pr-tab-side"));
+      expect(box).toHaveClass("hidden");
+      await userEvent.click(line);
+      expect(line).toHaveAttribute("aria-expanded", "true");
+      expect(box).not.toHaveClass("hidden");
     });
 
     it("counts passed checks beside their label, leaving skipped ones out", async () => {
@@ -1354,7 +1376,8 @@ describe("SessionInspector PR section", () => {
     const side = within(await screen.findByTestId("pr-tab-side"));
     // A later comment keeps linus's approval; the author's own comment isn't a review.
     const reviewers = within(side.getByRole("list", { name: "Reviewers" })).getAllByRole("listitem");
-    expect(reviewers.map((row) => row.getAttribute("title"))).toEqual(["Approved", "Review pending"]);
+    // The state is in words beside each name, not left to a tooltip.
+    expect(reviewers.map((row) => row.lastElementChild?.textContent)).toEqual(["Approved", "Review pending"]);
     expect(side.getByText("linus")).toBeInTheDocument();
     expect(side.getByText("grace")).toBeInTheDocument();
     expect(side.queryByText("ada")).not.toBeInTheDocument();
@@ -7334,6 +7357,19 @@ describe("SessionInspector branch summary", () => {
     expect(screen.getByText("Conflicts")).not.toHaveClass("text-micro");
     expect(conflicts.querySelector("[data-state='passed']")).toHaveClass("text-micro");
     expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-micro");
+  });
+
+  it("folds the card to its title row while the PR's tab is showing, which has the same facts and its own merge button", async () => {
+    const open = prSummary(7, "open", { ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [{ name: "lint", status: "passed" }] } });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")])} />, undefined, (client) => seedPRSummaries(client, [open]));
+    const focus = () => within(screen.getByTestId("pr-focus"));
+    await waitFor(() => expect(focus().getByTestId("pr-action-button")).toBeInTheDocument());
+    expect(focus().queryAllByText("feat/ns").length).toBeGreaterThan(0);
+
+    await userEvent.click(focus().getByText("Open tab"));
+    await waitFor(() => expect(focus().queryAllByText("feat/ns")).toHaveLength(0));
+    expect(focus().queryByTestId("pr-action-button")).not.toBeInTheDocument();
+    expect(focus().getByRole("button", { name: /^PR #7/ })).toBeInTheDocument();
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {

@@ -1,6 +1,6 @@
 import { CheckStateGlyph, type PRCheckState } from "@aoagents/product-ui";
-import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileText, MessageSquare } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowRight, ArrowUpRight, ChevronDown, Circle, CircleAlert, FileText, MessageSquare } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
 import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
@@ -22,6 +22,7 @@ import { prStateIcon } from "./PRPills";
 import { PRStackSection, usePRStackSection } from "./PRStack";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { TabCloseButton, TerminalTabFrame } from "./TerminalTabFrame";
+import { Pressable } from "./ui/pressable";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
@@ -155,61 +156,92 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 				: lowerBlock ? { label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) }) }
 					: prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) ? { state: "passed", label: t("pr.card.readyToMerge") }
 						: { ...(blockReason ? blockMark[blockReason] : undefined), label: blockReason === "checks" && failedChecks(checks) > 0 ? t("pr.blocker.checksFailing", { count: failedChecks(checks) }) : t(blockReason ? blockReasonLabel[blockReason] : "pr.card.mergeBlocked") };
+	// Narrow, the box sat between the title and the description; folded, it is
+	// one line of what decides the merge, and opens to the full box.
+	const [open, setOpen] = useState(false);
+	const groupsId = useId();
+	const summary = [
+		merge ? (
+			<span className="inline-flex min-w-0 items-center gap-1.5" key="merge">
+				{merge.state ? <SideMark className={merge.className} state={merge.state} /> : <CircleAlert aria-hidden="true" className={cn(markClass, "text-warning")} />}
+				<span className="truncate text-foreground">{merge.label}</span>
+			</span>
+		) : null,
+		checksNote ? <span className="shrink-0" key="checks">{t("pr.tab.checks")} <span className="tabular-nums">{checksNote.text}</span></span> : null,
+		reviewers.length > 0 ? (
+			<span className="inline-flex shrink-0 items-center gap-1.5" key="reviewers">
+				{t("pr.tab.reviewers")}
+				<span className="flex -space-x-1">{reviewers.slice(0, 3).map((reviewer) => <PRAvatar bot={reviewer.bot} key={reviewer.login} name={reviewer.login} size="sm" />)}</span>
+			</span>
+		) : null,
+		stackSection ? <span className="shrink-0" key="stack">{stackSection.label}</span> : null,
+	].filter(Boolean);
 	const stackGroup = stackSection ? (
 		<SideGroup label={stackSection.label}>
 			<PRStackSection hostId={hostId} pr={pr} section={stackSection} session={session} />
 		</SideGroup>
 	) : null;
 	return (
-		<aside aria-label={t("pr.tab.status")} className="mb-3 flex min-w-0 flex-col rounded-xl border border-border/60 @3xl:absolute @3xl:top-6 @3xl:right-6 @3xl:mb-0 @3xl:w-[220px] @3xl:rounded-none @3xl:border-0" data-testid="pr-tab-side">
-			{stack?.stack ? stackGroup : null}
-			<SideGroup label={t("pr.tab.reviewers")}>
-				{reviewers.length > 0 ? (
-					<ul aria-label={t("pr.tab.reviewers")} className={sideListClass}>
-						{reviewers.map((reviewer) => {
-							const mark = reviewerMark[reviewer.status];
-							return (
-								<li className={sideRowClass} key={reviewer.login} title={t(mark.label)}>
-									<SideMark className={mark.className} state={mark.state} />
-									<PRAvatar bot={reviewer.bot} name={reviewer.login} size="sm" />
-									<span className="min-w-0 truncate">{reviewer.login}</span>
-									<span className="sr-only">{t(mark.label)}</span>
-								</li>
-							);
-						})}
-					</ul>
-				) : loaded ? <SideEmpty>{t("pr.tab.noReviewers")}</SideEmpty> : detailsFailed ? <SideEmpty>{t("pr.description.unavailable")}</SideEmpty> : <SideLoading />}
-			</SideGroup>
-			<SideGroup label={t("pr.tab.checks")} note={checksNote}>
-				{checks.length > 0 ? (
-					<ul aria-label={t("pr.tab.checks")} className={sideListClass}>
-						{checks.slice(0, PR_TAB_CHECKS_SHOWN).map((check) => {
-							const tone = checkTone[check.status];
-							return (
-								<li className={sideRowClass} key={check.name}>
-									<CheckStateGlyph size="sm" state={tone.key} />
-									{check.url ? <AppLink className={sideLinkClass} href={check.url} noHoverPreview rel="noopener noreferrer" target="_blank">{check.name}</AppLink> : <span className="min-w-0 truncate">{check.name}</span>}
-									<span className="sr-only">{t(`pr.checks.status.${tone.key}`)}</span>
-								</li>
-							);
-						})}
-						{hiddenChecks > 0 ? (
-							<li className={cn(sideRowClass, "pl-6 text-muted-foreground")}>
-								{checksUrl ? <AppLink className={sideLinkClass} href={checksUrl} noHoverPreview rel="noopener noreferrer" target="_blank">{t("pr.checks.more", { count: hiddenChecks })}</AppLink> : t("pr.checks.more", { count: hiddenChecks })}
-							</li>
-						) : null}
-					</ul>
-				) : loaded ? <SideEmpty>{t("pr.tab.noChecks")}</SideEmpty> : detailsFailed ? <SideEmpty>{t("pr.description.unavailable")}</SideEmpty> : <SideLoading />}
-			</SideGroup>
-			{merge ? (
-				<SideGroup>
-					<span className={sideRowClass}>
-						{merge.state ? <SideMark className={merge.className} state={merge.state} /> : <CircleAlert aria-hidden="true" className={cn(markClass, "text-warning")} />}
-						<span className="min-w-0 truncate" title={merge.label}>{merge.label}</span>
+		<aside aria-label={t("pr.tab.status")} className="mb-3 flex min-w-0 flex-col rounded-xl border border-border/60 @3xl:absolute @3xl:top-6 @3xl:right-6 @3xl:mb-0 @3xl:w-[220px] @3xl:rounded-none @3xl:border-0" data-testid="pr-tab-status">
+			{summary.length > 0 ? (
+				<Pressable aria-controls={groupsId} aria-expanded={open} className="flex min-h-9 min-w-0 items-center gap-2 rounded-xl px-3.5 text-control text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 @3xl:hidden" data-testid="pr-tab-side-summary" onClick={() => setOpen((value) => !value)}>
+					<span className="flex min-w-0 flex-1 items-center gap-x-2 overflow-hidden whitespace-nowrap">
+						{summary.flatMap((part, index) => index === 0 ? [part] : [<span aria-hidden="true" className="shrink-0 text-passive" key={`dot-${index}`}>·</span>, part])}
 					</span>
-				</SideGroup>
+					<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-180")} />
+				</Pressable>
 			) : null}
-			{stack?.stack ? null : stackGroup}
+			<div className={cn("min-w-0 flex-col @3xl:flex", open || summary.length === 0 ? "flex" : "hidden", summary.length > 0 && "border-t border-border/60 @3xl:border-t-0")} data-testid="pr-tab-side" id={groupsId}>
+				{stack?.stack ? stackGroup : null}
+				<SideGroup label={t("pr.tab.reviewers")}>
+					{reviewers.length > 0 ? (
+						<ul aria-label={t("pr.tab.reviewers")} className={sideListClass}>
+							{reviewers.map((reviewer) => {
+								const mark = reviewerMark[reviewer.status];
+								return (
+									<li className={sideRowClass} key={reviewer.login}>
+										<SideMark className={mark.className} state={mark.state} />
+										<PRAvatar bot={reviewer.bot} name={reviewer.login} size="sm" />
+										<span className="min-w-0 truncate" title={reviewer.login}>{reviewer.login}</span>
+										{/* A mark alone left "commented" to a tooltip: the state is in words. */}
+										<span className="shrink-0 text-passive">{t(mark.label)}</span>
+									</li>
+								);
+							})}
+						</ul>
+					) : loaded ? <SideEmpty>{t("pr.tab.noReviewers")}</SideEmpty> : detailsFailed ? <SideEmpty>{t("pr.description.unavailable")}</SideEmpty> : <SideLoading />}
+				</SideGroup>
+				<SideGroup label={t("pr.tab.checks")} note={checksNote}>
+					{checks.length > 0 ? (
+						<ul aria-label={t("pr.tab.checks")} className={sideListClass}>
+							{checks.slice(0, PR_TAB_CHECKS_SHOWN).map((check) => {
+								const tone = checkTone[check.status];
+								return (
+									<li className={sideRowClass} key={check.name}>
+										<CheckStateGlyph size="sm" state={tone.key} />
+										{check.url ? <AppLink className={sideLinkClass} href={check.url} noHoverPreview rel="noopener noreferrer" target="_blank">{check.name}</AppLink> : <span className="min-w-0 truncate">{check.name}</span>}
+										<span className="sr-only">{t(`pr.checks.status.${tone.key}`)}</span>
+									</li>
+								);
+							})}
+							{hiddenChecks > 0 ? (
+								<li className={cn(sideRowClass, "pl-6 text-muted-foreground")}>
+									{checksUrl ? <AppLink className={sideLinkClass} href={checksUrl} noHoverPreview rel="noopener noreferrer" target="_blank">{t("pr.checks.more", { count: hiddenChecks })}</AppLink> : t("pr.checks.more", { count: hiddenChecks })}
+								</li>
+							) : null}
+						</ul>
+					) : loaded ? <SideEmpty>{t("pr.tab.noChecks")}</SideEmpty> : detailsFailed ? <SideEmpty>{t("pr.description.unavailable")}</SideEmpty> : <SideLoading />}
+				</SideGroup>
+				{merge ? (
+					<SideGroup>
+						<span className={sideRowClass}>
+							{merge.state ? <SideMark className={merge.className} state={merge.state} /> : <CircleAlert aria-hidden="true" className={cn(markClass, "text-warning")} />}
+							<span className="min-w-0 truncate" title={merge.label}>{merge.label}</span>
+						</span>
+					</SideGroup>
+				) : null}
+				{stack?.stack ? null : stackGroup}
+			</div>
 		</aside>
 	);
 }
@@ -256,6 +288,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const stripRef = useRef<HTMLDivElement>(null);
 	const bodyRef = useRef<HTMLDivElement>(null);
+	const [stuck, setStuck] = useState(false);
 	const requestKey = request?.key;
 	const requestSection = request?.section;
 	useEffect(() => {
@@ -275,6 +308,8 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 		const clip = () => {
 			const under = strip.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
 			body.style.clipPath = under > 0 ? `inset(${under}px 0 0 0)` : "";
+			// Stuck: the tabs sit at the pane's top, so the header above them is out of view.
+			setStuck(scroller.scrollTop > 0 && strip.getBoundingClientRect().top - scroller.getBoundingClientRect().top < 1);
 		};
 		clip();
 		scroller.addEventListener("scroll", clip, { passive: true });
@@ -304,6 +339,9 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 		);
 	}
 	const comments = prCommentCount(pr);
+	const action = (pr.state === "open" || pr.state === "draft") && !session.cloud
+		? <PRActionButton canMerge={prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) && Boolean(pr.url && pr.headSha)} hostId={hostId} pr={pr} sessionId={session.id} />
+		: null;
 
 	return (
 		<section aria-label={t("pr.tab.label", { number: pr.number })} className="@container h-full min-h-0 bg-background" data-testid="pr-tab-pane">
@@ -318,14 +356,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 								<span className="hidden @md:inline">{t("pr.comments.openOnProvider")}</span>
 							</ProductExternalLink>
 						</div>
-						<div className="flex min-w-0 flex-col items-start gap-2.5 @xl:flex-row @xl:gap-4">
-							<h2 className="m-0 min-w-0 flex-1 text-heading font-medium leading-tight text-foreground [overflow-wrap:anywhere]">{pr.title}</h2>
-							{(pr.state === "open" || pr.state === "draft") && !session.cloud ? (
-								<div className="max-w-full shrink-0">
-									<PRActionButton canMerge={prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) && Boolean(pr.url && pr.headSha)} hostId={hostId} pr={pr} sessionId={session.id} />
-								</div>
-							) : null}
-						</div>
+						<h2 className="m-0 min-w-0 text-heading font-medium leading-tight text-foreground [overflow-wrap:anywhere]">{pr.title}</h2>
 						<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-control text-muted-foreground">
 							<PRAuthor pr={pr} />
 							{pr.createdAt ? <span className="shrink-0" title={pr.createdAt}>{formatTimeCompact(pr.createdAt, { longUnits: true })}</span> : null}
@@ -339,8 +370,10 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 						</div>
 					</header>
 					<PRTabSide detailsFailed={detailsFailed} hostId={hostId} pr={pr} session={session} />
-					<div className="sticky top-0 z-10 border-b border-border bg-background" ref={stripRef}>
-						<TabsList aria-label={t("pr.tab.label", { number: pr.number })} className="flex h-auto w-full justify-start gap-5 rounded-none bg-transparent p-0">
+					{/* The merge button rides with the tabs, so it stays in reach down a long
+					    description; once the header has scrolled away, the title joins them. */}
+					<div className="sticky top-0 z-10 flex min-w-0 flex-wrap items-stretch gap-x-4 border-b border-border bg-background" data-stuck={stuck ? "true" : undefined} ref={stripRef}>
+						<TabsList aria-label={t("pr.tab.label", { number: pr.number })} className="flex h-auto shrink-0 justify-start gap-5 rounded-none bg-transparent p-0">
 							<TabsTrigger className={tabClass} value="summary">
 								<FileText aria-hidden="true" className="size-icon-sm" />
 								{t("pr.tab.summary")}
@@ -351,6 +384,8 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 								{comments > 0 ? <span className="rounded-full bg-muted px-1.5 text-micro font-medium tabular-nums text-muted-foreground">{comments}</span> : null}
 							</TabsTrigger>
 						</TabsList>
+						<span aria-hidden="true" className={cn("hidden min-w-0 flex-1 self-center truncate text-control text-muted-foreground transition-opacity duration-150 motion-reduce:transition-none @2xl:block", stuck ? "opacity-100" : "opacity-0")} data-testid="pr-tab-strip-title">{pr.title}</span>
+						{action ? <div className="ml-auto max-w-full shrink-0 self-center py-1">{action}</div> : null}
 					</div>
 					<div className="min-w-0 py-5" ref={bodyRef}>
 						<TabsContent className="min-w-0 data-[state=inactive]:hidden" forceMount value="summary">
