@@ -322,6 +322,24 @@ describe("Codex subagents", () => {
 		expect(agent.steps.map((item) => item.id)).toEqual(["c1"]);
 	});
 
+	it("reads the latest hand-back when the child took another turn", () => {
+		const first = handback("h1", "call-c", "Build passes.", at(5));
+		const failed = { ...handback("h2", "call-c", "tests timed out", at(9)), status: "failed" as const };
+		const agent = readSubagent(codexLaunch("c"), [first, step("c2", "call-c", { createdAt: at(7) }), failed], false);
+		expect(agent).toMatchObject({ state: "failed", error: "tests timed out" });
+		expect(agent.steps.map((item) => item.id)).toEqual(["h1", "c2"]);
+	});
+
+	it("is working again once the child starts another turn after reporting", () => {
+		const agent = readSubagent(
+			codexLaunch("c"),
+			[handback("h1", "call-c", "Build passes.", at(5)), step("c2", "call-c", { status: "running", createdAt: at(7) })],
+			false,
+		);
+		expect(agent.state).toBe("working");
+		expect(agent.report).toBeUndefined();
+	});
+
 	it("reports a child whose turn failed or was stopped", () => {
 		const failed = { ...handback("h", "call-c", "context window exceeded"), status: "failed" as const };
 		expect(readSubagent(codexLaunch("c"), [failed], true)).toMatchObject({ state: "failed", error: "context window exceeded" });

@@ -86,9 +86,13 @@ type subagentRouter struct {
 	inflight map[string]struct{}
 	// launchOf maps a child thread to the spawn call that started it.
 	launchOf map[string]string
-	// turnOf maps a spawn call to the root provider turn it belongs to, so a
-	// child's steps join the parent's turn instead of a turn AO never opened.
-	turnOf map[string]string
+	// origin is where each spawn call was made: its thread and native turn. The
+	// root turn a launch belongs to is read from it when routing (rootTurnOf), so a
+	// nested launch still joins the root turn when its own thread is placed only
+	// after the nested spawn completed.
+	origin map[string]launchOrigin
+	// root is the conversation's own thread, as last seen.
+	root string
 
 	// held keeps a child thread's events, in order, until its spawn names it.
 	held      map[string][]ports.ChatEvent
@@ -101,12 +105,14 @@ type subagentRouter struct {
 	lastSaid map[string]string
 }
 
+type launchOrigin struct{ thread, turn string }
+
 func newSubagentRouter(scope func(string) string) *subagentRouter {
 	return &subagentRouter{
 		scope:     scope,
 		inflight:  map[string]struct{}{},
 		launchOf:  map[string]string{},
-		turnOf:    map[string]string{},
+		origin:    map[string]launchOrigin{},
 		held:      map[string][]ports.ChatEvent{},
 		streaming: map[string]bool{},
 		lastSaid:  map[string]string{},
@@ -124,6 +130,7 @@ func (r *subagentRouter) observe(n notification, root string) {
 		TurnID   string     `json:"turnId"`
 		Item     threadItem `json:"item"`
 	}
+	r.root = root
 	if json.Unmarshal(n.Params, &p) != nil || !isSpawnAgent(p.Item) {
 		return
 	}
@@ -131,9 +138,9 @@ func (r *subagentRouter) observe(n notification, root string) {
 	if launch == "" {
 		return
 	}
-	// Read again on completion: a grandchild's launch sits on a child thread that
-	// may only have been placed in between.
-	r.turnOf[launch] = r.rootTurn(root, p.ThreadID, p.TurnID)
+	if _, known := r.origin[launch]; !known {
+		r.origin[launch] = launchOrigin{thread: p.ThreadID, turn: p.TurnID}
+	}
 	if n.Method == codexproto.MethodItemStarted {
 		r.inflight[launch] = struct{}{}
 		return
@@ -146,17 +153,26 @@ func (r *subagentRouter) observe(n notification, root string) {
 	}
 }
 
-// rootTurn is the root turn an event on thread belongs to. A grandchild's launch
-// is on a child thread, whose own turn AO never opened.
-func (r *subagentRouter) rootTurn(root, thread, turn string) string {
-	if launch, ok := r.launchOf[thread]; ok && thread != root {
-		return r.turnOf[launch]
+// rootTurnOf is the root turn a launch belongs to. A grandchild's launch is on a
+// child thread, whose own turn AO never opened, so it takes its ancestor's.
+func (r *subagentRouter) rootTurnOf(launch string) string {
+	seen := map[string]bool{}
+	for !seen[launch] {
+		seen[launch] = true
+		from := r.origin[launch]
+		parent, nested := r.launchOf[from.thread]
+		if !nested || from.thread == r.root {
+			return from.turn
+		}
+		launch = parent
 	}
-	return turn
+	// A malformed chain that loops back: keep the turn the launch named itself.
+	return r.origin[launch].turn
 }
 
 // route returns what to emit for one event from thread.
 func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.ChatEvent {
+	r.root = root
 	if thread == "" || thread == root {
 		return []ports.ChatEvent{ev}
 	}
@@ -226,7 +242,7 @@ func (r *subagentRouter) flush() []ports.ChatEvent {
 func (r *subagentRouter) adopt(thread string, ev ports.ChatEvent) []ports.ChatEvent {
 	launch := r.launchOf[thread]
 	parent := r.scope(launch)
-	turn := r.turnOf[launch]
+	turn := r.rootTurnOf(launch)
 	childTurn := ev.ProviderTurnID
 	if turn != "" && isChildStep(ev.Kind) {
 		// A step joins the parent's turn. Everything else keeps the child's native

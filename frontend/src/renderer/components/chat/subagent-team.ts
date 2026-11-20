@@ -145,12 +145,16 @@ export function readSubagent(
 ): Subagent {
 	const input = launchInput(launch);
 	// The steps carry the whole chain under this launch, so an inner child's hand-back
-	// is among them. Only the one addressed to this launch is its report; the rest are
-	// steps the reader can open like any other.
-	const handback = allSteps.find(
-		(step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId,
-	);
+	// is among them. Only one addressed to this launch is its report, and a child that
+	// took another turn (a Codex follow-up) reports once per turn, so the latest one
+	// stands. The rest are steps the reader can open like any other.
+	const handback = allSteps
+		.filter((step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId)
+		.at(-1);
 	const steps = allSteps.filter((step) => step !== handback);
+	// Work the child began after its latest report means it is on another turn.
+	const resumed = handback !== undefined &&
+		allSteps.slice(allSteps.indexOf(handback) + 1).some((step) => step.status === "running" || step.status === "pending");
 	const result = launchResultText(launch);
 	// A background launch settles as soon as the child starts. Codex's driver says so
 	// in the detail; Claude says it in the result note.
@@ -170,6 +174,7 @@ export function readSubagent(
 		return { ...base, state: "failed", error: firstParagraph(result), endedAt: lastStepAt };
 	}
 	if (launch.status === "cancelled") return { ...base, state: "stopped", endedAt: lastStepAt };
+	if (resumed && !stopped) return { ...base, state: "working" };
 	if (handback?.status === "failed") {
 		return { ...base, state: "failed", error: stringOf(launchInput(handback).message), endedAt: timeOf(handback.createdAt) };
 	}

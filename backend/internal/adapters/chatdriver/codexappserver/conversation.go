@@ -234,7 +234,11 @@ func (c *conversation) pump() {
 					retry.Kind = ports.ChatEventActivityCompleted
 					retry.ActivityStatus = domain.ActivityStatusCompleted
 					if !completed || (ev.TurnState != domain.TurnStateFailed && ev.Err == nil) {
-						c.emit(retry)
+						// Routed like its start, which a child thread's router may
+						// still hold: the completion must follow it, under the launch.
+						for _, routed := range subagents.route(c.threadID, threadID, retry) {
+							c.emit(routed)
+						}
 					}
 					delete(retries, key)
 				}

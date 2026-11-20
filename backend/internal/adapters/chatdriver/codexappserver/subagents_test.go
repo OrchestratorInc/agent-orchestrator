@@ -155,7 +155,7 @@ func TestSubagentRouterLeavesUnclaimedThreadsAlone(t *testing.T) {
 func TestSubagentHandbackCarriesAFailure(t *testing.T) {
 	r := newSubagentRouter(func(id string) string { return "scoped:" + id })
 	r.launchOf["child-1"] = "call-spawn"
-	r.turnOf["call-spawn"] = "root-turn"
+	r.origin["call-spawn"] = launchOrigin{thread: "thread-1", turn: "root-turn"}
 	out := r.route("thread-1", "child-1", ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "child-turn", ProviderConversationID: "child-1",
 		TurnState: domain.TurnStateFailed, Err: errors.New("context window exceeded"),
@@ -168,5 +168,64 @@ func TestSubagentHandbackCarriesAFailure(t *testing.T) {
 	if handback.ActivityStatus != domain.ActivityStatusFailed || detail.ParentProviderItemID != "scoped:call-spawn" ||
 		detail.Input["message"] != "context window exceeded" {
 		t.Fatalf("hand-back = %+v detail %s", handback, handback.Detail)
+	}
+}
+
+// A retry on a child thread starts while the router still holds that thread. Its
+// completion must come out after the start and under the launch, not ahead of it
+// on the child's own turn, or the row stays running.
+func TestChildRetryCompletionFollowsItsHeldStart(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"root-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":` + spawnStartedParams + `}`)
+	srv.push(`{"method":"error","params":{"threadId":"child-1","turnId":"child-turn","willRetry":true,"error":{"message":"stream disconnected","codexErrorInfo":null,"additionalDetails":null}}}`)
+	srv.push(`{"method":"item/started","params":{"threadId":"child-1","turnId":"child-turn","item":{"type":"commandExecution","id":"child-cmd","command":"ls","status":"inProgress"}}}`)
+	srv.push(`{"method":"item/completed","params":` + spawnCompletedParams + `}`)
+
+	var retries []ports.ChatEvent
+	deadline := time.After(3 * time.Second)
+	for len(retries) < 2 {
+		select {
+		case ev := <-conv.Events():
+			if strings.HasPrefix(ev.ProviderItemID, "codex-retry:child-1") {
+				retries = append(retries, ev)
+			}
+		case <-deadline:
+			t.Fatalf("retry events = %+v", retries)
+		}
+	}
+	if retries[0].Kind != ports.ChatEventActivityStarted || retries[1].Kind != ports.ChatEventActivityCompleted {
+		t.Fatalf("retry order = %s then %s", retries[0].Kind, retries[1].Kind)
+	}
+	for _, ev := range retries {
+		if ev.ProviderTurnID != "root-turn" || decodeDetail(t, ev).ParentProviderItemID != "call-spawn" {
+			t.Fatalf("retry event not under its launch: %+v detail %s", ev, ev.Detail)
+		}
+	}
+}
+
+// A nested spawn can start and finish on a child thread before the outer spawn
+// names that thread. The grandchild's steps still join the root turn.
+func TestNestedLaunchJoinsRootTurnWhenItsThreadIsPlacedLater(t *testing.T) {
+	r := newSubagentRouter(func(id string) string { return id })
+	observe := func(method, params string) {
+		r.observe(notification{Method: method, Params: json.RawMessage(params)}, "thread-1")
+	}
+	observe("item/started", spawnStartedParams)
+	observe("item/started", `{"threadId":"child-1","turnId":"child-turn","item":{"type":"collabAgentToolCall","id":"call-inner","tool":"spawnAgent","status":"inProgress","receiverThreadIds":[]}}`)
+	observe("item/completed", `{"threadId":"child-1","turnId":"child-turn","item":{"type":"collabAgentToolCall","id":"call-inner","tool":"spawnAgent","status":"completed","receiverThreadIds":["grandchild-1"]}}`)
+	observe("item/completed", spawnCompletedParams)
+
+	out := r.route("thread-1", "grandchild-1", ports.ChatEvent{
+		Kind: ports.ChatEventActivityStarted, ProviderTurnID: "grandchild-turn", ProviderItemID: "gc-cmd",
+	})
+	if len(out) != 1 || out[0].ProviderTurnID != "root-turn" || decodeDetail(t, out[0]).ParentProviderItemID != "call-inner" {
+		t.Fatalf("grandchild step = %+v", out)
 	}
 }
