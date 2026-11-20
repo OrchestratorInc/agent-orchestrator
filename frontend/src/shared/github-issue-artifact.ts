@@ -1,5 +1,7 @@
 export type GitHubIssueChoice = { number: number; title: string };
 
+export type GitHubIssueArtifactResult = { status: "created" | "unconfirmed"; url: string };
+
 export type GitHubIssueArtifact = {
 	repository: string;
 	issue: number;

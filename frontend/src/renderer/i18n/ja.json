@@ -1,6 +1,9 @@
 {
 	"issueArtifact.add": "GitHub Issue に追加",
 	"issueArtifact.addLatest": "最新版を GitHub Issue に追加",
+	"issueArtifact.unconfirmed": "アップロードを確認できませんでした",
+	"issueArtifact.checkBeforeRetry": "GitHub にアーティファクトが保存されている可能性があります。重複を避けるため、再試行する前に Issue を確認してください。",
+	"issueArtifact.openIssue": "Issue を開く",
 	"issueArtifact.added": "GitHub Issue に追加しました",
 	"issueArtifact.view": "GitHub で表示",
 	"issueArtifact.copy": "選択した Issue に {{name}} のコピーを追加します。",

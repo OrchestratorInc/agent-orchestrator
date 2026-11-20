@@ -1,4 +1,4 @@
-import type { GitHubIssueArtifact, GitHubIssueChoice } from "./shared/github-issue-artifact";
+import type { GitHubIssueArtifact, GitHubIssueArtifactResult, GitHubIssueChoice } from "./shared/github-issue-artifact";
 import type { TriageResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
@@ -303,7 +303,7 @@ const api = {
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
 		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
 		findArtifactIssues: (repo: string, query: string) => ipcRenderer.invoke("app:findArtifactIssues", repo, query) as Promise<GitHubIssueChoice[]>,
-		publishIssueArtifact: (input: GitHubIssueArtifact) => ipcRenderer.invoke("app:publishIssueArtifact", input) as Promise<string>,
+		publishIssueArtifact: (input: GitHubIssueArtifact) => ipcRenderer.invoke("app:publishIssueArtifact", input) as Promise<GitHubIssueArtifactResult>,
 		listGitHubRepos: (query: string) =>
 			ipcRenderer.invoke("app:listGitHubRepos", query) as Promise<Array<{ fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string }>>,
 		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,

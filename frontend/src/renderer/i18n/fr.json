@@ -1,6 +1,9 @@
 {
 	"issueArtifact.add": "Ajouter à un ticket GitHub",
 	"issueArtifact.addLatest": "Ajouter la dernière version à un ticket GitHub",
+	"issueArtifact.unconfirmed": "Envoi non confirmé",
+	"issueArtifact.checkBeforeRetry": "GitHub a peut-être enregistré l’artefact. Vérifiez le ticket avant de réessayer pour éviter un doublon.",
+	"issueArtifact.openIssue": "Ouvrir le ticket",
 	"issueArtifact.added": "Ajouté au ticket GitHub",
 	"issueArtifact.view": "Voir sur GitHub",
 	"issueArtifact.copy": "Ajoutez une copie de {{name}} au ticket sélectionné.",

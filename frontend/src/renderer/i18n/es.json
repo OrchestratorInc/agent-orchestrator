@@ -1,6 +1,9 @@
 {
 	"issueArtifact.add": "Añadir a una incidencia de GitHub",
 	"issueArtifact.addLatest": "Añadir la última versión a una incidencia de GitHub",
+	"issueArtifact.unconfirmed": "Carga sin confirmar",
+	"issueArtifact.checkBeforeRetry": "Es posible que GitHub haya guardado el artefacto. Revisa la incidencia antes de volver a intentarlo para evitar duplicados.",
+	"issueArtifact.openIssue": "Abrir incidencia",
 	"issueArtifact.added": "Añadido a la incidencia de GitHub",
 	"issueArtifact.view": "Ver en GitHub",
 	"issueArtifact.copy": "Añade una copia de {{name}} a la incidencia seleccionada.",

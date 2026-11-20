@@ -1,6 +1,9 @@
 {
 	"issueArtifact.add": "GitHub kaydına ekle",
 	"issueArtifact.addLatest": "En son sürümü GitHub kaydına ekle",
+	"issueArtifact.unconfirmed": "Yükleme doğrulanamadı",
+	"issueArtifact.checkBeforeRetry": "GitHub yapıtı kaydetmiş olabilir. Yinelenen bir kopya oluşturmamak için tekrar denemeden önce kaydı kontrol edin.",
+	"issueArtifact.openIssue": "Kaydı aç",
 	"issueArtifact.added": "GitHub kaydına eklendi",
 	"issueArtifact.view": "GitHub’da görüntüle",
 	"issueArtifact.copy": "{{name}} dosyasının bir kopyasını seçilen kayda ekleyin.",

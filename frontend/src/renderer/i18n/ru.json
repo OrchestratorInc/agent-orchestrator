@@ -1,6 +1,9 @@
 {
 	"issueArtifact.add": "Добавить в задачу GitHub",
 	"issueArtifact.addLatest": "Добавить последнюю версию в задачу GitHub",
+	"issueArtifact.unconfirmed": "Загрузка не подтверждена",
+	"issueArtifact.checkBeforeRetry": "Возможно, GitHub сохранил артефакт. Проверьте задачу перед повторной попыткой, чтобы избежать дубликата.",
+	"issueArtifact.openIssue": "Открыть задачу",
 	"issueArtifact.added": "Добавлено в задачу GitHub",
 	"issueArtifact.view": "Открыть на GitHub",
 	"issueArtifact.copy": "Добавьте копию {{name}} в выбранную задачу.",

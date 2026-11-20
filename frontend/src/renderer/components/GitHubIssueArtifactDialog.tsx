@@ -55,10 +55,12 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose, returnFo
 	const add = useMutation({
 		mutationFn: async () => {
 			if (!repo || !selected) throw new Error(t("issueArtifact.selectIssue"));
-			return aoBridge.app.publishIssueArtifact({ repository: repo, issue: selected.number, name, body: await readContent() });
+			const result = await aoBridge.app.publishIssueArtifact({ repository: repo, issue: selected.number, name, body: await readContent() });
+			return { ...result, destination: `${repo}#${selected.number} · ${selected.title}` };
 		},
 		retry: false,
 	});
+	const unconfirmed = add.data?.status === "unconfirmed";
 	const chooseRepo = (value: string) => {
 		if (parseIssueLink(value)) {
 			editIssue(value);
@@ -92,10 +94,16 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose, returnFo
 				event.preventDefault();
 				returnFocus.focus();
 			}}>
-				<DialogTitle>{add.isSuccess ? t("issueArtifact.added") : actionLabel ?? t("issueArtifact.add")}</DialogTitle>
-				<DialogDescription>{add.isSuccess ? `${repo}#${selected?.number} · ${selected?.title}` : t("issueArtifact.copy", { name })}</DialogDescription>
+				<DialogTitle>{add.isSuccess ? t(unconfirmed ? "issueArtifact.unconfirmed" : "issueArtifact.added") : actionLabel ?? t("issueArtifact.add")}</DialogTitle>
+				<DialogDescription>{add.isSuccess ? add.data.destination : t("issueArtifact.copy", { name })}</DialogDescription>
 				{add.isSuccess ? (
-					<Button onClick={() => void aoBridge.app.openExternal(add.data)}>{t("issueArtifact.view")}</Button>
+					<>
+						{unconfirmed && <p role="status">{t("issueArtifact.checkBeforeRetry")}</p>}
+						<div className="flex justify-end gap-2">
+							{unconfirmed && <Button variant="outline" onClick={() => add.reset()}>{t("share.back")}</Button>}
+							<Button onClick={() => void aoBridge.app.openExternal(add.data.url)}>{t(unconfirmed ? "issueArtifact.openIssue" : "issueArtifact.view")}</Button>
+						</div>
+					</>
 				) : <>
 					<div className="space-y-1">
 						<label htmlFor="cloneRepositoryUrl">{t("issueArtifact.repo")}</label>

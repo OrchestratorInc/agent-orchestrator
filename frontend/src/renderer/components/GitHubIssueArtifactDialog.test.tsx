@@ -13,7 +13,7 @@ vi.mock("./GitHubRepoPicker", () => ({
 it("clears the old destination and posts the full saved file only after confirmation", async () => {
 	const user = userEvent.setup();
 	const find = vi.spyOn(aoBridge.app, "findArtifactIssues").mockImplementation(async repo => [{ number: 42, title: repo }]);
-	const publish = vi.spyOn(aoBridge.app, "publishIssueArtifact").mockResolvedValue("https://github.com/team/second/issues/42/artifacts/1");
+	const publish = vi.spyOn(aoBridge.app, "publishIssueArtifact").mockResolvedValue({ status: "created", url: "https://github.com/team/second/issues/42/artifacts/1" });
 	const content = "# Notes\n" + "x".repeat(300_000);
 	const read = vi.fn(async () => content);
 	render(<QueryClientProvider client={new QueryClient()}><GitHubIssueArtifactDialog name="notes.md" readContent={read} onClose={() => {}} /></QueryClientProvider>);
@@ -69,4 +69,26 @@ it("offers another search or a direct link when there are no matches", async () 
 	expect(await screen.findByText("Try another title, enter an issue number, or paste its GitHub link.")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Add to issue" })).toBeDisabled();
 	find.mockRestore();
+});
+
+it("opens the selected issue after an unconfirmed upload without resubmitting", async () => {
+	const user = userEvent.setup();
+	const url = "https://github.com/team/first/issues/42";
+	const find = vi.spyOn(aoBridge.app, "findArtifactIssues").mockResolvedValue([{ number: 42, title: "Notes" }]);
+	const publish = vi.spyOn(aoBridge.app, "publishIssueArtifact").mockResolvedValue({ status: "unconfirmed", url });
+	const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+	render(<QueryClientProvider client={new QueryClient()}><GitHubIssueArtifactDialog name="notes.md" readContent={async () => "# Notes"} onClose={() => {}} /></QueryClientProvider>);
+	await user.click(screen.getByLabelText("Issue"));
+	await user.paste(url);
+	await screen.findByRole("link", { name: /#42.*Notes/ });
+	await user.click(screen.getByRole("button", { name: "Add to issue #42" }));
+	expect(await screen.findByRole("status")).toHaveTextContent("GitHub may have saved the artifact");
+	await user.click(screen.getByRole("button", { name: "Open issue" }));
+	expect(open).toHaveBeenCalledWith(url);
+	await user.click(screen.getByRole("button", { name: "Back" }));
+	expect(screen.getByRole("button", { name: "Add to issue #42" })).toBeEnabled();
+	expect(publish).toHaveBeenCalledTimes(1);
+	find.mockRestore();
+	publish.mockRestore();
+	open.mockRestore();
 });

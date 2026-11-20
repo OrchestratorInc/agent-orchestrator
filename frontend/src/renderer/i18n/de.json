@@ -1,6 +1,9 @@
 {
 	"issueArtifact.add": "Zu GitHub-Issue hinzufügen",
 	"issueArtifact.addLatest": "Neueste Version zum GitHub-Issue hinzufügen",
+	"issueArtifact.unconfirmed": "Upload unbestätigt",
+	"issueArtifact.checkBeforeRetry": "GitHub hat das Artefakt möglicherweise gespeichert. Prüfe das Issue vor einem erneuten Versuch, um ein Duplikat zu vermeiden.",
+	"issueArtifact.openIssue": "Issue öffnen",
 	"issueArtifact.added": "Zum GitHub-Issue hinzugefügt",
 	"issueArtifact.view": "Auf GitHub ansehen",
 	"issueArtifact.copy": "Eine Kopie von {{name}} zum ausgewählten Issue hinzufügen.",

@@ -1,6 +1,9 @@
 {
 	"issueArtifact.add": "GitHub 이슈에 추가",
 	"issueArtifact.addLatest": "최신 버전을 GitHub 이슈에 추가",
+	"issueArtifact.unconfirmed": "업로드 확인 불가",
+	"issueArtifact.checkBeforeRetry": "GitHub에 아티팩트가 저장되었을 수 있습니다. 중복을 방지하려면 다시 시도하기 전에 이슈를 확인하세요.",
+	"issueArtifact.openIssue": "이슈 열기",
 	"issueArtifact.added": "GitHub 이슈에 추가됨",
 	"issueArtifact.view": "GitHub에서 보기",
 	"issueArtifact.copy": "선택한 이슈에 {{name}}의 사본을 추가합니다.",

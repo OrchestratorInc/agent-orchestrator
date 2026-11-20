@@ -6,10 +6,10 @@ import { findArtifactIssues, publishIssueArtifact } from "./github-issue-artifac
 const exec = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ execFile: exec }));
 
-function reply(stdout: string) {
+function reply(stdout: string, error: Error | null = null, stderr = "") {
 	const stdin = Object.assign(new EventEmitter(), { end: vi.fn() });
 	exec.mockImplementationOnce((_file, _args, _opts, callback) => {
-		queueMicrotask(() => callback(null, stdout, ""));
+		queueMicrotask(() => callback(error, stdout, stderr));
 		return { stdin };
 	});
 	return stdin;
@@ -19,7 +19,7 @@ const destination = { repository: "acme/web", issue: 12, body: "## Demo\n" };
 
 it.each([["report.html", "embedded_html"], ["demo.HTM", "embedded_html"], ["design.md", "generic"], ["notes.Markdown", "generic"]])("posts %s as %s using gh credentials", async (name, type) => {
 	const stdin = reply("https://github.com/acme/web/issues/12/artifacts/1\n");
-	await expect(publishIssueArtifact({ ...destination, name }, {})).resolves.toBe("https://github.com/acme/web/issues/12/artifacts/1");
+	await expect(publishIssueArtifact({ ...destination, name }, {})).resolves.toEqual({ status: "created", url: "https://github.com/acme/web/issues/12/artifacts/1" });
 	const [file, args] = exec.mock.lastCall!;
 	expect(file).toBe("gh");
 	expect(args).toContain("repos/acme/web/issues/12/artifacts");
@@ -52,4 +52,30 @@ it("strips parentheses from the posted name while preserving Markdown content", 
 	const stdin = reply("https://github.com/acme/web/issues/12/artifacts/1");
 	await publishIssueArtifact({ ...destination, name: "plan (1).md" }, {});
 	expect(JSON.parse(stdin.end.mock.calls[0]![0])).toEqual({ type: "generic", name: "plan 1.md", body: destination.body });
+});
+
+it.each([
+	[Object.assign(new Error("terminated"), { killed: true }), ""],
+	[new Error("exit 1"), "gh: Internal Server Error (HTTP 500)"],
+	[new Error("exit 1"), "Post: context deadline exceeded"],
+])("returns the original issue when GitHub may have stored the upload", async (error, stderr) => {
+	reply("", error, stderr);
+	await expect(publishIssueArtifact({ ...destination, name: "notes.md" }, {})).resolves.toEqual({
+		status: "unconfirmed", url: "https://github.com/acme/web/issues/12",
+	});
+	expect(exec.mock.lastCall?.[2].timeout).toBeGreaterThan(34_000);
+});
+
+it("reports definite GitHub rejections", async () => {
+	reply("", new Error("exit 1"), "gh: Validation Failed (HTTP 422)");
+	await expect(publishIssueArtifact({ ...destination, name: "notes.md" }, {})).rejects.toThrow("HTTP 422");
+});
+
+it("accepts the UTF-8 byte limit and rejects one extra byte before invoking gh", async () => {
+	const body = "€".repeat(16_777_215 / 3);
+	reply("https://github.com/acme/web/issues/12/artifacts/1");
+	await expect(publishIssueArtifact({ ...destination, name: "notes.md", body }, {})).resolves.toMatchObject({ status: "created" });
+	exec.mockClear();
+	await expect(publishIssueArtifact({ ...destination, name: "notes.md", body: body + "x" }, {})).rejects.toThrow("16,777,215 UTF-8 bytes");
+	expect(exec).not.toHaveBeenCalled();
 });
