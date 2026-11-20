@@ -83,11 +83,26 @@ export function describeUpdateRow(input: UpdateRowInput): UpdateRow {
 }
 
 /**
+ * Onboarding and pairing: a user here is still setting the app up, has nothing
+ * to lose by not restarting, and gets the update on the next launch anyway, so
+ * the update screen waits until they leave.
+ */
+export function isSetupRoute(pathname: string): boolean {
+	return /^\/(onboarding|pair)(\/|$)/.test(pathname);
+}
+
+/**
  * Whether a downloaded update should raise the update screen: once per update,
  * so "Not now" holds until a different update lands (or a long absence offers
- * it again through `onForeground`). An update without an id — a rollback to the
- * embedded bundle — is keyed as one stand-in update.
+ * it again through `onForeground`), and never over onboarding or pairing. An
+ * update without an id — a rollback to the embedded bundle — is keyed as one
+ * stand-in update.
  */
-export function shouldOfferUpdate(pending: boolean, updateId: string | undefined, lastOffered: string | null): boolean {
-	return pending && (updateId ?? "embedded") !== lastOffered;
+export function shouldOfferUpdate(
+	pending: boolean,
+	updateId: string | undefined,
+	lastOffered: string | null,
+	pathname = "/",
+): boolean {
+	return pending && !isSetupRoute(pathname) && (updateId ?? "embedded") !== lastOffered;
 }

@@ -149,6 +149,13 @@ describe("shouldOfferUpdate", () => {
 		expect(shouldOfferUpdate(false, "u1", null)).toBe(false);
 	});
 
+	it("waits while the user is onboarding or pairing, and offers once they leave", () => {
+		expect(shouldOfferUpdate(true, "u1", null, "/onboarding")).toBe(false);
+		expect(shouldOfferUpdate(true, "u1", null, "/pair")).toBe(false);
+		expect(shouldOfferUpdate(true, "u1", null, "/")).toBe(true);
+		expect(shouldOfferUpdate(true, "u1", null, "/session/abc")).toBe(true);
+	});
+
 	it("keys a rollback without an id as one update", () => {
 		expect(shouldOfferUpdate(true, undefined, null)).toBe(true);
 		expect(shouldOfferUpdate(true, undefined, "embedded")).toBe(false);
