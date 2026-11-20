@@ -110,6 +110,11 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	// register the phone again after its removal.
 	const pushRegistration = useRef<Promise<unknown>>(Promise.resolve());
 	const signingOut = useRef(false);
+	// Projects the phone put in the list itself, by the order they went in: a
+	// read that started before one can't know it, so it keeps those; a read that
+	// started after one answers for it, deletion included.
+	const upsertClock = useRef(0);
+	const upsertedProjects = useRef(new Map<string, { project: CloudProject; at: number }>());
 
 	const client = useMemo(() => createCloudClient({
 		baseUrl: CLOUD_API_BASE_URL,
@@ -129,6 +134,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	const reset = useCallback(() => {
 		generation.current++;
 		forgetCloudAccountCaches();
+		upsertedProjects.current.clear();
 		setMe(null);
 		setOrg(null);
 		setProjects([]);
@@ -158,6 +164,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		const current = orgRef.current;
 		const own = generation.current;
 		if (!current) return;
+		const startedAt = upsertClock.current;
 		try {
 			// The caller's standalone agents are each a project of their own, read
 			// apart from the projects so many agents can't page the projects out.
@@ -166,7 +173,12 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "only" })),
 			]);
 			if (own !== generation.current) return;
-			setProjects(mergeCloudProjectLists(listed, agents));
+			let next = mergeCloudProjectLists(listed, agents);
+			for (const [id, upsert] of upsertedProjects.current) {
+				if (upsert.at > startedAt) next = upsertCloudProject(next, upsert.project);
+				else upsertedProjects.current.delete(id);
+			}
+			setProjects(next);
 			setProjectsLoaded(true);
 			setProjectsError(null);
 		} catch (cause) {
@@ -231,6 +243,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (orgRef.current && orgRef.current.id !== nextOrg.id) {
 				own = ++generation.current;
 				forgetCloudAccountCaches();
+				upsertedProjects.current.clear();
 				setProjects([]);
 				setProjectsLoaded(false);
 				setSessions([]);
@@ -362,6 +375,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	}, []);
 
 	const upsertProject = useCallback((project: CloudProject) => {
+		upsertedProjects.current.set(project.id, { project, at: ++upsertClock.current });
 		setProjects((current) => upsertCloudProject(current, project));
 	}, []);
 

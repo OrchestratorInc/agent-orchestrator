@@ -125,6 +125,23 @@ describe("CloudProvider", () => {
 		expect(latest?.projects[1].displayName).toBe("renamed");
 	});
 
+	it("keeps a project put in the list during a read that started before it, and lets a later read drop it", async () => {
+		await mount();
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		// Both halves of a refresh are out when the agent's project goes in.
+		const finish: Array<(value: unknown) => void> = [];
+		fixtures.client.listProjects.mockImplementation(() => new Promise((resolve) => { finish.push(resolve); }));
+		const stale = latest!.refreshProjects();
+		act(() => latest!.upsertProject(agent));
+		await act(async () => { finish.forEach((resolve) => resolve(page([project("a-p", "a")]))); await stale; await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+
+		// A read that started after it answers for it: deleted meanwhile, it goes.
+		fixtures.client.listProjects.mockImplementation(async (orgId: string) => page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshProjects(); await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p"]);
+	});
+
 	it("comes back to ready when retried from an error, though it kept its organization", async () => {
 		await mount();
 		fixtures.client.getMe.mockImplementation(async () => { throw new Error("offline"); });
