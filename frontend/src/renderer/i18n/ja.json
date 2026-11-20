@@ -637,6 +637,7 @@
 	"browser.pickElement": "要素を選択",
 	"browser.pinTabs": "タブ一覧を固定",
 	"browser.popOut": "別ウィンドウで開く",
+	"browser.profile.defaultName": "個人",
 	"browser.profile.temporary": "一時的",
 	"browser.profile.label": "プロファイル",
 	"browser.profile.manage": "プロファイルを管理",
