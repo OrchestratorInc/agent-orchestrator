@@ -36,6 +36,8 @@ type ImportArchive struct {
 	Updated                     time.Time
 	Messages                    []domain.ImportedMessage
 	Shortened                   bool
+	MessageCount                int
+	OpeningText                 string
 }
 
 type importSession struct {
@@ -62,8 +64,38 @@ type importNativeMessage struct {
 }
 
 func sourceImportSchema(ctx context.Context, db *sql.DB) error {
-	var count, low, high int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*),MIN(version),MAX(version) FROM refinery_schema_history").Scan(&count, &low, &high); err != nil || count != 20 || low != 1 || high != 20 {
+	// Check object types before querying any provider rows. Views, virtual tables
+	// and generated columns execute source-owned SQL and are not native data.
+	for _, table := range []string{"refinery_schema_history", "sessions", "message_nodes", "subagent_heads", "tool_call_state", "prompt_history", "rendered_commits", "live_row_times"} {
+		var kind string
+		if err := db.QueryRowContext(ctx, "SELECT type FROM pragma_table_list WHERE schema='main' AND name=?", table).Scan(&kind); err != nil || kind != "table" {
+			return errors.New("devin: unsupported native table type")
+		}
+		var generated int
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_xinfo(?) WHERE hidden<>0", table).Scan(&generated); err != nil || generated != 0 {
+			return errors.New("devin: unsupported native generated columns")
+		}
+	}
+	rows, err := db.QueryContext(ctx, "SELECT version FROM refinery_schema_history ORDER BY version")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	expected := 1
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return err
+		}
+		if version != expected || expected > 20 {
+			return errors.New("devin: unsupported native session-store version")
+		}
+		expected++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if expected != 21 {
 		return errors.New("devin: unsupported native session-store version")
 	}
 	return nil
@@ -122,7 +154,7 @@ func remapImportDirectories(raw sql.NullString, source, target string) (any, err
 	return string(b), err
 }
 
-// ListImportSessions lists source IDs with immutable main+WAL selection evidence.
+// ListImportSessions computes preview counts from one immutable main+WAL snapshot.
 func ListImportSessions(ctx context.Context, root string) ([]ImportArchive, error) {
 	s, err := readSourceStore(ctx, root)
 	if err != nil {
@@ -151,7 +183,32 @@ func ListImportSessions(ctx context.Context, root string) ([]ImportArchive, erro
 		a.Fingerprint = s.fingerprint
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	previews := make([]ImportArchive, 0, len(out))
+	for _, item := range out {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		a, err := readImportArchiveFromStore(ctx, s, item.ID)
+		if err != nil {
+			continue
+		}
+		a.MessageCount = len(a.Messages)
+		if len(a.Messages) > 0 {
+			a.OpeningText = a.Messages[0].Text
+			if len(a.OpeningText) > 512 {
+				a.OpeningText = strings.Clone(a.OpeningText[:512])
+			}
+		}
+		a.Messages = nil // previews retain metadata/count, never all candidate text
+		previews = append(previews, a)
+	}
+	return previews, nil
 }
 
 // ReadImportArchive validates the complete active ancestry, including parents
@@ -166,6 +223,11 @@ func ReadImportArchive(ctx context.Context, root, id string) (ImportArchive, err
 	if err := sourceImportSchema(ctx, s.db); err != nil {
 		return a, err
 	}
+	return readImportArchiveFromStore(ctx, s, id)
+}
+
+func readImportArchiveFromStore(ctx context.Context, s *importStore, id string) (ImportArchive, error) {
+	a := ImportArchive{}
 	native, err := loadImportSession(ctx, s.db, id)
 	if err != nil {
 		return a, err

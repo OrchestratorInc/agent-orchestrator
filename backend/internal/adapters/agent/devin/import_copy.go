@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,8 +14,8 @@ import (
 // Every copied table is scoped to one native session; global app state and
 // other conversations never enter the prepared store.
 func copySelectedImport(ctx context.Context, source *sql.DB, root string, s importSession, cwd string) error {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(filepath.Join(root, "cli", "sessions.db"))}
-	target, err := sql.Open("sqlite", u.String()+"?mode=rw")
+	u := importSQLiteURI(filepath.Join(root, "cli", "sessions.db"))
+	target, err := sql.Open("sqlite", u+"?mode=rw")
 	if err != nil {
 		return err
 	}
@@ -83,6 +82,9 @@ func copyImportTable(ctx context.Context, source *sql.DB, target *sql.Tx, table 
 	}
 	defer func() { _ = shape.Close() }()
 	expected, err := shape.Columns()
+	if err == nil {
+		err = shape.Err()
+	}
 	_ = shape.Close()
 	if err != nil {
 		return err

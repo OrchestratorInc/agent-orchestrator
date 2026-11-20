@@ -48,6 +48,25 @@ func preparedImportNamespace(root string) bool {
 	return filepath.IsAbs(root) && filepath.Base(filepath.Dir(root)) == "devin" && filepath.Base(filepath.Dir(filepath.Dir(root))) == "native-imports"
 }
 
+func reservedImportRoot(root, dataDir string) bool {
+	if !preparedImportNamespace(root) || dataDir == "" {
+		return false
+	}
+	data, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(filepath.Dir(root)) == filepath.Join(data, "native-imports", "devin")
+}
+
+func importSQLiteURI(path string) string {
+	path = filepath.ToSlash(path)
+	if len(path) >= 3 && path[1] == ':' && path[2] == '/' {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
+}
+
 func importConfig(p importProof) []byte {
 	d := map[string]any{"version": 1, "auto_update": false, "session_store": "sqlite", "shell": map[string]bool{"setup_complete": true}, "hooks": map[string]any{}, "read_config_from": map[string]bool{}}
 	readFrom := map[string]bool{}
@@ -73,10 +92,15 @@ func importEnvValue(env map[string]string, key string) string {
 func importOrganization(env map[string]string) (string, error) {
 	home := importEnvValue(env, "HOME")
 	if home == "" {
-		home, _ = os.UserHomeDir()
+		if _, cleared := env["HOME"]; !cleared {
+			home, _ = os.UserHomeDir()
+		}
 	}
 	root := importEnvValue(env, "XDG_CONFIG_HOME")
 	if root == "" {
+		if home == "" {
+			return "", nil
+		}
 		root = filepath.Join(home, ".config")
 	}
 	f, err := os.Open(filepath.Join(root, "devin", "config.json"))
@@ -308,8 +332,8 @@ func privateImportDB(root string) (*sql.DB, error) {
 			return nil, errors.New("devin: invalid private native store")
 		}
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(filepath.Join(root, "cli", "sessions.db"))}
-	db, err := sql.Open("sqlite", u.String()+"?mode=ro&_pragma=busy_timeout(1000)")
+	u := importSQLiteURI(filepath.Join(root, "cli", "sessions.db"))
+	db, err := sql.Open("sqlite", u+"?mode=ro&_pragma=busy_timeout(1000)")
 	if err == nil {
 		db.SetMaxOpenConns(1)
 	}
@@ -443,8 +467,8 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 }
 
 // AugmentRuntimeLaunchEnv keeps an imported terminal on its private SQLite store and config.
-func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, _ string, _ domain.SessionID, _ string) {
-	if root := env[importStoreEnv]; preparedImportNamespace(root) {
+func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, _ domain.SessionID, _ string) {
+	if root := env[importStoreEnv]; reservedImportRoot(root, dataDir) {
 		env["DEVIN_SESSION_STORE"] = "sqlite"
 		env["XDG_CONFIG_HOME"] = filepath.Join(root, "config")
 	}

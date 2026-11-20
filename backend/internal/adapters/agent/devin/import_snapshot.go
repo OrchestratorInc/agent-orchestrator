@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	_ "modernc.org/sqlite" // Native store snapshots use the existing SQLite driver.
 )
@@ -52,7 +53,7 @@ func sourceStoreFile(ctx context.Context, root *os.Root, name string, optional b
 	if !info.Mode().IsRegular() || info.Size() > *remaining {
 		return nil, errors.New("devin: native store is not a bounded regular file")
 	}
-	f, err := root.Open(name)
+	f, err := openImportSourceFile(root, name)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +89,21 @@ func sourceStoreFile(ctx context.Context, root *os.Root, name string, optional b
 	return data, nil
 }
 
+// Nonblocking open prevents a regular-file-to-FIFO swap from hanging before
+// descriptor validation. Confinement stays with os.Root.
+func openImportSourceFile(root *os.Root, name string) (*os.File, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errors.New("devin: native source is not a regular file")
+	}
+	return f, nil
+}
+
 func readSourceStore(ctx context.Context, root string) (*importStore, error) {
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -99,7 +115,10 @@ func readSourceStore(ctx context.Context, root string) (*importStore, error) {
 	}
 	defer func() { _ = r.Close() }()
 	info, err := r.Lstat("cli")
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("devin: native store directory is unavailable")
 	}
 	if journal, err := r.Lstat("cli/sessions.db-journal"); err == nil && journal.Size() != 0 {

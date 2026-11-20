@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -187,7 +189,8 @@ func TestImportPreparationPreservesNativeStateRetriesAndUpgradeReopen(t *testing
 	if err := os.RemoveAll(root); err != nil {
 		t.Fatal(err)
 	}
-	p.importVersion = func(context.Context) error { return errors.New("new CLI version") }
+	versionErr := errors.New("new CLI version")
+	p.importVersion = func(context.Context) error { return versionErr }
 	again, err := p.PrepareImportedSession(ctx, r)
 	if err != nil || again.ConfigDir != ref.ConfigDir {
 		t.Fatalf("retry lost evolved history: %#v, %v", again, err)
@@ -199,7 +202,7 @@ func TestImportPreparationPreservesNativeStateRetriesAndUpgradeReopen(t *testing
 		t.Fatalf("upgraded restore=%v,%v,%v", argv, ok, err)
 	}
 	env := map[string]string{importStoreEnv: ref.ConfigDir, "DEVIN_SESSION_STORE": "files"}
-	p.AugmentRuntimeLaunchEnv(env, "", "", "")
+	p.AugmentRuntimeLaunchEnv(env, r.DataDir, "", "")
 	if env["DEVIN_SESSION_STORE"] != "sqlite" || env["XDG_CONFIG_HOME"] != filepath.Join(ref.ConfigDir, "config") {
 		t.Fatal("import launch did not preserve private configuration")
 	}
@@ -220,7 +223,7 @@ func TestImportPreparationPreservesNativeStateRetriesAndUpgradeReopen(t *testing
 			t.Fatal(err)
 		}
 	}
-	if err := p.PreLaunch(ctx, ports.LaunchConfig{WorkspacePath: hook.WorkspacePath, Env: env}); err != nil {
+	if err := p.PreLaunch(ctx, ports.LaunchConfig{DataDir: r.DataDir, WorkspacePath: hook.WorkspacePath, Env: env}); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range globalPaths {
@@ -237,8 +240,9 @@ func TestImportPreparationPreservesNativeStateRetriesAndUpgradeReopen(t *testing
 	if state, err := p.ProbeNativeSession(cancelled, ref); state != ports.NativeSessionAvailabilityUnknown || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled probe falsely marked history unavailable: %v,%v", state, err)
 	}
+	r.ConfigDir, r.SourceCWD, _ = nativeImportFixture(t)
 	r.LaunchCWD = t.TempDir()
-	if _, err := p.PrepareImportedSession(ctx, r); err == nil {
+	if _, err := p.PrepareImportedSession(ctx, r); !errors.Is(err, versionErr) {
 		t.Fatal("new preparation accepted unverified CLI")
 	}
 	if err := os.Remove(ref.TranscriptPath); err != nil {
@@ -249,5 +253,79 @@ func TestImportPreparationPreservesNativeStateRetriesAndUpgradeReopen(t *testing
 	}
 	if err := p.PrepareRuntimeLaunch(ctx, hook); err == nil {
 		t.Fatal("runtime accepted missing native history")
+	}
+}
+
+func TestImportSchemaRejectsViewsGeneratedColumnsAndBrokenMigrationSequence(t *testing.T) {
+	for _, mutation := range []string{
+		"ALTER TABLE prompt_history RENAME TO original_prompt_history; CREATE VIEW prompt_history AS SELECT * FROM original_prompt_history",
+		"ALTER TABLE refinery_schema_history RENAME TO original_history; CREATE VIEW refinery_schema_history AS SELECT * FROM original_history",
+		"ALTER TABLE prompt_history ADD COLUMN derived TEXT GENERATED ALWAYS AS (content) VIRTUAL",
+		"ALTER TABLE refinery_schema_history RENAME TO original_history; CREATE TABLE refinery_schema_history AS SELECT * FROM original_history; UPDATE refinery_schema_history SET version=1 WHERE version=2",
+	} {
+		t.Run(mutation, func(t *testing.T) {
+			root, _, db := nativeImportFixture(t)
+			if _, err := db.Exec(mutation); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadImportArchive(context.Background(), root, nativeImportTestID); err == nil {
+				t.Fatal("accepted unsupported source objects or migrations")
+			}
+		})
+	}
+}
+
+func TestImportOrganizationHonorsClearedHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	config := filepath.Join(home, ".config", "devin")
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "config.json"), []byte(`{"devin":{"org_id":"daemon-org"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	org, err := importOrganization(map[string]string{"HOME": ""})
+	if err != nil || org != "" {
+		t.Fatalf("cleared HOME inherited daemon org: %q, %v", org, err)
+	}
+	org, err = importOrganization(map[string]string{"HOME": "", "XDG_CONFIG_HOME": filepath.Join(home, ".config")})
+	if err != nil || org != "daemon-org" {
+		t.Fatalf("explicit config root ignored: %q, %v", org, err)
+	}
+}
+
+func TestOrdinaryStoreWithImportShapedPathIsNotAnImport(t *testing.T) {
+	p := New()
+	p.resolvedBinary = "devin-test-binary"
+	home, data := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(t.TempDir(), "native-imports", "devin", "ordinary")
+	env := map[string]string{importStoreEnv: root, "DEVIN_SESSION_STORE": "files"}
+	cfg := ports.LaunchConfig{DataDir: data, Env: env, WorkspacePath: t.TempDir()}
+	if _, err := p.GetLaunchCommand(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PreLaunch(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	p.AugmentRuntimeLaunchEnv(env, data, "", "")
+	if env["DEVIN_SESSION_STORE"] != "files" || env["XDG_CONFIG_HOME"] != "" {
+		t.Fatal("ordinary store acquired private configuration")
+	}
+	reserved := filepath.Join(data, "native-imports", "devin", "missing")
+	cfg.Env = map[string]string{importStoreEnv: reserved}
+	if _, err := p.GetLaunchCommand(context.Background(), cfg); !errors.Is(err, ports.ErrNativeHistoryUnavailable) {
+		t.Fatalf("missing real import fell through: %v", err)
+	}
+}
+
+func TestImportSQLiteURIUsesEmptyAuthorityForDrivePaths(t *testing.T) {
+	for _, path := range []string{"C:/AO/private/sessions.db", "/ao/private/sessions.db"} {
+		u, err := url.Parse(importSQLiteURI(path))
+		if err != nil || u.Host != "" || !strings.HasPrefix(u.Path, "/") {
+			t.Fatalf("invalid local SQLite URI: %v,%v", u, err)
+		}
 	}
 }

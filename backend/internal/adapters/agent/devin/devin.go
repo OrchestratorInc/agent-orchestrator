@@ -87,7 +87,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // The `-- <prompt>` form starts an interactive session. Do not use `-p`, which
 // is Devin's non-interactive print mode.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
-	if preparedImportNamespace(cfg.Env[importStoreEnv]) {
+	if reservedImportRoot(cfg.Env[importStoreEnv], cfg.DataDir) {
 		return nil, ports.ErrNativeHistoryUnavailable
 	}
 	binary, err := p.devinBinary(ctx)
@@ -125,7 +125,7 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if cfg.WorkspacePath == "" {
 		return nil
 	}
-	if root := cfg.Env[importStoreEnv]; preparedImportNamespace(root) {
+	if root := cfg.Env[importStoreEnv]; reservedImportRoot(root, cfg.DataDir) {
 		proof, err := readImportProof(root)
 		if err != nil {
 			return err
@@ -160,7 +160,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]
-	imported := cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" || preparedImportNamespace(root)
+	imported := cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" || root != ""
 	if agentSessionID == "" {
 		if imported {
 			return nil, false, ports.ErrNativeHistoryUnavailable

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,18 +84,40 @@ func TestImportSnapshotReadsCommittedWALWithoutChangingSource(t *testing.T) {
 }
 
 func TestImportSnapshotRefusesSymlinkedSourceFiles(t *testing.T) {
-	root, outside := t.TempDir(), t.TempDir()
+	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "cli"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(outside, "source.db")
-	if err := os.WriteFile(path, make([]byte, 4096), 0o600); err != nil {
+	path := filepath.Join(root, "cli", "sessions.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(path, filepath.Join(root, "cli", "sessions.db")); err != nil {
+	if _, err := db.Exec("CREATE TABLE probe(value TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	direct, err := readSourceStore(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct.Close()
+	target := filepath.Join(root, "cli", "valid.db")
+	if err := os.Rename(path, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := readSourceStore(context.Background(), root); err == nil {
 		t.Fatal("accepted a symlink under the selected source root")
+	}
+}
+
+func TestImportSnapshotPreservesAbsentStoreDirectory(t *testing.T) {
+	if _, err := readSourceStore(context.Background(), t.TempDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing cli directory: %v", err)
 	}
 }

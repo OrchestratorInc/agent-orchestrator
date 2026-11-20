@@ -20,7 +20,12 @@ func discoverDevin(ctx context.Context, root string) ([]sourceFiles, error) {
 	}
 	out := make([]sourceFiles, 0, len(items))
 	for _, a := range items {
-		out = append(out, sourceFiles{harness: domain.HarnessDevin, root: root, key: a.ID, paths: []string{a.ID, a.Fingerprint}, modTime: a.Updated})
+		paths := []string{a.ID, a.Fingerprint}
+		source := devinTranscript(root, paths, a)
+		if source.title == "" {
+			source.title = importTitle(a.OpeningText)
+		}
+		out = append(out, sourceFiles{harness: domain.HarnessDevin, root: root, key: a.ID, paths: paths, modTime: a.Updated, preview: &parsed{source: source, count: a.MessageCount}})
 	}
 	return out, nil
 }
@@ -37,6 +42,11 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 	if a.Fingerprint != paths[1] {
 		return t, errors.New("devin native history changed; scan again")
 	}
+	return devinTranscript(root, paths, a), nil
+}
+
+func devinTranscript(root string, paths []string, a devin.ImportArchive) transcript {
+	t := transcript{harness: domain.HarnessDevin, root: root, paths: paths}
 	t.nativeID, t.cwd, t.title, t.last = a.ID, a.CWD, a.Title, a.Updated
 	t.path = filepath.Join(root, "cli", "sessions.db")
 	t.messages = a.Messages
@@ -45,5 +55,5 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 	if t.title == "" && len(a.Messages) > 0 {
 		t.title = importTitle(a.Messages[0].Text)
 	}
-	return t, nil
+	return t
 }

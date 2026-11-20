@@ -25,7 +25,11 @@ func TestDevinImportsNativeHistoryAsTerminal(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE refinery_schema_history(version INTEGER PRIMARY KEY);
 CREATE TABLE sessions(id TEXT PRIMARY KEY,working_directory TEXT,backend_type TEXT,model TEXT,title TEXT,main_chain_id INTEGER,last_activity_at INTEGER,hidden INTEGER,workspace_dirs TEXT,cogs_json TEXT,metadata TEXT);
 CREATE TABLE message_nodes(session_id TEXT,node_id INTEGER,parent_node_id INTEGER,chat_message TEXT,created_at INTEGER);
-CREATE TABLE subagent_heads(session_id TEXT);`); err != nil {
+CREATE TABLE subagent_heads(session_id TEXT);
+CREATE TABLE tool_call_state(session_id TEXT);
+CREATE TABLE prompt_history(session_id TEXT);
+CREATE TABLE rendered_commits(session_id TEXT);
+CREATE TABLE live_row_times(session_id TEXT);`); err != nil {
 		t.Fatal(err)
 	}
 	for n := 1; n <= 20; n++ {
@@ -39,6 +43,10 @@ CREATE TABLE subagent_heads(session_id TEXT);`); err != nil {
 	message, _ := json.Marshal(map[string]any{"message_id": "user", "role": "user", "content": "remember native marker", "metadata": map[string]bool{"is_user_input": true}})
 	if _, err := db.Exec("INSERT INTO message_nodes VALUES('native-sage',0,NULL,?,?)", string(message), time.Now().Unix()); err != nil {
 		t.Fatal(err)
+	}
+	files, err := discoverDevin(context.Background(), root)
+	if err != nil || len(files) != 1 || files[0].preview == nil || files[0].preview.count != 1 || len(files[0].preview.source.messages) != 0 {
+		t.Fatalf("preview did not reuse shared snapshot metadata: %#v,%v", files, err)
 	}
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: cwd}}}
 	svc := New(st, t.TempDir(), chatSupported)
