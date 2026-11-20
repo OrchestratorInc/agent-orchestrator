@@ -204,8 +204,10 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Your GitHub username, when Orchestrator.inc can resolve the account signed in
   to its GitHub integration, on every desktop and daemon event (previously only
   session-start events)
-- Desktop onboarding progress, such as viewing, completing, or leaving the
-  welcome and GitHub sign-in steps, and a one-time install event on first run
+- Desktop onboarding progress: each step viewed, completed, skipped or left,
+  installs and sign-ins started there and how they ended, how long onboarding
+  took, and whether the first chat message followed. See "Desktop onboarding
+  funnel" below. Also a one-time install event on first run
 - One-time lifecycle markers: `ao.app.installed` is sent once, on the first
   daemon start of a fresh installation, and says whether the desktop app or the
   CLI started the daemon (`launcher`). An installation whose local database
@@ -659,6 +661,96 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## UI responsiveness
+
+When product telemetry is enabled, the desktop app sends launch timings in
+`ao.launches.timed` and sends `ao.usage.ui_performance`, a numeric summary of
+how fast the app responded. Their own properties are only counts, durations in
+milliseconds, buckets, and the closed values listed here; like every event,
+they also carry the shared context described above, such as `app_version` and
+`install_id`. They never include a
+session, project or file name, path, URL, message text, script URL, function
+name, element text, or CSS selector, and the summary does not say which session
+a measurement came from.
+
+| Event | When it is sent | Performance properties |
+| --- | --- | --- |
+| `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
+| `ao.usage.ui_performance` | At the end of each window, 45 to 60 minutes of elapsed time (random in that range) that includes idle and hidden time, so a window can hold much less use than that. A window cut short by quitting is kept and sent at the next launch if its end has passed, otherwise when the rest of it runs out. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
+
+Properties on `ao.launches.timed`:
+
+- `launch_kind` is `cold` (a new app process), `warm` (a window reopened while
+  the app kept running), or `update` (the first cold launch on a new
+  `app_version`).
+- `to_visible_ms` is the time from the start of the launch to the window's
+  first contentful paint. `to_usable_ms` is the time to the frame that first
+  shows the sidebar with live sessions, the same frame the desktop log's
+  "launch timing" line ends at. A cold launch starts when the app process
+  starts; a warm one when the window is requested.
+- A launch whose window was hidden after it first appeared but before it
+  became usable (the user minimized it or switched away) sends `launch_kind`
+  only. Hiding it after it became usable keeps the timings. The window is
+  created hidden and shown once the page loads; that wait is part of the
+  launch.
+- A window closed before it became usable sends the event as it closes,
+  without `to_usable_ms`.
+
+Properties on `ao.usage.ui_performance`:
+
+- Window: `measurement_schema_version` (2), `flush_reason` (`interval` or
+  `startup`), `window_seconds` (elapsed time while the app was running, so a
+  window kept across a quit leaves out the time the app was closed; never less
+  than `active_seconds`),
+  `active_seconds` (time the window was visible
+  with input in the last 5 minutes), `open_sessions_bucket` (`0`, `1-3`,
+  `4-10`, `11-30`, or `31+` sessions that are not terminated), and
+  `uptime_hours_bucket` (how long the window has been open: `lt1`, `lt8`,
+  `lt24`, `lt72`, or `ge72` hours).
+- Session switches: `switch_cached_lt150_count`, `switch_cached_lt500_count`,
+  `switch_cached_lt1000_count`, `switch_cached_ge1000_count`, and the same four
+  `switch_uncached_*` counts. Each switch from one session to another is timed
+  from the click or key that asked for it (or from routing, for a menu
+  shortcut) to the frame that shows the destination's messages, and counted in
+  the bucket under 150, 500, or 1,000 ms, or 1,000 ms and over. Cached means
+  the destination showed its content in its first frame: a chat whose messages
+  were already in memory, or a terminal session. `switch_visible_p75_ms` is the
+  75th percentile time to the first frame that shows the destination.
+  `switch_dropped_count` counts switches not timed because the window was
+  hidden during them or they took over 30 seconds.
+- Clicks and keys: `interaction_count` (every click, tap and key press),
+  `slow_interaction_count` (over 200 ms to the next frame),
+  `very_slow_interaction_count` (over 500 ms), and `interaction_p98_ms`, the
+  98th percentile computed the way Interaction to Next Paint is. These come
+  from the browser's Event Timing API, which reports only interactions of
+  40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
+  fallback, not a measured duration.
+- Frozen frames: `long_frame_count` (frames that took over 50 ms),
+  `long_frame_blocking_ms` (their total blocking time), and
+  `long_frame_top_cause`, the kind of work that took longest inside them:
+  `rendering` (style, layout and paint), a script's invoker type
+  (`event-listener`, `user-callback` for timers and animation frames,
+  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`), or
+  `other`, the rest of those frames' time. The browser credits only scripts
+  that ran over 5 ms, so shorter scripts count as `other`. Version 1 summaries
+  put rendering-only frames under `other`.
+- Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
+  messages were not in memory, from the click to the frame that shows them.
+- Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
+  `app_mb_bucket` (peak memory of all app processes), each `lt256`, `lt512`,
+  `lt1024`, `lt2048`, or `ge2048` MB; `app_cpu_avg_pct`, the average CPU of all
+  app processes since the previous summary, to one decimal place. The app
+  samples these every 10 minutes. The daemon's own process is not included.
+
+A missing count means zero; a missing percentile or cause means nothing
+was measured for it. Measurements other than memory and CPU count only while
+the window is visible; memory and CPU cover the whole time, so background use
+is included. The summary window and its counts are kept in the app's local storage
+between launches and replaced after each send. Share usage analytics and the
+kill switch control both events. Turning Share usage analytics off stops the
+summary and deletes the window counted so far, so nothing from before is sent
+after it is turned back on.
+
 ## Chat import
 
 When desktop product telemetry is enabled, Orchestrator.inc records these events
@@ -685,6 +777,177 @@ an imported chat.
 
 No chat title, chat content, folder name, path, project identifier, session
 identifier, or error message is sent.
+
+## Desktop onboarding funnel
+
+When desktop product telemetry is enabled, Orchestrator.inc records how new
+users move through first-run onboarding, so we can see where they stop and
+why. The flow is: the startup dependency dialog (only when git, tmux or a
+coding agent is missing, before onboarding), the welcome page and its three-part story (the last
+part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
+tools (the GitHub CLI and coding agents), then a guided tour of the real app
+(add a project, open its orchestrator, send the first message).
+
+The onboarding properties below are only the closed values listed here,
+counts, buckets and durations: never a path, repository name or URL, project
+or session name, username, email, chat text or error message. Like every
+renderer event, these events also carry the shared context and identity
+properties documented later in this file, including `github_actor` when the
+GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
+
+### Steps
+
+The funnel to read is the pages and then the tour: `welcome` → `sign_in` →
+`tools` → `tour_project` → `tour_orchestrator` → `first_task` → `finish`.
+Three steps are conditional sub-steps, not stages every run passes through,
+so `step_index` is an order, not a dense funnel:
+
+- `dependencies` shows only when git, tmux or a coding agent is missing, and
+  before `started`. It counts only while onboarding has not been seen yet; the
+  same dialog after onboarding (a tool removed months later) sends nothing.
+- `github_auth` shows inside Your tools, or in the clone dialog opened from
+  the tour, only while the GitHub CLI needs installing or signing in. It has
+  no `already_done` skip when Your tools itself is skipped. The clone dialog
+  outside onboarding sends nothing.
+- `import_chats` is not reachable today.
+
+Every step is identified by `step` and its position in the flow,
+`step_index`:
+
+| `step_index` | `step` | What it is |
+| --- | --- | --- |
+| 0 | `dependencies` | The startup dialog for missing git, tmux or a coding agent |
+| 1 | `welcome` | The first page and its story |
+| 2 | `sign_in` | The optional AO Cloud account page |
+| 3 | `tools` | Your tools: the GitHub CLI and coding agents |
+| 4 | `github_auth` | Signing the GitHub CLI in, on Your tools |
+| 5 | `import_chats` | Importing earlier chats. Not shown since the first-run prompt on Home was removed; recorded if it returns |
+| 6 | `tour_project` | Tour: open or add a project |
+| 7 | `tour_orchestrator` | Tour: open the project's orchestrator |
+| 8 | `first_task` | Tour: send the first message |
+| 9 | `finish` | Tour: the closing note |
+
+| Event | When it is sent | Onboarding-specific properties |
+| --- | --- | --- |
+| `ao.onboarding.step_viewed` | A step is shown | `step`, `step_index`, `run_kind`, `missing` (dependencies, tools), `agents_ready` (tools), `chats_found_bucket` (import_chats) |
+| `ao.onboarding.step_completed` | A step is done: Continue on a page, the tour moving on, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
+| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Sign in's "do it later", Skip setup, Skip on the import step), or by closing the tour | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
+| `ao.onboarding.step_abandoned` | The window closes while the step is showing. Sent at once with `sendBeacon` | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
+| `ao.onboarding.back_clicked` | Back is clicked | `step`, `step_index`, `to_step`, `run_kind` |
+
+`step_viewed`, `step_completed`, `step_abandoned` and an automatic
+`step_skipped` are each sent at most once per installation (once per replay
+for a replay), so the counts read as a funnel. A person's skip and Back are
+sent on each click. `time_on_step_ms` runs from the step's latest showing in
+this launch. `step_index` is derived from `step` by the app, never taken from
+the page that sent the event. Your tools sends its view once its checks have
+answered (at most 3 seconds), so `missing` and `agents_ready` are complete;
+leaving it or closing the window sooner still sends the view first, with what
+was known. Its `time_on_step_ms` runs from when it opened.
+
+### The run
+
+| Event | When it is sent | Onboarding-specific properties |
+| --- | --- | --- |
+| `ao.onboarding.started` | Onboarding opens for the first time on this installation, or a replay starts | `step`, `step_index`, `run_kind` |
+| `ao.onboarding.resumed` | Onboarding opens on a later launch after the app was quit mid-flow | `step`, `step_index`, `run_kind`, `away_ms`, `away_bucket`, `launch_count` |
+| `ao.onboarding.abandoned` | The window closes mid-flow. At most once per launch. Sent at once with `sendBeacon` | `step` (the page showing), `step_index`, `run_kind`, `duration_ms`, `duration_bucket`, `launch_count` |
+| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in` or `tools`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
+| `ao.onboarding.activated` | The first chat message delivered after a first run finished, within 7 days. Once per installation | `milestone`, `time_since_completed_ms`, `time_bucket`, `during_tour` |
+
+PostHog sends its queue from its own `pagehide` handler before the app's run,
+so `abandoned` and `step_abandoned` bypass the queue and go out with
+`sendBeacon`, which outlives the page. A quit that still loses them is
+visible: the run has `started` without `completed`, and a later launch sends
+`resumed`.
+
+### Actions
+
+Installs and sign-ins started during onboarding report how each attempt
+ended. The tour's project step sends no action: its add or clone is already
+`ao.projects.added`, `ao.projects.add_failed` or `ao.projects.clone_failed`,
+and `project_source` on its `step_completed` says which it was.
+
+| Event | When it is sent | Onboarding-specific properties |
+| --- | --- | --- |
+| `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
+| `ao.onboarding.action_finished` | That attempt ends, once | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+
+`attempt` counts from 1 for each action and target in a launch, so a value
+above 1 is a retry. The existing `ao.projects.clone_failed`,
+`ao.projects.add_failed` and `ao.projects.added` events are unchanged.
+
+Some events fire together for one thing that happened; count one of each pair,
+not both:
+
+- `step_completed` (`github_auth`) and `action_finished` (`gh_sign_in`,
+  `succeeded`) when the GitHub CLI signs in.
+- `action_finished` (`cloud_sign_in`, `succeeded`) and
+  `ao.renderer.cloud_signed_in` with `source` `onboarding`.
+- `activated` with `during_tour` true and `step_completed` (`first_task`).
+
+### Property values
+
+- `run_kind` is `first_run` or `replay` (Replay onboarding in Developer Mode,
+  in development builds only, so published builds send `first_run`). A replay
+  is a separate run with its own step counts and is never counted as
+  activation.
+- `missing` is a comma-separated list of `git`, `tmux`, `gh` (GitHub CLI not
+  installed), `gh_auth` (installed, signed out), `agent` (no coding agent
+  installed) and `agent_auth` (installed, none signed in).
+- `agents_ready` is the number of coding agents ready to use; `gh_ready` is
+  whether the GitHub CLI is installed and signed in.
+- `chats_found_bucket` is `0`, `1`, `2_5`, `6_20` or `21_plus`. The folders
+  picked are counted by `ao.session_imports.completed` (`source` `onboarding`).
+- `story_points_seen` is how many of the welcome story's three parts played
+  before Get started (1 to 3); `story_completed` is true once the whole story
+  played at least once, CI part included.
+- `project_source` is `clone`, `local_folder`, `existing` (a project that was
+  already there) or `other` (such as an AO Cloud project).
+- `reason` on `step_skipped` is `already_done`, `user` or `dismissed`.
+- `outcome` on `completed` is `finished` (the last page's Continue),
+  `skipped_setup` (Skip setup on Your tools) or `superseded` (a later launch
+  found a project, or an offer to bring over data from an older installation,
+  and closed onboarding for the person).
+- `duration_bucket` and `away_bucket` are `lt_1m`, `1m_3m`, `3m_10m`,
+  `10m_30m`, `30m_2h`, `2h_1d` or `gte_1d`. `launch_count` is how many launches
+  the run has spanned. Durations are capped at 30 days.
+- `time_bucket` on `activated` is `lt_5m`, `5m_15m`, `15m_1h`, `1h_1d` or
+  `1d_7d`. `milestone` is `first_message`. `during_tour` is true when the
+  message was the tour's task step.
+- `action` is `dependency_install`, `gh_install`, `gh_sign_in`,
+  `agent_install`, `agent_sign_in` or `cloud_sign_in`. `target` is the install target or agent id from AO's own
+  registry, such as `gh`, `tmux` or `claude-code`.
+- `outcome` on `action_finished` is `succeeded`, `failed`, `cancelled` (the
+  person closed the login or moved on), `timed_out` (a login left open 15
+  minutes) or `handed_off` (the agent signs in outside AO, so its guide
+  opened).
+- `reason` on `action_finished` is `start_failed`, `install_failed`,
+  `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
+  `cleanup_failed`, `request_failed`, `documentation` or `other`.
+  `error_code` is the API's error code, never its message.
+
+`ao.renderer.cloud_signed_in` also carries `source` `onboarding` when the
+sign-in finished within 30 minutes of clicking Sign in on onboarding's account
+page. That note is kept in memory only.
+
+The renderer's usual limit of five events per name per minute applies per
+step and action for these events, so clicking quickly through onboarding does
+not drop later steps. A sixth quick retry of the same action within a minute
+drops both its `action_started` and its `action_finished`; it shows only as a
+gap in `attempt`.
+
+They stop when Share usage analytics is off, and a kill-switch entry in
+`AO_TELEMETRY_DISABLED_EVENTS` silences them like any other event. While
+analytics is off nothing is counted or stored for them either, and turning it
+off drops the run in progress, attempt counts and step timings, so an event
+sent after turning it back on carries nothing from the time it was off. A run
+that was off when it began has no `started`, and so sends no `completed`.
+
+`ao.onboarding.first_run_experiment_exposed` and
+`ao.onboarding.first_run_prompt_action` are no longer sent and their
+properties are no longer allowed: they belonged to the first-run prompt on
+Home, which has been removed. Builds from before that still send them.
 
 ## What Orchestrator.inc does not intentionally send
 

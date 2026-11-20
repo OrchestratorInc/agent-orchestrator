@@ -120,6 +120,34 @@ func eventuallySessionInput(t *testing.T, timeout time.Duration, fn func() bool)
 	t.Fatal("condition was not met before timeout")
 }
 
+func TestOptedInInputIsSerializedAndAdoptionFailsClosed(t *testing.T) {
+	m := newInputLeaseTestManager()
+	first, ok := m.AcquireSessionInput("mastra-1")
+	if !ok {
+		t.Fatal("first lease refused")
+	}
+	second, ok := m.AcquireSessionInput("mastra-1")
+	if !ok {
+		t.Fatal("legacy lease refused before opt-in")
+	}
+	if m.enableSerializedInput("mastra-1") {
+		t.Fatal("adoption admitted a paste alongside existing input")
+	}
+	second()
+	if !m.enableSerializedInput("mastra-1") {
+		t.Fatal("single holder not admitted")
+	}
+	if _, ok := m.AcquireSessionInput("mastra-1"); ok {
+		t.Fatal("concurrent raw input admitted")
+	}
+	first()
+	release, ok := m.AcquireSessionInput("mastra-1")
+	if !ok {
+		t.Fatal("admission did not reopen after release")
+	}
+	release()
+}
+
 // Lifecycle's guard holds no input lease of its own. Its nudge to a TUI
 // session reaches the pane through Session Manager's send, whose guard holds
 // the lease, so an exclusive operation still keeps the write out. The refusal

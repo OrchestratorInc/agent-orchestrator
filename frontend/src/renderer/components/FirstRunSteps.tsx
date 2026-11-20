@@ -8,7 +8,16 @@ import aoMascot from "../../../assets/ao-mascot.svg";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
-import { completeOnboardingStepIfViewed, reportOnboardingStep } from "../lib/onboarding-telemetry";
+import {
+	completeOnboardingStepIfViewed,
+	finishOnboardingAction,
+	onboardingActionAttempt,
+	onboardingInProgress,
+	reportOnboardingStep,
+	skipOnboardingStep,
+	startOnboardingAction,
+	useOnboardingStep,
+} from "../lib/onboarding-telemetry";
 import { agentLabel } from "../lib/agent-options";
 import { type ImportCandidate, sessionImportPreviewQuery, useImportableAgents, useImportOfferShown } from "../lib/session-import";
 import { useShellMaybe } from "../lib/shell-context";
@@ -113,13 +122,15 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 	authRefetch.current = auth.refetch;
 	const readyRef = useRef(onReady);
 	readyRef.current = onReady;
+	// This panel also serves the clone dialog long after onboarding; it reports
+	// to the funnel only while onboarding (the first-run window or the tour) shows.
 	const install = useInstallRunner(() => {
 		void Promise.resolve(query.refetch())
 			.then(() => authRefetch.current())
 			.then((result) => {
 				if (result.data?.satisfied) readyRef.current();
 			});
-	});
+	}, () => (onboardingInProgress() ? { action: "gh_install", step: "github_auth" } : undefined));
 	const { inspect } = install;
 	useEffect(() => {
 		if (cliMissing) void inspect("gh");
@@ -129,7 +140,7 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 	// needed, abandoned if the window goes away first, completed once signed in.
 	const needsSetup = cliMissing || auth.data?.satisfied === false;
 	useEffect(() => {
-		if (!needsSetup) return;
+		if (!needsSetup || !onboardingInProgress()) return;
 		reportOnboardingStep("github_auth", "viewed");
 		const onHide = () => reportOnboardingStep("github_auth", "abandoned");
 		window.addEventListener("pagehide", onHide);
@@ -140,14 +151,27 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 	const signedIn = auth.data?.satisfied === true;
 	useEffect(() => {
 		if (!signedIn) return;
+		finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh" });
 		completeOnboardingStepIfViewed("github_auth");
 		if (terminal) closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
 		readyRef.current();
 	}, [signedIn, terminal, closeTerminal, terminalQuery.clear]);
+	useEffect(() => {
+		if (startLogin.isError) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
+	}, [startLogin.isError]);
 	// The login process ending usually means it finished; confirm with a fresh check.
 	useEffect(() => {
-		if (terminalState === "exited" || terminalState === "error") void authRefetch.current();
+		if (terminalState !== "exited" && terminalState !== "error") return;
+		// The attempt this login belonged to, so a retry started before the check answers is left alone.
+		const attempt = onboardingActionAttempt("gh_sign_in", "gh");
+		void authRefetch.current().then((result) => {
+			if (attempt !== undefined && result.data && !result.data.satisfied) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in", attempt });
+		});
 	}, [terminalState]);
+	const signIn = () => {
+		if (onboardingInProgress()) startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		startLogin.mutate();
+	};
 
 	const loginEnded = terminalState === "exited" || terminalState === "error";
 	return (
@@ -171,8 +195,8 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 						className="w-full"
 						disabled={startLogin.isPending || (loginRunning && !loginEnded)}
 						onClick={() => {
-							if (loginEnded && terminal) closeTerminal(terminal.handleId, { onSuccess: () => { terminalQuery.clear(); setTerminalState("idle"); startLogin.mutate(); } });
-							else startLogin.mutate();
+							if (loginEnded && terminal) closeTerminal(terminal.handleId, { onSuccess: () => { terminalQuery.clear(); setTerminalState("idle"); signIn(); } });
+							else signIn();
 						}}
 					>
 						{startLogin.isPending ? t("startup.githubLoginStarting") : loginEnded ? t("startup.githubLoginTryAgain") : t("startup.githubLogin")}
@@ -259,10 +283,28 @@ export function FirstRunImport({
 	useImportOfferShown("onboarding", true);
 	const chats = (preview.data?.candidates ?? []).filter(importableFromFolder);
 	const nothingToImport = !expanded && (preview.isError || (preview.isSuccess && !chats.length));
+	// The onboarding funnel's import step, viewed once the scan has found chats
+	// to offer (so the view carries how many): Skip and Choose folders report
+	// themselves; the folder count is on ao.session_imports.completed.
+	const completeImport = useOnboardingStep("import_chats", preview.isSuccess && chats.length > 0, {
+		autoComplete: false,
+		viewed: { chats_found: chats.length },
+	});
+	const skip = () => {
+		skipOnboardingStep("import_chats", "user");
+		onSkip();
+	};
+	const imported = () => {
+		completeImport();
+		onImported();
+	};
 	const nothingRef = useRef(onNothingToImport);
 	nothingRef.current = onNothingToImport;
 	useEffect(() => {
-		if (nothingToImport) nothingRef.current();
+		if (!nothingToImport) return;
+		// Only a scan that answered says there is nothing to do; a failed one moves on unreported.
+		if (preview.isSuccess) skipOnboardingStep("import_chats", "already_done");
+		nothingRef.current();
 	}, [nothingToImport]);
 	const agents = [...new Set(chats.map((chat) => chat.harness))];
 	const header = (
@@ -295,7 +337,7 @@ export function FirstRunImport({
 					</div>
 				</div>
 				<div className="flex items-center justify-end gap-3 p-4">
-					<Button type="button" variant="secondary" onClick={onSkip}>{t("firstRun.skip")}</Button>
+					<Button type="button" variant="secondary" onClick={skip}>{t("firstRun.skip")}</Button>
 					<Button type="button" variant="primary" disabled={!chats.length} onClick={() => setExpanded(true)}>{t("firstRun.importChoose")}</Button>
 				</div>
 			</div>
@@ -307,8 +349,8 @@ export function FirstRunImport({
 			<FolderImport
 				source="onboarding"
 				cancelLabel={t("firstRun.skip")}
-				onCancel={onSkip}
-				onImported={onImported}
+				onCancel={skip}
+				onImported={imported}
 				onImporting={setImporting}
 				bodyClassName="flex max-h-[min(360px,calc(100svh-240px))] min-h-0 flex-col gap-4 overflow-y-auto px-4 pt-4 settings-thin-scrollbar"
 				footerClassName="flex items-center justify-end gap-3 p-4"

@@ -170,8 +170,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
-	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
-	const setThemePreference = useUiStore((s) => s.setThemePreference);
+	const toggleThemePreference = useUiStore((s) => s.toggleThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
@@ -884,9 +883,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		}
 	}, [view, scoped, t]);
 
-	const toggleTheme = useCallback(() => {
-		setThemePreference(resolvedTheme === "dark" ? "light" : "dark");
-	}, [resolvedTheme, setThemePreference]);
+	const toggleTheme = useCallback(() => toggleThemePreference(), [toggleThemePreference]);
 
 	const navigateToTarget = useCallback(
 		(target: NavigateTarget) => {

@@ -48,7 +48,7 @@ import {
 } from "../lib/terminal-mouse";
 import { LoaderCircle, TriangleAlert } from "@/components/app-icons";
 import { isMacPlatform } from "../lib/platform";
-import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
+import { applyDocumentTheme, applyDocumentThemeStyle, isThemeStylePreviewActive, onThemeStylePreviewEnd } from "../lib/theme";
 import {
 	buildCursorColorSchemeNotification,
 	cursorColorSchemeReplyForOutput,
@@ -770,14 +770,23 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		// run after child effects, so sync both independent theme axes here before
 		// reading. Retained terminals subscribe to themeStyle directly and update
 		// their live palette without being torn down or losing scrollback.
+		// A theme preview owns data-style-theme while it lasts: re-applying the
+		// saved theme here would end it, so the palette is rebuilt once it ends.
 		applyDocumentTheme(props.theme);
-		applyDocumentThemeStyle(themeStyle);
-		const term = termRef.current;
-		if (!term) return;
-		const { dark, light } = buildTerminalThemes(translucent);
-		term.options.theme = props.theme === "dark" ? dark : light;
-		webglLeaseRef.current?.setEnabled(!translucent);
-		colorSchemeReporterRef.current?.(props.theme, themeStyle);
+		const previewing = isThemeStylePreviewActive();
+		if (!previewing) applyDocumentThemeStyle(themeStyle);
+		const syncPalette = () => {
+			const term = termRef.current;
+			if (!term) return;
+			const { dark, light } = buildTerminalThemes(translucent);
+			term.options.theme = props.theme === "dark" ? dark : light;
+		};
+		syncPalette();
+		if (termRef.current) {
+			webglLeaseRef.current?.setEnabled(!translucent);
+			colorSchemeReporterRef.current?.(props.theme, themeStyle);
+		}
+		return previewing ? onThemeStylePreviewEnd(syncPalette) : undefined;
 	}, [props.theme, themeStyle, translucent]);
 
 	useEffect(() => {
