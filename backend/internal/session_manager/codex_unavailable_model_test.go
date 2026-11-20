@@ -59,33 +59,43 @@ func codexSpawn(m *Manager, accountID, model string, project domain.ProjectConfi
 }
 
 // A Codex spawn on a model Codex already refused for its account fails at
-// spawn and names the models the account lists, instead of starting a worker
-// whose first turn fails (#4518). A spawn on another account, whose plan may
-// include the model, is not refused; nor is a model Codex never refused (#8119).
+// spawn instead of starting a worker whose first turn fails (#4518), naming the
+// models the catalog lists when the catalog is that account's: the computer's
+// own login. A spawn on another account, whose plan may include the model, is
+// not refused; nor is a model Codex never refused (#8119).
 func TestResolveAgentConfigRefusesACodexModelOnlyForTheAccountThatRefusedIt(t *testing.T) {
 	codexagent.ConfigureUnavailableModels("")
 	t.Cleanup(func() { codexagent.ConfigureUnavailableModels("") })
 	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "device"))
 	work, personal := filepath.Join(dir, "work"), filepath.Join(dir, "personal")
-	if err := codexagent.DefaultUnavailableModels().Record(work, "gpt-5.2-codex", time.Now()); err != nil {
-		t.Fatal(err)
+	for _, home := range []string{work, ""} {
+		if err := codexagent.DefaultUnavailableModels().Record(home, "gpt-5.2-codex", time.Now()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	catalog := &refreshCountingCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "gpt-6.1-sol"}, {ID: "gpt-5.6-sol"},
 	}}}
 	m := &Manager{
 		backgroundContext: context.Background(), modelCatalog: catalog,
-		agentAccounts: codexAccountsFake{homes: map[string]string{"": work, "work": work, "personal": personal}},
+		agentAccounts: codexAccountsFake{homes: map[string]string{"": "", "work": work, "personal": personal}},
 	}
 
-	for _, accountID := range []string{"work", ""} {
-		_, err := codexSpawn(m, accountID, "gpt-5.2-codex", domain.ProjectConfig{})
-		if !errors.Is(err, ErrUnsupportedModel) {
-			t.Fatalf("refused model on the refusing account (%q) error = %v, want ErrUnsupportedModel", accountID, err)
-		}
-		if !strings.Contains(err.Error(), "gpt-6.1-sol") || !strings.Contains(err.Error(), "gpt-5.6-sol") {
-			t.Fatalf("error = %q, want the models the account lists", err)
-		}
+	_, err := codexSpawn(m, "", "gpt-5.2-codex", domain.ProjectConfig{})
+	if !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("refused model on the computer's own login: error = %v, want ErrUnsupportedModel", err)
+	}
+	if !strings.Contains(err.Error(), "gpt-6.1-sol") || !strings.Contains(err.Error(), "gpt-5.6-sol") {
+		t.Fatalf("error = %q, want the models the account lists", err)
+	}
+	// The catalog is not the saved account's, so it names none of its models.
+	_, err = codexSpawn(m, "work", "gpt-5.2-codex", domain.ProjectConfig{})
+	if !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("refused model on the refusing saved account: error = %v, want ErrUnsupportedModel", err)
+	}
+	if strings.Contains(err.Error(), "gpt-6.1-sol") || !strings.Contains(err.Error(), "choose another model") {
+		t.Fatalf("error = %q, want the plain refusal without another account's models", err)
 	}
 	if _, err := codexSpawn(m, "personal", "gpt-5.2-codex", domain.ProjectConfig{}); err != nil {
 		t.Fatalf("spawn on another account: error = %v, want the launch left to the CLI", err)
@@ -123,7 +133,10 @@ func TestResolveAgentConfigScopesTheComputersOwnCodexLoginByProjectHome(t *testi
 func TestResolveAgentConfigTrustsOnlyAFreshCatalogToLiftARefusal(t *testing.T) {
 	codexagent.ConfigureUnavailableModels("")
 	t.Cleanup(func() { codexagent.ConfigureUnavailableModels("") })
-	home := filepath.Join(t.TempDir(), "work")
+	// The catalog is discovered under the computer's own login, so it can lift
+	// only that login's refusals.
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "device"))
+	home := ""
 	if err := codexagent.DefaultUnavailableModels().Record(home, "gpt-5.2-codex", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -165,5 +178,43 @@ func TestResolveAgentConfigTrustsOnlyAFreshCatalogToLiftARefusal(t *testing.T) {
 	}
 	if codexagent.DefaultUnavailableModels().Unavailable(home, "gpt-5.2-codex") {
 		t.Fatal("a model a fresh catalog lists must be forgotten")
+	}
+}
+
+// Codex discovers its catalog under the computer's own login, never a saved
+// account's. A saved account's refusal therefore stays even when a fresh
+// catalog lists the model, rather than letting the spawn through to fail its
+// first turn again (#4518), and the refusal names none of the catalog's models.
+func TestResolveAgentConfigKeepsASavedAccountsRefusalTheComputersCatalogLists(t *testing.T) {
+	codexagent.ConfigureUnavailableModels("")
+	t.Cleanup(func() { codexagent.ConfigureUnavailableModels("") })
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "device"))
+	saved := filepath.Join(dir, "saved")
+	if err := codexagent.DefaultUnavailableModels().Record(saved, "gpt-5.2-codex", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &refreshCountingCatalog{catalog: ports.AgentModelCatalog{
+		ValidatedAt: time.Now().Add(time.Minute),
+		Models:      []ports.AgentModelInfo{{ID: "gpt-6.1-sol"}, {ID: "gpt-5.2-codex"}},
+	}}
+	m := &Manager{
+		backgroundContext: context.Background(), modelCatalog: catalog,
+		agentAccounts: codexAccountsFake{homes: map[string]string{"": "", "saved": saved}},
+	}
+	for range 2 {
+		_, err := codexSpawn(m, "saved", "gpt-5.2-codex", domain.ProjectConfig{})
+		if !errors.Is(err, ErrUnsupportedModel) {
+			t.Fatalf("saved account's refused model: error = %v, want the refusal kept", err)
+		}
+		if strings.Contains(err.Error(), "gpt-6.1-sol") || !strings.Contains(err.Error(), "choose another model") {
+			t.Fatalf("error = %q, want the plain refusal without the computer's models", err)
+		}
+	}
+	if !codexagent.DefaultUnavailableModels().Unavailable(saved, "gpt-5.2-codex") {
+		t.Fatal("the computer's catalog must not forget a saved account's refusal")
+	}
+	if got := catalog.refreshCount(); got != 0 {
+		t.Fatalf("rediscoveries for a saved account's refusal = %d, want 0", got)
 	}
 }
