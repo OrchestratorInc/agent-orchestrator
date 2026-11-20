@@ -93,7 +93,7 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 	if err != nil {
 		return ports.NativeSessionRef{}, fmt.Errorf("check kilo version: %w", err)
 	}
-	if !regexp.MustCompile(`^7\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`).Match(bytes.TrimSpace(version)) {
+	if !regexp.MustCompile(`^7\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$`).Match(bytes.TrimSpace(version)) {
 		return ports.NativeSessionRef{}, errors.New("kilo native import requires a supported v7 binary")
 	}
 	exported, err := run(ctx, cwd, r.ConfigDir, "export", r.NativeSessionID)
@@ -223,34 +223,32 @@ func kiloSourceDigest(ctx context.Context, db *sql.DB, sessionID string) ([32]by
 		`SELECT * FROM part WHERE session_id = ? ORDER BY id`,
 		`SELECT * FROM session_message WHERE session_id = ? ORDER BY id`,
 	} {
-		rows, err := tx.QueryContext(ctx, query, sessionID)
-		if err != nil {
-			return [32]byte{}, err
-		}
-		columns, err := rows.Columns()
-		if err != nil {
-			_ = rows.Close()
-			return [32]byte{}, err
-		}
-		encoder := json.NewEncoder(h)
-		for rows.Next() {
-			values := make([]any, len(columns))
-			pointers := make([]any, len(columns))
-			for i := range values {
-				pointers[i] = &values[i]
+		if err := func() error {
+			rows, err := tx.QueryContext(ctx, query, sessionID)
+			if err != nil {
+				return err
 			}
-			if err := rows.Scan(pointers...); err != nil {
-				_ = rows.Close()
-				return [32]byte{}, err
+			defer func() { _ = rows.Close() }()
+			columns, err := rows.Columns()
+			if err != nil {
+				return err
 			}
-			if err := encoder.Encode(values); err != nil {
-				_ = rows.Close()
-				return [32]byte{}, err
+			encoder := json.NewEncoder(h)
+			for rows.Next() {
+				values := make([]any, len(columns))
+				pointers := make([]any, len(columns))
+				for i := range values {
+					pointers[i] = &values[i]
+				}
+				if err := rows.Scan(pointers...); err != nil {
+					return err
+				}
+				if err := encoder.Encode(values); err != nil {
+					return err
+				}
 			}
-		}
-		err = rows.Err()
-		_ = rows.Close()
-		if err != nil {
+			return rows.Err()
+		}(); err != nil {
 			return [32]byte{}, err
 		}
 	}

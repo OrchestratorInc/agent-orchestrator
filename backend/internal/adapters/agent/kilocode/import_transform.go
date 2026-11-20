@@ -164,12 +164,14 @@ func remapKiloExport(data []byte, sourceID, cwd string, next func(string) (strin
 		}
 	}
 	for _, value := range messages {
-		message := value.(map[string]any)
-		if err := rewriteFields(message["info"].(map[string]any), "id", "sessionID", "parentID"); err != nil {
+		message, _ := value.(map[string]any) // validated in the first pass
+		messageInfo, _ := message["info"].(map[string]any)
+		if err := rewriteFields(messageInfo, "id", "sessionID", "parentID"); err != nil {
 			return nil, "", err
 		}
-		for _, value := range message["parts"].([]any) {
-			part := value.(map[string]any)
+		parts, _ := message["parts"].([]any)
+		for _, value := range parts {
+			part, _ := value.(map[string]any)
 			if err := rewriteFields(part, "id", "sessionID", "messageID"); err != nil {
 				return nil, "", err
 			}
