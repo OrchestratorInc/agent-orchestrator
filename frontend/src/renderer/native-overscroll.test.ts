@@ -64,7 +64,7 @@ describe("native overscroll (macOS rubber band)", () => {
 	it("keeps overscroll-behavior: contain to the bounce sources", () => {
 		const containing = SCANNED_DIRS.flatMap((dir) => sourceFiles(resolve(REPO, dir)))
 			.filter((path) => CONTAIN.test(readFileSync(path, "utf8")))
-			.map((path) => relative(REPO, path))
+			.map((path) => relative(REPO, path).replace(/\\/g, "/"))
 			.sort();
 		expect(containing).toEqual([...CONTAIN_SOURCES].sort());
 	});

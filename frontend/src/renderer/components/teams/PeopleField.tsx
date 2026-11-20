@@ -1,6 +1,6 @@
 import { Plus, Search, X } from "@/components/app-icons";
 import { Popover as PopoverPrimitive } from "radix-ui";
-import { type KeyboardEvent, type ReactNode, type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { CloudCpShareCandidate } from "../../lib/cloud-cp";
@@ -88,18 +88,6 @@ export function PeopleField({
 	const ownInputRef = useRef<HTMLInputElement>(null);
 	const inputRef = externalInputRef ?? ownInputRef;
 	const fieldRef = useRef<HTMLDivElement>(null);
-	// The list is portaled outside any modal dialog, whose scroll lock cancels
-	// wheel events there; scroll it directly, as SearchablePicker does.
-	const listRef = useCallback((list: HTMLDivElement | null) => {
-		if (!list) return;
-		const onWheel = (event: WheelEvent) => {
-			if (list.scrollHeight <= list.clientHeight) return;
-			list.scrollTop += event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * list.clientHeight : event.deltaY;
-			event.preventDefault();
-		};
-		list.addEventListener("wheel", onWheel, { passive: false });
-		return () => list.removeEventListener("wheel", onWheel);
-	}, []);
 	const [text, setText] = useState("");
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
@@ -341,8 +329,10 @@ export function PeopleField({
 				</PopoverPrimitive.Anchor>
 				{/* Above everything, so a short dialog doesn't clip the suggestions. */}
 				<PopoverPrimitive.Portal>
+					{/* Portaled outside any modal dialog. Its scroll lock would cancel this
+					    list's wheel; lib/native-overscroll.ts lets it through so the list
+					    scrolls natively and stretches at its ends. */}
 					<PopoverPrimitive.Content
-						ref={listRef}
 						id={listId}
 						role="listbox"
 						align="start"
