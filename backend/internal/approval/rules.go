@@ -51,6 +51,12 @@ var (
 	IsEnterKey = rules.IsEnterKey
 	// IsActivationKey reports whether a press activates a focused control.
 	IsActivationKey = rules.IsActivationKey
+	// HasLineBreak reports whether typed text contains a line break.
+	HasLineBreak = rules.HasLineBreak
+	// TypedEnter turns typing a line break into the Enter press it is.
+	TypedEnter = rules.TypedEnter
+	// Host names a page's host for prompts; rules key on Site.
+	Host = rules.Host
 	// GatedActions are the browser actions Classify can flag.
 	GatedActions = rules.GatedActions
 )
