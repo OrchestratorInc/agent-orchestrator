@@ -547,9 +547,12 @@ type Manager struct {
 	nativeRestoreProofWait    time.Duration
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
-	inputLeases               map[domain.SessionID]int
-	inputDrained              map[domain.SessionID]chan struct{}
-	serializedInput           map[domain.SessionID]bool
+	// queuedReconciles marks startup reconcile reservations whose health probe
+	// has not started yet. Kill may take these over instead of failing.
+	queuedReconciles map[domain.SessionID]struct{}
+	inputLeases      map[domain.SessionID]int
+	inputDrained     map[domain.SessionID]chan struct{}
+	serializedInput  map[domain.SessionID]bool
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
@@ -4933,13 +4936,22 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 	jobs := make(chan domain.SessionRecord)
 	var wg sync.WaitGroup
-	var retryMu sync.Mutex
-	var retryChats []domain.SessionID
+	var followUpMu sync.Mutex
+	var retryChats, preempted []domain.SessionID
 	wg.Add(workers)
 	for range workers {
 		go func() {
 			defer wg.Done()
 			for rec := range jobs {
+				if !m.claimQueuedReconcile(rec.ID) {
+					// Kill took this session before its check ran. The check is
+					// still owed: a failed archive leaves the session live.
+					m.beginStatusRecovery(rec.ID)
+					followUpMu.Lock()
+					preempted = append(preempted, rec.ID)
+					followUpMu.Unlock()
+					continue
+				}
 				m.beginStatusRecovery(rec.ID)
 				err := func() error {
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
@@ -4960,9 +4972,9 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					}
 				}
 				if retry {
-					retryMu.Lock()
+					followUpMu.Lock()
 					retryChats = append(retryChats, rec.ID)
-					retryMu.Unlock()
+					followUpMu.Unlock()
 				}
 			}
 		}()
@@ -4974,6 +4986,9 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	wg.Wait()
 	if len(retryChats) > 0 && ctx.Err() == nil {
 		go m.retryStartupChatChecks(ctx, retryChats)
+	}
+	if len(preempted) > 0 {
+		go m.recheckPreemptedStartupSessions(ctx, preempted)
 	}
 }
 

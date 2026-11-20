@@ -167,7 +167,7 @@ func (m *Manager) beginKillOperation(ctx context.Context, id domain.SessionID) e
 	return m.admitAgentOperation(ctx, id, agentOperationKill, true)
 }
 
-func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind, waitForResume bool) error {
+func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind, killAdmission bool) error {
 	var drained <-chan struct{}
 	var resumeDeadline time.Time
 	for {
@@ -180,12 +180,23 @@ func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, 
 		}
 		if m.agentOperationActiveLocked(id) {
 			current := m.agentOperations[id]
+			if killAdmission && current == agentOperationReconcile {
+				// A startup health probe that has not started yet must not make
+				// archive fail; the worker skips sessions it no longer owns.
+				if _, queued := m.queuedReconciles[id]; queued {
+					delete(m.queuedReconciles, id)
+					m.agentOperations[id] = kind
+					drained = m.inputDrained[id]
+					m.agentOpMu.Unlock()
+					break
+				}
+			}
 			m.agentOpMu.Unlock()
 			switch {
 			case current == agentOperationHibernate && kind != agentOperationHibernate:
 				// Background cleanup yields to every explicit operation once its
 				// bounded shutdown completes; it must not make Kill/Switch fail.
-			case current == agentOperationResume && waitForResume:
+			case current == agentOperationResume && killAdmission:
 				// Opening a hibernated Chat session wakes it, and the wake holds
 				// a resume for as long as the provider takes to reload the
 				// conversation. An archive clicked meanwhile must not fail for
@@ -198,6 +209,9 @@ func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, 
 						"sessionID", id, "waited", m.killResumeWaitLimit())
 					return errAgentOperationInProgress
 				}
+			case current == agentOperationReconcile && killAdmission:
+				// A startup health probe already running is bounded by
+				// statusVerificationLimit; archive waits for it instead of failing.
 			default:
 				return errAgentOperationInProgress
 			}
@@ -282,6 +296,12 @@ func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.Session
 			continue
 		}
 		m.agentOperations[id] = kind
+		if kind == agentOperationReconcile {
+			if m.queuedReconciles == nil {
+				m.queuedReconciles = make(map[domain.SessionID]struct{})
+			}
+			m.queuedReconciles[id] = struct{}{}
+		}
 		reservations = append(reservations, reservation{id: id, drained: m.inputDrained[id]})
 	}
 	m.agentOpMu.Unlock()
@@ -309,10 +329,23 @@ func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.Session
 func (m *Manager) endAgentOperation(id domain.SessionID, kind agentOperationKind) {
 	m.agentOpMu.Lock()
 	defer m.agentOpMu.Unlock()
+	if kind == agentOperationReconcile {
+		delete(m.queuedReconciles, id)
+	}
 	if current, ok := m.agentOperations[id]; ok && current == kind {
 		delete(m.agentOperations, id)
 		m.resumeDeferredInterfaceRecoveryLocked(id)
 	}
+}
+
+// claimQueuedReconcile starts a reserved startup probe. It reports false when
+// Kill took the reservation over while the session waited for a worker.
+func (m *Manager) claimQueuedReconcile(id domain.SessionID) bool {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	_, queued := m.queuedReconciles[id]
+	delete(m.queuedReconciles, id)
+	return queued && m.agentOperations[id] == agentOperationReconcile
 }
 
 // The deferred fence survives the foreign operation's release. Recovery, not
