@@ -108,6 +108,41 @@ func TestNestedLoginShellRunsWithoutWrapperRecursion(t *testing.T) {
 	}
 }
 
+func TestBashWrapperDoesNotRecursivelySourceOuterWrapper(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		outer bool
+	}{
+		{name: "saved outer wrapper", outer: true},
+		{name: "empty saved value"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outerDir := filepath.Join(t.TempDir(), "runtime", "login-shell")
+			innerDir := filepath.Join(t.TempDir(), "runtime", "login-shell")
+			for _, dir := range []string{outerDir, innerDir} {
+				if err := writeLoginShellFiles(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			saved := ""
+			if tc.outer {
+				saved = filepath.Join(outerDir, "bash_env")
+			}
+			// Bypass LoginShellEnv deliberately: this is the exact inherited
+			// environment that crashed bash before the wrapper's own guard.
+			env := map[string]string{
+				"HOME":         t.TempDir(),
+				"PATH":         "/usr/bin:/bin",
+				"BASH_ENV":     filepath.Join(innerDir, "bash_env"),
+				envUserBashEnv: saved,
+			}
+			if got := runNestedLoginShell(t, "/bin/bash", env, "printf ok", "--noprofile", "--norc"); got != "ok" {
+				t.Fatalf("bash startup output = %q, want ok", got)
+			}
+		})
+	}
+}
+
 func TestBashWrapperSourcesUserHookOncePerShell(t *testing.T) {
 	root := t.TempDir()
 	userHook := filepath.Join(root, "user_bash_env")
@@ -154,14 +189,14 @@ func writeNestedShellFile(t *testing.T, path, content string) {
 	}
 }
 
-func runNestedLoginShell(t *testing.T, shell string, env map[string]string, command string) string {
+func runNestedLoginShell(t *testing.T, shell string, env map[string]string, command string, flags ...string) string {
 	t.Helper()
 	if _, err := os.Stat(shell); err != nil {
 		t.Skipf("%s not installed", shell)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, shell, "-c", command)
+	cmd := exec.CommandContext(ctx, shell, append(flags, "-c", command)...)
 	cmd.WaitDelay = time.Second
 	for key, value := range env {
 		cmd.Env = append(cmd.Env, key+"="+value)
