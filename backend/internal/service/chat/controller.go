@@ -220,6 +220,7 @@ type Controller struct {
 	// workspacePath is the worktree whose files are snapshotted before each turn
 	// and restored by a rollback.
 	workspacePath string
+	started       time.Time
 
 	conv                   ports.ChatConversation
 	store                  Store

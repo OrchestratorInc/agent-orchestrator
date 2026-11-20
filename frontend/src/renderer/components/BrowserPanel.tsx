@@ -1,5 +1,7 @@
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { BrowserIcon } from "./icons";
+import { BrowserSiteBlockRow, continueLabel, useUserBrowser } from "./BrowserContinueElsewhere";
+import { canOpenInUserBrowser } from "../../shared/browser-site-block";
 import {
 	memo,
 	useCallback,
@@ -466,6 +468,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		setAnnotationMode,
 		annotationAction = async () => undefined,
 	} = browserView;
+	const userBrowser = useUserBrowser();
 	const [urlInput, setUrlInput] = useState(navState.url);
 	// A popped-out panel is portaled outside #root; the popout flag covers that
 	// case, so this one marks only a live page docked inside the shell.
@@ -486,6 +489,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
 	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
+	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { agentTab: onAgentTab }) && !browserUnavailable;
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
@@ -716,6 +720,20 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			showGlobalToast(t("browser.screenshotCopied"), undefined, "top-center");
 		} catch {
 			showGlobalToast(t("browser.screenshotFailed"), undefined, "top-center");
+		}
+	}, [showGlobalToast, t, viewId]);
+
+	// The browser menu's way out, for any page detection did not catch.
+	const openPageElsewhere = useCallback(async () => {
+		try {
+			const used = await window.ao?.browser.openInUserBrowser(viewId);
+			showGlobalToast(
+				used?.name ? t("browser.continueElsewhere.openedIn", { browser: used.name }) : t("browser.continueElsewhere.openedInYourBrowser"),
+				undefined,
+				"top-center",
+			);
+		} catch {
+			showGlobalToast(t("browser.continueElsewhere.failed"), undefined, "top-center");
 		}
 	}, [showGlobalToast, t, viewId]);
 
@@ -1594,7 +1612,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						</DropdownMenuItem>
 							</>
 						) : controlsView === "approvals" && approvalSessionId ? (
-							<ApprovalModeMenuItems sessionId={approvalSessionId} onBack={() => setControlsView("root")} />
+							<ApprovalModeMenuItems sessionId={approvalSessionId} hostId={session.hostId} onBack={() => setControlsView("root")} />
 						) : controlsView === "profiles" ? (
 							<>
 								<DropdownMenuItem
@@ -1666,7 +1684,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 								</DropdownMenuItem>
 								{approvalSessionId ? (
-									<ApprovalModeMenuRow sessionId={approvalSessionId} onOpen={() => setControlsView("approvals")} />
+									<ApprovalModeMenuRow sessionId={approvalSessionId} hostId={session.hostId} onOpen={() => setControlsView("approvals")} />
 								) : null}
 								<DropdownMenuItem
 									className="gap-2"
@@ -1680,6 +1698,10 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 								<DropdownMenuItem className="gap-2" disabled={!canTakeScreenshot} onSelect={() => void takeScreenshot()}>
 									<Camera aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t("browser.takeScreenshot")}</span>
+								</DropdownMenuItem>
+								<DropdownMenuItem className="gap-2" disabled={!canOpenElsewhere} onSelect={() => void openPageElsewhere()}>
+									<ExternalLink aria-hidden="true" className="size-icon-base shrink-0" />
+									<span className="flex-1">{continueLabel(t, userBrowser, "open")}</span>
 								</DropdownMenuItem>
 								<DropdownMenuItem className="gap-2" onSelect={() => openGlobalSettings("browserProfiles")}>
 									<Download aria-hidden="true" className="size-icon-base shrink-0" />
@@ -1697,6 +1719,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 				</DropdownMenu>
 				</div>
 			</div>
+			<BrowserSiteBlockRow siteBlock={navState.siteBlock} viewId={viewId} />
 			<AnimatePresence initial={false}>
 				{annotationMode ? (
 					<motion.div
@@ -1884,7 +1907,6 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
 				actionPinned
-				actionPosition="end"
 				active={selected}
 				buttonProps={{
 					...attributes,
@@ -1934,7 +1956,6 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={noop} />}
 				actionPinned
-				actionPosition="end"
 				active={tab.active}
 				buttonProps={{ tabIndex: -1, type: "button" }}
 				icon={<BrowserTabIcon favicon={tab.favicon} />}

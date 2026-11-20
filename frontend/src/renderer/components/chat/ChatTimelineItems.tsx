@@ -158,7 +158,7 @@ import { actionDetailLines, describeConversationActivity } from "./activity-acti
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
+import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -1067,7 +1067,7 @@ export function formatTime(iso: string): string {
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
 
-function formatMessageTimestamp(iso: string, now = new Date()): string {
+export function formatMessageTimestamp(iso: string, now = new Date()): string {
 	const parsed = new Date(iso);
 	if (Number.isNaN(parsed.getTime())) return "";
 
@@ -1111,6 +1111,30 @@ export function QueuedNote() {
 const WORKER_REPORT_OPEN = "<ao-worker-reports>";
 const WORKER_REPORT_CLOSE = "</ao-worker-reports>";
 
+const ANNOTATION_PLACEHOLDER = /^Use the attached \d+ (?:chat excerpt|annotation)\(s\) as context$/;
+
+export function withoutAnnotationPlaceholder(text: string, annotationCount: number): string {
+	return annotationCount > 0 && ANNOTATION_PLACEHOLDER.test(text.trim()) ? "" : text;
+}
+
+type SteerContent = NonNullable<ConversationActivity["detail"]>["content"];
+
+export function steerAnnotations(content: SteerContent = []): ChatAnnotationSummaryItem[] {
+	return content.flatMap((item): ChatAnnotationSummaryItem[] => {
+		if (item.type === "file_reference" && item.fileReference) {
+			return [{ fileReference: item.fileReference, id: item.fileReference.id, order: item.fileReference.order, text: "" }];
+		}
+		if (item.type !== "excerpt") return [];
+		const ref = item.excerpt?.reference;
+		const text = item.excerpt?.selectedText || ref?.text || item.text || "";
+		if (!text && !ref?.snapshot?.badgeOnly) return [];
+		return [{
+			id: ref?.id, order: ref?.order, text, comment: ref?.comment, snapshot: ref?.snapshot,
+			conversationId: ref?.conversationId, messageId: ref?.messageId, revision: ref?.revision,
+		}];
+	});
+}
+
 export function humanVisibleText(text: string): string {
 	if (!text.endsWith(WORKER_REPORT_CLOSE)) return text;
 	const reportStart = text.lastIndexOf(`\n\n${WORKER_REPORT_OPEN}\n`);
@@ -1139,6 +1163,8 @@ export function HumanMessage({
 	branchPoint,
 	onActivateBranch,
 	activateBranchPending = false,
+	activateBranchDisabled = false,
+	activateBranchTarget,
 	activateBranchError,
 	onSelectAnnotation,
 	status,
@@ -1167,6 +1193,8 @@ export function HumanMessage({
 	branchPoint?: ConversationBranchPoint;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/**
@@ -1178,10 +1206,10 @@ export function HumanMessage({
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
-	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
 		(content) => (content.type === "excerpt" && (Boolean(content.text) || content.snapshot?.badgeOnly === true)) || Boolean(content.fileReference),
 	);
+	const { body, attachments } = stagedAttachmentParts(withoutAnnotationPlaceholder(visibleMessageText, excerptReferences.length));
 	const annotationSummary = excerptReferences.length > 0 ? (
 		<ChatAnnotationSummary
 			annotations={excerptReferences.map((excerpt) => ({
@@ -1194,7 +1222,6 @@ export function HumanMessage({
 				snapshot: excerpt.snapshot,
 			}))}
 			onSelect={onSelectAnnotation}
-			tile
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
@@ -1315,7 +1342,14 @@ export function HumanMessage({
 						<ConversationBranchNavigator
 							point={branchPoint}
 							pending={activateBranchPending}
-							error={activateBranchError}
+							disabled={activateBranchDisabled}
+							error={
+								!activateBranchTarget ||
+								branchPoint.previousBranchId === activateBranchTarget ||
+								branchPoint.nextBranchId === activateBranchTarget
+									? activateBranchError
+									: undefined
+							}
 							onActivate={onActivateBranch}
 						/>
 					) : null}
@@ -3496,13 +3530,16 @@ export function SteerMessage({
 	activity,
 	sessionId,
 	apiBaseUrl = getApiBaseUrl(),
+	onSelectAnnotation,
 }: {
 	activity: ConversationActivity;
 	sessionId: string;
 	apiBaseUrl?: string | null;
+	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
 	const [expanded, setExpanded] = useState(false);
-	const text = activity.detail?.text ?? activity.summary;
+	const annotations = steerAnnotations(activity.detail?.content);
+	const text = withoutAnnotationPlaceholder(activity.detail?.text ?? activity.summary, annotations.length);
 	const senderSessionId = activity.detail?.senderSessionId?.trim();
 	const senderProjectId = activity.detail?.senderProjectId?.trim();
 	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
@@ -3524,7 +3561,11 @@ export function SteerMessage({
 	// Composer images are recorded twice: once as durable staged paths and once as
 	// native prompt blocks. Suppress only the corresponding leading native images;
 	// later image blocks may be distinct provider content and must remain visible.
+	const annotationSummary = annotations.length > 0
+		? <ChatAnnotationSummary annotations={annotations} onSelect={onSelectAnnotation} />
+		: null;
 	const remainingContent = (activity.detail?.content ?? []).filter((item) => {
+		if (item.type === "excerpt" || item.type === "file_reference") return false;
 		if (item.type !== "image" || stagedImagesToMatch === 0) return true;
 		stagedImagesToMatch -= 1;
 		return false;
@@ -3538,12 +3579,13 @@ export function SteerMessage({
 					<SessionLinkedText text={preview} />
 				</p>
 			) : null}
+				{annotationSummary ? <div className={cn(body && "mt-2")}>{annotationSummary}</div> : null}
 				<StagedAttachmentItems
 					paths={attachments}
 					sessionId={sessionId}
 					apiBaseUrl={apiBaseUrl}
 					ariaLabel="Steered attachments"
-					className={cn(body && "mt-2")}
+					className={cn((body || annotationSummary) && "mt-2")}
 				/>
 				<ConversationContentItems
 					content={remainingContent}
@@ -3567,8 +3609,9 @@ export function SteerMessage({
 			) : (
 				<>
 					{/* As on a sent message: attachments above the text, outside its bubble. */}
-					{attachments.length > 0 || remainingContent.length > 0 ? (
+					{annotationSummary || attachments.length > 0 || remainingContent.length > 0 ? (
 						<AttachmentStrip>
+							{annotationSummary}
 							<StagedAttachmentItems
 								paths={attachments}
 								sessionId={sessionId}
@@ -3585,7 +3628,7 @@ export function SteerMessage({
 							/>
 						</AttachmentStrip>
 					) : null}
-					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
+					{body || (!annotationSummary && attachments.length === 0 && remainingContent.length === 0) ? (
 						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 							{body ? (
 								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>

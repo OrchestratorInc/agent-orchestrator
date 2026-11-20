@@ -49,12 +49,14 @@ var executableHarness = map[string]domain.AgentHarness{
 	"codewhale":    domain.HarnessCodewhale,
 	"codew":        domain.HarnessCodewhale,
 	"mimo":         domain.HarnessMiMoCode,
+	"mcode":        domain.HarnessMiniMaxCode,
 	"memcode":      domain.HarnessMemcode,
 	"dsh":          domain.HarnessDeepSeek,
 	"openhands":    domain.HarnessOpenHands,
 	"command-code": domain.HarnessCommandCode,
 	"cmdc":         domain.HarnessCommandCode,
 	"hermes":       domain.HarnessHermes,
+	"stakpak":      domain.HarnessStakpak,
 }
 
 // packageDirHarness names harnesses whose launcher runs a generic script from

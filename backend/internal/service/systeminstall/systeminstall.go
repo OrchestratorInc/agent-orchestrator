@@ -46,47 +46,51 @@ type Target string
 
 // The exhaustive set of installable targets. No other value is ever accepted.
 const (
-	TargetTmux        Target = "tmux"
-	TargetGH          Target = "gh"
-	TargetClaude      Target = "claude"
-	TargetClaudeCode  Target = "claude-code"
-	TargetCodex       Target = "codex"
-	TargetCursor      Target = "cursor"
-	TargetOpencode    Target = "opencode"
-	TargetOpencodeV2  Target = "opencode-v2"
-	TargetAider       Target = "aider"
-	TargetCopilot     Target = "copilot"
-	TargetGrok        Target = "grok"
-	TargetKimi        Target = "kimi"
-	TargetPi          Target = "pi"
-	TargetAmp         Target = "amp"
-	TargetAuggie      Target = "auggie"
-	TargetDroid       Target = "droid"
-	TargetCrush       Target = "crush"
-	TargetCline       Target = "cline"
-	TargetGoose       Target = "goose"
-	TargetQwen        Target = "qwen"
-	TargetGemini      Target = "gemini"
-	TargetContinue    Target = "continue"
-	TargetDevin       Target = "devin"
-	TargetKiro        Target = "kiro"
-	TargetKilocode    Target = "kilocode"
-	TargetVibe        Target = "vibe"
-	TargetMuse        Target = "muse"
-	TargetAgy         Target = "agy"
-	TargetAutohand    Target = "autohand"
-	TargetKimchi      Target = "kimchi"
-	TargetPrimeAgent  Target = "prime-agent"
-	TargetOMP         Target = "omp"
-	TargetFX          Target = "fx"
-	TargetUnreal      Target = "unreal-agent"
-	TargetCodewhale   Target = "codewhale"
-	TargetMiMoCode    Target = "mimo-code"
-	TargetDeepSeek    Target = "deepseek-harness"
-	TargetOpenHands   Target = "openhands"
-	TargetCommandCode Target = "command-code"
-	TargetMemcode     Target = "memcode"
-	TargetHermes      Target = "hermes"
+	TargetTmux            Target = "tmux"
+	TargetGH              Target = "gh"
+	TargetClaude          Target = "claude"
+	TargetClaudeCode      Target = "claude-code"
+	TargetCodex           Target = "codex"
+	TargetCursor          Target = "cursor"
+	TargetOpencode        Target = "opencode"
+	TargetOpencodeV2      Target = "opencode-v2"
+	TargetAider           Target = "aider"
+	TargetCopilot         Target = "copilot"
+	TargetGrok            Target = "grok"
+	TargetKimi            Target = "kimi"
+	TargetPi              Target = "pi"
+	TargetAmp             Target = "amp"
+	TargetAuggie          Target = "auggie"
+	TargetDroid           Target = "droid"
+	TargetCrush           Target = "crush"
+	TargetCline           Target = "cline"
+	TargetGoose           Target = "goose"
+	TargetQwen            Target = "qwen"
+	TargetGemini          Target = "gemini"
+	TargetContinue        Target = "continue"
+	TargetDevin           Target = "devin"
+	TargetKiro            Target = "kiro"
+	TargetKilocode        Target = "kilocode"
+	TargetVibe            Target = "vibe"
+	TargetMuse            Target = "muse"
+	TargetAgy             Target = "agy"
+	TargetAutohand        Target = "autohand"
+	TargetKimchi          Target = "kimchi"
+	TargetPrimeAgent      Target = "prime-agent"
+	TargetOMP             Target = "omp"
+	TargetFX              Target = "fx"
+	TargetUnreal          Target = "unreal-agent"
+	TargetCodewhale       Target = "codewhale"
+	TargetMiMoCode        Target = "mimo-code"
+	TargetMiniMaxCode     Target = "minimax-code"
+	TargetDeepSeek        Target = "deepseek-harness"
+	TargetOpenHands       Target = "openhands"
+	TargetCommandCode     Target = "command-code"
+	TargetDockerAgent     Target = "docker-agent"
+	TargetMemcode         Target = "memcode"
+	TargetHermes          Target = "hermes"
+	TargetStakpak         Target = "stakpak"
+	TargetOpenInterpreter Target = "open-interpreter"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -102,8 +106,8 @@ var agentTargets = []Target{
 	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen, TargetGemini,
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
-	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetMemcode, TargetHermes,
+	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetMiniMaxCode, TargetDeepSeek, TargetOpenHands,
+	TargetCommandCode, TargetDockerAgent, TargetMemcode, TargetHermes, TargetStakpak, TargetOpenInterpreter,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -342,7 +346,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,open-interpreter,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status    `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string    `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string    `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -1489,6 +1493,12 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 			strings.Contains(out.String(), "The existing installation was not changed.") {
 			message = fmt.Sprintf("Autohand could not start the downloaded CLI; the existing installation was not changed. Its startup check can time out on a busy machine. Let other updates finish, then retry. (%v)", runErr)
 		}
+		// Cursor's update service accepts anonymous requests but rejects a
+		// stale or revoked saved login, which `cursor-agent status` still
+		// reports as logged in. Without a stored login the update succeeds.
+		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
+			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
+		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
@@ -2048,7 +2058,7 @@ func minimumNodeVersionForTarget(target Target) [3]int {
 		return [3]int{20, 0, 0}
 	case TargetClaudeCode, TargetQwen, TargetAutohand:
 		return [3]int{22, 0, 0}
-	case TargetPi:
+	case TargetPi, TargetMiniMaxCode:
 		return [3]int{22, 19, 0}
 	default:
 		return [3]int{16, 0, 0}

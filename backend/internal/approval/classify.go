@@ -175,7 +175,7 @@ func Classify(target Target, mode Mode) Verdict {
 		name, role = instructionTarget(target.Instruction)
 	}
 	verdict := classifyRisk(action, role, name, target)
-	if !verdict.NeedsApproval && mode == ModeEverySubmit && target.IsSubmit {
+	if !verdict.NeedsApproval && mode == ModeEverySubmit && target.IsSubmit && submitsByPress(action, role, target.Key) {
 		verdict = Verdict{NeedsApproval: true, Category: CategorySubmit, Reason: "This submits a form, and this session asks before every form submission."}
 	}
 	if verdict.NeedsApproval {
@@ -184,14 +184,35 @@ func Classify(target Target, mode Mode) Verdict {
 	return verdict
 }
 
+// submitsByPress is false only for a press that cannot submit: a key other
+// than Enter or Space, or Space outside a control (where it types).
+func submitsByPress(action, role, key string) bool {
+	if action != "press" {
+		return true
+	}
+	if IsEnterKey(key) {
+		return true
+	}
+	return IsActivationKey(key) && isActivatable(role)
+}
+
+func isActivatable(role string) bool {
+	return role == "button" || role == "link" || role == "menuitem"
+}
+
 func classifyRisk(action, role, name string, target Target) Verdict {
 	if action == "press" {
-		if !IsEnterKey(target.Key) {
+		if !IsActivationKey(target.Key) {
 			return Verdict{}
 		}
-		if role == "button" || role == "link" || role == "menuitem" {
-			// Enter on a focused control activates it, exactly like a click.
+		if isActivatable(role) {
+			// Enter or Space on a focused control activates it, exactly
+			// like a click.
 			return classifyRisk("click", role, name, target)
+		}
+		if !IsEnterKey(target.Key) {
+			// Space elsewhere types or scrolls; only Enter submits a form.
+			return Verdict{}
 		}
 		if target.IsSubmit {
 			// Enter submits the form as its default button would.
@@ -379,7 +400,35 @@ func IsEnterKey(key string) bool {
 		}
 	}
 	last = strings.ToLower(last)
-	return last == "enter" || last == "return"
+	return last == "enter" || last == "return" || last == "numpadenter"
+}
+
+// IsActivationKey reports whether a press can activate the focused control:
+// Enter (see IsEnterKey) or Space, under any of the names runtimes accept for
+// it. A chord ending in "+ " is Space too, so the raw key is checked first.
+func IsActivationKey(key string) bool {
+	if key == " " || strings.HasSuffix(key, "+ ") {
+		return true
+	}
+	if IsEnterKey(key) {
+		return true
+	}
+	last := ""
+	for _, part := range strings.Split(key, "+") {
+		if part = strings.TrimSpace(part); part != "" {
+			last = part
+		}
+	}
+	last = strings.ToLower(last)
+	return last == "space" || last == "spacebar"
+}
+
+// keyLabel names a pressed key for a prompt.
+func keyLabel(key string) string {
+	if IsEnterKey(key) {
+		return "Enter"
+	}
+	return "Space"
 }
 
 // normalize lowercases and turns punctuation and any Unicode space into
@@ -410,9 +459,14 @@ func summarize(action string, target Target) string {
 	case "dblclick":
 		text = fmt.Sprintf("Double-click %q", label)
 	case "press":
-		text = fmt.Sprintf("Press Enter in %q", label)
-		if label == "" {
-			text = "Press Enter"
+		key := keyLabel(target.Key)
+		switch {
+		case label == "":
+			text = "Press " + key
+		case key == "Space":
+			text = fmt.Sprintf("Press Space on %q", label)
+		default:
+			text = fmt.Sprintf("Press Enter in %q", label)
 		}
 	case "act":
 		if label == "" {

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
@@ -103,16 +104,68 @@ describe("render activity", () => {
 		expect(inline.getAttribute("src")).toBe(src);
 	});
 
-	it("shows a note instead of a frame in a remote host's chat", () => {
-		// The local daemon has no copy of a remote host's render, and the remote
-		// proxy URL carries a capability token the page could read.
-		render(
-			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
-				<ActivityRow activity={renderActivity()} />
-			</ChatImageSourceProvider>,
-		);
-		expect(document.querySelector("iframe")).toBeNull();
-		expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+	describe("in a remote host's chat", () => {
+		const renderOrigin = "http://ao-preview-0123.localhost:4000";
+		afterEach(() => vi.restoreAllMocks());
+
+		function remoteChat(baseUrl?: string) {
+			return render(
+				<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+					<ActivityRow activity={renderActivity()} />
+				</ChatImageSourceProvider>,
+			);
+		}
+
+		it("frames the page from the proxy's render origin, sandboxed, without the proxy token", async () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-0123\.localhost:4000\/r1#ao-theme=/));
+			expect(previewUrl).toHaveBeenCalledWith("h_box", "proj-1", "/api/v1/sessions/proj-1/renders/r1");
+			expect(frame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+		});
+
+		it("reads the source from the render origin and offers no local-only actions", async () => {
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>chart</p>"));
+			const user = userEvent.setup();
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			await user.click(screen.getByRole("button", { name: "Expand page" }));
+			const dialog = screen.getByRole("dialog");
+			for (const name of ["Save as artifact", "Open in Orchestrator Browser", "Open in external browser"]) {
+				expect(within(dialog).queryByRole("button", { name })).toBeNull();
+			}
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			await waitFor(() => expect(fetch).toHaveBeenCalledWith(`${renderOrigin}/r1?source=1`, expect.anything()));
+		});
+
+		it("drops the previous origin while a reconnected host's lookup is pending", async () => {
+			let resolveNext!: (url: string) => void;
+			vi.spyOn(aoBridge.remotes, "previewUrl")
+				.mockResolvedValueOnce(`${renderOrigin}/r1`)
+				.mockReturnValueOnce(new Promise((resolve) => (resolveNext = resolve)));
+			const chat = (baseUrl: string) => (
+				<TooltipProvider>
+					<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+						<ActivityRow activity={renderActivity()} />
+					</ChatImageSourceProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(chat("http://127.0.0.1:4000/tok123"));
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			rerender(chat("http://127.0.0.1:4001/tok456"));
+			expect(document.querySelector("iframe")).toBeNull();
+			act(() => resolveNext("http://ao-preview-4567.localhost:4001/r1"));
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-4567\.localhost:4001\/r1#/));
+		});
+
+		it("shows the note while the host is not connected", () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
+			remoteChat();
+			expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+			expect(previewUrl).not.toHaveBeenCalled();
+			expect(document.querySelector("iframe")).toBeNull();
+		});
 	});
 
 	it("frames the page in a local chat", () => {

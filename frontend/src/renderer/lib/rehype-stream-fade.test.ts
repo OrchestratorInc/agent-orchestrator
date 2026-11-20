@@ -42,8 +42,10 @@ describe("rehypeStreamFade", () => {
 	});
 
 	it("leaves a block over the size cap plain", () => {
-		expect(spans(html("x".repeat(4000)))).toBe(4000);
-		expect(spans(html("x".repeat(4001)))).toBe(0);
+		expect(spans(html("x".repeat(1000)))).toBe(1000);
+		const text = "x".repeat(1001);
+		expect(html(text)).toBe(`<p>${text}</p>`);
+		expect(html(`${text} **bold**`)).toBe(`<p>${text} <strong>bold</strong></p>`);
 	});
 
 	it("leaves source text before the settled offset plain", () => {

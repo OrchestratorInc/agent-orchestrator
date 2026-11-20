@@ -45,6 +45,8 @@ A worker can request a review of its own PR: inside the worker, `ao review trigg
 
 In the inspector, choose the reviewer harness (and offered model/mode), start the run, then open its Chat or terminal surface. Read the result, then use **Send to worker agent** in the review actions to send its findings to the worker. A reviewer harness can have different permissions from the worker; an experimental reviewer is not automatically sandboxed. If the trigger is unavailable, check the linked PR, reviewer readiness, and the reason shown by the UI. `ao review ls` shows the run state; `ao review cancel` stops a run that should not continue.
 
+Every review run always ends on its own. A run is `queued`, then `launching` while the reviewer starts, then `running` once it has the task, and `cancelling` while a stop is confirmed. It ends `completed` (a verdict was submitted), `failed`, `cancelled`, or `superseded` (a newer commit replaced it). The daemon fails a run whose reviewer never starts working, exits, goes idle without submitting, or runs past its time limit, and force-stops a reviewer that ignores a cancel. `ao review ls` shows the reason for a failed run, for example `failed (turn_ended_without_submit)`; the inspector shows "Review failed. Please try again." with a Retry action.
+
 Enable automatic review per session, or use the project `autoReview` default for future workers. It starts only for an eligible PR head while the worker is idle. In **Files**, inspect workspace or PR changes and available commits; local inspection does not automatically publish a review. The mobile review and reviewer views expose the corresponding session results.
 
 ## Best practices

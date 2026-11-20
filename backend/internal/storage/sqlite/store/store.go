@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 // CDC is captured by DB triggers (migration 0001), NOT by this layer: the store
 // never writes change_log, it only reads it for the CDC poller.
 type Store struct {
+	stopTimestampRepair   func()
 	writeDB               *sql.DB
 	readDB                *sql.DB
 	qw                    *gen.Queries // bound to the single writer connection
@@ -173,6 +175,11 @@ func (m *contextMutex) holder() string {
 }
 
 type conversationProjectionTxKey struct{}
+type conversationProjectionDBKey struct{}
+
+func projectionContext(ctx context.Context, q *gen.Queries, db gen.DBTX) context.Context {
+	return context.WithValue(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationProjectionDBKey{}, db)
+}
 
 // conversationWriter returns the transaction-bound query set when a provider
 // event projection is in progress. Otherwise it acquires the ordinary single
@@ -199,14 +206,36 @@ func NewStore(writeDB, readDB *sql.DB) *Store {
 	return &Store{
 		writeDB: writeDB,
 		readDB:  readDB,
-		qw:      gen.New(writeDB),
-		qr:      gen.New(readDB),
+		qw:      gen.New(utcTimes{writeDB}),
+		qr:      gen.New(utcTimes{readDB}),
 		writeMu: newContextMutex(),
 	}
 }
 
+// StartTimestampRepair lets health and readers run while legacy timestamps are
+// normalized. Close cancels and joins the worker before closing its pools.
+func (s *Store) StartTimestampRepair(repair func(context.Context) error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	s.stopTimestampRepair = func() { cancel(); <-done }
+	go func() {
+		defer close(done)
+		start := time.Now()
+		if err := repair(ctx); err != nil {
+			if ctx.Err() == nil {
+				slog.Error("timestamp repair failed; will retry on next open", "error", err)
+			}
+			return
+		}
+		slog.Info("timestamp repair completed", "duration", time.Since(start))
+	}()
+}
+
 // Close closes every pool.
 func (s *Store) Close() error {
+	if s.stopTimestampRepair != nil {
+		s.stopTimestampRepair()
+	}
 	err := s.writeDB.Close()
 	if e := s.readDB.Close(); e != nil && err == nil {
 		err = e
@@ -232,7 +261,11 @@ func (s *Store) inTx(ctx context.Context, what string, fn func(*gen.Queries) err
 // while their sqlc artifacts are intentionally regenerated in a later slice.
 func (s *Store) inTxDB(ctx context.Context, what string, fn func(*gen.Queries, gen.DBTX) error) error {
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
-		if err := fn(q, nil); err != nil {
+		db, ok := ctx.Value(conversationProjectionDBKey{}).(gen.DBTX)
+		if !ok {
+			return errors.New("projection transaction database is missing")
+		}
+		if err := fn(q, db); err != nil {
 			return fmt.Errorf("%s: %w", what, err)
 		}
 		return nil
@@ -242,7 +275,7 @@ func (s *Store) inTxDB(ctx context.Context, what string, fn func(*gen.Queries, g
 		return fmt.Errorf("begin %s: %w", what, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := fn(s.qw.WithTx(tx), tx); err != nil {
+	if err := fn(s.txQueries(tx), utcTimes{tx}); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
 	return tx.Commit()

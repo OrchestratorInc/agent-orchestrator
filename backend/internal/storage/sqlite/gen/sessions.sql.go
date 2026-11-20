@@ -1028,12 +1028,16 @@ WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
     AND s.id NOT IN (
         SELECT t.handled_by_session_id FROM conversation_turns t
         JOIN conversations c ON c.id = t.conversation_id
-        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+        LEFT JOIN review r ON r.id = c.review_id
+        WHERE (c.session_id IS NULL OR c.session_id <> t.handled_by_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> t.handled_by_session_id)
     )
     AND s.id NOT IN (
         SELECT c.current_session_id FROM conversations c
+        LEFT JOIN review r ON r.id = c.review_id
         WHERE c.current_session_id IS NOT NULL
             AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> c.current_session_id)
     )
 ORDER BY s.id
 `

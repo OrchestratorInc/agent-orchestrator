@@ -213,3 +213,32 @@ func TestPaymentFormEvidenceBeatsTheButtonLabel(t *testing.T) {
 		t.Fatalf("search form flagged: %+v", got)
 	}
 }
+
+func TestActivationKeysActivateFocusedControls(t *testing.T) {
+	for key, want := range map[string]bool{
+		"Enter": true, "NumpadEnter": true, "Space": true, " ": true, "Spacebar": true, "Shift+Space": true,
+		"Return": true, "Tab": false, "a": false, "": false,
+	} {
+		if IsActivationKey(key) != want {
+			t.Errorf("IsActivationKey(%q) != %v", key, want)
+		}
+	}
+	for _, key := range []string{"Space", "NumpadEnter", " "} {
+		for _, name := range []string{"Place order", "Delete repository"} {
+			if got := Classify(Target{Action: "press", Key: key, Role: "button", Name: name}, ModeRisky); !got.NeedsApproval {
+				t.Errorf("%q on %q not gated", key, name)
+			}
+		}
+		submit := Classify(Target{Action: "press", Key: key, Role: "button", Name: "Continue", IsSubmit: true, FormMethod: "post"}, ModeEverySubmit)
+		if !submit.NeedsApproval {
+			t.Errorf("%q on a submit button not gated in every-submit mode", key)
+		}
+	}
+	// Space types a character in a text field; it does not submit.
+	if got := Classify(Target{Action: "press", Key: "Space", Role: "textbox", Name: "Message", IsSubmit: true, FormMethod: "post"}, ModeEverySubmit); got.NeedsApproval {
+		t.Fatalf("space in a text field gated: %+v", got)
+	}
+	if got := Classify(Target{Action: "press", Key: "Space", Role: "button", Name: "Place order"}, ModeRisky); got.Summary != `Press Space on "Place order"` {
+		t.Fatalf("summary = %q", got.Summary)
+	}
+}

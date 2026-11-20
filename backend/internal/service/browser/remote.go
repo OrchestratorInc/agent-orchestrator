@@ -109,13 +109,13 @@ func classifyRemoteArgs(args []string) remoteGate {
 		}
 		return remoteGate{kind: remoteDescribe, action: command, selector: rest[0]}
 	case "press", "key":
-		if len(rest) > 0 && approval.IsEnterKey(rest[0]) {
+		if len(rest) > 0 && approval.IsActivationKey(rest[0]) {
 			return remoteGate{kind: remoteDescribe, action: "press", key: rest[0]}
 		}
 		return remoteGate{}
 	case "keyboard":
 		for _, word := range rest {
-			if approval.IsEnterKey(word) {
+			if approval.IsActivationKey(word) {
 				return remoteGate{kind: remoteDescribe, action: "press", key: word}
 			}
 		}
@@ -182,11 +182,16 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	}
 	var verdict approval.Verdict
 	if gate.kind == remoteDescribe {
-		target, identified := s.remoteTarget(ctx, gate)
+		target, identified, partial := s.remoteTarget(ctx, gate)
 		target.PageURL, target.PageTitle = pageURL, pageTitle
 		if identified {
 			verdict = approval.Classify(target, mode)
-		} else {
+		}
+		if identified && partial && !verdict.NeedsApproval {
+			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
+				Summary: onSite(fmt.Sprintf("Run %q", command), pageURL),
+				Reason:  "Orchestrator could not read the form this element belongs to, so it asks first."}
+		} else if !identified {
 			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
 				Summary: onSite(fmt.Sprintf("Run %q", command), pageURL),
 				Reason:  "Orchestrator could not identify the element this acts on, so it asks first."}
@@ -235,49 +240,76 @@ func (s *Service) remotePage(ctx context.Context) (string, string) {
 	return url, title
 }
 
-// remoteTarget describes what a click or Enter would act on. identified is
-// false when nothing about the element could be read.
-func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (approval.Target, bool) {
-	target := approval.Target{Action: gate.action, Key: gate.key, Role: gate.role, Name: gate.name}
-	if gate.name != "" {
-		if target.Role == "" {
-			target.Role = "button"
+// remoteTarget describes what a click, Enter or Space would act on.
+// identified is false when nothing about the element could be read; partial
+// is true when the element was named (by a snapshot ref or a find locator)
+// but the page could not resolve it to one element, so its form is unknown.
+func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target approval.Target, identified, partial bool) {
+	target = approval.Target{Action: gate.action, Key: gate.key, Role: gate.role, Name: gate.name}
+	var request map[string]string
+	switch ref, isRef := snapshotRef(gate.selector); {
+	case gate.name != "":
+		// find: text locators match any control; role locators one role.
+		request = map[string]string{"mode": "named", "role": gate.role, "name": gate.name}
+	case gate.action == "press":
+		// Enter and Space act on the focused element.
+		request = map[string]string{"mode": "focused"}
+	case isRef:
+		// The snapshot gives only role and name; the element itself says
+		// what form it would submit.
+		data, ok := s.remoteData(ctx, "snapshot", "--interactive", "--json")
+		if !ok {
+			return target, false, false
 		}
-		return target, true
-	}
-	if ref, ok := snapshotRef(gate.selector); ok {
-		if data, ok := s.remoteData(ctx, "snapshot", "--interactive", "--json"); ok {
-			if refs, ok := data["refs"].(map[string]interface{}); ok {
-				if entry, ok := refs[ref].(map[string]interface{}); ok {
-					target.Role, _ = entry["role"].(string)
-					target.Name, _ = entry["name"].(string)
-					return target, target.Role != "" || target.Name != ""
-				}
-			}
+		refs, _ := data["refs"].(map[string]interface{})
+		entry, _ := refs[ref].(map[string]interface{})
+		target.Role, _ = entry["role"].(string)
+		target.Name, _ = entry["name"].(string)
+		if target.Role == "" && target.Name == "" {
+			return target, false, false
 		}
-		return target, false
-	}
-	// Enter acts on the focused element; a CSS selector names one directly.
-	request := map[string]string{"mode": "focused"}
-	if gate.action != "press" {
+		request = map[string]string{"mode": "named", "role": target.Role, "name": target.Name}
+	default:
 		request = map[string]string{"mode": "selector", "selector": gate.selector}
 	}
+	named := request["mode"] == "named"
+	if named && target.Role == "" {
+		target.Role = "button"
+	}
+	described, ok := s.remoteDescribe(ctx, request)
+	if !ok || described.Partial {
+		// A named element without its form facts may still submit one.
+		return target, named, named
+	}
+	described.Action, described.Key = gate.action, gate.key
+	if named && described.Name == "" {
+		described.Role, described.Name = target.Role, target.Name
+	}
+	return described.Target, described.Role != "" || described.Name != "" || described.IsSubmit, false
+}
+
+type remoteFacts struct {
+	approval.Target
+	Partial bool `json:"partial"`
+}
+
+// remoteDescribe runs remoteDescribeScript for request.
+func (s *Service) remoteDescribe(ctx context.Context, request map[string]string) (remoteFacts, bool) {
 	raw, _ := json.Marshal(request)
 	data, ok := s.remoteData(ctx, "eval", fmt.Sprintf(remoteDescribeScript, raw), "--json")
 	if !ok {
-		return target, false
+		return remoteFacts{}, false
 	}
 	facts, ok := data["result"].(map[string]interface{})
 	if !ok {
-		return target, false
+		return remoteFacts{}, false
 	}
 	encoded, _ := json.Marshal(facts)
-	var described approval.Target
+	var described remoteFacts
 	if json.Unmarshal(encoded, &described) != nil {
-		return target, false
+		return remoteFacts{}, false
 	}
-	described.Action, described.Key = gate.action, gate.key
-	return described, described.Role != "" || described.Name != "" || described.IsSubmit
+	return described, true
 }
 
 // snapshotRef reads a snapshot ref as agents write it: "e2" as the snapshot
@@ -317,16 +349,34 @@ func (s *Service) remoteData(ctx context.Context, args ...string) (map[string]in
 // form it would submit. %s is a JSON request.
 const remoteDescribeScript = `(() => {
 const req = %s;
-const el = req.mode === "focused" ? document.activeElement : document.querySelector(req.selector);
-if (!el || el === document.body) return null;
 const clean = (v) => (v || "").replace(/\s+/g, " ").trim().slice(0, 120);
+const roleOf = (el) => {
+  const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
+  return el.getAttribute("role") || (tag === "a" ? "link" : tag === "button" || ["submit", "button", "image"].includes(type) ? "button" : tag === "textarea" || tag === "input" ? "textbox" : "");
+};
+const nameOf = (el) => {
+  const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
+  let name = clean(el.getAttribute("aria-label")) || (tag === "input" && ["submit", "button"].includes(type) ? clean(el.value) : "");
+  if (!name && el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l) name = clean(l.textContent); }
+  return name || clean(el.innerText || el.textContent || el.placeholder);
+};
+let el;
+if (req.mode === "named") {
+  // A snapshot ref or find locator names an element by role and label; it
+  // counts only when exactly one control on the page matches.
+  const want = clean(req.name).toLowerCase();
+  const hits = [...document.querySelectorAll("a,button,input,select,textarea,summary,[role],[onclick],[tabindex]")]
+    .filter((c) => (!req.role || roleOf(c) === req.role) && nameOf(c).toLowerCase() === want);
+  if (hits.length !== 1) return { partial: true };
+  el = hits[0];
+} else {
+  el = req.mode === "focused" ? document.activeElement : document.querySelector(req.selector);
+}
+if (!el || el === document.body) return null;
 const tag = el.tagName.toLowerCase();
 const type = (el.type || "").toLowerCase();
-let role = el.getAttribute("role") || "";
-if (!role) role = tag === "a" ? "link" : tag === "button" || ["submit", "button", "image"].includes(type) ? "button" : tag === "textarea" || tag === "input" ? "textbox" : "";
-let name = clean(el.getAttribute("aria-label")) || (tag === "input" && ["submit", "button"].includes(type) ? clean(el.value) : "");
-if (!name && el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l) name = clean(l.textContent); }
-if (!name) name = clean(el.innerText || el.textContent || el.placeholder);
+const role = roleOf(el);
+const name = nameOf(el);
 const form = el.form || el.closest("form");
 const out = { role, name, tag, inputType: type || undefined, isSubmit: false, formHasPayment: false, formHasPassword: false };
 if (form) {

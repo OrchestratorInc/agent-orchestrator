@@ -158,7 +158,7 @@ func mayActConsequentially(action string, args map[string]interface{}) bool {
 	switch action {
 	case "press":
 		key, _ := args["key"].(string)
-		return approval.IsEnterKey(key)
+		return approval.IsActivationKey(key)
 	case "act":
 		verb, _ := args["action"].(string)
 		verb = strings.ToLower(strings.TrimSpace(verb))

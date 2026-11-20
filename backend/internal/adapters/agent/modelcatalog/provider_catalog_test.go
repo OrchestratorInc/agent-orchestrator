@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestProviderSnapshotIncludesUnconfiguredAndEmptyProviders(t *testing.T) {
   "unconfigured":{"models":[{"id":"same","input":["text","image"]}]},
   "local":{"models":{}},
   "custom":{"apiKey":"never-export","models":[{"id":"same"}]}
- }`))
+ }`), false)
 	if !reflect.DeepEqual(catalog.Providers, []string{"configured", "custom", "local", "unconfigured"}) {
 		t.Fatalf("providers = %v", catalog.Providers)
 	}
@@ -135,7 +136,7 @@ func TestProviderCatalogMissingOrInvalidCacheKeepsDiscoveryUsable(t *testing.T) 
 			t.Fatalf("%s: %#v", agentID, got)
 		}
 	}
-	if got := parseProviderSnapshot([]byte(`not json`)); len(got.Models) != 0 || len(got.Providers) != 0 {
+	if got := parseProviderSnapshot([]byte(`not json`), false); len(got.Models) != 0 || len(got.Providers) != 0 {
 		t.Fatalf("invalid cache: %#v", got)
 	}
 }
@@ -294,22 +295,49 @@ func TestPiInstalledCatalogReadsImportOnlyPiAIAndPrimeAgentFork(t *testing.T) {
 	}
 }
 
+// TestPiModelRecordsCarryTheirThinkingLevels checks the levels match pi-ai's
+// getSupportedThinkingLevels: null drops a level, xhigh needs naming, and a
+// reasoning model without a map gets minimal-high only under Pi's rules.
 func TestPiModelRecordsCarryTheirThinkingLevels(t *testing.T) {
-	models := parseProviderModelRecords([]byte(`[
+	raw := []byte(`[
 		{"id":"gpt-6.1-sol","reasoning":true,"thinkingLevelMap":{"off":null,"minimal":"low","max":"max"}},
 		{"id":"spark","reasoning":true,"thinkingLevelMap":{"xhigh":"xhigh","low":null}},
 		{"id":"plain","reasoning":false,"thinkingLevelMap":{}},
-		{"id":"cached","reasoning":true}
-	]`), "openai-codex")
-	want := map[string][]string{
-		"openai-codex/gpt-6.1-sol": {"minimal", "low", "medium", "high", "xhigh"},
-		"openai-codex/spark":       {"minimal", "medium", "high", "xhigh"},
-		"openai-codex/plain":       nil,
-		"openai-codex/cached":      nil,
+		{"id":"unmapped","reasoning":true}
+	]`)
+	for _, piRules := range []bool{true, false} {
+		unmapped := []string(nil)
+		if piRules {
+			unmapped = []string{"minimal", "low", "medium", "high"}
+		}
+		want := map[string][]string{
+			"openai-codex/gpt-6.1-sol": {"minimal", "low", "medium", "high"},
+			"openai-codex/spark":       {"minimal", "medium", "high", "xhigh"},
+			"openai-codex/plain":       nil,
+			"openai-codex/unmapped":    unmapped,
+		}
+		models := parseProviderModelRecords(raw, "openai-codex", piRules)
+		if len(models) != len(want) {
+			t.Fatalf("piRules=%v models = %#v", piRules, models)
+		}
+		for _, model := range models {
+			if !reflect.DeepEqual(model.Efforts, want[model.ID]) {
+				t.Errorf("piRules=%v %s efforts = %v, want %v", piRules, model.ID, model.Efforts, want[model.ID])
+			}
+		}
 	}
-	for _, model := range models {
-		if !reflect.DeepEqual(model.Efforts, want[model.ID]) {
-			t.Errorf("%s efforts = %v, want %v", model.ID, model.Efforts, want[model.ID])
+}
+
+// TestPiCatalogKeysReplaceSnapshotsWithoutThinkingLevels keeps catalogs saved
+// before discovery kept Pi's thinking metadata from serving levelless models.
+func TestPiCatalogKeysReplaceSnapshotsWithoutThinkingLevels(t *testing.T) {
+	for _, agentID := range []string{"pi", "prime-agent"} {
+		home := t.TempDir()
+		key := (Discoverer{}).CatalogFingerprint(context.Background(), ports.AgentModelDiscoveryRequest{
+			AgentID: agentID, WorkingDir: home, Env: map[string]string{"HOME": home},
+		})
+		if !strings.HasSuffix(key, ":thinking-v3") {
+			t.Errorf("%s catalog key = %q, want a thinking-v3 suffix", agentID, key)
 		}
 	}
 }

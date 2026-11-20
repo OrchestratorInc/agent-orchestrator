@@ -9,7 +9,7 @@ import type { components } from "../../api/schema";
 import { apiErrorException } from "./api-error-exception";
 import { apiClient, eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { useConnectedHosts } from "../hooks/useHostConnection";
-import { baseUrlForHost, clientForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
+import { baseUrlForHost, clientForHost, clientForSessionHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
 import { usesPreviewWorkspaceData } from "./preview-mode";
 import { computeSseRetryDelayMs } from "./sse-backoff";
@@ -25,7 +25,8 @@ export type ApprovalMode = ApprovalPolicy["mode"];
 
 export const pendingApprovalsQueryKey = ["approvals", "pending"] as const;
 export const approvalAuditQueryKey = (sessionId?: string) => ["approvals", "audit", sessionId ?? ""] as const;
-export const approvalPolicyQueryKey = (sessionId?: string) => ["approvals", "policy", sessionId ?? ""] as const;
+export const approvalPolicyQueryKey = (sessionId?: string, hostId?: string) =>
+	["approvals", "policy", hostId ?? "", sessionId ?? ""] as const;
 export const remotePendingApprovalsQueryKey = (hostId: string) => ["approvals", "pending", "host", hostId] as const;
 
 /** Fallback reread of a remote host's requests while its stream is down. */
@@ -66,17 +67,23 @@ export async function fetchApprovalAudit(sessionId?: string, limit = 100): Promi
 	return data.entries;
 }
 
-export async function fetchApprovalPolicy(sessionId?: string): Promise<ApprovalPolicy> {
+/** hostId routes a remote session's policy to the daemon that runs it. */
+export async function fetchApprovalPolicy(sessionId?: string, hostId?: string): Promise<ApprovalPolicy> {
 	if (usesPreviewWorkspaceData) return { mode: "risky", defaultMode: "risky", sites: [] };
-	const { data, error } = await apiClient.GET("/api/v1/approvals/policy", {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/approvals/policy", {
 		params: { query: sessionId ? { sessionId } : {} },
 	});
 	if (error || !data) throw apiErrorException(error, "Could not load approval settings");
 	return data;
 }
 
-export async function setApprovalMode(sessionId: string, mode: ApprovalMode, queryClient?: QueryClient): Promise<ApprovalPolicy> {
-	const { data, error } = await apiClient.PUT("/api/v1/approvals/policy", { body: { sessionId, mode } });
+export async function setApprovalMode(
+	sessionId: string,
+	mode: ApprovalMode,
+	queryClient?: QueryClient,
+	hostId?: string,
+): Promise<ApprovalPolicy> {
+	const { data, error } = await clientForSessionHost(hostId).PUT("/api/v1/approvals/policy", { body: { sessionId, mode } });
 	await queryClient?.invalidateQueries({ queryKey: ["approvals", "policy"] });
 	if (error || !data) throw apiErrorException(error, "Could not save approval settings");
 	return data;
@@ -231,8 +238,11 @@ export function useApprovalAudit(sessionId?: string) {
 	return useQuery({ queryKey: approvalAuditQueryKey(sessionId), queryFn: () => fetchApprovalAudit(sessionId) });
 }
 
-export function useApprovalPolicy(sessionId?: string) {
-	return useQuery({ queryKey: approvalPolicyQueryKey(sessionId), queryFn: () => fetchApprovalPolicy(sessionId) });
+export function useApprovalPolicy(sessionId?: string, hostId?: string) {
+	return useQuery({
+		queryKey: approvalPolicyQueryKey(sessionId, hostId),
+		queryFn: () => fetchApprovalPolicy(sessionId, hostId),
+	});
 }
 
 async function fetchRemotePendingApprovals(hostId: string): Promise<PendingApproval[]> {
