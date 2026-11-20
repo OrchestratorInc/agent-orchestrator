@@ -3,7 +3,7 @@ title: Agent adapters
 description: The agent harnesses built into AO, with terminal and structured Chat capabilities.
 ---
 
-Most agents require a local installation and sign-in. Unreal Agent is built into Orchestrator for macOS and Linux and is Chat-only. For an installed agent, check that Orchestrator can find it and start a session:
+Most agents require a local installation and sign-in. Check that Orchestrator can find your agent, then start a session:
 
 ```bash
 ao agent ls --refresh
@@ -52,10 +52,15 @@ The current daemon registers the following capabilities. Availability still depe
 | `autohand` | Yes | — | Yes |
 | `fx` | Yes | — | — |
 | `unreal-agent` | No | Yes | — |
+| `docker-agent` | No | Yes | — |
 | `mimo-code` | Yes | — | — |
 | `deepseek-harness` | Yes | Yes | — |
 | `openhands` | Yes | — | — |
 | `command-code` | Yes | Yes | — |
+| `mastra-code` | Yes | — | — |
+| `codebuddy` | Yes | — | — |
+| `open-interpreter` | Yes | — | — |
+| `stakpak` | Yes | — | — |
 
 The table shows shipped capabilities, not whether an agent is ready on your machine. Run the catalog for current readiness or when scripting:
 
@@ -96,12 +101,13 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `qwen` | Native ACP |
 | `hermes` | Native ACP (`hermes acp`) |
 | `unreal-agent` | Built into Orchestrator |
+| `docker-agent` | [Docker Agent standalone binary](https://github.com/docker/docker-agent/releases), v1.150.0 or newer; optional native config |
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
 | `command-code` | Native ACP (`cmd acp`) |
 
 Every other harness is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the Orchestrator session and worktree.
 
-Qwen Chat needs version 0.16 or newer; OMP Chat needs version 15 or newer. MiMo Code needs version 0.1.14 or newer and is Terminal UI-only, as is Gemini. Unreal Agent is built into Orchestrator for macOS/Linux, is Chat-only, and requires bypass permissions because it has no interactive approval flow. DeepSeek Chat uses `dsh --profile acp`. Check readiness and the provider options offered by your installed Orchestrator version before launching.
+Qwen Chat needs version 0.16 or newer; OMP Chat needs version 15 or newer. MiMo Code needs version 0.1.14 or newer and is Terminal UI-only, as is Gemini. Unreal Agent is built into Orchestrator for macOS/Linux, is Chat-only, and requires bypass permissions because it has no interactive approval flow. DeepSeek Chat uses `dsh --profile acp`. Stakpak is Terminal UI-only: its ACP server does not reload a conversation's history on `session/load`. Check readiness and the provider options offered by your installed Orchestrator version before launching.
 
 Chat registration does not imply interface handoff support. Use the switch action and its disabled reason in the session UI. Experimental reviewer modes and prompts do not sandbox tools or network access.
 
@@ -138,12 +144,6 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>
 
+Docker Agent supports native ACP Chat on Unix. Without a config of your own, Orchestrator generates a private default config per session from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GOOGLE_API_KEY`/`GEMINI_API_KEY`. To use your own instead, set `AO_DOCKER_AGENT_CONFIG` to an absolute existing YAML config path before launching Orchestrator; its native provider credentials and hooks are preserved. Terminal mode, accept-edits, and reasoning-effort overrides are unavailable. Use the configured model choices. Local authentication is reported as configured or unknown; provider authorization is checked when a task runs.
+
 CodeBuddy Code supports foreground TUI sessions with native Default permissions and exact native resume. Configure CodeBuddy first; Chat and other permission modes are unavailable.
-
-### memcode (TUI only)
-
-Install the official native release binary and configure its endpoint/model before launching AO. AO supports the terminal UI only, with no Chat, interface handoff, agent switching, or reviewer support. The TUI ignores `--model`; AO applies supported native catalog choices through `/model` and waits for native confirmation before sending the task. Custom endpoint models remain selected in native endpoint configuration; AO rejects overrides for those endpoints. Ask, Auto and Bypass map to native `--ask`, `--auto` and `--allow-all`; accept-edits is unsupported and native catastrophic-command checks remain.
-
-Exact restore initializes a taskless empty native composer, sends `/resume <full-native-id>` once, and requires a current-launch native identity witness, real loaded messages and an empty composer before returning success. Missing, malformed, empty or mismatched history fails closed. Private standing instructions use the native session-start hook (ordered chunks bounded by the native 8192-byte per-hook limit, at most 512 KiB total). Splits must preserve native whitespace joining: an oversized paragraph without a safe boundary is rejected rather than truncated; existing user hooks are preserved. Native session-end during `/resume` does not imply process exit. Human native session/configuration switching inside a managed terminal is outside AO's supported lifecycle.
-
-AO installs 64 fixed context hook slots so sessions sharing a workspace keep their own private instructions. Each launch carries its own chunk count, allowing unused slots to return before opening or decoding the private instruction snapshot. Each slot still starts a hook process; launches created before this optimization use the snapshot-reading fallback. AO hooks allow 30 seconds for context emission and identity reporting. Model selection also runs for promptless launches and is confirmed against the exact model ID in the current terminal viewport before a task is sent. Custom endpoints configured in the project launch environment keep native model selection.

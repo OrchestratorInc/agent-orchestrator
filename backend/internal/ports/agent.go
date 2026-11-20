@@ -10,16 +10,8 @@ import (
 )
 
 var (
-	// ErrTerminalMessageNotReady refuses a paste the current rendered surface
-	// cannot take. On its own it means a native decision or an unrecognized
-	// surface; ErrTerminalTurnActive and ErrTerminalComposerDraft join it to name
-	// the retryable cases.
+	// ErrTerminalMessageNotReady refuses a paste into native decisions or drafts.
 	ErrTerminalMessageNotReady = errors.New("terminal composer is not ready for a message")
-	// ErrTerminalTurnActive refuses a paste while the native turn is still running.
-	ErrTerminalTurnActive = errors.New("terminal turn is still active")
-	// ErrTerminalComposerDraft refuses a paste into the human's unsent draft or
-	// alongside keystrokes still being written.
-	ErrTerminalComposerDraft = errors.New("terminal composer holds human input")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.
@@ -307,6 +299,22 @@ type AgentNativeSessionResolver interface {
 	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
 }
 
+// AgentTerminalReplyReader is an optional capability for a Terminal UI harness
+// whose Stop hook omits the turn's reply. The daemon reads the reply from the
+// adapter's native history when a stop arrives without one, so the hook CLI
+// never opens agent storage itself. It returns "" when no reply is available.
+type AgentTerminalReplyReader interface {
+	TerminalTurnReply(ctx context.Context, cfg TerminalReplyConfig) string
+}
+
+// TerminalReplyConfig locates one AO session's adapter-owned native history.
+// NativeSessionID is the hook's native thread, or "" when it reported none.
+type TerminalReplyConfig struct {
+	DataDir         string
+	SessionID       domain.SessionID
+	NativeSessionID string
+}
+
 // NativeSessionResolveConfig identifies one supervised agent launch. DataDir
 // and the two AO ids locate adapter-owned launch metadata without trusting a
 // provider-supplied path.
@@ -314,6 +322,11 @@ type NativeSessionResolveConfig struct {
 	DataDir   string
 	SessionID domain.SessionID
 	LaunchID  string
+	// Env is the session's runtime environment, as the runtime layers it over
+	// the daemon's for the agent process, for adapters whose lookup runs the
+	// agent CLI against a store that project-level settings or credentials
+	// select. nil means the caller has none.
+	Env map[string]string
 }
 
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
@@ -378,6 +391,15 @@ type AgentInterfaceHandoffHistoryProbe interface {
 		nativeConversationID string,
 		env map[string]string,
 	) (bool, error)
+}
+
+// AgentProcessConversationReader is an OPTIONAL capability for agents a user
+// starts by hand in a shell terminal: it names the native conversation a
+// running agent process is in, so the shell can resume exactly that one after
+// the app restarts. pid leads the agent's foreground process group. ok=false
+// when the process does not say.
+type AgentProcessConversationReader interface {
+	ProcessConversationID(ctx context.Context, pid int) (id string, ok bool, err error)
 }
 
 // AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
@@ -576,6 +598,12 @@ const (
 	AgentExitDetectionSupervisor AgentExitDetectionMode = "supervisor"
 )
 
+// AgentInterruptInputProvider selects a native cancellation key for TUIs where
+// Ctrl+C does not cancel the active turn. The input is sent without Enter.
+type AgentInterruptInputProvider interface {
+	InterruptInput() string
+}
+
 // AgentExitDetector is an optional adapter capability. Adapters that omit it
 // keep their existing launch behavior.
 type AgentExitDetector interface {
@@ -648,6 +676,12 @@ type TerminalActivityOptionsProvider interface {
 	TerminalActivityOptions() TerminalActivityOptions
 }
 
+// TurnInterruptKey declares a key that stops a running turn without exiting
+// the harness. Harnesses without this capability refuse explicit Stop turn.
+type TurnInterruptKey interface {
+	InterruptKey() string
+}
+
 // EmptyComposerDetector is an opt-in safety capability for unsolicited
 // coordination sent to an already-running interactive agent. It must return
 // true only when current terminal evidence positively proves that the active
@@ -688,11 +722,16 @@ type WaitingTerminalActivityDetector interface {
 // TerminalActivityDetector, in which case AO waits for an authoritative idle
 // detection. A non-positive timeout always preserves immediate delivery.
 type PromptReadinessHints struct {
-	InitialDelay time.Duration
-	Patterns     []string
-	PollInterval time.Duration
-	Timeout      time.Duration
-	Lines        int
+	// RequireReady refuses delivery when startup markers are absent or the wait budget expires.
+	RequireReady bool
+	// RequireCurrentLaunchSignal requires the lifecycle's first signal for this launch in addition
+	// to a terminal marker. This prevents preserved pane history from proving current readiness.
+	RequireCurrentLaunchSignal bool
+	InitialDelay               time.Duration
+	Patterns                   []string
+	PollInterval               time.Duration
+	Timeout                    time.Duration
+	Lines                      int
 	// RenderedScreen matches against the runtime's rendered current viewport
 	// (StyledTerminalOutputReader) instead of the raw output ring. Full-screen
 	// TUIs draw on the alternate screen, so their text never appears as a
@@ -908,10 +947,18 @@ type RestoreConfig struct {
 	Env map[string]string
 }
 
-// TerminalMessageInputGuard validates pastes under an exclusive input lease
-// against the current rendered viewport. Raw native keys remain available.
+// NativeRestoreVerifier is required by CLIs whose resume command can silently
+// open fresh history. AO checks current-generation native evidence and a
+// rendered viewport before publishing the replacement runtime.
+type NativeRestoreVerifier interface {
+	VerifyNativeRestore(context.Context, RestoreConfig, string, string) (bool, error)
+}
+
+// TerminalMessageInputGuard opts a harness into serialized pane input and
+// validates pasted messages against the current rendered composer. Raw user
+// keystrokes remain available for native decisions and editing drafts.
 type TerminalMessageInputGuard interface {
-	ValidateTerminalPaste(output, message string) error
+	ValidateTerminalMessage(output, message string) error
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

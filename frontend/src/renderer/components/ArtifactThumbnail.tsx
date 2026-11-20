@@ -19,6 +19,7 @@ import { TableFileView } from "./TableFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
 import { useDownscaledImage } from "../lib/downscaled-image";
+import { LOCAL_HOST } from "../lib/hosts";
 
 const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 625;
@@ -26,7 +27,7 @@ const MARKDOWN_PAGE_WIDTH = 700;
 
 const PLAIN_TEXT = /\.(?:txt|json|jsonl|yaml|yml|toml|ini|conf|log|xml|css|js|jsx|ts|tsx|sql|sh|py|go|rs|diff|patch)$/i;
 
-/** Gallery previews load near the viewport; pages keep the isolated inline origin. */
+/** Gallery previews load near the viewport; local pages keep the isolated inline origin, Cloud and remote pages an opaque sandbox. */
 export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_HEIGHT }: { row: ArtifactRow; previewLive?: boolean; /** Layout height of an HTML page, for tiles taller than 16:10. */ pageHeight?: number }) {
 	const { t } = useTranslation();
 	const container = useRef<HTMLSpanElement>(null);
@@ -36,6 +37,9 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	// A Cloud page's frame, by the URL it reported for: a frame for another URL is still loading.
 	const [frame, setFrame] = useState<{ url?: string; state: "loading" | "failed" | "ready" }>({ state: "loading" });
 	const cloud = Boolean(row.cloud);
+	// Another host's page has no inline origin here: it is framed, sandboxed, from its proxy's artifact origin, as a Cloud page is.
+	const remote = !cloud && Boolean(row.hostId && row.hostId !== LOCAL_HOST);
+	const framed = cloud || remote;
 	const imagePath = isRasterImagePath(row.path) || isSvgPath(row.path);
 	const plainText = PLAIN_TEXT.test(row.path);
 	const table = isDelimitedTextPath(row.path);
@@ -48,7 +52,7 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	const rawUrl = cloud ? access.data ? cloudArtifactFileUrl(access.data, row.path, row.updatedAt) : undefined : row.rawUrl;
 	const contentUrl = artifactContentUrl(row.sessionId, row.path, rawUrl);
 	const page = previewLive && row.kind === "html"
-		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
+		? framed ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
 		: undefined;
 	const image = imagePath ? contentUrl : undefined;
 	// A local photo or screenshot shows a small copy: the original is decoded once, off the main
@@ -71,14 +75,14 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 			if (response.status === 404 || response.status === 410) return false;
 			throw new Error(`artifact page check failed: ${response.status}`);
 		},
-		enabled: !cloud && visible && Boolean(page) && Boolean(contentUrl),
+		enabled: !framed && visible && Boolean(page) && Boolean(contentUrl),
 		staleTime: Infinity,
 		gcTime: 10 * 60_000,
 		retry: false,
 	});
-	const pageAvailable = !cloud && page && contentUrl ? (pageCheck.isError ? false : pageCheck.data) : undefined;
+	const pageAvailable = !framed && page && contentUrl ? (pageCheck.isError ? false : pageCheck.data) : undefined;
 	const onFrameState = useCallback((state: "loading" | "failed" | "ready") => setFrame({ url: page, state }), [page]);
-	const frameState = cloud && page ? (frame.url === page ? frame.state : "loading") : undefined;
+	const frameState = framed && page ? (frame.url === page ? frame.state : "loading") : undefined;
 	// A local video shows the frame Chromium paints after a metadata preload,
 	// which reads only the ranges it needs rather than the whole file.
 	const video = !cloud && fileMediaKind(row.path) === "video" ? contentUrl : undefined;
@@ -160,9 +164,9 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		|| (!page && !image && !video && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
 	// A preview that failed to load for a reason that may pass (the network, an expired access link, a read error).
-	const loadFailed = failed || access.isError || (!cloud && Boolean(page) && pageCheck.isError) || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
+	const loadFailed = failed || access.isError || (!framed && Boolean(page) && pageCheck.isError) || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
 	// What a snapshot of this card may wait for: the preview drawn, nothing worth drawing for good, or a failure to try again later.
-	const previewState = accessPending || imagePending || downscaling || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined) || frameState === "loading"
+	const previewState = accessPending || imagePending || downscaling || !visible || (readText && file.isPending) || (page && !framed && pageAvailable === undefined) || frameState === "loading"
 		? "loading"
 		: loadFailed ? "error" : unavailable ? "unavailable" : "content";
 	const placeholder = (
@@ -177,8 +181,16 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 			) : video ? (
 				<video crossOrigin={mediaCrossOrigin(video)} muted onError={() => setFailed(true)} playsInline preload="metadata" src={video} tabIndex={-1} className="h-full w-full object-cover object-top" />
 			) : page ? (
-				cloud ? (
-					<CloudArtifactFrame onAccessGranted={accessGranted} onAccessRefused={refreshAccess} onThumbnailState={onFrameState} thumbnail={{ width, height: pageHeight, fallback: placeholder }} title={row.name} url={page} />
+				framed ? (
+					<CloudArtifactFrame
+						onAccessGranted={cloud ? accessGranted : undefined}
+						onAccessRefused={cloud ? refreshAccess : undefined}
+						onThumbnailState={onFrameState}
+						source={cloud ? "cloud" : "host"}
+						thumbnail={{ width, height: pageHeight, fallback: placeholder }}
+						title={row.name}
+						url={page}
+					/>
 				) : pageAvailable ? (
 					<iframe
 						src={page}

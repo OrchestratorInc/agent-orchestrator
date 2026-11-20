@@ -49,7 +49,9 @@ Only **Default** permissions are qualified. AO preserves native permission
 controls and folder trust, and refuses Auto, Accept Edits and Bypass Permissions.
 Answer native decisions in the terminal. AO message delivery requires the current
 rendered empty composer and refuses drafts, initialization, active work and
-permission/login/trust dialogs under a serialized input lease. Native prompt
+permission/login/trust dialogs under a serialized input lease. AO then waits for
+a started turn or a committed echo of the whole message before admitting more AO
+input; an unconfirmed submission is reported, not retried. Native prompt
 suggestions are conservatively treated as nonempty input; use the native TUI
 or disable suggestions through native settings before sending an AO message.
 

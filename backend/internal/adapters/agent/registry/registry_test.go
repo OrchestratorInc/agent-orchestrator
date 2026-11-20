@@ -345,31 +345,6 @@ func TestCodeBuddyIsTUISelectable(t *testing.T) {
 	}
 }
 
-// The session-manager paste guard and the daemon's terminal admission (which
-// takes ValidateTerminalMessage(message, screen) and a submission witness) are
-// separate contracts. A harness must opt into one: CodeBuddy uses the paste
-// guard, and no other harness, Hermes included, changes path by accident.
-func TestTerminalPasteGuardIsCodeBuddyOnly(t *testing.T) {
-	reg, err := Build()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, harness := range domain.AllHarnesses {
-		adapter, ok := reg.Get(string(harness))
-		if !ok {
-			continue
-		}
-		_, guarded := adapter.(ports.TerminalMessageInputGuard)
-		_, admitted := adapter.(interface{ ValidateTerminalMessage(string, string) error })
-		if guarded != (harness == domain.HarnessCodeBuddy) {
-			t.Errorf("%s paste guard = %v", harness, guarded)
-		}
-		if guarded && admitted {
-			t.Errorf("%s implements both terminal input contracts", harness)
-		}
-	}
-}
-
 func TestMemcodeAdapterIsSelectable(t *testing.T) {
 	reg, err := Build()
 	if err != nil {
@@ -380,6 +355,23 @@ func TestMemcodeAdapterIsSelectable(t *testing.T) {
 		t.Fatal("Memcode is not selectable")
 	}
 	if adapter.Manifest().Name != "memcode" {
+		t.Fatal(adapter.Manifest())
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
+}
+
+func TestStakpakAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("stakpak")
+	if !ok || !domain.HarnessStakpak.IsKnown() {
+		t.Fatal("Stakpak is not selectable")
+	}
+	if adapter.Manifest().Name != "Stakpak" {
 		t.Fatal(adapter.Manifest())
 	}
 	if _, ok := adapter.(ports.Agent); !ok {

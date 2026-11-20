@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -25,6 +26,11 @@ type Config struct {
 	OutputLines int
 	Clock       func() time.Time
 	Logger      *slog.Logger
+	// StartAfter holds the poll loop until it closes; nil starts at once. The
+	// daemon closes it once SetSessionEnv is installed, so no state change is
+	// read, and its native identity resolved, without the session's
+	// environment.
+	StartAfter <-chan struct{}
 }
 
 type sessionSource interface {
@@ -51,6 +57,20 @@ type Observer struct {
 	outputLines int
 	clock       func() time.Time
 	logger      *slog.Logger
+	startAfter  <-chan struct{}
+	sessionEnv  atomic.Pointer[SessionEnvFunc]
+}
+
+// SessionEnvFunc builds the environment a session's agent process runs in.
+type SessionEnvFunc func(ctx context.Context, session domain.SessionRecord) (map[string]string, error)
+
+// SetSessionEnv gives native-identity lookups the session's runtime
+// environment: an adapter whose lookup runs the agent CLI may need a
+// project-level profile or credential the daemon's own environment lacks.
+// The daemon sets it once the session manager exists; lookups before that run
+// without one.
+func (o *Observer) SetSessionEnv(fn SessionEnvFunc) {
+	o.sessionEnv.Store(&fn)
 }
 
 // New builds an activity observer.
@@ -66,6 +86,7 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 		outputLines: cfg.OutputLines,
 		clock:       cfg.Clock,
 		logger:      cfg.Logger,
+		startAfter:  cfg.StartAfter,
 	}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
@@ -92,7 +113,20 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 
 // Start runs polling until the context is canceled.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	if o.startAfter == nil {
+		return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			return
+		case <-o.startAfter:
+		}
+		<-observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	}()
+	return done
 }
 
 // Poll performs one activity reconciliation pass.
@@ -152,16 +186,14 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	var output string
 	var err error
-	if _, guarded := agent.(ports.TerminalMessageInputGuard); requiresRendered || guarded {
-		reader, ok := o.runtime.(interface {
-			GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
-		})
-		if !ok {
-			return
-		}
-		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
-	} else if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
-		output, err = rendered.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	reader, available := o.runtime.(ports.StyledTerminalOutputReader)
+	_, requiresViewport := agent.(ports.TerminalMessageInputGuard)
+	if (requiresViewport || requiresRendered) && !available {
+		return
+	}
+	if available && (requiresViewport || requiresRendered || options.PreferStyledOutput) {
+		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
 	} else {
 		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	}
@@ -179,6 +211,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	nativeID := ""
 	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
 		resolveCfg := ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID}
+		if fn := o.sessionEnv.Load(); fn != nil && *fn != nil {
+			if env, envErr := (*fn)(ctx, session); envErr != nil {
+				o.logger.Debug("activity observer: session environment unavailable", "session", session.ID, "err", envErr)
+			} else {
+				resolveCfg.Env = env
+			}
+		}
 		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, resolveCfg)
 		if resolveErr != nil {
 			// Native identity is optional evidence; a failed lookup must not

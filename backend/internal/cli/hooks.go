@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -144,6 +146,34 @@ func hookCommandMayChangePR(payload []byte) bool {
 		} `json:"tool_input"`
 	}
 	return json.Unmarshal(normalizeHookPayload(payload), &p) == nil && domain.CommandMayChangePR(string(p.ToolInput.Command))
+}
+
+// kimiApprovalID reuses the existing opaque correlation slot for permission
+// callbacks only. Kimi generates a fresh approval UUID, independent of the tool
+// call; session/agent/turn scope also prevents reused IDs from matching a later
+// approval. Hashing the unambiguous tuple keeps the wire key bounded. Incomplete
+// payloads retain the ID-less compatibility path instead of guessing an ID.
+func kimiApprovalID(payload []byte) string {
+	var p struct {
+		ID        string      `json:"id"`
+		SessionID string      `json:"session_id"`
+		AgentID   string      `json:"agent_id"`
+		TurnID    json.Number `json:"turn_id"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil {
+		return ""
+	}
+	for _, value := range []string{p.ID, p.SessionID, p.AgentID} {
+		if value == "" || len(value) > maxActivityMetaLen || domain.SanitizeControlChars(value) != value {
+			return ""
+		}
+	}
+	turn, err := p.TurnID.Int64()
+	if err != nil || turn < 0 {
+		return ""
+	}
+	key := p.SessionID + "\x00" + p.AgentID + "\x00" + strconv.FormatInt(turn, 10) + "\x00" + p.ID
+	return fmt.Sprintf("kimi-approval:%x", sha256.Sum256([]byte(key)))
 }
 
 // claudeSubagentFacts keeps native child identity separate from the resumable
@@ -443,6 +473,10 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	}
 	decodeErr := json.Unmarshal(payload, &p)
 	observedPrompt := firstHookValue(p.Prompt, p.UserPrompt, p.UserPromptCamel)
+	coordinationPrompt := observedPrompt
+	if agent == domain.HarnessClaudeCode {
+		coordinationPrompt = normalizeClaudePastedPrompt(observedPrompt)
+	}
 	var userPrompt, assistant, finalMessage, turnID string
 	origin := domain.ConversationCheckpointOriginUnknown
 	// Conversation checkpoints are trusted only at the main-turn boundaries that
@@ -481,7 +515,7 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	// AO's own handoff request and continuation kickoff are coordination turns,
 	// not the latest real user instruction. They remain in provider history but
 	// must not overwrite deterministic user intent.
-	if isAOCoordinationMessage(observedPrompt) {
+	if isAOCoordinationMessage(coordinationPrompt) {
 		userPrompt = ""
 		assistant = ""
 		finalMessage = ""
@@ -495,7 +529,7 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	if decodeErr != nil {
 		turnRequest, finalMessage = "", ""
 	}
-	coordinationID, _ := domain.CoordinationDeliveryID(observedPrompt)
+	coordinationID, _ := domain.CoordinationDeliveryID(coordinationPrompt)
 	return hookConversationSnapshot{
 		ProviderTurnID:        turnID,
 		LatestUserPrompt:      capHookText(userPrompt, maxHookInteractionLen),
@@ -506,6 +540,69 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 		CoordinationID:        coordinationID,
 		TranscriptPath:        capHookText(firstHookValue(p.TranscriptPath, p.TranscriptPathCamel), maxHookTranscriptPath),
 	}
+}
+
+var claudePastedContentPrefix = regexp.MustCompile(`^<pasted_content id="([A-Za-z0-9_-]+)">`)
+var claudePastedContentTag = regexp.MustCompile(`<pasted_content id="([A-Za-z0-9_-]+)">|</pasted_content(?: id="([A-Za-z0-9_-]+)")?>`)
+var claudePastedContentLeadingClosing = regexp.MustCompile(`^</pasted_content(?: id="([A-Za-z0-9_-]+)")?>`)
+
+// normalizeClaudePastedPrompt removes only Claude's leading paste wrapper.
+// A report envelope can continue after the pasted segment, so keep that suffix.
+// Human text before the wrapper or inside it still precedes the report envelope.
+func normalizeClaudePastedPrompt(prompt string) string {
+	match := claudePastedContentPrefix.FindStringSubmatch(prompt)
+	if match == nil {
+		return prompt
+	}
+	content := strings.TrimPrefix(prompt, match[0])
+	before, after, ok := strings.Cut(content, `</pasted_content id="`+match[1]+`">`)
+	if !ok {
+		before, after, ok = strings.Cut(content, "</pasted_content>")
+	}
+	if !ok {
+		return prompt
+	}
+	return before + after
+}
+
+func reportDeliveryHasOnlyPastedClosers(value string) bool {
+	const reportClose = "</ao-report-delivery>"
+	closeAt := strings.Index(value, reportClose)
+	if closeAt < 0 {
+		return false
+	}
+	suffix := strings.TrimSpace(value[closeAt+len(reportClose):])
+	if suffix == "" {
+		return true
+	}
+	// Each closer, with or without an ID, must close a paste block that is
+	// still open, the same closers normalizeClaudePastedPrompt accepts. A plain
+	// closer closes the innermost block, an ID closer the innermost with its ID.
+	var open []string
+	closeBlock := func(id string) bool {
+		for i := len(open) - 1; i >= 0; i-- {
+			if id == "" || open[i] == id {
+				open = append(open[:i], open[i+1:]...)
+				return true
+			}
+		}
+		return false
+	}
+	for _, tag := range claudePastedContentTag.FindAllStringSubmatch(value[:closeAt], -1) {
+		if tag[1] != "" {
+			open = append(open, tag[1])
+		} else if !closeBlock(tag[2]) {
+			return false
+		}
+	}
+	for suffix != "" {
+		match := claudePastedContentLeadingClosing.FindStringSubmatch(suffix)
+		if len(match) != 2 || !closeBlock(match[1]) {
+			return false
+		}
+		suffix = strings.TrimSpace(suffix[len(match[0]):])
+	}
+	return true
 }
 
 func firstHookValue(values ...string) string {
@@ -519,8 +616,14 @@ func firstHookValue(values ...string) string {
 
 func isAOCoordinationMessage(value string) bool {
 	value = strings.TrimSpace(value)
-	_, reportDelivery := domain.CoordinationDeliveryID(value)
-	return reportDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
+	if _, reportDelivery := domain.ReportDeliveryID(value); reportDelivery {
+		// A report envelope may share a prompt with a human instruction. Keep
+		// the delivery ID for acknowledgement, but only classify the whole
+		// prompt as coordination when only Claude paste closers follow it.
+		return reportDeliveryHasOnlyPastedClosers(value)
+	}
+	_, sessionDelivery := domain.CoordinationDeliveryID(value)
+	return sessionDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
 		strings.HasPrefix(value, "AO transferred the previous agent's context in hidden system instructions.")
 }
 
@@ -614,9 +717,97 @@ func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, paylo
 	}
 }
 
+// claudePostToolUseOutput adds to a Claude Code PostToolUse or
+// PostToolUseFailure result: SystemMessage is shown to the user in the
+// session, AdditionalContext is handed to the model with the tool's result.
+type claudePostToolUseOutput struct {
+	SystemMessage      string `json:"systemMessage,omitempty"`
+	HookSpecificOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	} `json:"hookSpecificOutput"`
+}
+
+// Claude Code's built-in computer use, whose tools Claude Code names
+// mcp__computer-use__<tool>.
+const claudeComputerUseToolPrefix = "mcp__computer-use__"
+
+// envDesktopApp mirrors sessionmanager.EnvDesktopApp: "1" on sessions whose
+// daemon the Orchestrator desktop app started.
+const envDesktopApp = "AO_DESKTOP_APP"
+
+const computerUsePermissionNotice = "Computer use needs Orchestrator to have Accessibility and Screen Recording: macOS checks Orchestrator for " +
+	"everything this session runs, not Claude. Grant them in Orchestrator under Settings > Computer use agents > Native computer use > Grant macOS permissions to Orchestrator, " +
+	"then restart this session's agent if it still says not granted."
+
+const computerUsePermissionContext = "This session runs inside Orchestrator, so macOS checks Orchestrator's permissions, not the Claude desktop app's " +
+	"or a terminal's, for everything it runs. Ignore the advice to grant Claude: tell the user to grant Accessibility and Screen Recording to " +
+	"Orchestrator in Orchestrator's Settings > Computer use agents > Native computer use > Grant macOS permissions to Orchestrator, and that if it still says not granted afterwards, " +
+	"this session's agent needs a restart to see them."
+
+// computerUsePermissionDenied reports whether a tool result is Claude Code's
+// built-in computer use refusing because macOS has not granted Accessibility
+// or Screen Recording ("macOS Accessibility permission(s) are still not
+// granted"). Other refusals, such as the user declining access to one app,
+// keep the tool's own explanation.
+func computerUsePermissionDenied(payload []byte) bool {
+	// Check the tool first: every Claude tool result passes through here, and
+	// only computer use's needs its response read.
+	if toolName, _ := activityMeta(payload); !strings.HasPrefix(toolName, claudeComputerUseToolPrefix) {
+		return false
+	}
+	var p struct {
+		ToolResponse json.RawMessage `json:"tool_response"`
+		Error        string          `json:"error"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return false
+	}
+	for _, text := range []string{string(p.ToolResponse), p.Error} {
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "permission(s) are still not granted") &&
+			(strings.Contains(lower, "accessibility") || strings.Contains(lower, "screen recording")) {
+			return true
+		}
+	}
+	return false
+}
+
+// emitComputerUsePermissionNotice answers a Claude Code computer-use result
+// that macOS refused: the user sees where to grant the permissions, and the
+// model is told to name Orchestrator, whose grants macOS checks for the
+// session, instead of the Claude desktop app its own result names.
+func (c *commandContext) emitComputerUsePermissionNotice(agent, event, sessionID string, payload []byte) {
+	// Only under a desktop-started daemon does macOS check Orchestrator; under
+	// one started from a terminal, Claude's own advice names the right app.
+	if domain.AgentHarness(agent) != domain.HarnessClaudeCode || os.Getenv(envDesktopApp) != "1" {
+		return
+	}
+	var hookEventName string
+	switch event {
+	case "post-tool-use":
+		hookEventName = "PostToolUse"
+	case "post-tool-use-failure":
+		hookEventName = "PostToolUseFailure"
+	default:
+		return
+	}
+	if !computerUsePermissionDenied(payload) {
+		return
+	}
+	var out claudePostToolUseOutput
+	out.SystemMessage = computerUsePermissionNotice
+	out.HookSpecificOutput.HookEventName = hookEventName
+	out.HookSpecificOutput.AdditionalContext = computerUsePermissionContext
+	if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
+		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("write computer use permission notice: %w", err))
+	}
+}
+
 const reviewerPermissionDenyMessage = "Orchestrator headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+	"and the exact submit commands from the review task, fed by a quoted <<'" + ports.ReviewSubmitHeredocDelimiter + "' heredoc " +
+	"or, in a read-only sandbox, by `printf '%s' '<text>' | ...`."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
 // allow the exact submit shapes (claudecode.ReviewerSubmitCommandAllowed, which
@@ -714,10 +905,14 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			c.reportHookFailure(agent, event, sessionID, fmt.Errorf("read stdin: %w", err))
 		}
 	}
+	if agent == string(domain.HarnessOpenInterpreter) && !openinterpreter.IsRootHook(payload) {
+		return nil
+	}
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
 	c.emitArtifactNudge(agent, event, sessionID, payload)
+	c.emitComputerUsePermissionNotice(agent, event, sessionID, payload)
 	if isCursorPermissionHook(agent, event) {
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}
@@ -754,6 +949,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	}
 
 	toolName, toolUseID := activityMeta(payload)
+	if domain.AgentHarness(agent) == domain.HarnessKimi && (event == "permission-request" || event == "permission-resolved") {
+		toolUseID = kimiApprovalID(payload)
+	}
 	if domain.AgentHarness(agent) == domain.HarnessCursor && event == "post-tool-use-failure" {
 		if failureEvent, failureTool, ok := cursor.TerminalFailureCorrelation(payload); ok {
 			event = failureEvent
@@ -765,8 +963,8 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessContinue:
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
-		domain.HarnessOMP, domain.HarnessPi,
-		domain.HarnessAmp, domain.HarnessPrimeAgent:
+		domain.HarnessOMP, domain.HarnessPi, domain.HarnessTau,
+		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessMiniMaxCode:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 		if domain.AgentHarness(agent) == domain.HarnessPi {
 			conversation.TranscriptPath = hookConversationFacts(domain.HarnessPi, event, payload).TranscriptPath
@@ -778,6 +976,16 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if domain.AgentHarness(agent) == domain.HarnessCopilot && event == "stop" && conversation.FinalAssistantMessage == "" {
 		// Copilot's stop hook names its event log instead of carrying the answer.
 		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
+	}
+	if domain.AgentHarness(agent) == domain.HarnessMastraCode && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Mastra's TUI Stop hook omits the answer. The daemon reads it from
+		// native history; the hook only forwards a reply the payload carries.
+		var reply struct {
+			AssistantMessage string `json:"assistant_message"`
+		}
+		if json.Unmarshal(payload, &reply) == nil {
+			conversation.FinalAssistantMessage = capHookText(strings.TrimSpace(reply.AssistantMessage), maxHookInteractionLen)
+		}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{
@@ -1008,7 +1216,7 @@ func shouldEmitSessionStartContext(agent, event string) bool {
 		return false
 	}
 	switch agent {
-	case "agy", "devin":
+	case "agy", "devin", "open-interpreter":
 		return true
 	default:
 		return false

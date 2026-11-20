@@ -93,7 +93,7 @@ func (m *Manager) WaitForMessageDeliveryReady(ctx context.Context, id domain.Ses
 						outputErr = ports.ErrStyledTerminalOutputUnavailable
 					}
 				} else {
-					output, outputErr = m.runtime.GetOutput(ctx, handle, messageDeliveryReadyLines)
+					output, outputErr = m.terminalActivityOutput(ctx, detector, handle, messageDeliveryReadyLines)
 				}
 				if outputErr == nil {
 					state, authoritative := detector.DetectTerminalActivity(output)

@@ -40,6 +40,7 @@ import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
+import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
 	ApprovalMode,
@@ -135,6 +136,7 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen = false,
 	agentSwitch,
 	beforePicker,
+	afterPicker,
 	modelsLoading,
 	lastModel,
 	unsetModelLabel,
@@ -188,6 +190,8 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
+	/** Right after the model control, in either picker, such as the usage-limit sign. */
+	afterPicker?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
@@ -541,6 +545,8 @@ export function TurnSettingsBar({
 							onChange={applyOption}
 						/>
 					) : null}
+
+					{afterPicker}
 
 					{standaloneExecutionMode && onChangeConfigOption ? (
 						<ExecutionModePicker
@@ -1053,7 +1059,7 @@ function restoreComposerFocus(event: Event) {
 	const trigger = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker'][data-shortcut-opened]");
 	if (!trigger) return;
 	delete trigger.dataset.shortcutOpened;
-	const composer = document.querySelector<HTMLElement>('[aria-label="Message the agent"]');
+	const composer = queryShown<HTMLElement>('[aria-label="Message the agent"]');
 	if (!composer || composer.getAttribute("aria-disabled") === "true") return;
 	event.preventDefault();
 	composer.focus();

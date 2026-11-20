@@ -66,6 +66,8 @@ type Config struct {
 	// RetryStartupExit starts the agent once more if it exits during its first handshake.
 	RetryStartupExit bool
 	Launch           func(context.Context, LaunchConfig) (Launch, error)
+	// ValidateEnvironment checks required native configuration before session allocation.
+	ValidateEnvironment func(context.Context, map[string]string) error
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -165,9 +167,6 @@ type Config struct {
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
-	// ValidateConfigOption applies provider restrictions to direct picker changes,
-	// including legacy model/mode setters, before any native request is sent.
-	ValidateConfigOption func(string, ports.ChatConfigOptionValue) error
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response. model
 	// is the session's selected model when the turn ran, or "" when unknown.
@@ -210,6 +209,15 @@ type Config struct {
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
 	PlansSpanTurns bool
+	// HideCommand reports an advertised command that AO keeps out of the `/`
+	// menu. AO sends a picked command as ordinary prompt text, so a built-in
+	// that drives the agent's own terminal UI, or changes a setting AO has its
+	// own control for (Claude's `/model` switches the model behind AO's
+	// picker), misleads there. Agents report no command kind over ACP, so each
+	// binding names its own built-ins; see HideCommands. A hidden command still
+	// counts for capability checks such as compaction, and typing it by hand
+	// still sends it. Nil keeps every command.
+	HideCommand func(acpsdk.AvailableCommand) bool
 	// QuickStop marks a provider whose stop gains nothing from waiting (it never
 	// reacts to stdin closing): a short session/close wait, then a quick signal.
 	QuickStop bool
@@ -272,6 +280,7 @@ type Driver struct {
 }
 
 var _ ports.ChatDriver = (*Driver)(nil)
+var _ ports.ChatEnvironmentValidator = (*Driver)(nil)
 
 // New returns an ACP Chat driver from a provider binding.
 func New(cfg Config, log *slog.Logger) *Driver {
@@ -418,6 +427,18 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, err
 	}
 	return cloneCapabilities(d.cfg.Capabilities), nil
+}
+
+// ValidateEnvironment checks launch overrides without starting a provider or
+// writing its configuration. Bindings without required configuration are a no-op.
+func (d *Driver) ValidateEnvironment(ctx context.Context, env map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.cfg.ValidateEnvironment != nil {
+		return d.cfg.ValidateEnvironment(ctx, env)
+	}
+	return nil
 }
 
 // CheckChatInstall reports a missing chat adapter; nil without a cheap check.
@@ -917,7 +938,6 @@ func (d *Driver) initialize(
 	conv.resetsConversation = d.cfg.ResetsConversation
 	conv.steering = steeringFor(d.cfg)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
-	conv.validateConfigOption = d.cfg.ValidateConfigOption
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.promptFailureCode = d.cfg.PromptFailureCode
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
@@ -925,6 +945,7 @@ func (d *Driver) initialize(
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.hideCommand = d.cfg.HideCommand
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns
@@ -1147,9 +1168,11 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityFork] = false // ACP has no turn-anchored fork in the pinned SDK.
 	caps[ports.ChatCapabilityForkCurrent] = init.AgentCapabilities.SessionCapabilities.Fork != nil &&
 		supportsSessionRestore(init)
-	caps[ports.ChatCapabilitySteer] = negotiatedPromptCapability(configured, ports.ChatCapabilitySteer, steer.supported(init))
-	caps[ports.ChatCapabilityImages] = negotiatedPromptCapability(configured, ports.ChatCapabilityImages, init.AgentCapabilities.PromptCapabilities.Image)
-	caps[ports.ChatCapabilityEmbeddedContext] = negotiatedPromptCapability(configured, ports.ChatCapabilityEmbeddedContext, init.AgentCapabilities.PromptCapabilities.EmbeddedContext)
+	if steer.supported(init) {
+		caps[ports.ChatCapabilitySteer] = true
+	}
+	caps[ports.ChatCapabilityImages] = init.AgentCapabilities.PromptCapabilities.Image
+	caps[ports.ChatCapabilityEmbeddedContext] = init.AgentCapabilities.PromptCapabilities.EmbeddedContext
 	// ResourceLink is a baseline ACP content block rather than an optional prompt
 	// capability. Every ACP conversation preserves it natively.
 	caps[ports.ChatCapabilityResourceLinks] = true
@@ -1159,11 +1182,6 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityNestedAgents] = true
 	caps[ports.ChatCapabilityTerminalOutput] = true
 	return caps
-}
-
-func negotiatedPromptCapability(configured ports.ChatCapabilities, capability ports.ChatCapability, advertised bool) bool {
-	enabled, explicit := configured[capability]
-	return advertised && (!explicit || enabled)
 }
 
 func supportsSessionRestore(init acpsdk.InitializeResponse) bool {

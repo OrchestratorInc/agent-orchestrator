@@ -1,10 +1,12 @@
-import { Button, Checkbox, Column, Host, ListItem, OutlinedTextField, RadioButton, Text, TextButton, useNativeState } from "@expo/ui/jetpack-compose";
-import { fillMaxWidth, selectable, selectableGroup, testID, toggleable, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
+import { useState } from "react";
+import { Button, Checkbox, Column, Host, ListItem, OutlinedTextField, RadioButton, Row, Spacer, Text, TextButton, useNativeState } from "@expo/ui/jetpack-compose";
+import { fillMaxWidth, selectable, selectableGroup, testID, toggleable, weight, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
 import { StyleSheet, View } from "react-native";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import { font, type } from "../tokens";
+import { font, space, type } from "../tokens";
 import { useNativeTextInput } from "../useNativeTextInput";
+import { fairWidths } from "./actionRowFit";
 import { useActionFit } from "./elicitationActionFit";
 
 // The Material 3 controls Android draws for a request's choices, typed answers
@@ -25,6 +27,8 @@ export type ElicitationTextFieldProps = {
 	numeric?: boolean;
 	maxLength?: number;
 	onChange(value: string | number): void;
+	/** The field took focus (see RevealFocusedField). */
+	onFocus?(): void;
 };
 export type ElicitationActionProps = {
 	label: string;
@@ -33,6 +37,12 @@ export type ElicitationActionProps = {
 	/** The caller owns the press's haptic: one when the work lands (success or error), or none for a step between questions. The press itself stays silent. */
 	reportsOutcome?: boolean;
 	onPress(): void;
+};
+export type ElicitationRowAction = { key: string; label: string; primary?: boolean; disabled?: boolean; onPress(): void };
+export type ElicitationActionRowProps = {
+	actions: ElicitationRowAction[];
+	/** As for ElicitationAction: the caller owns the press's haptic. */
+	reportsOutcome?: boolean;
 };
 
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
@@ -75,7 +85,7 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 	);
 }
 
-export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
+export function ElicitationTextField({ value, label, numeric, maxLength, onChange, onFocus }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const controlledText = value === undefined ? "" : String(value);
@@ -89,6 +99,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 				maxLength={maxLength}
 				keyboardOptions={{ keyboardType: numeric ? "decimal" : "text" }}
 				onValueChange={(next) => changeText(numeric ? (next === "" ? "" : Number(next)) : next)}
+				onFocusChanged={(focused) => { if (focused) onFocus?.(); }}
 				textStyle={{ color: t.textPrimary, fontFamily: font.regular, fontSize: type.subheadline.fontSize }}
 				// The caret and selection take the colour the app's React Native fields use.
 				textSelectionColors={{ handleColor: t.highlight, backgroundColor: t.selection }}
@@ -151,8 +162,68 @@ export function ElicitationAction({ label, primary, disabled, reportsOutcome, on
 	);
 }
 
+/**
+ * A request's decisions on one line, whatever their labels or the text size.
+ * One Compose row lays them out: the weighted spacer takes whatever they leave,
+ * so they sit at the end. Compose hands an unweighted child whatever the ones
+ * before it left, so once the decisions don't fit, each is held to a fair share
+ * of the row (fairWidths), measured from hidden copies at their own widths, and
+ * its label ellipsizes there instead of wrapping a decision under the rest.
+ */
+export function ElicitationActionRow({ actions, reportsOutcome }: ElicitationActionRowProps) {
+	const t = useTheme();
+	const { scheme } = useThemeState();
+	const [row, setRow] = useState(0);
+	const [natural, setNatural] = useState<Record<string, number>>({});
+	const widths = fairWidths(actions.map((action) => natural[action.label]), row - space.sm * (actions.length - 1));
+	const button = (action: ElicitationRowAction, width: number | undefined, press?: () => void) => {
+		const title = <Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.semibold, textAlign: "center" }}>{action.label}</Text>;
+		const modifiers = width !== undefined ? [fixedWidth(width)] : undefined;
+		return action.primary ? (
+			<Button key={action.key} onClick={press} enabled={!action.disabled} colors={{ containerColor: t.accent, contentColor: t.onAccent }} modifiers={modifiers}>
+				{title}
+			</Button>
+		) : (
+			<TextButton key={action.key} onClick={press} enabled={!action.disabled} colors={{ contentColor: t.accent }} modifiers={modifiers}>
+				{title}
+			</TextButton>
+		);
+	};
+	return (
+		<>
+			<View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.measure}>
+				{actions.map((action) => (
+					<Host
+						key={action.key}
+						matchContents
+						colorScheme={scheme}
+						onLayoutContent={(event) => {
+							const width = event.nativeEvent.width;
+							setNatural((old) => old[action.label] === width ? old : { ...old, [action.label]: width });
+						}}
+					>
+						{button(action, undefined)}
+					</Host>
+				))}
+			</View>
+			<View style={styles.row} onLayout={(event) => setRow(event.nativeEvent.layout.width)}>
+				<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.row}>
+					<Row horizontalArrangement={{ spacedBy: space.sm }} verticalAlignment="center" modifiers={[fillMaxWidth()]}>
+						<Spacer modifiers={[weight(1)]} />
+						{actions.map((action, index) => button(action, widths?.[index], () => {
+							if (!reportsOutcome) haptics.tap();
+							action.onPress();
+						}))}
+					</Row>
+				</Host>
+			</View>
+		</>
+	);
+}
+
 const styles = StyleSheet.create({
 	// Spans the row behind the actions, unseen and untouchable: it only measures.
 	measure: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0 },
 	action: { maxWidth: "100%" },
+	row: { width: "100%" },
 });

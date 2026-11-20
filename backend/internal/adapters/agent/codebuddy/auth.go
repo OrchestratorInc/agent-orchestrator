@@ -44,11 +44,15 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	}
 	identity := domain.CommandSource("codebuddy", "--print")
 	finish := func(status ports.AgentAuthStatus, code string, started time.Time) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
-		step := domain.NewAgentAuthDiagnostic("native_inference", code)
+		step := domain.NewAgentAuthDiagnostic("provider_validation", code)
 		step.DurationMs = time.Since(started).Milliseconds()
-		if code == "provider_quota" {
-			step.Reason = "CodeBuddy's selected provider reported a rate or usage limit; this does not establish that you are signed out."
-			step.NextStep = "Check that provider's quota, balance and plan endpoint, then try again."
+		switch code {
+		case "provider_rate_limited":
+			step.Reason = "CodeBuddy's selected provider rate-limited the verification request; this is not a rejected login."
+			step.NextStep = "Wait for the provider limit to reset, then check again."
+		case "provider_quota_exhausted":
+			step.Reason = "CodeBuddy's selected provider reported a quota or billing limit; credentials remain configured."
+			step.NextStep = "Review the provider's quota or billing, then check again."
 		}
 		if status.HasCredential() {
 			ports.RecordAuthEvidence(ctx, identity)
@@ -107,7 +111,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		return fallback, id, steps, err
 	}
 	if output.exceeded {
-		return finish(fallback, "output_unrecognized", started)
+		return finish(fallback, "provider_inconclusive", started)
 	}
 	if probeCtx.Err() != nil {
 		return finish(fallback, "probe_timeout", started)
@@ -175,18 +179,18 @@ func classifyAuthResult(raw []byte, exitedOK bool, fallback ports.AgentAuthStatu
 	}
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
-		return fallback, "output_unrecognized"
+		return fallback, "provider_inconclusive"
 	}
 	if raw[0] == '[' {
 		var history []json.RawMessage
 		if json.Unmarshal(raw, &history) != nil || len(history) == 0 {
-			return fallback, "output_unrecognized"
+			return fallback, "provider_inconclusive"
 		}
 		raw = history[len(history)-1]
 	}
 	var r result
 	if json.Unmarshal(raw, &r) != nil || r.Type != "result" || r.IsError == nil {
-		return fallback, "output_unrecognized"
+		return fallback, "provider_inconclusive"
 	}
 	if !*r.IsError && exitedOK && r.Subtype == "success" && r.TerminalReason == "" && len(r.Errors) == 0 && len(r.ErrorsInfo) == 0 && strings.TrimSpace(r.Result) != "" && r.Usage.OutputTokens > 0 {
 		return ports.AgentAuthStatusAuthorized, "provider_accepted"
@@ -195,8 +199,11 @@ func classifyAuthResult(raw []byte, exitedOK bool, fallback ports.AgentAuthStatu
 		// Quota/transport do not prove sign-out. Only structured credential rejection
 		// establishes unauthorized; raw messages and unknown categories stay private.
 		for _, info := range r.ErrorsInfo {
-			if info.Status == 429 || info.Category == "quota" {
-				return fallback, "provider_quota"
+			if info.Category == "quota" {
+				return fallback, "provider_quota_exhausted"
+			}
+			if info.Status == 429 {
+				return fallback, "provider_rate_limited"
 			}
 			if info.Category == "network" || info.Status == 408 || info.Status >= 500 {
 				return fallback, "provider_unreachable"
@@ -208,5 +215,5 @@ func classifyAuthResult(raw []byte, exitedOK bool, fallback ports.AgentAuthStatu
 			}
 		}
 	}
-	return fallback, "check_inconclusive"
+	return fallback, "provider_inconclusive"
 }

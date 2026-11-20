@@ -875,6 +875,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attachment-uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stream a file to disk for a later attachment to name by uploadId */
+        post: operations["uploadAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/automations": {
         parameters: {
             query?: never;
@@ -1660,6 +1677,23 @@ export interface paths {
         put?: never;
         /** Validate a selected folder for project import onboarding */
         post: operations["validateImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kept-artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the artifacts no session or project lists: those of sessions deleted with their artifacts kept, and of sessions in removed projects */
+        get: operations["listKeptArtifacts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4403,6 +4437,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/stop-turn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop an active turn without ending the session */
+        post: operations["stopSessionTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/branches": {
         parameters: {
             query?: never;
@@ -4829,6 +4880,23 @@ export interface paths {
         head?: never;
         /** Rename a standalone shell terminal tab */
         patch: operations["renameShellTerminal"];
+        trace?: never;
+    };
+    "/api/v1/shell-terminals/{handleId}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace an ended shell terminal with a fresh shell in the same tab */
+        post: operations["reopenShellTerminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/side-chats/launch/claim": {
@@ -5457,6 +5525,7 @@ export interface components {
         };
         AgentReadinessSnapshot: {
             authentication: components["schemas"]["AgentAuthenticationObservation"];
+            canStopTurn?: boolean;
             /** @enum {string} */
             effectiveReadiness: "ready" | "not_ready" | "unknown";
             id: string;
@@ -5559,8 +5628,14 @@ export interface components {
             version: number;
         };
         AttachmentInput: {
-            data: string;
+            data?: string;
             mimeType?: string;
+            uploadId?: string;
+        };
+        AttachmentUploadResponse: {
+            /** Format: int64 */
+            bytes: number;
+            uploadId: string;
         };
         AutoSpawnPause: {
             effort?: string;
@@ -6260,9 +6335,24 @@ export interface components {
             lidSupported?: boolean;
             supported: boolean;
         };
+        ControllersKeptArtifactsView: {
+            artifactFiles: components["schemas"]["SessionArtifact"][];
+            /**
+             * Format: date-time
+             * @description When the session was deleted, or last updated.
+             */
+            at: string;
+            projectId?: string;
+            sessionDeleted: boolean;
+            sessionId: string;
+            title: string;
+        };
         ControllersKillSessionRequest: {
             callerSessionId?: string;
             deleteArtifacts?: boolean;
+        };
+        ControllersListKeptArtifactsResponse: {
+            sets: components["schemas"]["ControllersKeptArtifactsView"][];
         };
         ControllersPairDeviceRequest: {
             /** @description Name shown in the host's device list. */
@@ -6461,7 +6551,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Waiting on base PR" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -6971,7 +7061,7 @@ export interface components {
         DelegateTaskRequest: {
             accountId?: string;
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "codebuddy" | "hermes" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "codebuddy" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
@@ -7266,7 +7356,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "codebuddy" | "hermes" | "cloudflared" | "cua-driver";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "codebuddy" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "cloudflared" | "cua-driver";
             /** Format: date-time */
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
@@ -7416,7 +7506,11 @@ export interface components {
         ListSessionsResponse: {
             archived?: components["schemas"]["SessionArchiveSummary"];
             nextCursor?: string;
+            /** @enum {string} */
+            prState?: "open" | "draft" | "merged" | "closed";
             sessions: components["schemas"]["ControllersSessionView"][];
+            total?: null | number;
+            version?: string;
         };
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
@@ -7806,6 +7900,7 @@ export interface components {
             autoCompactWindow?: "200k" | "1m";
             effort?: string;
             fastMode?: boolean;
+            force?: boolean;
             idempotencyKey?: string;
             message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
@@ -7815,8 +7910,13 @@ export interface components {
             ultracode?: boolean;
         };
         ProviderSwitchResponse: {
+            cancelledQueuedMessages?: number;
+            failedPendingApprovals?: boolean;
             message?: components["schemas"]["SendConversationMessageResponse"];
+            settingsUpdated?: boolean;
             status: string;
+            stoppedTurn?: boolean;
+            warnings?: string[];
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -7935,6 +8035,16 @@ export interface components {
             level: "debug" | "log" | "warning" | "error";
             text: string;
         };
+        ReopenShellTerminalRequest: {
+            /** @description Initial terminal columns, as for opening a shell terminal. */
+            cols?: number;
+            /** @description Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed. */
+            resumeAgent?: boolean;
+            /** @description Initial terminal rows. See cols. */
+            rows?: number;
+            /** @description Shell to launch, as for opening a shell terminal. */
+            shell?: string;
+        };
         ReorderQueuedConversationTurnsRequest: {
             turnIds: string[];
         };
@@ -8037,20 +8147,41 @@ export interface components {
             batchId: string;
             body: string;
             /** Format: date-time */
+            cancelRequestedAt?: null | string;
+            /** @enum {string} */
+            cancelledBy?: "user" | "worker_lifecycle";
+            /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             deliveredAt?: null | string;
+            /** Format: date-time */
+            endedAt?: null | string;
+            /** @enum {string} */
+            failureReason?: "preflight_failed" | "launch_failed" | "never_started" | "exited_during_launch" | "turn_ended_without_submit" | "process_exited" | "timed_out" | "daemon_restarted" | "cancel_unconfirmed";
+            /** Format: date-time */
+            firstActivityAt?: null | string;
             githubReviewId: string;
             harness: string;
             id: string;
+            /** Format: date-time */
+            launchingAt?: null | string;
             prUrl: string;
             reviewId: string;
             sessionId: string;
-            status: string;
+            /** Format: date-time */
+            startedAt?: null | string;
+            /** @enum {string} */
+            status: "queued" | "launching" | "running" | "cancelling" | "completed" | "failed" | "cancelled" | "superseded";
             targetSha: string;
             /** @enum {string} */
             triggerSource: "manual" | "agent" | "auto";
             verdict: string;
+            /** @enum {string} */
+            workerNotice?: "" | "pending" | "sent" | "failed";
+            /** Format: date-time */
+            workerNoticeAttemptedAt?: null | string;
+            workerNoticeAttempts?: number;
+            workerNoticeError?: string;
         };
         ReviewRunResponse: {
             review: components["schemas"]["ReviewRun"];
@@ -8171,6 +8302,7 @@ export interface components {
             base?: string;
             baseRef?: string;
             behind: number;
+            branch?: string;
             commits: number;
             conflicts: boolean;
             head?: string;
@@ -8320,6 +8452,7 @@ export interface components {
             /** @enum {string} */
             review: "none" | "approved" | "changes_requested" | "review_required";
             reviewComments: boolean;
+            stackParent?: number;
             /** @enum {string} */
             state: "draft" | "open" | "merged" | "closed";
             /** Format: date-time */
@@ -8510,6 +8643,7 @@ export interface components {
             /** @enum {string} */
             kind: "title" | "user" | "assistant" | "tool" | "command" | "path";
             messageId?: string;
+            namedForQuery?: boolean;
             projectId: string;
             projectName?: string;
             /** Format: double */
@@ -8722,8 +8856,15 @@ export interface components {
         ShellTerminalResponse: {
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached.
+             */
+            endedAt?: null | string;
             handleId: string;
             projectId?: string;
+            /** @description For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes. */
+            resumeHarness?: string;
             sessionId?: string;
             terminalTitle?: string;
             title: string;
@@ -8782,6 +8923,9 @@ export interface components {
             mainConversationId: string;
             manualLabel?: boolean;
             model?: string;
+            /** Format: date-time */
+            openingStartedAt?: null | string;
+            openingTurnId?: string;
             recreateRequired?: boolean;
             selectedText?: string;
             sessionId: string;
@@ -8868,8 +9012,11 @@ export interface components {
         SideRecoveryTurn: {
             content?: components["schemas"]["SideContent"][];
             dispatchAttempt?: number;
+            effort?: string;
+            model?: string;
             providerTurnId?: string;
             referenceContexts: string[];
+            settingsFrozen?: boolean;
             turn: components["schemas"]["SideTurn"];
         };
         SideSettingsRequest: {
@@ -8925,7 +9072,7 @@ export interface components {
             displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "codebuddy" | "hermes";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "codebuddy" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -9166,6 +9313,8 @@ export interface components {
             prUrl?: string;
             /** @description Return 409 instead of reusing when every open PR head is already being reviewed or already has a review. */
             rejectReviewedHead?: boolean;
+            /** @description Agent session that requested the pass and should receive its final outcome. */
+            requesterSessionId?: string;
             /** @description Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead. */
             rerun?: boolean;
             /**
@@ -12373,6 +12522,57 @@ export interface operations {
             };
         };
     };
+    uploadAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentUploadResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listAutomations: {
         parameters: {
             query?: {
@@ -15167,6 +15367,44 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listKeptArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersListKeptArtifactsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -18910,6 +19148,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor returned by the previous page. Requires limit. */
                 cursor?: string;
+                /** @description Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total. */
+                prState?: "open" | "draft" | "merged" | "closed";
             };
             header?: never;
             path?: never;
@@ -19043,6 +19283,8 @@ export interface operations {
             query?: {
                 /** @description When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete. */
                 cleanup?: boolean;
+                /** @description When true, the session's artifact files are kept, view only, and listed by GET /api/v1/kept-artifacts until they are deleted one by one. Otherwise they are deleted with the session. */
+                keepArtifacts?: boolean;
             };
             header?: never;
             path: {
@@ -26057,6 +26299,63 @@ export interface operations {
             };
         };
     };
+    stopSessionTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listSessionWorkspaceBranches: {
         parameters: {
             query?: never;
@@ -27741,6 +28040,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    reopenShellTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Shell terminal runtime handle identifier. */
+                handleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ReopenShellTerminalRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellTerminalEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

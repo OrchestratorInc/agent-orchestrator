@@ -3,6 +3,7 @@ package codebuddy
 import (
 	"errors"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
@@ -29,21 +30,101 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 // ContinuouslyDetectTerminalActivity enables current viewport observation alongside hooks.
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
-// ValidateTerminalPaste requires an initialized empty native composer before pasting.
-func (p *Plugin) ValidateTerminalPaste(output, message string) error {
+// ValidateTerminalMessage requires an initialized empty native composer before pasting.
+func (p *Plugin) ValidateTerminalMessage(output, message string) error {
 	if err := validateTask(message); err != nil {
 		return err
 	}
-	observation := p.InspectTerminalSurface(output)
-	switch {
-	case observation.Composer == ports.TerminalComposerDraft:
-		return errors.Join(ports.ErrTerminalMessageNotReady, ports.ErrTerminalComposerDraft, errors.New("codebuddy composer holds an unsent draft; submit or clear it in the terminal"))
-	case observation.Work == ports.TerminalSurfaceWorkActive:
-		return errors.Join(ports.ErrTerminalMessageNotReady, ports.ErrTerminalTurnActive, errors.New("codebuddy is still running a turn"))
-	case observation.Work != ports.TerminalSurfaceWorkIdle || observation.Composer != ports.TerminalComposerEmpty:
-		return errors.Join(ports.ErrTerminalMessageNotReady, errors.New("codebuddy requires an initialized empty composer; resolve the native decision in the terminal"))
+	if !p.ComposerIsEmpty(output) {
+		return errors.Join(ports.ErrTerminalMessageNotReady, errors.New("codebuddy requires an initialized empty composer; resolve native decisions or submit/clear your draft in the terminal"))
 	}
 	return nil
+}
+
+// TerminalMessageObserved confirms that AO's submission left the idle composer:
+// the native turn started (spinner above the composer), or the transcript above
+// the composer gained one more committed "> " echo holding the whole message.
+// Only letters and digits are compared, since the echo may wrap or drop markup.
+func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
+	if screen == baseline || !p.ComposerIsEmpty(baseline) {
+		return false
+	}
+	if p.InspectTerminalSurface(screen).Work == ports.TerminalSurfaceWorkActive {
+		return true
+	}
+	return committedEchoes(message, screen) > committedEchoes(message, baseline)
+}
+
+// echoKey normalizes text for echo comparison. A message with no letters or
+// digits keeps every non-space rune instead, so it can still be confirmed.
+func echoKey(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	if b.Len() > 0 {
+		return b.String()
+	}
+	for _, r := range text {
+		if !unicode.IsSpace(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// committedEchoes counts "> " user-message echoes above the current composer
+// whose full text, including indented continuation lines, is message.
+func committedEchoes(message, screen string) int {
+	want := echoKey(message)
+	if want == "" {
+		return 0
+	}
+	lines := terminalui.PlainTerminalLines(strings.TrimRight(screen, "\r\n "))
+	end := transcriptEnd(lines)
+	count := 0
+	for i := 0; i < end; i++ {
+		text := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(text, ">") {
+			continue
+		}
+		var echo strings.Builder
+		echo.WriteString(strings.TrimPrefix(text, ">"))
+		for i+1 < end {
+			next := lines[i+1]
+			trimmed := strings.TrimSpace(next)
+			if trimmed == "" || trimmed == next || strings.HasPrefix(trimmed, ">") || horizontalRule(next) {
+				break
+			}
+			echo.WriteString(" " + trimmed)
+			i++
+		}
+		if echoKey(echo.String()) == want {
+			count++
+		}
+	}
+	return count
+}
+
+// transcriptEnd is the index of the current composer's upper rule, so the
+// composer itself is never read as a committed echo.
+func transcriptEnd(lines []string) int {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(strings.TrimSpace(lines[i]), ">") {
+			continue
+		}
+		upper := i - 1
+		for upper >= 0 && strings.TrimSpace(lines[upper]) == "" {
+			upper--
+		}
+		if upper >= 0 && horizontalRule(lines[upper]) {
+			return upper
+		}
+		return i
+	}
+	return len(lines)
 }
 
 // ComposerIsEmpty recognizes the current idle composer.

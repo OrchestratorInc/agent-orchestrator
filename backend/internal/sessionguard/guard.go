@@ -455,19 +455,10 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	g.leaseMu.RUnlock()
 	if guarded {
 		if err := checker.ValidateSessionMessageInput(ctx, rec, msg); err != nil {
-			var outcome Outcome
-			switch {
-			case errors.Is(err, ports.ErrTerminalComposerDraft):
-				outcome = SuppressedComposerBusy
-			case errors.Is(err, ports.ErrTerminalTurnActive):
-				outcome = SuppressedBusy
-			case errors.Is(err, ports.ErrTerminalMessageNotReady):
-				outcome = SuppressedAwaitingUser
-			default:
-				return SuppressedUnknown, fmt.Errorf("guard %s: terminal input: %w", id, err)
+			if errors.Is(err, ports.ErrTerminalMessageNotReady) {
+				return SuppressedAwaitingUser, nil
 			}
-			g.logger.Info("sessionguard: write suppressed", "sessionID", id, "reason", outcome.String(), "state", string(rec.Activity.State))
-			return outcome, nil
+			return SuppressedUnknown, fmt.Errorf("guard %s: terminal input: %w", id, err)
 		}
 	}
 	// Composer-occupancy check runs last, under the held input lease and on the
@@ -489,6 +480,12 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	// gone: never let that turn into a write.
 	if err := ctx.Err(); err != nil {
 		return SuppressedUnknown, fmt.Errorf("guard %s: %w", id, err)
+	}
+	// Tau's Textual composer needs a complete paste event: raw chunked
+	// multiline text can submit mid-message and leave a remainder draft.
+	// Frame only admitted nonempty messages; Enter nudges stay unchanged.
+	if rec.Harness == domain.HarnessTau && msg != "" {
+		msg = "\x1b[200~" + msg + "\x1b[201~"
 	}
 	if err := g.messenger.Send(ctx, id, msg); err != nil {
 		return Sent, fmt.Errorf("guard %s: send: %w", id, err)

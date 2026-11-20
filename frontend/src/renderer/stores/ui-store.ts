@@ -80,7 +80,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
 
 export type CloudReviewUiState = {
 	showChanges?: boolean;
@@ -100,6 +100,8 @@ export type InspectorSessionState = {
 	browserContentRevealed?: boolean;
 	/** Real browser activity occurred while Browser was not visible. */
 	browserUnseen?: boolean;
+	/** The session's chat has subagents, so the inspector offers its Subagents tab. */
+	subagentsAvailable?: boolean;
 	/** An artifact was registered while the user was busy in Browser or Files. */
 	artifactsUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
@@ -240,8 +242,6 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
-	/** Home offers the session import once: until the user imports or dismisses it. */
-	sessionImportOfferClosed: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
@@ -271,6 +271,12 @@ export type UiState = {
 	// running in the background. The board renders a progress banner and gates
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
+	// Full-window first-run onboarding is showing; transient shell notices wait.
+	firstRunOnboardingOpen: boolean;
+	setFirstRunOnboardingOpen: (open: boolean) => void;
+	/** Bumped by Developer mode's Replay onboarding; the flow reopens on each change. */
+	onboardingReplayRequest: number;
+	requestOnboardingReplay: () => void;
 	projectCreationPending: boolean;
 	// Freestyle cloud projects just created, whose board starts the orchestrator
 	// on its own instead of waiting for the Orchestrator button.
@@ -298,9 +304,6 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
-	/** True while the first-run project prompt is pending, so shell notices wait for it. */
-	firstRunPromptActive: boolean;
-	setFirstRunPromptActive: (active: boolean) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -325,12 +328,13 @@ export type UiState = {
 	visibleTerminalKindBySession: Record<string, TerminalTarget["kind"]>;
 	setWorkbenchTab: (tab: WorkbenchTab) => void;
 	setThemePreference: (theme: ThemePreference) => void;
+	/** Flip light/dark; landing on the OS appearance picks System instead. */
+	toggleThemePreference: () => void;
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
-	closeSessionImportOffer: () => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
@@ -379,6 +383,7 @@ export type UiState = {
 	initializeInspectorSession: (sessionId: string, hasBrowserContent: boolean, hasInspector: boolean) => void;
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
+	setSubagentsAvailable: (sessionId: string, available: boolean) => void;
 	setArtifactsUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
@@ -425,7 +430,6 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
-const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
@@ -463,14 +467,6 @@ function initialDiagnostics() {
 
 function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
-}
-
-function initialSessionImportOfferClosed() {
-	try {
-		return getLocalStorage()?.getItem(sessionImportOfferClosedStorageKey) === "true";
-	} catch {
-		return false;
-	}
 }
 
 function initialTerminalClickMode(): TerminalClickMode {
@@ -539,6 +535,29 @@ export function sidebarOccupiesLayout(state: Pick<UiState, "isSidebarOpen">): bo
 	return state.isSidebarOpen;
 }
 
+/**
+ * The OS light/dark appearance. prefers-color-scheme follows Electron's
+ * nativeTheme, so while Light or Dark is forced it reports that mode rather
+ * than the OS; main reads the real one.
+ */
+export async function readSystemTheme(): Promise<Theme> {
+	try {
+		const theme = await aoBridge.theme?.systemAppearance?.();
+		if (theme === "light" || theme === "dark") return theme;
+	} catch {
+		// Fall back to the media query below.
+	}
+	return systemTheme();
+}
+
+// The latest theme choice; an older System lookup or transition that finishes
+// after a newer choice is dropped.
+let themePreferenceRequest = 0;
+
+function sendThemePreference(themePreference: ThemePreference): Promise<void> {
+	return aoBridge.theme?.set(themePreference)?.catch(() => undefined) ?? Promise.resolve();
+}
+
 const initialThemePreference = readStoredThemePreference();
 const initialThemeStyle = readStoredThemeStyle();
 const initialDeveloperModeValue = initialDeveloperMode();
@@ -558,7 +577,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
-	sessionImportOfferClosed: initialSessionImportOfferClosed(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
@@ -571,6 +589,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	projectAvatars: initialProjectAvatars(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
+	firstRunOnboardingOpen: false,
+	setFirstRunOnboardingOpen: (open) => set({ firstRunOnboardingOpen: open }),
+	onboardingReplayRequest: 0,
+	requestOnboardingReplay: () => set((state) => ({ onboardingReplayRequest: state.onboardingReplayRequest + 1 })),
 	projectCreationPending: false,
 	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
@@ -581,8 +603,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	newTaskRequest: null,
 	archiveModal: null,
 	newChatDraftRevision: 0,
-	firstRunPromptActive: false,
-	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
@@ -592,18 +612,71 @@ export const useUiStore = create<UiState>((set, get) => ({
 	visibleTerminalKindBySession: {},
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
-		if (get().themePreference === themePreference) return;
-		runThemeTransition(
-			() => {
-				const resolvedTheme = resolveTheme(themePreference);
-				getLocalStorage()?.setItem(themeStorageKey, themePreference);
-				applyDocumentTheme(resolvedTheme);
-				set({ themePreference, resolvedTheme });
-			},
-			// The window's vibrancy material follows nativeTheme; flip it as the
-			// new frame is revealed so the tint and the material change together.
-			() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
-		);
+		const request = ++themePreferenceRequest;
+		if (get().themePreference === themePreference) {
+			// An overtaken System choice may already have reached main (the lookup
+			// on Windows and Linux, an opaque window's early reveal). Send the
+			// current mode again; main skips it when nothing changed.
+			void sendThemePreference(themePreference);
+			return;
+		}
+		// The transition's callbacks run later too, so each one checks that no
+		// newer choice has come in since.
+		const current = () => request === themePreferenceRequest;
+		const apply = (resolvedTheme: Theme) => {
+			if (!current()) return;
+			// An opaque window reveals before the update runs, so main can answer
+			// before System is in the store; the correction below waits for both.
+			let markCommitted: () => void = () => undefined;
+			const committed = new Promise<void>((resolve) => {
+				markCommitted = resolve;
+			});
+			runThemeTransition(
+				() => {
+					if (!current()) return;
+					getLocalStorage()?.setItem(themeStorageKey, themePreference);
+					applyDocumentTheme(resolvedTheme);
+					set({ themePreference, resolvedTheme });
+					markCommitted();
+				},
+				// The window's vibrancy material follows nativeTheme; flip it as the
+				// new frame is revealed so the tint and the material change together.
+				() => {
+					if (!current()) return;
+					const sent = sendThemePreference(themePreference);
+					// The OS can change between the lookup and here. Once main stops
+					// forcing a mode, read it again: the media query may not move, so
+					// its listener would never correct a stale value.
+					if (themePreference !== "system") return;
+					// Skip the lookup once a newer choice exists: on Windows and Linux it
+					// sets themeSource to "system" again, over that choice.
+					void Promise.all([sent, committed])
+						.then(() => (current() ? readSystemTheme() : null))
+						.then((os) => {
+							if (!os || !current() || get().resolvedTheme === os) return;
+							runThemeTransition(() => {
+								if (!current()) return;
+								applyDocumentTheme(os);
+								set({ resolvedTheme: os });
+							});
+						});
+				},
+			);
+		};
+		// System comes from main: the media query still reports the forced mode
+		// until theme:set("system") lands, which happens only on reveal.
+		if (themePreference === "system") void readSystemTheme().then(apply);
+		else apply(themePreference);
+	},
+	toggleThemePreference: () => {
+		// Counts as a choice right away, so a newer one cancels it while the OS
+		// appearance is read.
+		const request = ++themePreferenceRequest;
+		const next: Theme = get().resolvedTheme === "dark" ? "light" : "dark";
+		void readSystemTheme().then((os) => {
+			if (request !== themePreferenceRequest) return;
+			get().setThemePreference(next === os ? "system" : next);
+		});
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;
@@ -637,14 +710,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSideChats: (sideChats) => {
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
-	},
-	closeSessionImportOffer: () => {
-		try {
-			getLocalStorage()?.setItem(sessionImportOfferClosedStorageKey, "true");
-		} catch {
-			// The offer comes back next launch; the agent page still has the import.
-		}
-		set({ sessionImportOfferClosed: true });
 	},
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
@@ -838,6 +903,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, browserUnseen },
+				},
+			};
+		}),
+	setSubagentsAvailable: (sessionId, subagentsAvailable) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (Boolean(current.subagentsAvailable) === subagentsAvailable) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, subagentsAvailable },
 				},
 			};
 		}),

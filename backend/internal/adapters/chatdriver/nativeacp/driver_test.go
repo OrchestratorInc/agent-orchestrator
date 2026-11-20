@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -179,31 +181,46 @@ func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {
 	}
 }
 
-// VersionProbe gates admission only. Every registered binding that sets it
-// (Cursor, Kimchi, OMP, Qwen, Hermes) must launch and relaunch on resume
-// without another version command; a candidate needing a launch-time check
-// runs it in its own Configure.
-func TestBindingLaunchDoesNotRunVersionProbe(t *testing.T) {
-	probes := 0
-	configured := false
-	cfg := buildConfig(fakePlugin{binary: "/user/provider"}, Config{
-		Harness: domain.HarnessCursor,
-		VersionProbe: func(context.Context, string) error {
-			probes++
-			return nil
-		},
+func TestBindingRetainsNativeInitializeAdmission(t *testing.T) {
+	sentinel := errors.New("unqualified native version")
+	cfg := buildConfig(fakePlugin{}, Config{ValidateInitialize: func(acpsdk.InitializeResponse) error { return sentinel }}, nil)
+	if cfg.ValidateInitialize == nil || !errors.Is(cfg.ValidateInitialize(acpsdk.InitializeResponse{}), sentinel) {
+		t.Fatal("native identity admission lost")
+	}
+}
+
+func TestBindingPreflightRejectsUnavailableProviderBeforeDiscovery(t *testing.T) {
+	sentinel := errors.New("provider requires Unix")
+	cfg := buildConfig(fakePlugin{binErr: ports.ErrAgentBinaryNotFound}, Config{
+		Harness:   domain.HarnessClaudeCode,
+		Preflight: func(context.Context) error { return sentinel },
 		Configure: func(context.Context, acpdriver.LaunchConfig) ([]string, map[string]string, error) {
-			configured = true
-			return []string{"acp"}, nil, nil
+			return nil, nil, nil
 		},
 	}, nil)
-	if err := cfg.Probe(context.Background()); err != nil || probes != 1 {
-		t.Fatalf("admission probe = %v after %d version checks, want one", err, probes)
+	if err := cfg.Probe(context.Background()); !errors.Is(err, ports.ErrChatDriverUnavailable) || !errors.Is(err, sentinel) {
+		t.Fatalf("Probe error = %v, want prerequisite failure before binary discovery", err)
 	}
-	if _, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{}); err != nil || !configured {
-		t.Fatalf("launch = %v (configured %v)", err, configured)
+}
+
+func TestBindingPreservesContextualEnvironmentValidation(t *testing.T) {
+	sentinel := errors.New("native config missing")
+	driver := New(fakePlugin{}, Config{
+		ValidateEnvironment: func(_ context.Context, env map[string]string) error {
+			if env["CONFIG"] != "/project/config.yaml" {
+				return sentinel
+			}
+			return nil
+		},
+	}, nil)
+	validator, ok := driver.(ports.ChatEnvironmentValidator)
+	if !ok {
+		t.Fatal("native ACP binding lost contextual validation")
 	}
-	if probes != 1 {
-		t.Fatalf("launch ran %d extra version checks", probes-1)
+	if err := validator.ValidateEnvironment(context.Background(), nil); !errors.Is(err, sentinel) {
+		t.Fatalf("missing config error = %v", err)
+	}
+	if err := validator.ValidateEnvironment(context.Background(), map[string]string{"CONFIG": "/project/config.yaml"}); err != nil {
+		t.Fatalf("project config rejected: %v", err)
 	}
 }

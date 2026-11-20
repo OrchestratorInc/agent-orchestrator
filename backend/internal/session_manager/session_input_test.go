@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
@@ -121,75 +120,30 @@ func eventuallySessionInput(t *testing.T, timeout time.Duration, fn func() bool)
 	t.Fatal("condition was not met before timeout")
 }
 
-type guardedPasteAgent struct {
-	fakeAgent
-	validated int
-}
-
-func (a *guardedPasteAgent) ValidateTerminalPaste(string, string) error {
-	a.validated++
-	return nil
-}
-
-// A terminal holds one input lease per queued keystroke frame, so raw leases on
-// a guarded harness must keep stacking. Only the guarded paste is serialized:
-// it fails closed while other writers are admitted, and while it holds the sole
-// lease it keeps new input out until it releases.
-func TestGuardedPasteSerializesOnlyAgainstOtherWriters(t *testing.T) {
+func TestOptedInInputIsSerializedAndAdoptionFailsClosed(t *testing.T) {
 	m := newInputLeaseTestManager()
-	agent := &guardedPasteAgent{}
-	m.agents = testAgentRegistry{domain.HarnessCodeBuddy: agent}
-	m.runtime = &fakeRuntime{}
-	rec := domain.SessionRecord{ID: "cb-1", Harness: domain.HarnessCodeBuddy, Mode: domain.SessionModeTUI}
-	rec.Metadata.RuntimeHandleID = "cb-1-handle"
-
-	first, ok := m.AcquireSessionInput(rec.ID)
+	first, ok := m.AcquireSessionInput("mastra-1")
 	if !ok {
-		t.Fatal("first raw lease refused")
+		t.Fatal("first lease refused")
 	}
-	second, ok := m.AcquireSessionInput(rec.ID)
+	second, ok := m.AcquireSessionInput("mastra-1")
 	if !ok {
-		t.Fatal("overlapping raw lease refused on a guarded harness")
+		t.Fatal("legacy lease refused before opt-in")
 	}
-	paste, ok := m.AcquireSessionInput(rec.ID)
-	if !ok {
-		t.Fatal("guarded delivery lease refused")
+	if m.enableSerializedInput("mastra-1") {
+		t.Fatal("adoption admitted a paste alongside existing input")
 	}
-	if err := m.ValidateSessionMessageInput(context.Background(), rec, "hello"); !errors.Is(err, ports.ErrTerminalMessageNotReady) {
-		t.Fatalf("paste beside queued keystrokes = %v, want ErrTerminalMessageNotReady", err)
+	second()
+	if !m.enableSerializedInput("mastra-1") {
+		t.Fatal("single holder not admitted")
+	}
+	if _, ok := m.AcquireSessionInput("mastra-1"); ok {
+		t.Fatal("concurrent raw input admitted")
 	}
 	first()
-	second()
-	if err := m.ValidateSessionMessageInput(context.Background(), rec, "hello"); err != nil || agent.validated != 1 {
-		t.Fatalf("sole-holder paste = %v (validated %d), want admitted", err, agent.validated)
-	}
-	if _, ok := m.AcquireSessionInput(rec.ID); ok {
-		t.Fatal("raw input admitted during a guarded paste")
-	}
-	paste()
-
-	third, ok := m.AcquireSessionInput(rec.ID)
+	release, ok := m.AcquireSessionInput("mastra-1")
 	if !ok {
-		t.Fatal("raw input refused after the paste released")
-	}
-	fourth, ok := m.AcquireSessionInput(rec.ID)
-	if !ok {
-		t.Fatal("overlapping raw lease refused after the paste released")
-	}
-	third()
-	fourth()
-}
-
-// A delivery under an exclusive operation holds no input lease; the operation
-// already refuses raw input, and nothing is left to keep input closed after it.
-func TestGuardedPasteWithoutLeaseLeavesInputOpen(t *testing.T) {
-	m := newInputLeaseTestManager()
-	if !m.beginGuardedPaste("cb-1") {
-		t.Fatal("lease-free guarded paste refused")
-	}
-	release, ok := m.AcquireSessionInput("cb-1")
-	if !ok {
-		t.Fatal("raw input stayed closed after a lease-free paste")
+		t.Fatal("admission did not reopen after release")
 	}
 	release()
 }

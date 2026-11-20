@@ -80,20 +80,20 @@ func TestNativeAuthResultRequiresCompletedInference(t *testing.T) {
 		code           string
 	}{
 		{"native-array", "[" + success + "]", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusAuthorized, "provider_accepted"},
-		{"cancelled-success", strings.Replace(success, `"result":"OK"`, `"result":"OK","terminal_reason":"aborted_streaming"`, 1), true, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "check_inconclusive"},
-		{"empty-success", strings.Replace(success, `"result":"OK"`, `"result":""`, 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "check_inconclusive"},
-		{"no-inference-usage", strings.Replace(success, `"output_tokens":1`, `"output_tokens":0`, 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "check_inconclusive"},
-		{"missing-error-flag", strings.Replace(success, `"is_error":false,`, "", 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "output_unrecognized"},
-		{"failed-exit", success, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "check_inconclusive"},
-		{"prose", "Authenticated: true; API key found; secret", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "output_unrecognized"},
-		{"history-result-not-terminal", "[" + success + `,{"type":"assistant"}]`, true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "output_unrecognized"},
+		{"cancelled-success", strings.Replace(success, `"result":"OK"`, `"result":"OK","terminal_reason":"aborted_streaming"`, 1), true, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "provider_inconclusive"},
+		{"empty-success", strings.Replace(success, `"result":"OK"`, `"result":""`, 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
+		{"no-inference-usage", strings.Replace(success, `"output_tokens":1`, `"output_tokens":0`, 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
+		{"missing-error-flag", strings.Replace(success, `"is_error":false,`, "", 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
+		{"failed-exit", success, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "provider_inconclusive"},
+		{"prose", "Authenticated: true; API key found; secret", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
+		{"history-result-not-terminal", "[" + success + `,{"type":"assistant"}]`, true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
 		{"structured-rejection", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"status":403,"category":"auth","details":"secret"}]}`, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusUnauthorized, "provider_rejected"},
-		{"quota", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["unauthorized secret"],"errors_info":[{"status":429,"category":"quota"}]}`, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "provider_quota"},
-		{"quota-no-local-evidence", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"status":429}]}`, false, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_quota"},
-		{"category-only-auth", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"category":"auth"}]}`, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "check_inconclusive"},
-		{"auth-category-with-validation-status", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"status":400,"category":"auth"}]}`, false, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "check_inconclusive"},
+		{"quota", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["unauthorized secret"],"errors_info":[{"status":429,"category":"quota"}]}`, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "provider_quota_exhausted"},
+		{"quota-no-local-evidence", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"status":429}]}`, false, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_rate_limited"},
+		{"category-only-auth", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"category":"auth"}]}`, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "provider_inconclusive"},
+		{"auth-category-with-validation-status", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"status":400,"category":"auth"}]}`, false, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
 		{"transport", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors_info":[{"category":"network"}]}`, false, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "provider_unreachable"},
-		{"unstructured-error", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["401 unauthorized secret"]}`, false, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "check_inconclusive"},
+		{"unstructured-error", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["401 unauthorized secret"]}`, false, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestAuthDiagnosticsKeepNativeResponsesPrivate(t *testing.T) {
 	t.Setenv("CODEBUDDY_API_KEY", "private-provider-key")
 	p := fakeAuthCLI(t, `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["private-provider-key https://private.invalid /private/profile"],"errors_info":[{"category":"quota","details":"private-provider-key"}]}`, "1")
 	got, identity, steps, err := p.AuthStatusWithDiagnostics(context.Background())
-	if err != nil || got != ports.AgentAuthStatusConfigured || len(steps) != 1 || steps[0].Code != "provider_quota" {
+	if err != nil || got != ports.AgentAuthStatusConfigured || len(steps) != 1 || steps[0].Code != "provider_quota_exhausted" {
 		t.Fatalf("verdict=%s steps=%+v err=%v", got, steps, err)
 	}
 	raw, _ := json.Marshal([]any{identity, steps})
@@ -168,7 +168,7 @@ func TestAuthProbeBoundsOutput(t *testing.T) {
 	t.Setenv("CODEBUDDY_AUTH_TOKEN", "")
 	p := fakeAuthCLI(t, strings.Repeat("x", authProbeOutputLimit+1), "0")
 	got, _, steps, err := p.AuthStatusWithDiagnostics(context.Background())
-	if err != nil || got != ports.AgentAuthStatusUnknown || len(steps) != 1 || steps[0].Code != "output_unrecognized" {
+	if err != nil || got != ports.AgentAuthStatusUnknown || len(steps) != 1 || steps[0].Code != "provider_inconclusive" {
 		t.Fatalf("oversized result=%s/%+v err=%v", got, steps, err)
 	}
 }

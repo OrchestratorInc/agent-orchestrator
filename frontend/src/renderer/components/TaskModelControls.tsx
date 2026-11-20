@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TaskComposerEffortControl, TaskComposerModelControl } from "@aoagents/product-ui";
-import { agentModelDisplayLabel, isConcreteModelID } from "../lib/agent-model-choices";
+import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
@@ -53,7 +53,6 @@ export function TaskModelPicker({
 	onRefresh,
 	showFollowAgentAction,
 	allowNativeSelection = false,
-	allowDirectEntry = false,
 	footer,
 	modelHint,
 }: TaskComposerModelControl & {
@@ -62,8 +61,6 @@ export function TaskModelPicker({
 	hostId?: string;
 	/** Offer the native default as a choice and any model ID, as a cloud task can run them. */
 	allowNativeSelection?: boolean;
-	/** Accept a typed model ID when the catalog's entry mode allows it. */
-	allowDirectEntry?: boolean;
 	/** Where the listed models come from. */
 	footer?: ReactNode;
 	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
@@ -105,7 +102,10 @@ export function TaskModelPicker({
 	const selectCatalogModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};
-	const directEntry = allowNativeSelection || allowDirectEntry;
+	// Open Interpreter's native catalog can be empty or partial for a custom
+	// provider, so a local task still accepts a model ID it names directly.
+	const directEntry = !allowNativeSelection && ((agentId === "open-interpreter" && catalog?.customModelEntry === "direct") || acceptsLocalModelID(agentId, catalog));
+	const acceptsCustom = allowNativeSelection || directEntry;
 
 	return (
 		<AgentModelCombobox
@@ -114,11 +114,12 @@ export function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={directEntry && catalog?.allowCustom}
-			customModelEntry={directEntry ? catalog?.customModelEntry : catalog?.customModelEntry === "configured" ? "configured" : "none"}
-			onCustom={directEntry ? onModelChange : undefined}
+			allowCustom={allowNativeSelection ? catalog?.allowCustom : directEntry}
+			customModelEntry={allowNativeSelection ? catalog?.customModelEntry : directEntry ? "direct" : catalog?.customModelEntry === "configured" ? "configured" : "none"}
+			onCustom={acceptsCustom ? onModelChange : undefined}
 			// Default sends no model, so the project's or the agent's own applies.
-			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
+			// A local direct-entry task needs it too, to undo a typed model ID.
+			onUseDefault={allowNativeSelection || directEntry ? () => onModelChange("") : undefined}
 			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
 			footer={footer}
 			modelHint={modelHint}

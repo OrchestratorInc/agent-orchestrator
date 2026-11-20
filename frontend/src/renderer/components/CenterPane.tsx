@@ -31,7 +31,7 @@ import { handleTerminalTabListKeyDown } from "../lib/terminal-tabs";
 import { cn } from "../lib/utils";
 import { sidebarOccupiesLayout, useUiStore, type Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
-import { isOrchestratorSession, sessionIsActive, type WorkspaceSession } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame, terminalTabRenameInputClassName } from "./TerminalTabFrame";
@@ -66,8 +66,6 @@ type CenterPaneProps = {
 	topbarActions?: ReactNode;
 	/** Agent-session actions (interface switch, handoff) on the primary session tab. */
 	sessionTabAction?: ReactNode;
-	/** Keep the primary tab's action showing while an interface switch runs. */
-	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	workspaceTabs?: CenterPaneWorkspaceTab[];
@@ -237,7 +235,6 @@ export function CenterPane({
 	onRenameShellTerminal,
 	topbarActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -292,7 +289,6 @@ export function CenterPane({
 		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableAuxiliaryKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
-	const stripShellHandleIds = useMemo(() => shellTerminals.map((terminal) => terminal.handleId), [shellTerminals]);
 	const orderedAuxiliaryTabs = useMemo(() => {
 		const preferred = auxiliaryTabOrder ?? (sessionId ? (tabOrderBySession[sessionId] ?? []) : []);
 		const byKey = new Map(auxiliaryTabs.map((tab) => [tab.key, tab]));
@@ -591,7 +587,6 @@ export function CenterPane({
 												onRenamed={refreshWorkspaces}
 												session={session}
 												tabAction={sessionTabAction}
-												tabActionPinned={sessionTabActionPinned}
 											/>
 										) : (
 											<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
@@ -638,7 +633,7 @@ export function CenterPane({
 														}
 														onSelect={() => onSelectShellTerminal?.(tab.terminal.handleId)}
 														shell={tab.terminal}
-														stripShellHandleIds={stripShellHandleIds}
+														stripShells={shellTerminals}
 													/>
 												) : (
 													tab.tab.menu ? (
@@ -729,8 +724,6 @@ type SessionPaneTabProps = {
 	title?: string;
 	/** The control after the tab's title: the session's ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
-	/** Keep the action showing at rest (the session tab's ⋮ always shows). */
-	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;
 	/** The tab's strip key, for split actions in its menu. */
@@ -749,7 +742,6 @@ export function SessionPaneTab({
 	icon,
 	title,
 	tabAction,
-	tabActionPinned = false,
 	tabMenu = false,
 	tabKey = SESSION_TAB_KEY,
 }: SessionPaneTabProps) {
@@ -787,10 +779,10 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			// Renaming hides the ⋮ but keeps its slot, so the tab keeps its width.
-			action={tabAction ? <span className={cn(sessionTabActionClassName, rename.isEditing && "invisible")} data-testid="session-tab-action">{tabAction}</span> : undefined}
-			actionPosition="end"
-			actionPinned={tabActionPinned}
+			// Renaming hides the ⋮ but keeps its slot (the frame's rule), so the tab keeps its width.
+			action={tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			// The session tab's ⋮ always shows, in its own room after the title.
+			actionInline
 			wide={session ? "session" : undefined}
 			active={isActive}
 			buttonProps={{
@@ -829,14 +821,14 @@ export function SessionPaneTab({
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
 	// Archive only where the ⇧⌘A confirmation is mounted (SessionTopbarActions):
-	// an active local or remote worker. The orchestrator goes with its project.
+	// an active local, remote, or Cloud worker. The orchestrator goes with its project.
 	const menu: TabMenuSpec = session
 		? {
 				kind: "session",
 				tabKey,
 				session,
 				onRename: renameSession ? rename.begin : undefined,
-				canArchive: !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session),
+				canArchive: canArchiveWorkerSession(session),
 			}
 		: { kind: "plain", tabKey };
 	// The ⋮ button in the action slot opens this same spec.

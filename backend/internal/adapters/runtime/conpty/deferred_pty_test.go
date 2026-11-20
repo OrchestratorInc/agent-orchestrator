@@ -236,6 +236,18 @@ func TestPtyHostArgsCarryHostOptions(t *testing.T) {
 	}
 }
 
+func TestPtyHostArgsCarryReplayFileAndOutputLines(t *testing.T) {
+	opts := HostOptions{StartOnAttach: true, ReplayFile: "/tmp/saved output", OutputLines: 5000}
+	args := ptyHostArgs("shellterm-1", "/tmp/ws", []string{"/bin/zsh"}, opts)
+	if want := []string{"pty-host", "--start=attach", "--replay=/tmp/saved output", "--lines=5000", "shellterm-1", "/tmp/ws", "/bin/zsh"}; !slices.Equal(args, want) {
+		t.Fatalf("args = %q, want %q", args, want)
+	}
+	got, rest := splitHostOptionArgs(args[1:])
+	if got != opts || !slices.Equal(rest, args[4:]) {
+		t.Fatalf("split = %+v, %q", got, rest)
+	}
+}
+
 func TestHostStartGrid(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

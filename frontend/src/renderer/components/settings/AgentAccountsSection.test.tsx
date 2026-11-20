@@ -364,6 +364,45 @@ it("says an API key is not a subscription sign-in and keeps the sign-in open", a
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+it.each([
+	["no accounts", []],
+	["one CLI account", [device]],
+	["one saved account", [saved]],
+	["an unsigned CLI placeholder and one saved account", [{ ...device, signedIn: false, loggedIn: false, email: undefined }, saved]],
+	["an API key CLI login and one saved account", [{ ...device, signedIn: false }, saved]],
+	["one account per provider", [device, { ...saved, provider: "codex" }]],
+	["the CLI and saved copy of one login", [{ ...device, sameLoginAs: saved.id }, { ...saved, signedIn: true, loggedIn: true, email: device.email }]],
+])("hides the usage-limit handoff with %s", async (_name, accounts) => {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts },
+	}));
+	renderPanel();
+	await waitFor(() => expect(screen.queryByText("Loading accounts…")).not.toBeInTheDocument());
+
+	expect(screen.queryByRole("switch", { name: "Move to another account at a usage limit" })).not.toBeInTheDocument();
+});
+
+it("shows the usage-limit handoff for two saved accounts with the CLI signed out", async () => {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] }
+			: { accounts: [{ ...device, signedIn: false, loggedIn: false }, saved, { ...saved, id: "acct-c", email: "c@example.com" }] },
+	}));
+	renderPanel();
+
+	expect(await screen.findByRole("switch", { name: "Move to another account at a usage limit" })).toBeInTheDocument();
+});
+
+it("hides the usage-limit handoff after removing the second account", async () => {
+	const user = userEvent.setup();
+	deleteMock.mockReset().mockResolvedValue({ data: { accounts: [device] } });
+	renderPanel();
+	const toggle = await screen.findByRole("switch", { name: "Move to another account at a usage limit" });
+	await user.click(screen.getByRole("button", { name: "Remove account" }));
+	await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove account" }));
+
+	await waitFor(() => expect(toggle).not.toBeInTheDocument());
+});
+
 it("turns the usage-limit handoff on through the daemon and shows what it stored", async () => {
 	const user = userEvent.setup();
 	let stored = false;

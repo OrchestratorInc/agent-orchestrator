@@ -7,12 +7,12 @@ import (
 	"strings"
 )
 
-// CodeBuddy's sessions CHECK migration, and the number its PR preview builds
+// codeBuddyHarnessMigration is CodeBuddy's sessions CHECK migration.
+// codeBuddyPreviewHarnessMigrations are the numbers its PR preview builds
 // recorded before it moved above main's latest migration.
-const (
-	codeBuddyHarnessMigration        int64 = 20261114173149181
-	codeBuddyPreviewHarnessMigration int64 = 20261023181512240
-)
+const codeBuddyHarnessMigration int64 = 20261120094922017
+
+var codeBuddyPreviewHarnessMigrations = []int64{20261023181512240, 20261114173149181}
 
 // Preview CodeBuddy builds used 214 and 215 before main assigned them to
 // version refresh and harness releases. Release only identifiable preview
@@ -33,10 +33,10 @@ func repairRenumberedCodeBuddyMigrationHistory(db *sql.DB) error {
 	if !strings.Contains(schema, "'codebuddy'") {
 		return nil
 	}
-	// Preview ledgers predate CodeBuddy's own migration. Once either of its
+	// Preview ledgers predate CodeBuddy's own migration. Once any of its
 	// numbers is recorded, the repair is done for good, so a later migration that
 	// changes these canonical objects can never read as a preview ledger.
-	for _, version := range []int64{codeBuddyHarnessMigration, codeBuddyPreviewHarnessMigration} {
+	for _, version := range append([]int64{codeBuddyHarnessMigration}, codeBuddyPreviewHarnessMigrations...) {
 		var applied int
 		if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, version).Scan(&applied); err != nil {
 			return err

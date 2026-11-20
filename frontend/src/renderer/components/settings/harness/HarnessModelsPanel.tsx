@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../../hooks/useAgentModelsQuery";
 import { useSettings, useUpdateHarnessDefault } from "../../../hooks/useSettings";
-import { acceptsTypedNewTaskModel, agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
+import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { groupModelProviders } from "../../../lib/model-providers";
@@ -100,7 +100,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</div></div>;
 	}
 	const data = catalog.data;
-	const acceptsDirectModel = acceptsTypedNewTaskModel(agentId) && (data?.customModelEntry ?? (data?.allowCustom ? "direct" : "none")) === "direct";
+	const acceptsDirectModel = acceptsLocalModelID(agentId, data);
 	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;

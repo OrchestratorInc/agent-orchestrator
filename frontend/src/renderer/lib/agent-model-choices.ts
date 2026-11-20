@@ -4,12 +4,13 @@ export function isConcreteModelID(id: string): boolean {
 	return id !== "" && id.toLowerCase() !== "default";
 }
 
-// Harnesses whose models are chosen natively, with no catalog, so a local New
-// Task accepts the model ID the user types. Others keep picking from the catalog.
-const NEW_TASK_TYPED_MODEL_AGENTS: ReadonlySet<string> = new Set(["codebuddy"]);
-
-export function acceptsTypedNewTaskModel(agentId: string | undefined): boolean {
-	return agentId !== undefined && NEW_TASK_TYPED_MODEL_AGENTS.has(agentId);
+/**
+ * Whether a local New Task may take a typed model ID. Mastra Code and CodeBuddy
+ * Code list no models and select their native model by ID; other harnesses keep
+ * their catalog.
+ */
+export function acceptsLocalModelID(agentId: string, catalog?: { customModelEntry?: string }): boolean {
+	return (agentId === "mastra-code" || agentId === "codebuddy") && catalog?.customModelEntry === "direct";
 }
 
 /**

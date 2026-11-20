@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -59,6 +60,17 @@ type ChatLauncher interface {
 	// DrainChatQueue dispatches what accumulated while the session had no
 	// controller.
 	DrainChatQueue(ctx context.Context, id domain.SessionID) error
+}
+
+type chatEnvironmentPreflighter interface {
+	PreflightChatWithEnv(context.Context, domain.AgentHarness, ports.PermissionMode, map[string]string) error
+}
+
+func (m *Manager) preflightChat(ctx context.Context, harness domain.AgentHarness, permissions ports.PermissionMode, env map[string]string) error {
+	if preflighter, ok := m.chat.(chatEnvironmentPreflighter); ok {
+		return preflighter.PreflightChatWithEnv(ctx, harness, permissions, env)
+	}
+	return m.chat.PreflightChat(ctx, harness, permissions)
 }
 
 type chatBackgroundTaskRunner interface {
@@ -413,9 +425,24 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 	if m.computerUseEnabled(ctx) {
 		serverEnv[envComputerUse] = "1"
 	}
+	command, args := mcpServerCommand(executable)
 	return []ports.ChatMCPServerConfig{{
-		Name: "ao", Type: "stdio", Command: executable, Args: []string{"mcp"}, Env: serverEnv,
+		Name: "ao", Type: "stdio", Command: command, Args: args, Env: serverEnv,
 	}}
+}
+
+// mcpServerCommand runs the ao-mcp executable next to ao when there is one: it
+// serves the same tools without loading the CLI's commands, database, and
+// services. Otherwise the server is `ao mcp`.
+func mcpServerCommand(executable string) (string, []string) {
+	name := filepath.Base(executable)
+	if name == "ao" || name == "ao.exe" {
+		helper := filepath.Join(filepath.Dir(executable), "ao-mcp"+filepath.Ext(name))
+		if info, err := os.Stat(helper); err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0) {
+			return helper, nil
+		}
+	}
+	return executable, []string{"mcp"}
 }
 
 func (m *Manager) stopChatAfterSpawnFailure(ctx context.Context, id domain.SessionID) {
