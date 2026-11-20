@@ -17,6 +17,7 @@ vi.mock("../lib/api-client", () => ({
 import {
 	agentReadinessQueryOptions,
 	agentReadinessQueryKey,
+	loadProjectAgentDefaults,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
 	useEnsureAgentReadiness,
@@ -115,5 +116,41 @@ describe("agent readiness query", () => {
 			expect(result.current).toBe(true);
 			unmount();
 		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("project agent defaults", () => {
+	it("rechecks readiness before falling back when no agent can launch", async () => {
+		const none = { data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined };
+		getMock.mockResolvedValue(none);
+		postMock.mockResolvedValue(none);
+
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: [], purpose: "display" } });
+	});
+
+	it("rechecks a cached snapshot with no launchable agent and ranks what the daemon finds", async () => {
+		getMock.mockResolvedValue({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined });
+
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+	});
+
+	it("ranks the daemon's latest snapshot when the checks outlast the limit", async () => {
+		vi.useFakeTimers();
+		try {
+			const unchecked = { installation: "unknown", authentication: "unknown" } as const;
+			getMock
+				.mockResolvedValueOnce({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", unchecked)] }, error: undefined })
+				.mockResolvedValue({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", { authentication: "unknown" })] }, error: undefined });
+			postMock.mockReturnValue(new Promise(() => {}));
+
+			const defaults = loadProjectAgentDefaults(new QueryClient());
+			await vi.advanceTimersByTimeAsync(5000);
+
+			// Claude Code was never checked; the daemon found Codex installed by now.
+			await expect(defaults).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

@@ -88,6 +88,7 @@ type Service struct {
 	telemetry      ports.EventSink
 	milestones     ports.InstallMilestones
 	defaultHarness domain.AgentHarness
+	preferredAgent func(context.Context) domain.AgentHarness
 	logger         *slog.Logger
 	githubRepos    ports.GitHubRepositoryResolver
 	// addMu serialises the whole body of Add. Workspace registration performs
@@ -106,6 +107,12 @@ type Deps struct {
 	// DefaultHarness is the daemon's configured default agent (AO_AGENT).
 	// When empty, the service falls back to config.DefaultAgent.
 	DefaultHarness domain.AgentHarness
+	// PreferredAgent ranks this machine's agents the way the desktop does
+	// (installed and signed in first, then AO's priority) and returns the top
+	// one, or "" when AO has found no launchable agent installed. A new project
+	// gets it for any role it names no agent for. Left nil or "",
+	// DefaultHarness is used.
+	PreferredAgent func(context.Context) domain.AgentHarness
 	Store          Store
 	Sessions       SessionTeardowner
 	Clock          func() time.Time
@@ -139,6 +146,7 @@ func NewWithDeps(d Deps) *Service {
 		telemetry:      d.Telemetry,
 		milestones:     d.Milestones,
 		defaultHarness: defaultHarness,
+		preferredAgent: d.PreferredAgent,
 		logger:         d.Logger,
 		githubRepos:    d.GitHubRepos,
 	}
@@ -359,6 +367,13 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
 		projectConfig = *in.Config
+	}
+	// Every project starts with a worker and an orchestrator agent. Callers
+	// that name only one role (`ao project add --worker-agent X`) or none
+	// (session import adding a folder) get the most preferred agent for the
+	// rest; a role they named is kept.
+	if projectConfig.MissingRoleAgent() {
+		projectConfig.FillRoleAgents(m.PreferredAgent(ctx))
 	}
 
 	registeredAt := time.Now()
@@ -1239,6 +1254,18 @@ func sessionPrefix(id string) string {
 		return id
 	}
 	return id[:12]
+}
+
+// PreferredAgent is the agent a project gets for a role it names none for:
+// the top of the ranked default list, or the daemon's default agent when no
+// agent could be ranked.
+func (m *Service) PreferredAgent(ctx context.Context) domain.AgentHarness {
+	if m.preferredAgent != nil {
+		if agent := m.preferredAgent(ctx); agent != "" {
+			return agent
+		}
+	}
+	return m.defaultHarness
 }
 
 // SetPermissions remembers the approval policy for future sessions of either role.

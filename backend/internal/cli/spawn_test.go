@@ -1154,24 +1154,24 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 			Orchestrator: roleOverride{Agent: "claude-code"},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "orchestrator", project); err != nil || got != "claude-code" {
-		t.Fatalf("orchestrator default: got %q err %v, want claude-code", got, err)
+	if got := resolveSpawnHarness("", "orchestrator", project); got != "claude-code" {
+		t.Fatalf("orchestrator default: got %q, want claude-code", got)
 	}
-	if got, err := resolveSpawnHarness("", "worker", project); err != nil || got != "codex" {
-		t.Fatalf("worker default: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "worker", project); got != "codex" {
+		t.Fatalf("worker default: got %q, want codex", got)
 	}
-	if got, err := resolveSpawnHarness("aider", "orchestrator", project); err != nil || got != "aider" {
-		t.Fatalf("explicit agent: got %q err %v, want aider", got, err)
+	if got := resolveSpawnHarness("aider", "orchestrator", project); got != "aider" {
+		t.Fatalf("explicit agent: got %q, want aider", got)
 	}
 	// Unset kind is the default `ao spawn` path and must resolve to worker.agent.
-	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
-		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "", project); got != "codex" {
+		t.Fatalf("unset kind: got %q, want codex", got)
 	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
+	// Orchestrator spawn with no orchestrator.agent configured leaves the
+	// harness to the daemon, which fills the project's empty roles.
 	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
-	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
-		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
+	if got := resolveSpawnHarness("", "orchestrator", noOrch); got != "" {
+		t.Fatalf("missing orchestrator agent: got %q, want daemon-resolved empty harness", got)
 	}
 }
 

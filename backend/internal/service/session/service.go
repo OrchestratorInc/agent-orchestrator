@@ -225,6 +225,8 @@ type terminalTitleSource interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
+	// preferredAgent picks the agent for a project role that names none.
+	preferredAgent func(context.Context) domain.AgentHarness
 	// prMoved tells a live session that another session took its PR.
 	prMoved             PRMovedNotifier
 	manager             commander
@@ -316,6 +318,58 @@ func (s *Service) renewTaskPreparation(rec domain.SessionRecord) {
 // a github.com origin's rename or transfer.
 func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) {
 	s.githubRepos = r
+}
+
+// SetPreferredProjectAgent late-binds the ranked default agent that heals a
+// project whose worker or orchestrator role names no agent before a session of
+// that project starts. It returns "" when no agent can launch, and the role is
+// then left empty.
+func (s *Service) SetPreferredProjectAgent(pick func(context.Context) domain.AgentHarness) {
+	s.preferredAgent = pick
+}
+
+// projectRoleAgentFiller fills a project's empty role agents atomically.
+type projectRoleAgentFiller interface {
+	FillProjectRoleAgents(ctx context.Context, id string, agent domain.AgentHarness) (domain.ProjectRecord, bool, error)
+}
+
+// fillMissingRoleAgents gives every empty role the ranked default before a
+// project session starts. The transaction preserves concurrent settings edits
+// and roles that already name an agent.
+func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.ProjectRecord) domain.ProjectRecord {
+	if !project.Config.MissingRoleAgent() || s.preferredAgent == nil {
+		return project
+	}
+	filler, ok := s.store.(projectRoleAgentFiller)
+	if !ok {
+		return project
+	}
+	agent := s.preferredAgent(ctx)
+	if agent == "" {
+		return project
+	}
+	row, changed, err := filler.FillProjectRoleAgents(ctx, project.ID, agent)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("fill project role agents", "projectID", project.ID, "agent", agent, "error", err)
+		}
+		return project
+	}
+	if changed && s.logger != nil {
+		s.logger.Info("filled missing project role agents", "projectID", project.ID, "agent", agent)
+	}
+	if row.ID == "" {
+		return project
+	}
+	return row
+}
+
+// roleHarness is the agent the project names for sessions of kind.
+func roleHarness(project domain.ProjectRecord, kind domain.SessionKind) domain.AgentHarness {
+	if kind == domain.KindOrchestrator {
+		return project.Config.Orchestrator.Harness
+	}
+	return project.Config.Worker.Harness
 }
 
 // SetComputerLoginCheck late-binds the account check the launch gate needs: the
@@ -469,6 +523,13 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		project, err = s.requireProject(ctx, cfg.ProjectID)
 		if err != nil {
 			return domain.Session{}, 0, 0, err
+		}
+		needsHarness := cfg.Harness == "" && roleHarness(project, cfg.Kind) == ""
+		project = s.fillMissingRoleAgents(ctx, project)
+		if needsHarness {
+			// A daemon-selected agent goes through the same launch checks as
+			// an explicit one.
+			cfg.Harness = roleHarness(project, cfg.Kind)
 		}
 	} else {
 		if cfg.IssueID != "" || strings.TrimSpace(cfg.Branch) != "" {

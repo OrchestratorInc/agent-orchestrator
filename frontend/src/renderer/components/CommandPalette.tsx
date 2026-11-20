@@ -87,7 +87,6 @@ import { useKeybindingsStore } from "../stores/keybindings-store";
 import {
 	CLOUD_PROJECT_KIND,
 	findProjectOrchestrator,
-	hasConfiguredOrchestratorAgent,
 	isOrchestratorSession,
 	openPRs,
 	STANDALONE_WORKSPACE_ID,
@@ -971,13 +970,9 @@ export const CommandPalette = memo(function CommandPalette() {
 				if (isCurrentRun()) closePalette();
 				return;
 			}
-			if (!hasConfiguredOrchestratorAgent(workspace)) {
-				if (workspace) {
-					navigateToTarget({ to: "/projects/$projectId/settings", params: { projectId } });
-					closePalette();
-				}
-				return;
-			}
+			if (!workspace) return;
+			// A project that lost its orchestrator agent starts on the ranked
+			// default: the daemon fills the empty role as it starts.
 			const sessionId = await spawnOrchestrator(projectId, "command_palette");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			navigateToTarget(sessionRoute(projectId, sessionId));
