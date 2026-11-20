@@ -95,10 +95,19 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	// Only subscriptions take part in moving at a usage limit.
 	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => !perToken(account) && (!account.device || account.signedIn)).length > 1;
 	// The harness's methods that suit adding an account, or account's kind.
+	// A daemon from before account kinds sends none and takes no sign-in method:
+	// its accounts sign in only in a terminal.
+	const takesMethods = providerAccounts.some((account) => (account as { kind?: string }).kind);
 	const methodsFor = (account?: AgentAccount) => {
+		if (!takesMethods) return [];
 		const allowed = account ? accountMethods[provider][account.kind] ?? [] : accountMethods[provider].add;
 		return (loginMethods ?? []).filter((method) => allowed.includes(method.id));
 	};
+	// A key, setup token or Console login signs in only through the panel: a
+	// terminal sign-in could pick another kind of login.
+	const panelOnly = (account?: AgentAccount) => account?.kind === "api_key" || account?.kind === "setup_token" || account?.kind === "metered";
+	// Until its methods load, such an account has nothing to sign in with.
+	const signInReady = (account: AgentAccount) => !panelOnly(account) || methodsFor(account).length > 0;
 	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[loginKey];
@@ -164,7 +173,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	// method that suits it, the CLI's own sign-in runs in a terminal instead.
 	const openSignIn = (account?: AgentAccount) => {
 		if (methodsFor(account).length === 0) {
-			void startLogin(account?.id);
+			if (!panelOnly(account)) void startLogin(account?.id);
 			return;
 		}
 		setError("");
@@ -289,11 +298,11 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	useEffect(() => {
 		if (hostId) return;
 		const account = rows.find((row) => row.id === requestedLogin);
-		if (!account || (account.device && (!cliLogin || cliLogin.disabled))) return;
+		if (!account || (account.device && (!cliLogin || cliLogin.disabled)) || (!account.device && !signInReady(account))) return;
 		useUiStore.setState({ accountLogin: null });
 		if (account.device) cliLogin?.onSignIn();
 		else openSignIn(account);
-	}, [requestedLogin, accounts.data, cliLogin?.disabled, hostId]);
+	}, [requestedLogin, accounts.data, cliLogin?.disabled, hostId, loginMethods]);
 	const signInTarget = signIn?.account;
 
 	return <>
@@ -330,7 +339,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				account={{ start: startAccountSignIn, named: !signInTarget }}
 				onVerify={verifyAccountSignIn}
 				onClose={closeSignIn}
-				onTerminal={signInTarget && (signInTarget.kind === "api_key" || signInTarget.kind === "setup_token") ? undefined : async () => {
+				onTerminal={panelOnly(signInTarget) ? undefined : async () => {
 					closeSignIn();
 					await startLogin(signInTarget?.id);
 				}}
@@ -352,8 +361,8 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
-				onSignInAgain={() => openSignIn(account)}
-				onReplaceKey={() => openSignIn(account)}
+				onSignInAgain={signInReady(account) ? () => openSignIn(account) : undefined}
+				onReplaceKey={signInReady(account) ? () => openSignIn(account) : undefined}
 				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
@@ -379,8 +388,9 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	cliLogin?: CliLoginControls;
 	onMakeDefault: () => void;
 	onUseReset: () => void;
-	onSignInAgain: () => void;
-	onReplaceKey: () => void;
+	/** Missing while the sign-in methods this account needs are loading. */
+	onSignInAgain?: () => void;
+	onReplaceKey?: () => void;
 	onRemove: () => void;
 }) {
 	const { t, i18n } = useTranslation();
@@ -420,12 +430,12 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 				{cliLogin
 					? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.agentAccounts.signInAgain")}</Button>
 					: !replaces && !agentAccountUsable(account) && !account.device
-						? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null} onClick={onSignInAgain}>{t("settings.agentAccounts.signInAgain")}</Button>
+						? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || !onSignInAgain} onClick={onSignInAgain}>{t("settings.agentAccounts.signInAgain")}</Button>
 						: null}
 				{account.default
 					? <span className="text-xs text-muted-foreground">{t("settings.agentAccounts.default")}</span>
 					: agentAccountUsable(account) ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
-				{replaces ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onReplaceKey}>{t(kind === "api_key" ? "settings.agentAccounts.replaceKey" : "settings.agentAccounts.replaceToken")}</Button> : null}
+				{replaces ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || !onReplaceKey} onClick={onReplaceKey}>{t(kind === "api_key" ? "settings.agentAccounts.replaceKey" : "settings.agentAccounts.replaceToken")}</Button> : null}
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
 				{account.device
 					? cliLogin?.canLogout && account.loggedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onLogout}>{t("settings.harness.logout")}</Button> : null

@@ -31,8 +31,8 @@ vi.mock("../TerminalPane", () => ({
 	},
 }));
 
-const device = { id: "device-claude", provider: "claude", device: true, default: true, signedIn: true, loggedIn: true, email: "a@example.com" };
-const saved = { id: "acct-b", provider: "claude", device: false, default: false, signedIn: false, loggedIn: false, email: "b@example.com" };
+const device = { id: "device-claude", provider: "claude", device: true, default: true, signedIn: true, loggedIn: true, email: "a@example.com", kind: "subscription" };
+const saved = { id: "acct-b", provider: "claude", device: false, default: false, signedIn: false, loggedIn: false, email: "b@example.com", kind: "subscription" };
 const login = { operationId: "login-1", provider: "claude", shellTerminal: { handleId: "shellterm-1", title: "Sign in to Claude account", createdAt: "2026-10-18T10:00:00Z" } };
 
 function renderPanel(cliLogin?: CliLoginControls) {
@@ -504,7 +504,8 @@ it("adds an Anthropic API key from the panel, checked by the daemon first", asyn
 	expect(await screen.findByText("The provider rejected this key.")).toBeInTheDocument();
 	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/api-keys", { body: { provider: "claude", name: "Work", apiKey: "sk-ant-api03-secret" } });
 
-	await user.type(screen.getByLabelText("API key"), "sk-ant-api03-secret");
+	// The refused key stays typed, so a retry needs no retyping.
+	expect(screen.getByLabelText("API key")).toHaveValue("sk-ant-api03-secret");
 	await user.click(screen.getByRole("button", { name: "Save and verify" }));
 	await waitFor(() => expect(screen.queryByRole("button", { name: "Anthropic API key" })).not.toBeInTheDocument());
 	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]');
@@ -623,4 +624,33 @@ it("keeps the computer's own sign-in waiting while an account signs in", async (
 
 	await user.click(screen.getByRole("button", { name: "Add account" }));
 	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeDisabled();
+});
+
+it("adds an account in a terminal on a daemon from before sign-in methods", async () => {
+	const user = userEvent.setup();
+	const oldDevice = { ...device, kind: undefined };
+	const oldSaved = { ...saved, kind: undefined };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [oldDevice, oldSaved] },
+	}));
+	postMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/api/v1/agents/accounts/login" ? login : {} }));
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+
+	// Its older request takes no method, so the panel never opens.
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", { body: { provider: "claude" } });
+	expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument();
+});
+
+it("waits for the sign-in methods before replacing a key", async () => {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, keyAccount] },
+	}));
+	renderPanel();
+	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-key"]')).not.toBeNull());
+	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]')!;
+
+	// Without the panel's methods, a key has no terminal sign-in to fall back to.
+	expect(within(row).getByRole("button", { name: "Replace key" })).toBeDisabled();
+	expect(postMock).not.toHaveBeenCalled();
 });

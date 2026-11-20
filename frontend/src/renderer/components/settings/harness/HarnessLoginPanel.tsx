@@ -289,7 +289,11 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				if (targetKey || target?.id === "gemini_api_key") onProviderKeysChanged?.();
 			});
 		} catch (err) {
-			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
+			if (mounted.current) {
+				// An account's key or token refused by the daemon stays typed, to fix and retry.
+				if (account) setSecret(credential);
+				setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
+			}
 		} finally {
 			pending.current = false;
 			if (mounted.current) setBusy(false);
