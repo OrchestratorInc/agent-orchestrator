@@ -114,7 +114,7 @@ describe("installScrollLockBouncePassThrough", () => {
 
 	// Stands in for react-remove-scroll: added after the pass-through, as a lock
 	// mounts after startup, and cancels every wheel it sees.
-	function setup({ locked = true, layer = true, bouncing = true } = {}) {
+	function setup({ locked = true, layer = true, bouncing = true, overflows = true } = {}) {
 		cleanup.push(installScrollLockBouncePassThrough(document));
 		const lock = (event: Event) => event.preventDefault();
 		document.addEventListener("wheel", lock, { passive: false });
@@ -124,6 +124,9 @@ describe("installScrollLockBouncePassThrough", () => {
 		if (layer) host.setAttribute("role", "menu");
 		const list = document.createElement("div");
 		if (bouncing) list.className = NATIVE_BOUNCE_Y;
+		// jsdom does no layout.
+		Object.defineProperty(list, "scrollHeight", { configurable: true, value: overflows ? 600 : 200 });
+		Object.defineProperty(list, "clientHeight", { configurable: true, value: 200 });
 		const item = document.createElement("div");
 		list.append(item);
 		host.append(list);
@@ -141,16 +144,14 @@ describe("installScrollLockBouncePassThrough", () => {
 		expect(wheel(setup())).toBe(false);
 	});
 
-	it("leaves the lock alone everywhere else", () => {
-		expect(wheel(setup({ locked: false }))).toBe(true);
-		cleanup.forEach((undo) => undo());
-		cleanup = [];
-		document.body.replaceChildren();
-		expect(wheel(setup({ layer: false }))).toBe(true);
-		cleanup.forEach((undo) => undo());
-		cleanup = [];
-		document.body.replaceChildren();
-		expect(wheel(setup({ bouncing: false }))).toBe(true);
+	it.each([
+		["no lock is on", { locked: false }],
+		["the list is not in a menu, popover or dialog", { layer: false }],
+		["the scroller does not opt in", { bouncing: false }],
+		// A list that fits is no scroller to Chromium: the wheel would chain past it.
+		["the list fits", { overflows: false }],
+	])("leaves the wheel to the lock when %s", (_case, options) => {
+		expect(wheel(setup(options))).toBe(true);
 	});
 
 	it("leaves pinch-zoom and sideways wheels to the lock", () => {

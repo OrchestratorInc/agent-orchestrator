@@ -47,8 +47,9 @@ export function createWindowComposition(options: {
 			transparent: true,
 			// Native trackpad rubber band. Electron reads this only on macOS and
 			// it applies to the whole shell: Chromium then stretches any scroller
-			// with `overscroll-behavior: contain` at its edge. Lists opt in with
-			// `overscroll-y-contain`; native-overscroll.test.ts holds the list.
+			// with `overscroll-behavior: contain` at its edge. Lists and menus opt
+			// in with NATIVE_BOUNCE_Y (renderer/lib/native-overscroll.ts);
+			// native-overscroll.test.ts holds the list.
 			// The page itself never stretches (body is overflow: hidden).
 			scrollBounce: true,
 		},

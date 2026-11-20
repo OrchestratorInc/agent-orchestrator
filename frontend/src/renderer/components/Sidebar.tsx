@@ -169,6 +169,7 @@ import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { RemoteHostsSection } from "./RemoteHostsSection";
+import { NATIVE_BOUNCE_Y } from "../lib/native-overscroll";
 
 // macOS paints framed chrome: the fixed TitlebarNav cluster carries the
 // sidebar toggle + history arrows above this surface. Windows hangs the sidebar
@@ -716,7 +717,6 @@ export {
 	resolveNextNavigationAfterSessionKill,
 	type NextSessionNavigation,
 } from "../types/workspace";
-import { NATIVE_BOUNCE_Y } from "../lib/native-overscroll";
 
 // Built on shadcn's sidebar primitives (components/ui/sidebar): the provider in
 // _shell owns the persistent open state. Collapsed sidebars move fully off-canvas.

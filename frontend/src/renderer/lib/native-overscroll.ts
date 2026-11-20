@@ -19,8 +19,10 @@ const LAYER = "[data-radix-popper-content-wrapper], [role='dialog'], [role='aler
  * react-remove-scroll. Its document wheel listener cancels a wheel at a list's
  * edge (and every wheel over a list portaled outside a dialog), which also
  * cancels the native stretch. While a lock is on, a vertical wheel over a
- * bouncing list inside such a layer skips that listener; the list's own
- * `overscroll-behavior: contain` already keeps the page behind it still.
+ * bouncing list that overflows, inside such a layer, skips that listener: the
+ * list's own `overscroll-behavior: contain` keeps the page behind it still. A
+ * list that fits is not a scroller to Chromium and would chain the wheel on,
+ * so it stays under the lock.
  *
  * Install once at startup: listeners on one node run in the order they were
  * added, so this must be on `document` before any lock adds its own.
@@ -32,7 +34,7 @@ export function installScrollLockBouncePassThrough(doc: Document = document): ()
 		const target = event.target;
 		if (!(target instanceof Element)) return;
 		const scroller = target.closest(BOUNCING_SCROLLER);
-		if (!scroller?.closest(LAYER)) return;
+		if (!scroller?.closest(LAYER) || scroller.scrollHeight <= scroller.clientHeight) return;
 		event.stopImmediatePropagation();
 	};
 	doc.addEventListener("wheel", onWheel, { passive: true });
