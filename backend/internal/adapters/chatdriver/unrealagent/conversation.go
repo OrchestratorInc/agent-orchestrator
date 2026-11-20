@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -260,7 +259,9 @@ func (c *conversation) Close() error {
 
 func (c *conversation) Terminate() error {
 	_ = c.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// As for ACP hosts: wait at least the host's own bounded stop sequence;
+	// a 5 s deadline clamped the wait and failed on loaded machines.
+	ctx, cancel := context.WithTimeout(context.Background(), persistenthost.WaitBudget())
 	defer cancel()
 	return c.shutdownHost(ctx, c.cfg.DataDir, c.cfg.AOSessionID)
 }
