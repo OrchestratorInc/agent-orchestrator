@@ -119,12 +119,22 @@ qualifying read. Confirmed shells retain outcomes even if a later list omits the
 before completion arrives. Unconfirmed command metadata is bounded to 256
 sanitized labels per conversation.
 Provider labels are one line, capped at 240 characters, and redact obvious
-credential assignments, credential flags, authorization values, and URL user
-information; this is not general secret detection.
+credential assignments, common credential flags, authorization values, and
+`user:password` URL or `-u`/`--user` values. Ordinary `-u` arguments, query-string
+email addresses, and flags such as `--sort-key` remain readable; this is not
+general secret detection.
+
+Claude stop acknowledgments do not establish completion. If the SDK rejects a
+stop while the session and task still appear live, accept reconciliation and log
+the rejection; do not invent a stopped outcome. Native notifications or snapshots
+settle the task, and Stop remains retryable if it stays live. Already-settled
+tasks return not-stoppable, and closed-session failures still propagate.
 
 `GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
 `ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
-termination/generation checks after provider I/O. Real completion outcomes remain
+termination/generation checks after provider I/O. Provider reads run outside the
+cache mutex; deferred cleanup releases waiting readers even if a provider panics,
+without caching a sample from that call. Real completion outcomes remain
 visible for 30 seconds. Event-derived running jobs defer ACP hibernation; native
 snapshots remain authoritative where a provider supports them.
 

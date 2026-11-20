@@ -365,3 +365,43 @@ func TestBackgroundTasksConcurrentReadersShareOneSample(t *testing.T) {
 		t.Fatalf("provider reads=%d, want 1", conv.calls.Load())
 	}
 }
+
+func TestBackgroundTasksProviderPanicReleasesSharedRead(t *testing.T) {
+	conv := &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{{ID: "live", Kind: "shell", State: "running"}}}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	conv.duringRead = func() {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			panic("provider panic")
+		}
+	}
+	h := newHarnessWithConversation(t, conv)
+	panicked := make(chan any, 1)
+	go func() {
+		defer func() { panicked <- recover() }()
+		_, _ = h.svc.BackgroundTasks(t.Context(), testSession)
+	}()
+	<-entered
+	waiterCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	read := make(chan error, 1)
+	go func() {
+		reading, err := h.svc.BackgroundTasks(waiterCtx, testSession)
+		if err == nil && (reading.Availability != "ready" || len(reading.Tasks) != 1 || reading.Tasks[0].ID != "live") {
+			err = errors.New("panic cached an incomplete reading")
+		}
+		read <- err
+	}()
+	close(release)
+	if got := <-panicked; got != "provider panic" {
+		t.Fatalf("panic = %v", got)
+	}
+	if err := <-read; err != nil {
+		t.Fatalf("reader after provider panic: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("provider reads=%d, want a fresh sample after panic", calls.Load())
+	}
+}

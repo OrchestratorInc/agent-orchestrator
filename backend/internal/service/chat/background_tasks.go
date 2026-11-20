@@ -86,24 +86,32 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 		version := controller.backgroundVersion
 		controller.backgroundMu.Unlock()
 
-		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		sample, readErr := inspector.BackgroundTasks(readCtx)
-		cancel()
-		controller.backgroundMu.Lock()
-		// A stop invalidates samples already in flight, as well as cached samples.
-		// The canceled leader must not cache its cancellation for other readers.
-		if ctx.Err() == nil && version == controller.backgroundVersion {
-			controller.backgroundPartial = errors.Is(readErr, ports.ErrBackgroundTasksPartial)
-			if controller.backgroundPartial {
-				readErr = nil
+		func() {
+			// Always release followers, including when the provider panics and the
+			// HTTP recovery boundary handles it. A panic must publish no sample.
+			defer func() {
+				controller.backgroundMu.Lock()
+				controller.backgroundInFlight = nil
+				close(flight)
+				controller.backgroundMu.Unlock()
+			}()
+			readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			sample, readErr := inspector.BackgroundTasks(readCtx)
+			controller.backgroundMu.Lock()
+			defer controller.backgroundMu.Unlock()
+			// A stop invalidates samples already in flight, as well as cached samples.
+			// The canceled leader must not cache its cancellation for other readers.
+			if ctx.Err() == nil && version == controller.backgroundVersion {
+				controller.backgroundPartial = errors.Is(readErr, ports.ErrBackgroundTasksPartial)
+				if controller.backgroundPartial {
+					readErr = nil
+				}
+				controller.backgroundErr = readErr
+				controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), sample...)
+				controller.backgroundSampledAt = s.now()
 			}
-			controller.backgroundErr = readErr
-			controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), sample...)
-			controller.backgroundSampledAt = s.now()
-		}
-		controller.backgroundInFlight = nil
-		close(flight)
-		controller.backgroundMu.Unlock()
+		}()
 	}
 	// Provider I/O can cross termination, a handoff, or a provider replacement.
 	fresh, found, err := s.sessions.GetSession(ctx, id)

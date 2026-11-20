@@ -10,12 +10,12 @@ const taskRedactedNamePattern = `(?:[A-Z_][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD
 const taskRedactedValuePattern = `(?:"[^"]*"|'[^']*'|[^\s;&|"']+)`
 
 var taskWindowsSetCredential = regexp.MustCompile(`(?i)(\bset\s+")(` + taskRedactedNamePattern + `)\s*=\s*[^"]*(")`)
-var taskCredentialAssignment = regexp.MustCompile(`(?i)\b(` + taskRedactedNamePattern + `)\s*=\s*` + taskRedactedValuePattern)
-var taskCredentialFlag = regexp.MustCompile(`(?i)(--(?:[a-z0-9_-]*(?:key|token|secret|password|passwd|pass|pwd|credential))(?:(?:\s*=\s*)|\s+))` + taskRedactedValuePattern)
+var taskCredentialAssignment = regexp.MustCompile(`(?i)\b(` + taskRedactedNamePattern + `)\s*=\s*(?:(?:Bearer|Basic|token)\s+)?` + taskRedactedValuePattern)
+var taskCredentialFlag = regexp.MustCompile(`(?i)(--(?:(?:api|access|auth|client|private|secret|encryption|signing|refresh|bearer)[-_])?(?:key|token|secret|password|passwd|pass|pwd|credential)\b(?:(?:\s*=\s*)|\s+))` + taskRedactedValuePattern)
 var taskBasicOrTokenCredential = regexp.MustCompile(`(?i)(\bAuthorization\s*:\s*(?:Basic|token)\s+)[A-Za-z0-9._~+/=-]+`)
 var taskBearerCredential = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
-var taskURLCredential = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@`)
-var taskUserCredential = regexp.MustCompile(`(?i)((?:^|\s)(?:-u|--user)(?:\s+|=))` + taskRedactedValuePattern)
+var taskURLCredential = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s@?#:]*:[^/\s@?#]*@`)
+var taskUserCredential = regexp.MustCompile(`(?i)((?:^|\s)(?:-u|--user)(?:\s+|=))(?:"[^"]*:[^"]*"|'[^']*:[^']*'|[^\s;&|"']*:[^\s;&|"']*)`)
 
 // SanitizeTaskDescription bounds untrusted provider labels for compact UI and
 // tooltips. Redaction covers obvious credential forms, not arbitrary secrets.

@@ -424,11 +424,13 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             try {
                 await session.query.stopTask(taskId);
             } catch (error) {
-                // A rejection may precede the SDK's terminal notification.
-                // Give the projection one bounded settle window; genuine live-task errors still propagate.
-                if (session.aoBackgroundLive?.has(taskId)) await new Promise(resolve => setTimeout(resolve, 100));
                 if (!session.aoBackgroundLive?.has(taskId)) throw RequestError.invalidParams(undefined, "Background task is not running.");
-                throw error;
+                if (session.queryClosed) throw error;
+                // The SDK has no typed already-ended rejection, and its terminal
+                // notification can arrive arbitrarily later. Accept reconciliation,
+                // not completion: retain the live task and Stop for retry. Genuine
+                // failures remain visible in logs and are never projected as stopped.
+                agent.logger?.error("Background stop was not acknowledged; retaining live task:", error);
             }
             return {};
         })
