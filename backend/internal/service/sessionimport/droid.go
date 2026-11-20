@@ -106,7 +106,8 @@ func readDroidTranscript(ctx context.Context, root string, paths ...string) (tra
 	for _, item := range trimmed {
 		t.messages = append(t.messages, item.Message)
 	}
-	return t, finishTranscript(&t)
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }
 
 // droidRecord is one JSONL line. Only session_start and message carry display
