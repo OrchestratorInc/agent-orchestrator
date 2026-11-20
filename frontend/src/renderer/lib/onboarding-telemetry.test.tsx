@@ -8,8 +8,13 @@ const unload = vi.hoisted(() => vi.fn((event: string, props?: unknown) => {
 	return true;
 }));
 vi.mock("./telemetry", () => ({ captureRendererEvent: capture, captureRendererEventOnUnload: unload }));
+const sentry = vi.hoisted(() => ({
+	failure: vi.fn((_action: string, _reason: string, _target?: string) => undefined),
+}));
+vi.mock("./sentry", () => ({ captureOnboardingFailureToSentry: sentry.failure }));
 
 import { setAnalyticsOptedOut } from "./analytics-opt-out";
+import { onboardingSentryFlow } from "./onboarding-flow";
 import { notifyComposerSent } from "./guided-tour-signals";
 import {
 	beginOnboardingRun,
@@ -19,6 +24,7 @@ import {
 	ensureOnboardingStepViewed,
 	finishOnboardingAction,
 	installJobOutcome,
+	leaveOnboardingActions,
 	onboardingActionAttempt,
 	onboardingInProgress,
 	onboardingProjectSource,
@@ -367,6 +373,43 @@ describe("onboarding action telemetry", () => {
 		expect(finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh", attempt: onboardingActionAttempt("gh_sign_in", "gh") })).toBe(true);
 		expect(lastProps("ao.onboarding.action_finished")).toMatchObject({ attempt: 2, outcome: "succeeded" });
 	});
+
+	it("ends attempts still running as left when onboarding ends without the tour", () => {
+		beginOnboardingRun("first_run", "tools");
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		startOnboardingAction("cloud_sign_in", { step: "sign_in" });
+		completeOnboardingRun("skipped_setup");
+		const finished = capture.mock.calls.filter((call) => call[0] === "ao.onboarding.action_finished").map((call) => call[1]);
+		expect(finished).toEqual([
+			expect.objectContaining({ action: "gh_install", target: "gh", step: "tools", attempt: 1, outcome: "left" }),
+			expect.objectContaining({ action: "cloud_sign_in", step: "sign_in", attempt: 1, outcome: "left" }),
+		]);
+		// Its own end, arriving later, has nothing left to report.
+		expect(finishOnboardingAction("gh_install", "succeeded", { target: "gh" })).toBe(false);
+	});
+
+	it("keeps attempts running into the tour, and ends them as left when the tour ends", () => {
+		const close = beginOnboardingRun("first_run", "tools");
+		startOnboardingAction("agent_install", { target: "codex", step: "tools" });
+		completeOnboardingRun("finished");
+		close();
+		expect(events()).not.toContain("ao.onboarding.action_finished");
+		leaveOnboardingActions();
+		leaveOnboardingActions();
+		expect(events().filter((event) => event === "ao.onboarding.action_finished")).toHaveLength(1);
+		expect(lastProps("ao.onboarding.action_finished")).toMatchObject({ action: "agent_install", target: "codex", outcome: "left" });
+	});
+
+	it("ends attempts as left as the window closes mid-onboarding, and not outside it", () => {
+		startOnboardingAction("agent_sign_in", { target: "codex", step: "tools" });
+		window.dispatchEvent(new Event("pagehide"));
+		expect(unload).not.toHaveBeenCalled();
+		setOnboardingTourStep("tour_project");
+		window.dispatchEvent(new Event("pagehide"));
+		expect(unload.mock.calls).toEqual([
+			["ao.onboarding.action_finished", expect.objectContaining({ action: "agent_sign_in", target: "codex", outcome: "left" })],
+		]);
+	});
 });
 
 describe("onboarding activation telemetry", () => {
@@ -500,5 +543,108 @@ describe("onboarding telemetry while opted out", () => {
 		setAnalyticsOptedOut(false);
 		expect(capture).not.toHaveBeenCalled();
 		expect(window.localStorage.getItem("ao.telemetry.onboardingRun")).toBeNull();
+	});
+});
+
+describe("onboarding Sentry reports", () => {
+	beforeEach(() => {
+		capture.mockClear();
+		sentry.failure.mockClear();
+		setAnalyticsOptedOut(false);
+		window.localStorage.clear();
+		resetOnboardingTelemetryForTests();
+	});
+	afterEach(() => setAnalyticsOptedOut(false));
+
+	it("reports each broken attempt once, by action and reason", () => {
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed" });
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed" });
+		expect(sentry.failure.mock.calls).toEqual([["gh_install", "install_failed", "gh"]]);
+		// A retry that breaks again is its own report.
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "lost_contact" });
+		expect(sentry.failure.mock.calls.at(-1)).toEqual(["gh_install", "lost_contact", "gh"]);
+	});
+
+	it("sends nothing for an attempt that succeeded, was cancelled or timed out", () => {
+		for (const outcome of ["succeeded", "cancelled", "timed_out"] as const) {
+			startOnboardingAction("agent_sign_in", { target: "codex", step: "tools" });
+			finishOnboardingAction("agent_sign_in", outcome, { target: "codex" });
+		}
+		expect(sentry.failure).not.toHaveBeenCalled();
+	});
+
+	it("passes setup states on for the Sentry helper to drop", () => {
+		startOnboardingAction("agent_sign_in", { target: "codex", step: "tools" });
+		finishOnboardingAction("agent_sign_in", "failed", { target: "codex", reason: "not_signed_in" });
+		// The helper owns the reported-reasons list; the attempt is used up either way.
+		expect(sentry.failure.mock.calls).toEqual([["agent_sign_in", "not_signed_in", "codex"]]);
+		finishOnboardingAction("agent_sign_in", "failed", { target: "codex", reason: "start_failed" });
+		expect(sentry.failure).toHaveBeenCalledOnce();
+	});
+
+	it("sends nothing for the same panel outside onboarding, with no attempt started there", () => {
+		finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
+		expect(sentry.failure).not.toHaveBeenCalled();
+	});
+
+	it("leaves a newer attempt alone when a stale check answers", () => {
+		startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		const stale = onboardingActionAttempt("gh_sign_in", "gh");
+		finishOnboardingAction("gh_sign_in", "cancelled", { target: "gh" });
+		startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		expect(finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in", attempt: stale })).toBe(false);
+		finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
+		expect(sentry.failure.mock.calls).toEqual([["gh_sign_in", "start_failed", "gh"]]);
+	});
+
+	it("leaves a newer attempt alone when a stale check answers, with analytics off too", () => {
+		setAnalyticsOptedOut(true);
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		const stale = onboardingActionAttempt("gh_install", "gh");
+		expect(stale).toBeDefined();
+		// Back, then a retry, while attempt 1's poll is still out.
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		expect(finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "interrupted", attempt: stale })).toBe(false);
+		expect(sentry.failure).not.toHaveBeenCalled();
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed", attempt: onboardingActionAttempt("gh_install", "gh") });
+		expect(sentry.failure.mock.calls).toEqual([["gh_install", "install_failed", "gh"]]);
+	});
+
+	it("still reports while analytics is opted out: Share error events governs Sentry", () => {
+		setAnalyticsOptedOut(true);
+		startOnboardingAction("dependency_install", { target: "tmux", step: "dependencies" });
+		finishOnboardingAction("dependency_install", "failed", { target: "tmux", reason: "start_failed" });
+		expect(sentry.failure.mock.calls).toEqual([["dependency_install", "start_failed", "tmux"]]);
+		expect(capture).not.toHaveBeenCalled();
+	});
+
+	it("stops watching an attempt that was left, so its later failure is not an onboarding issue", () => {
+		setAnalyticsOptedOut(true);
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		leaveOnboardingActions();
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed" });
+		expect(sentry.failure).not.toHaveBeenCalled();
+		expect(capture).not.toHaveBeenCalled();
+	});
+
+	it("tags Sentry with the onboarding flow for the window, and for the tour that follows it this launch", () => {
+		const close = beginOnboardingRun("first_run", "welcome");
+		expect(onboardingSentryFlow()).toBe("onboarding");
+		completeOnboardingRun("finished");
+		close();
+		expect(onboardingSentryFlow()).toBeUndefined();
+		setOnboardingTourStep("tour_project");
+		expect(onboardingSentryFlow()).toBe("onboarding");
+		setOnboardingTourStep(undefined);
+		expect(onboardingSentryFlow()).toBeUndefined();
+	});
+
+	it("does not tag Sentry for a tour restored on a later launch", () => {
+		// The tour card stays until dismissed; this launch never showed the pages.
+		setOnboardingTourStep("tour_project");
+		expect(onboardingInProgress()).toBe(true);
+		expect(onboardingSentryFlow()).toBeUndefined();
 	});
 });

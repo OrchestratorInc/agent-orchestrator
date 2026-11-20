@@ -141,8 +141,11 @@ sampled by install rather than by event:
 - Fatal events send from every install: Electron main uncaught exceptions,
   Electron process crashes (`process_exit`), and daemon panics. Renderer errors,
   including unhandled window errors and rejections, are non-fatal and sampled.
+  Failed onboarding installs and sign-ins also send from every install (see
+  "Onboarding errors in Sentry"): they are rare and block a new user's first
+  run.
 - Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
-  and `1` for always-sent fatal events. Multiply counts of `sample_rate:0.1`
+  and `1` for always-sent events. Multiply counts of `sample_rate:0.1`
   events by 10 to estimate the real volume.
 - Electron main caps every desktop event (main and renderer) after scrubbing,
   keyed on its final Sentry fingerprint: at most 3 events per fingerprint and 25
@@ -871,7 +874,7 @@ and `project_source` on its `step_completed` says which it was.
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
-| `ao.onboarding.action_finished` | That attempt ends, once | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
 
 `attempt` counts from 1 for each action and target in a launch, so a value
 above 1 is a retry. The existing `ao.projects.clone_failed`,
@@ -885,6 +888,45 @@ not both:
 - `action_finished` (`cloud_sign_in`, `succeeded`) and
   `ao.renderer.cloud_signed_in` with `source` `onboarding`.
 - `activated` with `during_tour` true and `step_completed` (`first_task`).
+
+### Onboarding errors in Sentry
+
+Onboarding errors go to the desktop Sentry project under **Share error
+events**, not the analytics choice, so they are sent with analytics off and
+stop when error sharing is off. A failed install or sign-in is sent from every
+install, not just the one in ten in the error sample (`sample_rate` `1`); the
+daily caps above still apply. The flow tag on other errors follows the usual
+sampling.
+
+- An install or sign-in started during onboarding that breaks is one Sentry
+  issue per attempt, titled `Onboarding <action> failed (<reason>)` and grouped
+  by action and reason alone. Its tags are `category` `onboarding`, `code`
+  `<action>:<reason>`, `action`, `reason`, `target` and `flow` `onboarding`.
+  `target` is what the action was for, from a fixed list in
+  `shared/onboarding-failures.ts` (`gh`, `tmux`, `claude-code`, `codex` and
+  the other registry agents), or `other` for any id not on it. It is a tag to
+  filter by, not part of the grouping. Only these
+  reasons are sent: `start_failed`, `install_failed`, `interrupted`,
+  `lost_contact`, `cleanup_failed`, `request_failed` and `other`. A login the
+  person did not finish (`not_signed_in`), a platform with no installer
+  (`unsupported`), an agent that signs in outside the app (`documentation`),
+  cancelled and timed-out attempts are setup states, counted only in PostHog.
+  The same panels outside onboarding (the clone dialog's GitHub sign-in) send
+  nothing, and an attempt stops counting once onboarding ends (outcome
+  `left`), so a later failure is not filed as an onboarding issue. The API
+  error code stays in PostHog's `action_finished`.
+- Every other renderer Sentry event (a render crash, a failed query, an API
+  error) sent while the first-run window shows, or a tour step in the launch
+  whose onboarding pages finished, carries `flow:onboarding`. A tour restored
+  on a later launch stays until it is dismissed, so it does not tag those
+  launches' errors. The tag does not change how the event is grouped.
+  Electron main's own events (process crashes, handled update or IPC
+  failures) do not carry it: main does not track which screen the renderer
+  shows.
+- To keep this working while analytics is off, the app holds the actions
+  started during onboarding, with an id for each attempt, in memory until each
+  ends. The id lets a check that outlived its attempt be ignored. Nothing about
+  them is stored or sent to PostHog.
 
 ### Property values
 
@@ -920,8 +962,12 @@ not both:
   registry, such as `gh`, `tmux` or `claude-code`.
 - `outcome` on `action_finished` is `succeeded`, `failed`, `cancelled` (the
   person closed the login or moved on), `timed_out` (a login left open 15
-  minutes) or `handed_off` (the agent signs in outside AO, so its guide
-  opened).
+  minutes), `handed_off` (the agent signs in outside AO, so its guide
+  opened) or `left` (onboarding ended, or the window closed, while it was
+  still running: Skip setup, onboarding closed for the person, the tour ending
+  or closing, or quitting mid-onboarding). An install or sign-in from the
+  onboarding pages keeps running into the tour, so its `left` comes when the
+  tour ends and its `duration_ms` includes the tour.
 - `reason` on `action_finished` is `start_failed`, `install_failed`,
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.
@@ -1165,7 +1211,8 @@ only: the daemon's Sentry capture of reportable 5xx errors, registered fault
 codes answered as 4xx or 503, background failures, and handler or background
 goroutine panics; and Electron main capture of process crashes, handled
 daemon, update and IPC failures, uncaught exceptions, unhandled rejections,
-and reportable renderer errors. Sentry
+reportable renderer errors, and installs and sign-ins that broke during
+onboarding (see "Onboarding errors in Sentry"). Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
 raw error messages. It groups HTTP faults by registered route and stable error
 code, or by a bounded cause type when no code exists. Ordinary Go errors carry
