@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { machineState } from "./hostRoute";
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -11,6 +12,9 @@ function between(text: string, start: string, end: string): string {
 	expect(to, end).toBeGreaterThan(from);
 	return text.slice(from, to);
 }
+
+/** Any comparison of a connection with "closed", in any quote style. */
+const CLOSED_CONNECTION_CHECK = /connection\s*[!=]==?\s*(["'`])closed\1/;
 
 /** `first` comes before `then`, and both are there: a missing one is -1, which would pass a bare comparison. */
 function expectBefore(text: string, first: string, then: string) {
@@ -67,7 +71,12 @@ describe("retained-stack host routes", () => {
 		expectBefore(web, "const source = backend.webSource(file.sessionId, file.path);", "const verified = useVerifiedFor(backend, source ? sourceKey(source) : \"unresolved\");");
 		expect(web).toContain("if (!source || !verified ||");
 		// Retry is a fresh view built once verified, not a reload of the address on screen.
-		expect(web).toContain("afterVerified(backend, () => setAttempt((n) => n + 1), retrying.current.signal);");
+		// Bound to the file on screen, and the error with its Retry stays until the reload starts.
+		expect(web).toContain("const retryAfterVerified = useRetryAfterVerified(backend, `${file.sessionId}\\n${file.path}`);");
+		const retry = between(web, "retryAfterVerified(() => {", "});");
+		expect(retry).toContain("setError(undefined);");
+		expect(retry).toContain("setAttempt((n) => n + 1);");
+		expect(between(web, "<Pressable onPress={() => {", "retryAfterVerified(() => {")).not.toContain("setError(undefined)");
 		expect(web).toContain("key={`${version}|${inlined.html ? \"inline\" : \"url\"}|${attempt}`}");
 		expect(web).not.toContain("web.current?.reload()");
 		expect(artifact).not.toMatch(/<ArtifactWeb[^>]*source=/);
@@ -96,8 +105,11 @@ describe("retained-stack host routes", () => {
 	it("opens the full-screen image through the verified connection, not the pane's source", () => {
 		const file = source("../app/files/[sessionId]/file.tsx");
 		const compare = between(file, "function ImageCompare(", "const makeStyles = ");
-		expect(compare).toContain("void resolveWhenVerified(backend, (signal) => sources.resolveSide(pane.side, signal), controller.signal).then((source) => {");
-		expect(compare).toContain("if (source && !controller.signal.aborted) setViewing({ label: pane.label, source });");
+		expect(compare).toContain("opener.open(pane.side, (signal) => sources.resolveSide(pane.side, signal), (source) => setViewing({ label: pane.label, source }));");
+		// The pane says it is opening, and a failed open says so (see useOpenWhenVerified).
+		expect(compare).toContain("accessibilityState={{ busy: opener.pending === pane.side }}");
+		expect(compare).toContain("{opener.pending === pane.side ? <View style={styles.imageOpening}><Spinner /></View> : null}");
+		expect(compare).toContain("{opener.failed === pane.side ? <Text accessibilityRole=\"alert\"");
 		expect(compare).toContain("onPress={() => open(pane)}");
 		expect(compare).not.toContain("setViewing(pane))");
 		expect(file).toContain("backend.imageSource(sessionId, path, which, version, read, signal)");
@@ -141,21 +153,29 @@ describe("retained-stack host routes", () => {
 			["../app/files/[sessionId]/file.tsx", "const machine = !backend ? machineState(app) : \"ok\";", "machine"],
 			["../app/shell/[handleId].tsx", "const state = !config && !opened ? machineState(app) : \"ok\";", "state"],
 		];
+		// A paired, reachable machine whose connection an app switch closed: the
+		// shared rule reads it as a reconnect, so neither of the branches below
+		// wins and the screen keeps waiting.
+		expect(machineState({ paired: true, unreachable: false, connection: "closed", error: null, errorStatus: null })).toBe("ok");
 		for (const [path, gate, state] of screens) {
 			const screen = source(path);
-			expect(screen, path).not.toContain('connection === "closed"');
+			expect(screen, path).not.toMatch(CLOSED_CONNECTION_CHECK);
 			expect(screen, path).not.toContain("machineOffline");
 			expect(screen, path).toContain("const app = useApp();");
 			expect(screen, path).toContain(gate);
 			// The refusal gets the board's copy and repair, before "Machine offline".
 			expectBefore(screen, `${state} === "rejected"`, `${state} === "offline"`);
 			expect(between(screen, `${state} === "rejected"`, `${state} === "offline"`), path).toContain("<MachineRejectedState />");
+			// "Machine offline" is drawn once, by the shared rule's branch and no other.
+			expect(screen.match(/title="Machine offline"/g), path).toHaveLength(1);
+			expect(between(screen, `${state} === "offline"`, 'title="Machine offline"'), path).not.toMatch(/\bif \(|\?/);
 		}
 		// Preview's held app page, not yet mounted, waits for a verified connection;
 		// not for one that refused this phone.
 		expect(source("../app/preview/[id].tsx")).toContain("appWaits ? <View style={styles.center}>{machine === \"rejected\" ? <MachineRejectedState /> : <EmptyState busy title=\"Connecting to this machine…\" />}</View>");
 		// The live browser pane, kept on screen through an app switch.
 		const pane = source("./preview/BrowserLivePane.tsx");
+		expect(pane).not.toMatch(CLOSED_CONNECTION_CHECK);
 		expect(pane).toContain("const state = config ? \"ok\" : machineState(app);");
 		expect(pane).toContain("rejectedMachineLine(app.errorStatus)");
 	});
@@ -175,10 +195,12 @@ describe("retained-stack host routes", () => {
 
 	// Each machine's projects keep their rows through an app switch, so a bare
 	// closed connection marked every one "(offline)", in the app-switcher snapshot too.
-	it("marks a machine's projects offline by the shared rule, never for a closed connection", () => {
-		expect(source("./hostedRows.ts")).not.toContain('connection === "closed"');
+	// A machine's state is its freshness dot now, which waits out a blip.
+	it("never marks a machine's projects offline for a closed connection", () => {
+		const rows = source("./hostedRows.ts");
+		expect(rows).not.toMatch(CLOSED_CONNECTION_CHECK);
+		expect(rows).toContain("hostName: host.name,");
 		const projects = source("../app/(tabs)/(projects)/projects.tsx");
-		expect(projects).toContain("offline: spawnHostState(host, phoneNetwork, now) !== \"ok\"");
-		expect(projects).toContain("hostedProjectSections(cloud ? [...hosts, cloud] : hosts)");
+		expect(projects).toContain("freshness={showMachine ? freshness.get(item.project.hostId) : undefined}");
 	});
 });

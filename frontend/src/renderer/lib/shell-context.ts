@@ -29,6 +29,8 @@ export type ShellContextValue = {
 	openRemoteProjectSettings: (hostId: string, projectId: string) => void;
 	remoteHosts?: RemoteHost[];
 	retryRemoteHosts?: () => void;
+	/** Removes a project the way the sidebar's Remove project does, after its confirm. */
+	removeProject?: (projectId: string, cloud: boolean) => void;
 	/** Navigate to a project's board, e.g. a cloud project just created. */
 	openProject?: (projectId: string) => void;
 	validateImport?: (input: {

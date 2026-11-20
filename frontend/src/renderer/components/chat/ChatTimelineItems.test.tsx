@@ -113,6 +113,56 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("ACP internal detail").closest("details")).toBeInTheDocument();
 	});
 
+	it("ends a refused login on one quiet line under the message, and never the CLI's advice", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" retry={{ onRetry: vi.fn() }}
+			onRollback={vi.fn()} login={{ status: "queued", align: "end" }} />);
+
+		expect(screen.getByTestId("login-status")).toHaveTextContent("Queued");
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Please run \/login/)).not.toBeInTheDocument();
+		// The login is offered on the chat box, so the turn has no action of its own.
+		expect(screen.queryAllByRole("button")).toHaveLength(0);
+		expect(document.querySelector("[data-turn-actions]")).toBeNull();
+	});
+
+	it("ends a refused turn that did work on its own last line, keeping copy and undo", () => {
+		const onRollback = vi.fn();
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" login={{ status: "resend", align: "start" }}
+			retry={{ onRetry: vi.fn() }} copyText="Edited the file" onRollback={onRollback} />);
+		expect(screen.getByTestId("login-status").closest("[data-turn-outcome]")).toBeInTheDocument();
+		expect(screen.getByText("Stopped · send it again once you’re in")).toBeInTheDocument();
+		// Its answer hands copy and undo down to this row, as any stopped turn's does.
+		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Roll back to here" }));
+		expect(onRollback).toHaveBeenCalledOnce();
+		// Sending it again is the band's, so the row has no Retry.
+		expect(screen.queryByTestId("retry-turn")).toBeNull();
+	});
+
+	it("keeps Retry on an earlier refusal the band no longer offers", () => {
+		const onRetry = vi.fn();
+		const { unmount } = render(<TurnOutcome state="failed" failureCode="auth_required" login={{ status: "stopped", align: "start", ownRetry: true }}
+			retry={{ onRetry }} copyText="Edited the file" onRollback={vi.fn()} />);
+		// A turn that did work: Retry leads its shared row.
+		fireEvent.click(screen.getByTestId("retry-turn"));
+		expect(onRetry).toHaveBeenCalledOnce();
+		unmount();
+
+		// One that did nothing else: on the line, which sits in the message's row.
+		render(<TurnOutcome state="failed" failureCode="auth_required" login={{ status: "stopped", align: "end", ownRetry: true }}
+			retry={{ onRetry, error: "Stop the current turn before retrying this one" }} />);
+		expect(screen.getByTestId("login-status")).toHaveTextContent(/^Stopped$/);
+		fireEvent.click(screen.getByTestId("retry-turn"));
+		expect(onRetry).toHaveBeenCalledTimes(2);
+		expect(screen.getByRole("alert")).toHaveTextContent("Stop the current turn before retrying this one");
+	});
+
+	it("shows a refused login with no way to log in as the plain failure", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" />);
+		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Log in" })).not.toBeInTheDocument();
+	});
+
 	it("leaves generic ACP failures without configuration guidance", () => {
 		render(<TurnOutcome state="failed" error="ACP internal detail" />);
 		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
@@ -783,6 +833,71 @@ describe("HumanMessage", () => {
 			);
 			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-16");
 			expect(screen.getByText("attachment-b.pdf").closest("li")).toHaveClass("h-16");
+		});
+	});
+
+	describe("branch navigation", () => {
+		const branchPoint = {
+			turnId: "turn-1",
+			position: 2,
+			total: 3,
+			previousBranchId: "branch-prev",
+			nextBranchId: "branch-next",
+		};
+
+		it("disables branch navigation when activateBranchDisabled is true", () => {
+			render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchDisabled
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Previous conversation branch" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
+		});
+
+		it("disables branch navigation globally while activateBranchPending is true regardless of activateBranchTarget", () => {
+			render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchPending
+					activateBranchTarget="unrelated-branch"
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Previous conversation branch" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
+		});
+
+		it("shows activateBranchError only when branch matches activateBranchTarget", () => {
+			const { rerender } = render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchTarget="unrelated-branch"
+					activateBranchError="stop the current turn before switching conversation branches"
+				/>,
+			);
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+			rerender(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchTarget="branch-prev"
+					activateBranchError="stop the current turn before switching conversation branches"
+				/>,
+			);
+			expect(screen.getByRole("alert")).toHaveTextContent("stop the current turn before switching conversation branches");
 		});
 	});
 });

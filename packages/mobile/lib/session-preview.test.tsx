@@ -15,6 +15,9 @@ const fixtures = vi.hoisted(() => ({
 	unreachable: false,
 	// The status the board poll was refused with, if it was.
 	refusedWith: null as number | null,
+	// How often the live browser pane mounted and unmounted: a remount is a new
+	// pane, whose stream and page state start over.
+	paneLife: { mounts: 0, unmounts: 0 },
 }));
 
 vi.mock("react-native", async () => {
@@ -86,7 +89,14 @@ vi.mock("./ui", async () => {
 vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
 vi.mock("./preview/BrowserLivePane", async () => {
 	const React = await import("react");
-	return { BrowserLivePane: (props: object) => React.createElement("BrowserLivePane", props) };
+	function BrowserLivePane(props: object) {
+		React.useEffect(() => {
+			fixtures.paneLife.mounts += 1;
+			return () => { fixtures.paneLife.unmounts += 1; };
+		}, []);
+		return React.createElement("BrowserLivePane", props);
+	}
+	return { BrowserLivePane };
 });
 vi.mock("./preview/LoadingBar", async () => {
 	const React = await import("react");
@@ -160,6 +170,7 @@ beforeEach(() => {
 	fixtures.router.navigate.mockClear();
 	fixtures.router.dismissTo.mockClear();
 	fixtures.backHandlers.length = 0;
+	fixtures.paneLife = { mounts: 0, unmounts: 0 };
 	fixtures.web.reload.mockClear();
 	fixtures.web.goBack.mockClear();
 	fixtures.away = false;
@@ -427,8 +438,12 @@ describe("app preview controls", () => {
 		it("keeps the live browser on screen when the session has an app preview, for it to wait on the connection", async () => {
 			await openPreview();
 			expect(mobileView().disabled).toBe(false);
+			const before = { ...fixtures.paneLife };
+			expect(before.mounts).toBeGreaterThan(0);
 			await appSwitch();
 			expect(nodes("BrowserLivePane")).toHaveLength(1);
+			// The same pane, not a new one in its place.
+			expect(fixtures.paneLife).toEqual(before);
 			expect(titles()).not.toContain("Machine offline");
 		});
 

@@ -133,7 +133,7 @@ describe("spawn offline notice", () => {
 	it("calls the machine offline or rejected by the rule the other screens use, not by a closed connection", () => {
 		expect(spawn).toContain("const machine = spawnHostState(selectedHost, phoneNetwork, Date.now());");
 		expect(spawn).not.toContain('connection === "closed");');
-		const notices = between(spawn, "const notices = [...hostNotices, ...cloudNotices, ...spawnNotices({", "})];");
+		const notices = between(spawn, "const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({", "}))];");
 		expect(notices).toContain("machine,");
 		// The refusal's status, for the board's copy of it.
 		expect(notices).toContain("errorStatus: selectedHost?.errorStatus,");

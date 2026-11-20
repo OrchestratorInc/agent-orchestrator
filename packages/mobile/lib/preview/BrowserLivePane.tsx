@@ -73,6 +73,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const [error, setError] = useState<string>();
 	const [page, setPage] = useState<BrowserLiveState | null>(null);
 	const [frameURI, setFrameURI] = useState<string>();
+	// Whether the frame on screen came from the stream that is running now. The
+	// last stream's frame stays up through a reconnect so the page doesn't blank,
+	// but the desktop page may have moved meanwhile: a tap on it could land on
+	// another control, so it takes no gestures until this stream draws its own.
+	const [frameIsLive, setFrameIsLive] = useState(false);
 	const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
 	const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
 	const frameRect = useMemo(() => containBrowserFrame(viewportSize, frameSize), [frameSize, viewportSize]);
@@ -88,6 +93,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 
 	useEffect(() => {
 		setPage(null);
+		setFrameIsLive(false);
 		if (!config) {
 			if (away === "reconnecting") {
 				setStatus("connecting");
@@ -129,6 +135,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				try {
 					setFrameSize({ width: frame.width, height: frame.height });
 					setFrameURI(browserJPEGDataURI(frame.jpeg));
+					setFrameIsLive(true);
 				} catch {
 					setStatus("error");
 					setError("This mobile build couldn't display the browser frame.");
@@ -220,7 +227,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const markY = useSharedValue(0);
 	const markScale = useSharedValue(1);
 	const markOpacity = useSharedValue(0);
-	const interactive = status === "open" && Boolean(frameURI) && !blank;
+	const interactive = status === "open" && Boolean(frameURI) && frameIsLive && !blank;
 	// Another session's page starts at its fitted size.
 	useEffect(() => {
 		zoomScale.value = 1;

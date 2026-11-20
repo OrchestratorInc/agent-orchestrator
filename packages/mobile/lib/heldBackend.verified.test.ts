@@ -9,7 +9,7 @@ vi.mock("./config", () => ({}));
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
 import type { FilesBackend } from "./files/backend";
 import { UnreachableError } from "./connectionError";
-import { afterVerified, createLiveSlot, HELD_WAIT_MS, holdArtifactsBackend, holdFilesBackend, resolveWhenVerified, retryWhenVerified, sourceKey, useVerifiedFor, useVerifiedOnMount } from "./heldBackend";
+import { afterVerified, createLiveSlot, HELD_WAIT_MS, holdArtifactsBackend, holdFilesBackend, resolveWhenVerified, retryWhenVerified, sourceKey, useOpenWhenVerified, useRetryAfterVerified, useVerifiedFor, useVerifiedOnMount } from "./heldBackend";
 
 // While the app reconnects, a machine's last address may answer as another
 // device until the identity probe says otherwise. What is on screen stays, but
@@ -360,5 +360,169 @@ describe("resolveWhenVerified", () => {
 		const resolve = vi.fn(async () => ({ uri: "data:image/png;base64,AA" }));
 		expect(await resolveWhenVerified({}, resolve)).toEqual({ uri: "data:image/png;base64,AA" });
 		expect(resolve).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("useRetryAfterVerified", () => {
+	let retry: (fn: () => void) => void = () => {};
+	function RetryButton({ backend, target }: { backend: ArtifactsBackend; target: string }) {
+		retry = useRetryAfterVerified(backend, target);
+		return null;
+	}
+	const machineAway = () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		slot.set(null);
+		return { slot, held };
+	};
+	const settle = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+	it("runs at once with a verified connection", async () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const reload = vi.fn();
+		retry(reload);
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("waits for the connection, then runs for the file it was pressed for", async () => {
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const reload = vi.fn();
+		retry(reload);
+		await settle();
+		expect(reload).not.toHaveBeenCalled();
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await settle();
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
+	// Following a link from unlisted file A to B reuses the same view: A's
+	// Retry must not reload B's page once the connection comes back.
+	it("drops a waiting retry when the view moves to another file or machine", async () => {
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const forA = vi.fn();
+		retry(forA);
+		await act(async () => { renderer!.update(createElement(RetryButton, { backend: held, target: "s\nb.html" })); });
+		const other = machineAway();
+		const forB = vi.fn();
+		retry(forB);
+		await act(async () => { renderer!.update(createElement(RetryButton, { backend: other.held, target: "s\nb.html" })); });
+		await act(async () => { slot.set(daemon("tunnel")); other.slot.set(daemon("tunnel")); });
+		await settle();
+		expect(forA).not.toHaveBeenCalled();
+		expect(forB).not.toHaveBeenCalled();
+	});
+
+	it("keeps only the latest press, and drops it on unmount", async () => {
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(RetryButton, { backend: held, target: "s\na.html" })); });
+		const first = vi.fn();
+		const second = vi.fn();
+		retry(first);
+		retry(second);
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await settle();
+		expect(first).not.toHaveBeenCalled();
+		expect(second).toHaveBeenCalledTimes(1);
+		slot.set(null);
+		const afterUnmount = vi.fn();
+		retry(afterUnmount);
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		slot.set(daemon("lan"));
+		await settle();
+		expect(afterUnmount).not.toHaveBeenCalled();
+	});
+});
+
+describe("useOpenWhenVerified", () => {
+	type Opener = ReturnType<typeof useOpenWhenVerified<ArtifactSource>>;
+	let opener: Opener;
+	function Viewer({ backend }: { backend: ArtifactsBackend }) {
+		opener = useOpenWhenVerified<ArtifactSource>(backend);
+		return null;
+	}
+	const machineAway = () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		slot.set(null);
+		return { slot, held };
+	};
+	const fresh = { uri: "http://tunnel/s/shot.png", headers: { Authorization: "Bearer machine-password" } };
+
+	it("shows the open as pending while it waits for the connection, then opens the fresh source", async () => {
+		vi.useFakeTimers();
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(Viewer, { backend: held })); });
+		const show = vi.fn();
+		await act(async () => { opener.open("after", async () => fresh, show); });
+		expect(opener.pending).toBe("after");
+		expect(opener.failed).toBeUndefined();
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(show).toHaveBeenCalledWith(fresh);
+		expect(opener.pending).toBeUndefined();
+		expect(opener.failed).toBeUndefined();
+	});
+
+	// A sustained outage: the tap must not do nothing for as long as it lasts.
+	it("fails once the connection stays away too long, and a second tap tries again", async () => {
+		vi.useFakeTimers();
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(Viewer, { backend: held })); });
+		const show = vi.fn();
+		await act(async () => { opener.open("after", async () => fresh, show); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(HELD_WAIT_MS); });
+		expect(opener.pending).toBeUndefined();
+		expect(opener.failed).toBe("after");
+		expect(show).not.toHaveBeenCalled();
+		await act(async () => { opener.open("after", async () => fresh, show); });
+		expect(opener.failed).toBeUndefined();
+		expect(opener.pending).toBe("after");
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(show).toHaveBeenCalledTimes(1);
+	});
+
+	it("fails when the verified connection cannot resolve the source", async () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		await act(async () => { renderer = create(createElement(Viewer, { backend: held })); });
+		const show = vi.fn();
+		await act(async () => { opener.open("before", async () => undefined, show); });
+		expect(opener.failed).toBe("before");
+		await act(async () => { opener.open("before", async () => { throw new Error("gone"); }, show); });
+		expect(opener.failed).toBe("before");
+		expect(show).not.toHaveBeenCalled();
+	});
+
+	it("drops an open replaced by another, or by leaving the screen, without a word", async () => {
+		vi.useFakeTimers();
+		const { slot, held } = machineAway();
+		await act(async () => { renderer = create(createElement(Viewer, { backend: held })); });
+		const first = vi.fn();
+		const second = vi.fn();
+		await act(async () => { opener.open("before", async () => fresh, first); });
+		await act(async () => { opener.open("after", async () => fresh, second); });
+		expect(opener.pending).toBe("after");
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(first).not.toHaveBeenCalled();
+		expect(second).toHaveBeenCalledTimes(1);
+		expect(opener.failed).toBeUndefined();
+		slot.set(null);
+		const left = vi.fn();
+		await act(async () => { opener.open("after", async () => fresh, left); });
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		await vi.advanceTimersByTimeAsync(HELD_WAIT_MS * 2);
+		expect(left).not.toHaveBeenCalled();
 	});
 });

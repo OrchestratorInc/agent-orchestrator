@@ -1866,6 +1866,11 @@ func TestFetchPullRequests_ForkMR_ResolvesSourceProjectHeadRepo(t *testing.T) {
 	if got, want := o.PR.HeadRepo, "contributor/myrepo-fork"; got != want {
 		t.Errorf("PR.HeadRepo = %q, want %q (source project path_with_namespace)", got, want)
 	}
+	// A fork's branch name says nothing about this project's branches, so the
+	// MR must never be read as a stack parent.
+	if !o.PR.HeadFromFork {
+		t.Error("PR.HeadFromFork = false, want true for a fork MR")
+	}
 	// The source-project endpoint must actually have been queried once.
 	if sourceProjectHits != 1 {
 		t.Errorf("source project endpoint hits = %d, want 1", sourceProjectHits)
@@ -1930,6 +1935,9 @@ func TestFetchPullRequests_NonForkMR_DoesNotFetchSourceProject(t *testing.T) {
 	// For a same-repo MR, HeadRepo stays the target repo (no fork resolution).
 	if got, want := obs[0].PR.HeadRepo, "myorg/myrepo"; got != want {
 		t.Errorf("PR.HeadRepo = %q, want %q (target repo for non-fork MR)", got, want)
+	}
+	if obs[0].PR.HeadFromFork {
+		t.Error("PR.HeadFromFork = true, want false for a same-project MR")
 	}
 	if sourceProjectHits != 0 {
 		t.Errorf("source project endpoint hits = %d, want 0 (non-fork MR must not trigger a fetch)", sourceProjectHits)

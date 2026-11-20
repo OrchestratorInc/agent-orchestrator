@@ -12,7 +12,7 @@ import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
 import { hostRouteMatches, machineState } from "../../../lib/hostRoute";
 import { MachineRejectedState } from "../../../lib/MachineRejectedState";
-import { resolveWhenVerified, retryWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
+import { retryWhenVerified, useOpenWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
 import { ImageViewer } from "../../../lib/ImageViewer";
 import { usePressFeedback } from "../../../lib/pressFeedback";
 import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
@@ -41,6 +41,7 @@ import {
 	isSvgPath,
 	languageForPath,
 	orderedChanges,
+	previewLines,
 	selectedLines,
 	selectionLabel,
 	splitPath,
@@ -76,6 +77,15 @@ type Selection = { anchor: number; focus: number };
 const STEP_IN_HEADER = Platform.OS === "ios";
 /** Material's floating toolbar: 64dp, and the gap it keeps above what it floats over. */
 const FLOATING_TOOLBAR_CLEARANCE = 64 + space.sm;
+/** Lines shown above a cited line when the file opens at it. */
+const CITED_CONTEXT_ROWS = 4;
+/**
+ * Rows the list's measured room overstates when a file cut short opens at its
+ * end: the note saying so arrives with the file, after the room was measured,
+ * and takes up to that much of it. Starting that much later keeps the last line
+ * on screen; the list's bottom padding takes any rows to spare.
+ */
+const END_MARGIN_ROWS = 3;
 
 export default function SessionFileScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
@@ -83,7 +93,7 @@ export default function SessionFileScreen() {
 }
 
 function SessionFileContent() {
-	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string } & SelectionParams>();
+	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string; line?: string } & SelectionParams>();
 	// What the Files screen was comparing; a file opened from chat has none, the worktree's base.
 	const pick = useRouteSelection(params);
 	const picked = Object.keys(selectionParams(pick)).length > 0;
@@ -97,7 +107,9 @@ function SessionFileContent() {
 	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
-	const { width } = useWindowDimensions();
+	const { width, height } = useWindowDimensions();
+	// The list's own height, under the header and the notes above it.
+	const [bodyHeight, setBodyHeight] = useState(0);
 	const codeScale = useCodeScale();
 
 	const { manifest } = useWorkspaceManifest(hostMatches ? backend : null, id, hostMatches);
@@ -115,8 +127,13 @@ function SessionFileContent() {
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState<string>();
 	const [mode, setMode] = useState<Mode>(params.mode === "file" ? "file" : "diff");
-	const [wrap, setWrap] = useState(true);
-	const [rendered, setRendered] = useState(true);
+	// A line a chat link cited (`file.ts:12`): the file opens there, and a
+	// markdown file shows its source, where that line is. It opens unwrapped:
+	// every row is then one line high, which is what lets the list open at line
+	// 4000 at once (see `rowLayout`). Wrap lines turns wrapping back on.
+	const citedLine = Number(params.line) > 0 ? Math.floor(Number(params.line)) : undefined;
+	const [wrap, setWrap] = useState(!citedLine);
+	const [rendered, setRendered] = useState(!citedLine);
 	const [revealed, setRevealed] = useState<Record<string, number>>({});
 	const [selection, setSelection] = useState<Selection | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -181,10 +198,13 @@ function SessionFileContent() {
 	const changed = Boolean(detail ? detail.status !== "unmodified" || detail.diff : listed);
 	const effectiveMode: Mode = !changed ? "file" : detail?.deleted ? "diff" : mode;
 	const lines = useMemo(() => detail ? contentLines(detail.deleted ? undefined : detail.content, detail.contentTruncated || detail.binary) : null, [detail]);
+	// A file past the machine's size limit arrives cut short: the File view shows
+	// what arrived, under a note saying so, rather than nothing.
+	const preview = useMemo(() => detail?.contentTruncated && !detail.binary && !detail.deleted && detail.content ? previewLines(detail.content) : null, [detail]);
 	const parsed = useMemo(() => detail?.diff ? parseUnifiedDiff(detail.diff) : [], [detail?.diff]);
 	const baseRows = useMemo<DisplayRow[]>(() => {
 		if (!detail || detail.binary) return [];
-		return effectiveMode === "diff" ? diffDisplayRows(parsed, lines, revealed) : fileDisplayRows(lines ?? []);
+		return effectiveMode === "diff" ? diffDisplayRows(parsed, lines, revealed) : fileDisplayRows(lines ?? preview ?? []);
 	}, [detail, effectiveMode, lines, parsed, revealed]);
 	// Comments on this file, queued and sent, drawn under the lines they are about.
 	// What a comment here is made on; only this pick's comments are drawn on its lines.
@@ -194,6 +214,7 @@ function SessionFileContent() {
 	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path && inPick(comment.target, context)), [context, path, review.all]);
 	const commentById = useMemo(() => new Map(fileComments.map((comment) => [comment.id, comment])), [fileComments]);
 	const rows = useMemo(() => withInlineComments(baseRows, fileComments), [baseRows, fileComments]);
+	const citedIndex = useMemo(() => citedLine ? rows.findIndex((row) => row.type === "line" && row.row.kind !== "del" && row.row.newNo === citedLine) : -1, [citedLine, rows]);
 	const digits = useMemo(() => String(rows.reduce((max, row) => row.type === "line" ? Math.max(max, row.row.newNo ?? 0, row.row.oldNo ?? 0) : max, 0)).length, [rows]);
 	const language = languageForPath(path);
 	const { name, dir } = splitPath(path);
@@ -212,8 +233,16 @@ function SessionFileContent() {
 	const go = useCallback((offset: number) => {
 		const target = changes[position + offset];
 		if (!target) return;
-		router.setParams({ path: target.path, previousPath: target.previousPath ?? "", mode: "diff" });
-	}, [changes, position, router]);
+		router.setParams({ path: target.path, previousPath: target.previousPath ?? "", mode: "diff", line: "" });
+		// A cited line chose this file's view (its text, a markdown file's source,
+		// unwrapped); the next file opens as Files opens any changed file. A view
+		// the reader chose themselves carries on, as it always has.
+		if (citedLine) {
+			setMode("diff");
+			setRendered(true);
+			setWrap(true);
+		}
+	}, [changes, citedLine, position, router]);
 
 	const onSelect = useCallback((index: number) => {
 		setActionError(undefined);
@@ -343,6 +372,29 @@ function SessionFileContent() {
 		const timer = setTimeout(() => list.current?.scrollToIndex({ index: selection.focus, viewPosition: 0.3, animated: true }), 60);
 		return () => clearTimeout(timer);
 	}, [drag.dragging, selection]);
+	// Unwrapped code rows are all one line high, so the list is told every row's
+	// place instead of measuring each one. It then opens at the cited line (a
+	// few lines of context above it) drawing only the rows there: line 4000 opens
+	// as fast as line 1. A wrapped row, or a comment card, has no known height;
+	// such a list is laid out by measuring, as before.
+	const rowHeight = CODE_LINE_HEIGHT * codeScale;
+	const uniformRows = !wrap && rows.every((row) => row.type === "line");
+	const rowLayout = useCallback((_: ArrayLike<DisplayRow> | null | undefined, index: number) => ({ length: rowHeight, offset: rowHeight * index, index }), [rowHeight]);
+	// A cited line past the part that arrived opens where that part ends.
+	const citedPast = Boolean(citedLine && preview && effectiveMode === "file" && citedIndex < 0 && rows.length && citedLine > preview.length);
+	const jumpIndex = citedIndex >= 0 ? citedIndex : citedPast ? rows.length - 1 : -1;
+	const openAt = citedPast
+		? Math.max(0, rows.length - Math.floor((bodyHeight || height) / rowHeight) + END_MARGIN_ROWS)
+		: citedIndex > 0 ? Math.max(0, citedIndex - CITED_CONTEXT_ROWS) : 0;
+	// Without known heights, a cited line is scrolled to once per list, roughly.
+	const roughJumpFor = useRef("");
+	const listKey = `${path}:${effectiveMode}:${wrap}`;
+	useEffect(() => {
+		if (uniformRows || jumpIndex < 0 || roughJumpFor.current === listKey) return;
+		roughJumpFor.current = listKey;
+		const timer = setTimeout(() => list.current?.scrollToIndex({ index: jumpIndex, viewPosition: 0.3, animated: false }), 0);
+		return () => clearTimeout(timer);
+	}, [jumpIndex, listKey, uniformRows]);
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
@@ -410,7 +462,9 @@ function SessionFileContent() {
 	) : null;
 	const truncation = detail?.diffTruncated && effectiveMode === "diff"
 		? "This diff is too large to show in full; the end is cut off."
-		: detail?.contentTruncated && effectiveMode === "file" ? "This file is too large to show in full." : "";
+		: detail?.contentTruncated && effectiveMode === "file"
+			? citedPast && preview ? `This file is too large to show in full. Line ${citedLine} is past the part shown, which ends at line ${preview.length}.` : "This file is too large to show in full."
+			: "";
 	// Another branch, or part of the changes: said under the title, since the
 	// page reads the same either way. The branch is named only when it is not the worktree's.
 	const meta = metaRow || compared || detail?.previousPath || viewOptions.length > 1 || truncation ? (
@@ -472,6 +526,8 @@ function SessionFileContent() {
 				maxToRenderPerBatch={60}
 				windowSize={15}
 				onViewableItemsChanged={onViewable}
+				getItemLayout={uniformRows ? rowLayout : undefined}
+				initialScrollIndex={uniformRows && openAt > 0 ? openAt : undefined}
 				onScrollToIndexFailed={({ index }) => list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true })}
 				contentContainerStyle={{ paddingBottom: (selection ? 260 : review.comments.length ? 140 : 96) + stepperClearance }}
 				renderItem={({ item, index }) => item.type === "fold" ? (
@@ -486,6 +542,7 @@ function SessionFileContent() {
 						wrap={wrap}
 						digits={digits}
 						selected={index >= selectionStart && index <= selectionEnd}
+						cited={index === citedIndex && !selection}
 						edge={index === selectionStart && index === selectionEnd ? "both" : index === selectionStart ? "start" : index === selectionEnd ? "end" : undefined}
 						commented={commented.has(item.row.kind === "del" ? `old:${item.row.oldNo}` : `new:${item.row.newNo}`)}
 						selectionActive={Boolean(selection)}
@@ -507,7 +564,7 @@ function SessionFileContent() {
 		<View style={[styles.screen, { paddingTop: glassInset }]}>
 			{headerItems}
 			{meta}
-			<View style={styles.body}>{body}</View>
+			<View style={styles.body} onLayout={(event) => setBodyHeight(event.nativeEvent.layout.height)}>{body}</View>
 			{composing ? (
 				<SelectionComposer
 					label={`${name} · ${label}`}
@@ -583,8 +640,10 @@ function ImageCompare({ backend, detail, name, sources }: { backend: FilesBacken
 	// full screen) only once the machine has answered as itself, while what is
 	// already on screen stays through a reconnect (see heldBackend).
 	const verified = useVerifiedOnMount(backend);
-	const opening = useRef<AbortController | null>(null);
-	useEffect(() => () => opening.current?.abort(), []);
+	// The pane being opened shows it is, while it waits for the connection too;
+	// one the connection stays away from (or can't resolve) says so, and a tap
+	// tries again.
+	const opener = useOpenWhenVerified<ImageSide>(backend);
 	if (!verified) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	const panes = [
 		sources.before ? { label: detail.deleted ? "Deleted" : "Before", side: "before" as const, source: sources.before } : null,
@@ -595,16 +654,11 @@ function ImageCompare({ backend, detail, name, sources }: { backend: FilesBacken
 	// switch), so it is resolved again through the verified connection; the
 	// comparison already on screen stays as it is. Cloud's sources are data, read once.
 	const open = (pane: (typeof panes)[number]) => {
-		opening.current?.abort();
 		if (!backend?.whenVerified) {
 			setViewing(pane);
 			return;
 		}
-		const controller = new AbortController();
-		opening.current = controller;
-		void resolveWhenVerified(backend, (signal) => sources.resolveSide(pane.side, signal), controller.signal).then((source) => {
-			if (source && !controller.signal.aborted) setViewing({ label: pane.label, source });
-		});
+		opener.open(pane.side, (signal) => sources.resolveSide(pane.side, signal), (source) => setViewing({ label: pane.label, source }));
 	};
 	return (
 		<ScrollView contentContainerStyle={styles.images}>
@@ -615,12 +669,15 @@ function ImageCompare({ backend, detail, name, sources }: { backend: FilesBacken
 						accessibilityRole="imagebutton"
 						accessibilityLabel={`${pane.label} image`}
 						accessibilityHint="Opens it full screen to zoom"
+						accessibilityState={{ busy: opener.pending === pane.side }}
 						onPress={() => open(pane)}
 						android_ripple={feedback.android_ripple}
 						style={({ pressed }) => [styles.imageFrame, pressed && feedback.pressed]}
 					>
 						<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [pane.source] : pane.source} resizeMode="contain" style={styles.image} />
+						{opener.pending === pane.side ? <View style={styles.imageOpening}><Spinner /></View> : null}
 					</Pressable>
+					{opener.failed === pane.side ? <Text accessibilityRole="alert" style={styles.imageOpenError}>Couldn't open this image full screen. Tap it to try again.</Text> : null}
 				</View>
 			))}
 			{viewing ? <ImageViewer visible name={`${name}, ${viewing.label.toLowerCase()}`} source={viewing.source} onClose={() => setViewing(undefined)} /> : null}
@@ -647,5 +704,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	imagePane: { gap: space.xs },
 	imageLabel: { ...type.footnote, fontFamily: font.semibold, color: t.textSecondary },
 	imageFrame: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },
+	imageOpening: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center" },
+	imageOpenError: { ...type.footnote, color: t.red },
 	image: { width: "100%", aspectRatio: 1 },
 });

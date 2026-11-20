@@ -396,7 +396,7 @@ func TestTerminalRefreshSupportMatrix(t *testing.T) {
 	for _, harness := range domain.AllHarnesses {
 		supported[string(harness)] = true
 	}
-	for _, name := range []string{"aider", "continue", "deepseek-harness", "memcode", "unreal-agent", "hermes"} {
+	for _, name := range []string{"aider", "continue", "deepseek-harness", "docker-agent", "minimax-code", "memcode", "unreal-agent", "hermes", "stakpak", "open-interpreter", "tau", "mastra-code"} {
 		supported[name] = false
 	}
 	for _, adapter := range agentregistry.Constructors() {
