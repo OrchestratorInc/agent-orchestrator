@@ -7,7 +7,7 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, Star, TriangleAlert, Zap } from "@/components/app-icons";
-import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
@@ -285,7 +285,7 @@ export function AgentModelPicker({
 	const live = listsModelVariants(currentHarness) && current.efforts.length === 0 && current.thinking === undefined
 		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
 		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) } : current;
-	const { settings: hostSettings } = useSettings(hostId);
+	const { settings: hostSettings, isLoading: loadingHostSettings } = useSettings(hostId);
 	// The agent's list is shared by every session, so it names the saved model at once.
 	// No saved model means the agent's own default, which Claude Code leaves unset.
 	const savedCatalog = useQuery({ ...catalogOptions(currentHarness), enabled: Boolean(loadingModels) }).data;
@@ -322,6 +322,65 @@ export function AgentModelPicker({
 		),
 		held, onPendingChange, t,
 	);
+	// A bare agent pick means “choose for me”. Resolve it as soon as that agent's
+	// catalog arrives, preferring a still-supported favorite, then its default.
+	// An explicit pending model always wins, including while a later catalog loads.
+	useEffect(() => {
+		if (!pending || pending.model || loadingHostSettings || !hostSettings) return;
+		const catalog = catalogs[others.findIndex((agent) => agent.id === pending.harness)]?.data;
+		if (!catalog) return;
+		const offered = offeredCatalogModels(
+			catalog,
+			hostSettings?.harnessDefaults?.[pending.harness]?.disabledModels,
+		).filter((model) => model.id && !model.unavailableReason);
+		if (offered.length === 0) return;
+
+		const favorite = favorites.find((entry) => entry.harness === pending.harness && offered.some((model) => model.id === entry.model));
+		if (favorite) {
+			const model = offered.find((entry) => entry.id === favorite.model)!;
+			if (listsModelVariants(pending.harness)) {
+				const families = collapseModelVariants(offered.map((entry) => ({
+					id: entry.id,
+					label: readableModelLabel(agentModelDisplayLabel(pending.harness, entry.label)),
+					group: modelGroupLabel(entry.provider, pending.harness),
+				})));
+				const match = findModelVariant(families, favorite.model);
+				if (match) {
+					onPendingChange({
+						...pending,
+						harness: pending.harness,
+						model: match.variant.id,
+						modelLabel: match.family.label,
+						shownEffort: match.variant.effort,
+						fast: match.variant.fast,
+						thinking: match.variant.thinking,
+					});
+					return;
+				}
+			} else {
+				const effort = favorite.effort && model.efforts?.includes(favorite.effort) ? favorite.effort : model.defaultEffort;
+				onPendingChange({
+					...pending,
+					model: model.id,
+					modelLabel: favorite.label,
+					shownEffort: effort,
+					effort,
+					fastMode: model.supportsFast && favorite.fast || undefined,
+				});
+				return;
+			}
+		}
+
+		const selected = offered.find((model) => model.isDefault)
+			?? (catalog.models.some((model) => model.isDefault) ? offered[0] : undefined);
+		if (!selected) return;
+		onPendingChange({
+			...pending,
+			model: selected.id,
+			modelLabel: readableModelLabel(agentModelDisplayLabel(pending.harness, selected.label)),
+			shownEffort: selected.defaultEffort,
+		});
+	}, [catalogs, favorites, hostSettings, loadingHostSettings, onPendingChange, others, pending]);
 	// The rows below always describe who answers next: the pending agent, or the running one.
 	const shownHarness = pending?.harness ?? currentHarness;
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
