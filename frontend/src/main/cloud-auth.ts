@@ -162,6 +162,15 @@ const unreadFiles = new Set<string>();
 // with. The file is kept for the next launch and not decrypted again in this
 // one, so a denied prompt does not come back on every read.
 const undecryptable = new Set<string>();
+// The session the file held when this run last read or wrote it, so a store
+// written during an outage that only carries that session on (a sign-in
+// started, an expired one cleared) is not taken for a new credential.
+const fileSessions = new Map<string, StoredSession | null>();
+
+// Whether two sessions are the same credential, not just the same account.
+function sameCredential(a: StoredSession | null | undefined, b: StoredSession | null | undefined): boolean {
+  return !!a && !!b && a.accessToken === b.accessToken && a.refreshToken === b.refreshToken;
+}
 const storeOps = new Map<string, Promise<void>>();
 const refreshes = new Map<string, Promise<CloudAccount | null>>();
 const authGenerations = new Map<string, number>();
@@ -396,6 +405,7 @@ export function readAuthStore(dataDir: string): Promise<AuthStore> {
         return store;
       }
       memoryStores.delete(dataDir);
+      fileSessions.set(dataDir, store.session);
       noteFileRead(dataDir, store);
       return store;
     }
@@ -404,6 +414,7 @@ export function readAuthStore(dataDir: string): Promise<AuthStore> {
       noteUndecryptable(dataDir);
       return emptyStore();
     }
+    fileSessions.set(dataDir, store.session);
     noteFileRead(dataDir, store);
     return store;
   });
@@ -418,13 +429,20 @@ export function writeAuthStore(
       // A rotating refresh token must never fall back to plaintext persistence.
       // Linux's basic_text backend also reports encryption as available despite
       // using an unprotected hardcoded password, so keep that process-local too.
-      const wasReplacing = memoryStores.get(dataDir)?.replacesFile === true;
-      memoryStores.set(dataDir, { store, replacesFile: wasReplacing || store.session !== null });
-      if (store.session !== null) {
+      const memory = memoryStores.get(dataDir);
+      const wasReplacing = memory?.replacesFile === true;
+      // A store that only carries the session already held (in memory, or in
+      // the file when it was last read) on, with a sign-in started or cleared,
+      // keeps the file.
+      const held = memory ? memory.store.session : fileSessions.get(dataDir);
+      const newCredential = store.session !== null && !sameCredential(store.session, held);
+      memoryStores.set(dataDir, { store, replacesFile: wasReplacing || newCredential });
+      if (newCredential) {
         // This credential is newer than the file's. Delete the file so the
         // account it replaced can never come back.
         unreadFiles.delete(dataDir);
         undecryptable.delete(dataDir);
+        fileSessions.delete(dataDir);
         await rm(storePath(dataDir), { force: true });
         if (!wasReplacing) {
           console.warn(
@@ -448,11 +466,13 @@ export function writeAuthStore(
       }
       await writeStoreFile(dataDir, next);
       memoryStores.delete(dataDir);
+      fileSessions.set(dataDir, next.session);
       noteFileRead(dataDir, next);
       return;
     }
     await writeStoreFile(dataDir, store);
     memoryStores.delete(dataDir);
+    fileSessions.set(dataDir, store.session);
     unreadFiles.delete(dataDir);
     undecryptable.delete(dataDir);
   });
@@ -463,6 +483,7 @@ export function removeAuthStore(dataDir: string): Promise<void> {
     memoryStores.delete(dataDir);
     unreadFiles.delete(dataDir);
     undecryptable.delete(dataDir);
+    fileSessions.delete(dataDir);
     await Promise.all([
       rm(storePath(dataDir), { force: true }),
       rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
