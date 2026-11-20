@@ -1058,7 +1058,7 @@ func (s *Service) lockOrchestratorProject(projectID domain.ProjectID) func() {
 
 // Restore relaunches a terminated session and returns the API-facing read model.
 func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutcome, error) {
-	res, err := s.manager.RestoreWithMode(ctx, id)
+	res, err := s.restoreWithOrchestratorAdmission(ctx, id)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.emitRelaunchFailed(ctx, "restore_session", id, err, apiErr)
@@ -1071,6 +1071,41 @@ func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutc
 	}
 	s.recordRestored(ctx, id, res.Session, domain.ActivityStatusCompleted, nil)
 	return RestoreOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
+}
+
+func (s *Service) restoreWithOrchestratorAdmission(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error) {
+	if s.store == nil {
+		return s.manager.RestoreWithMode(ctx, id)
+	}
+	rec, found, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return sessionmanager.RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
+	if !found || rec.Kind != domain.KindOrchestrator || rec.ProjectID == "" {
+		return s.manager.RestoreWithMode(ctx, id)
+	}
+	// Restore can revive a different archived coordinator from the one Spawn
+	// is admitting. A per-session manager lock cannot protect that project
+	// invariant: share the spawn/replacement gate until the live row is published.
+	unlock := s.lockOrchestratorProject(rec.ProjectID)
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return sessionmanager.RestoreResult{}, err
+	}
+	existing, err := s.activeOrchestrators(ctx, rec.ProjectID)
+	if err != nil {
+		return sessionmanager.RestoreResult{}, err
+	}
+	for _, candidate := range existing {
+		if candidate.ID != id {
+			return sessionmanager.RestoreResult{}, apierr.Conflict(
+				"ORCHESTRATOR_ALREADY_ACTIVE",
+				"Another orchestrator is already active for this project",
+				nil,
+			)
+		}
+	}
+	return s.manager.RestoreWithMode(ctx, id)
 }
 
 // ExitAgent stops only the agent controller while preserving the AO session,
