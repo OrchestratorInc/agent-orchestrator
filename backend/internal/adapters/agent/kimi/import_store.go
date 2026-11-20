@@ -181,7 +181,9 @@ func validateKimiWire(wire []byte, cwd string) (string, error) {
 		// Native replay rehydrates blobref URLs from agents/main/blobs. This
 		// snapshot copies no blob storage, so accepting one would lose media.
 		var payload any
-		if err := json.Unmarshal(scan.Bytes(), &payload); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(scan.Bytes()))
+		decoder.UseNumber() // Opaque numeric tokens need not fit in float64.
+		if err := decoder.Decode(&payload); err != nil {
 			return "", err
 		}
 		if kimiHasBlobMedia(payload) {

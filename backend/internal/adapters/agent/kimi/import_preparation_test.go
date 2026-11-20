@@ -313,7 +313,7 @@ func TestKimiPrivateHomeLinkCannotRedirectRuntimeWrites(t *testing.T) {
 
 func TestKimiRuntimeRemapPreservesOpaqueContext(t *testing.T) {
 	r := kimiImportFixture(t)
-	opaque := `{"type":"context.append_loop_event","event":{"type":"tool.result","result":{"workspaceId":"` + kimiWorkdirKey("/source") + `","cwd":"/source","marker":"KEEP"}}}` + "\n"
+	opaque := `{"type":"context.append_loop_event","event":{"type":"tool.result","result":{"workspaceId":"` + kimiWorkdirKey("/source") + `","cwd":"/source","marker":"KEEP","n":1e400}}}` + "\n"
 	f, err := os.OpenFile(r.TranscriptPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
