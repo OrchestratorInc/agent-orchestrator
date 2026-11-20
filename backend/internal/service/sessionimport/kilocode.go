@@ -67,9 +67,9 @@ func discoverKiloCode(ctx context.Context, root string) ([]sourceFiles, error) {
 	}
 	defer func() { _ = db.Close() }()
 	rows, err := db.QueryContext(ctx, `
-		SELECT s.id, s.time_updated,
-		       (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id),
-		       (SELECT COALESCE(MAX(m.time_created), 0) FROM message m WHERE m.session_id = s.id)
+		SELECT s.id,
+         MAX(s.time_updated, COALESCE((SELECT MAX(m.time_created) FROM message m WHERE m.session_id = s.id), 0)),
+         (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id)
 		FROM session s
 		WHERE (s.parent_id IS NULL OR s.parent_id = '')
 		  AND s.time_archived IS NULL
@@ -84,16 +84,12 @@ func discoverKiloCode(ctx context.Context, root string) ([]sourceFiles, error) {
 			return nil, err
 		}
 		var id string
-		var updated, count, lastMsg int64
-		if err := rows.Scan(&id, &updated, &count, &lastMsg); err != nil {
+		var updated, count int64
+		if err := rows.Scan(&id, &updated, &count); err != nil {
 			return nil, err
 		}
 		if !kiloCodeNativeID.MatchString(id) {
 			continue
-		}
-		modMillis := updated
-		if lastMsg > modMillis {
-			modMillis = lastMsg
 		}
 		out = append(out, sourceFiles{
 			harness: domain.HarnessKilocode,
@@ -102,7 +98,7 @@ func discoverKiloCode(ctx context.Context, root string) ([]sourceFiles, error) {
 			// paths carries the session id so readTranscript and RefreshArchive
 			// resolve the row without a provider file path.
 			paths:   []string{id},
-			modTime: time.UnixMilli(modMillis),
+			modTime: time.UnixMilli(updated),
 			// size doubles as a content-change signal for the scan cache.
 			size: count,
 		})

@@ -234,6 +234,9 @@ func kiloSourceDigest(ctx context.Context, db *sql.DB, sessionID string) ([32]by
 				return err
 			}
 			encoder := json.NewEncoder(h)
+			if err := encoder.Encode(query); err != nil {
+				return err
+			}
 			for rows.Next() {
 				values := make([]any, len(columns))
 				pointers := make([]any, len(columns))
