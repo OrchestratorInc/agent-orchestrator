@@ -21,6 +21,10 @@ Output flags are repeatable:
 --pr-reviewed <pr-or-mr-url>
 ```
 
+Free-form text and `--note` are each limited to 1000 characters. Put longer
+detail in a file in the session artifact directory and attach it with
+`--artifact`.
+
 Use reports for meaningful transitions, decisions, blockers, required input,
 outputs, and terminal judgment. Do not file a report for routine commands. Outputs do not
 imply completion, and `--done` does not terminate the session.

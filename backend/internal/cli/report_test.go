@@ -43,6 +43,31 @@ func TestReportValidation(t *testing.T) {
 	}
 }
 
+func TestReportTooLongStatesLimitAndLength(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "worker-1")
+	for _, args := range [][]string{
+		{"report", strings.Repeat("界", 1001)},
+		{"report", "--checkpoint", "--note", strings.Repeat("x", 1001)},
+	} {
+		_, _, err := executeCLI(t, Deps{}, args...)
+		if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "at most 1000 characters (got 1001)") {
+			t.Fatalf("args=%q err=%v", args[1], err)
+		}
+	}
+}
+
+func TestReportHelpStatesTextLimit(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "report", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Free-form text and --note are each limited to 1000 characters", "Structured state note (at most 1000 characters)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestReportModesAndBoundaries(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "worker-1")
 	pr1 := "https://github.com/o/r/pull/12"

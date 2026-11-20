@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -38,12 +39,12 @@ type reportAPIResponse struct {
 
 func newReportCommand(ctx *commandContext) *cobra.Command {
 	var o reportOptions
-	cmd := &cobra.Command{Use: "report <free-form text>", Short: "Report worker progress to the orchestrator", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "report <free-form text>", Short: "Report worker progress to the orchestrator", Long: fmt.Sprintf("Report worker progress to the orchestrator.\n\nFree-form text and --note are each limited to %d characters.", domain.MaxReportTextCharacters), Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		o.noteSet = cmd.Flags().Changed("note")
 		return ctx.report(cmd.Context(), args, o)
 	}}
 	f := cmd.Flags()
-	f.StringVar(&o.note, "note", "", "Structured state note")
+	f.StringVar(&o.note, "note", "", fmt.Sprintf("Structured state note (at most %d characters)", domain.MaxReportTextCharacters))
 	f.StringArrayVar(&o.artifacts, "artifact", nil, "Attach an opaque artifact reference (repeatable)")
 	f.StringArrayVar(&o.prsCreated, "pr-created", nil, "Attach a created GitHub PR or GitLab MR (repeatable)")
 	f.StringArrayVar(&o.prsReviewed, "pr-reviewed", nil, "Attach a reviewed GitHub PR or GitLab MR (repeatable)")
@@ -98,8 +99,8 @@ func (c *commandContext) report(ctx context.Context, args []string, o reportOpti
 	if strings.TrimSpace(message) == "" && selected == "" && len(outputs) == 0 {
 		return usageError{errors.New("usage: free-form text, a state flag, or at least one output option is required")}
 	}
-	if utf8.RuneCountInString(message) > domain.MaxReportTextCharacters || utf8.RuneCountInString(o.note) > domain.MaxReportTextCharacters {
-		return usageError{errors.New("usage: report text must be at most 1000 characters")}
+	if n := max(utf8.RuneCountInString(message), utf8.RuneCountInString(o.note)); n > domain.MaxReportTextCharacters {
+		return usageError{fmt.Errorf("usage: report text must be at most %d characters (got %d)", domain.MaxReportTextCharacters, n)}
 	}
 	for _, output := range outputs {
 		if strings.TrimSpace(output.Reference) == "" {

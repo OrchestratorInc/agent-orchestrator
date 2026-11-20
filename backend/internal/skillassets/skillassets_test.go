@@ -246,6 +246,7 @@ func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testi
 		"working material, not deliverables",
 		"Do not attach them unless requested or needed to explain an actionable failure",
 		"Summarize validation in the report note",
+		"Free-form text and `--note` are each limited to 1000 characters",
 		"not external publishing authorization",
 		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` also shows in the thread.",
 	} {

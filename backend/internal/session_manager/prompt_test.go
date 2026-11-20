@@ -234,6 +234,7 @@ func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 		"ao report --done --note <text>",
 		"Do not file a report for routine commands",
 		"applies to `ao report` only",
+		"A note or free-form report is at most 1000 characters",
 		"summarize validation and mention anything else, such as issues you filed, in the note",
 		"`--artifact <absolute-path>`",
 		"`--artifact` takes only a path to a file in the session artifact directory",
