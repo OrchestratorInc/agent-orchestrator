@@ -20562,6 +20562,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -21349,6 +21350,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -21378,6 +21380,14 @@ components:
         detail:
           description: The installer's latest output line.
           type: string
+        downloadAttempt:
+          description: Current installer download attempt, before it runs.
+          minimum: 1
+          type: integer
+        downloadAttempts:
+          description: Maximum installer download attempts.
+          minimum: 1
+          type: integer
         percent:
           description: Progress through the current phase, present only when the installer's
             output states sizes or counts.
@@ -21393,6 +21403,10 @@ components:
           - downloading
           - installing
           type: string
+        retryInSeconds:
+          description: Seconds until the next installer download attempt.
+          minimum: 1
+          type: integer
       type: object
     InvokeCueRequest:
       properties:
@@ -23436,6 +23450,22 @@ components:
           type: string
         verdict:
           type: string
+        workerNotice:
+          enum:
+          - ""
+          - pending
+          - sent
+          - failed
+          type: string
+        workerNoticeAttemptedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        workerNoticeAttempts:
+          type: integer
+        workerNoticeError:
+          type: string
       required:
       - id
       - reviewId
@@ -24664,6 +24694,8 @@ components:
           type: string
         messageId:
           type: string
+        namedForQuery:
+          type: boolean
         projectId:
           type: string
         projectName:
@@ -25727,6 +25759,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -26325,6 +26358,10 @@ components:
           description: Return 409 instead of reusing when every open PR head is already
             being reviewed or already has a review.
           type: boolean
+        requesterSessionId:
+          description: Agent session that requested the pass and should receive its
+            final outcome.
+          type: string
         rerun:
           description: Start a fresh pass for already-reviewed current heads; a different
             reviewer may run alongside one that is still running. A person's rerun

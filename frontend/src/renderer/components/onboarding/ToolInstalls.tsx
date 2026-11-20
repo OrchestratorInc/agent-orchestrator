@@ -15,6 +15,7 @@ import { invalidateAgentModelCatalogs } from "../../hooks/useAgentModelsQuery";
 import type { AgentReadinessSnapshot } from "../../hooks/useAgentReadinessQuery";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
+import { apiErrorCode, finishOnboardingAction, installJobOutcome, onboardingActionWatched, startOnboardingAction } from "../../lib/onboarding-telemetry";
 import { ManualCommand } from "../InstallDependencyDialog";
 import { installPercent } from "../settings/harness/describe-harness";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
@@ -64,6 +65,11 @@ export type InstallView = {
 
 const IDLE: InstallView = { busy: false, ended: false };
 
+/** The job each agent install from Your tools started (its startedAt), kept
+ * outside the page so Back and returning still reports how it ended, not an
+ * older job's end. */
+const startedAgentJobs = new Map<string, string>();
+
 /** Agents: plans and jobs shared with Settings > Harness (the jobs query polls
  * while one runs). `onInstalled` runs once for each install this page started
  * that succeeds. */
@@ -89,6 +95,13 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 	};
 
 	useEffect(() => {
+		for (const [agentId, startedAt] of startedAgentJobs) {
+			const job = jobs.data?.find((candidate) => candidate.target === agentId);
+			const end = job && (job.startedAt ?? "") === startedAt ? installJobOutcome(job.status) : null;
+			if (!end) continue;
+			startedAgentJobs.delete(agentId);
+			finishOnboardingAction("agent_install", end.outcome, { target: agentId, reason: end.reason });
+		}
 		for (const agentId of attempted) {
 			const job = jobs.data?.find((candidate) => candidate.target === agentId);
 			const key = `${agentId}:${job?.startedAt ?? ""}`;
@@ -103,6 +116,8 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 		setPending((current) => new Set(current).add(agentId));
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
 		setAttempted((current) => new Set(current).add(agentId));
+		startedAgentJobs.delete(agentId);
+		startOnboardingAction("agent_install", { target: agentId, step: "tools" });
 		try {
 			// No method: the daemon takes the recommended one that works here.
 			const { data, error } = await apiClient.POST("/api/v1/agents/{agent}/install", {
@@ -110,13 +125,16 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 				body: { operation: "install" },
 			});
 			if (error || !data) {
+				finishOnboardingAction("agent_install", "failed", { target: agentId, reason: "start_failed", errorCode: apiErrorCode(error) });
 				setErrors((current) => ({ ...current, [agentId]: apiErrorMessage(error, t("settings.harness.startFailed")) }));
 				return;
 			}
+			startedAgentJobs.set(agentId, data.startedAt ?? "");
 			queryClient.setQueryData<InstallJob[]>(installJobsQueryKey, (current) => upsertInstallJob(current, data));
 			// Polling starts from the next fetch, which sees the running job.
 			void queryClient.invalidateQueries({ queryKey: installJobsQueryKey });
 		} catch (error) {
+			finishOnboardingAction("agent_install", "failed", { target: agentId, reason: "request_failed" });
 			setErrors((current) => ({ ...current, [agentId]: error instanceof Error ? error.message : t("settings.harness.startFailed") }));
 		} finally {
 			setPending((current) => {
@@ -299,59 +317,89 @@ export function useGhInstall(onInstalled: () => void) {
 	const starting = useRef(false);
 	const onInstalledRef = useRef(onInstalled);
 	onInstalledRef.current = onInstalled;
+	// Bumped on every start: a poll answer from an earlier attempt, still in
+	// flight, must not settle the new one or clear its timer.
+	const generation = useRef(0);
 	useEffect(() => () => window.clearInterval(timer.current), []);
-	// Ask first whether it can be installed here at all: where it can't (Linux
-	// needs an administrator password, which AO can't ask for) the row shows
-	// the command to run instead of an Install that is bound to fail.
-	useEffect(() => {
-		let current = true;
-		void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } })
-			.then(({ data }) => {
-				if (current && data?.status === "unsupported") setJob((existing) => existing ?? data);
-			})
-			.catch(() => undefined);
-		return () => { current = false; };
-	}, []);
 
 	const settle = useCallback((next: InstallJob) => {
 		setJob(next);
 		if (isActiveInstallJob(next)) return false;
 		window.clearInterval(timer.current);
+		const end = installJobOutcome(next.status);
+		if (end) finishOnboardingAction("gh_install", end.outcome, { target: "gh", reason: end.reason });
 		if (next.status === "succeeded") onInstalledRef.current();
 		return true;
+	}, []);
+
+	// Polls the install until it ends, for the current attempt only.
+	const watch = useCallback(() => {
+		const attempt = generation.current;
+		window.clearInterval(timer.current);
+		let misses = 0;
+		const missed = () => {
+			if (attempt !== generation.current) return;
+			// A blip is tried again on the next tick; a daemon gone for good ends the wait.
+			if (++misses < POLL_GIVE_UP_AFTER) return;
+			window.clearInterval(timer.current);
+			finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "lost_contact" });
+			setJob(undefined);
+			setError(t("firstRun.installDidNotFinish"));
+		};
+		timer.current = window.setInterval(() => {
+			void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } })
+				.then(({ data: next }) => {
+					if (attempt !== generation.current) return;
+					if (!next) return missed();
+					misses = 0;
+					settle(next);
+				})
+				.catch(missed);
+		}, POLL_MS);
+	}, [settle, t]);
+
+	// Ask first whether it can be installed here at all: where it can't (Linux
+	// needs an administrator password, which AO can't ask for) the row shows
+	// the command to run instead of an Install that is bound to fail.
+	useEffect(() => {
+		let current = true;
+		// An install started while this lookup is out owns what comes next; its answer is older.
+		const lookedUpAt = generation.current;
+		void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } })
+			.then(({ data }) => {
+				if (!current || !data || lookedUpAt !== generation.current) return;
+				// An install started here before the page was left (Back) is still
+				// followed to its end, whether or not analytics is on.
+				if (onboardingActionWatched("gh_install", "gh")) {
+					if (!settle(data)) watch();
+					return;
+				}
+				if (data.status === "unsupported") setJob((existing) => existing ?? data);
+			})
+			.catch(() => undefined);
+		return () => { current = false; };
+		// Once, on mount.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	const start = async () => {
 		if (starting.current || isActiveInstallJob(job)) return;
 		starting.current = true;
+		generation.current += 1;
 		setPending(true);
 		setError(undefined);
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
 		try {
 			const { data, error: startError } = await apiClient.POST("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } });
 			if (startError || !data) {
+				finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "start_failed", errorCode: apiErrorCode(startError) });
 				setError(apiErrorMessage(startError, t("settings.harness.startFailed")));
 				return;
 			}
 			if (settle(data)) return;
-			window.clearInterval(timer.current);
-			let misses = 0;
-			const missed = () => {
-				// A blip is tried again on the next tick; a daemon gone for good ends the wait.
-				if (++misses < POLL_GIVE_UP_AFTER) return;
-				window.clearInterval(timer.current);
-				setJob(undefined);
-				setError(t("firstRun.installDidNotFinish"));
-			};
-			timer.current = window.setInterval(() => {
-				void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } })
-					.then(({ data: next }) => {
-						if (!next) return missed();
-						misses = 0;
-						settle(next);
-					})
-					.catch(missed);
-			}, POLL_MS);
+			watch();
 		} catch (startError) {
+			finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "request_failed" });
 			setError(startError instanceof Error ? startError.message : t("settings.harness.startFailed"));
 		} finally {
 			starting.current = false;

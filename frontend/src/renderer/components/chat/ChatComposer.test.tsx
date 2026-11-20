@@ -38,6 +38,8 @@ import {
 	placeLexicalCaretInLine,
 	typeAndPressInLexicalEditor,
 	typeInLexicalEditor,
+	clearLexicalEditor,
+	drawnComposerPlaceholder as drawnPlaceholder,
 } from "../../test/lexical";
 
 // Every button in the composer relies on the shared styled Tooltip, which needs
@@ -3941,5 +3943,122 @@ describe("unsent message strip", () => {
 		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
 		expect(readChatSessionDraft("unsent-observed").unsent).toBeUndefined();
 		expect(onSend).not.toHaveBeenCalled();
+	});
+});
+
+describe("queue hint while a send waits for its turn", () => {
+	const QUEUED = "Next message you send will be queued";
+
+	/** Every distinct placeholder state the box draws from now on, in order. */
+	function watchPlaceholder(field: HTMLElement) {
+		const drawn: (string | null)[] = [drawnPlaceholder(field)];
+		const note = () => {
+			const now = drawnPlaceholder(field);
+			if (drawn.at(-1) !== now) drawn.push(now);
+		};
+		const observer = new MutationObserver(note);
+		observer.observe(field.parentElement!, { subtree: true, childList: true, characterData: true, attributes: true });
+		return () => {
+			note();
+			observer.disconnect();
+			return drawn;
+		};
+	}
+
+	it("draws the queue hint from the frame a send clears the box until its turn ends, never the old suggestion or the idle hint", async () => {
+		const sessionId = "composer-queue-hint-through-send";
+		const pending = deferred<void>();
+		const onSend = vi.fn(() => pending.promise);
+		const props = { draftSessionId: sessionId, onSend };
+		const view = render(<ChatComposer {...props} promptSuggestion={{ id: "before", text: "Run the tests" }} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		expect(drawnPlaceholder(field)).toBe("suggestion: Run the tests");
+		await typeInComposer(field, "Ship it");
+		expect(drawnPlaceholder(field)).toBeNull();
+
+		const stop = watchPlaceholder(field);
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		// The surface has not heard of the send yet: it still offers the suggestion
+		// and has no turn to queue behind.
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe(QUEUED));
+		expect(field.textContent).toBe("");
+		expect(field).toHaveAttribute("aria-placeholder", QUEUED);
+
+		// A task later the surface is busy with the send and has its echo.
+		view.rerender(<ChatComposer {...props} busy sendPending willQueue />);
+		expect(drawnPlaceholder(field)).toBe(QUEUED);
+
+		// The daemon accepts before the snapshot holds the turn.
+		await act(async () => pending.resolve());
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		// The surface's echo (and then the running turn) still says a next message queues.
+		view.rerender(<ChatComposer {...props} willQueue />);
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(drawnPlaceholder(field)).toBe(QUEUED);
+		expect(stop()).toEqual([null, QUEUED]);
+
+		// The turn finished: idle again, with the suggestion for the new turn.
+		view.rerender(<ChatComposer {...props} promptSuggestion={{ id: "after", text: "Open a PR" }} />);
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe("suggestion: Open a PR"));
+		view.rerender(<ChatComposer {...props} />);
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe("Message the agent"));
+		expect(field).toHaveAttribute("aria-placeholder", "Message the agent");
+	});
+
+	it("draws the queue hint from the frame a memory-only send clears the box", async () => {
+		const pending = deferred<void>();
+		const onSend = vi.fn(() => pending.promise);
+		render(<ChatComposer onSend={onSend} promptSuggestion={{ id: "before", text: "Run the tests" }} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInComposer(field, "Ship it");
+
+		const stop = watchPlaceholder(field);
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("Ship it"));
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe(QUEUED));
+		expect(stop()).toEqual([null, QUEUED]);
+		// With no surface here to report the echo or withdraw the suggestion, the box
+		// offers it again once the send is answered: the hint does not stick.
+		await act(async () => pending.resolve());
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe("suggestion: Run the tests"));
+	});
+
+	it("drops the queue hint when the send fails, with the draft back and nothing held over", async () => {
+		const sessionId = "composer-queue-hint-failed-send";
+		let rejectSend!: (error: unknown) => void;
+		const pending = new Promise<void>((_resolve, reject) => { rejectSend = reject; });
+		const onSend = vi.fn().mockReturnValueOnce(pending);
+		const suggestion = { id: "before", text: "Run the tests" };
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} promptSuggestion={suggestion} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInComposer(field, "Ship it");
+
+		const stop = watchPlaceholder(field);
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe(QUEUED));
+		await act(async () => rejectSend({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+
+		await waitFor(() => expect(field).toHaveTextContent("Ship it"));
+		expect(stop()).toEqual([null, QUEUED, null]);
+		expect(field).toHaveAttribute("aria-placeholder", "Message the agent");
+		// Nothing was sent, so emptying the box offers the earlier suggestion again.
+		act(() => clearLexicalEditor(field));
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe("suggestion: Run the tests"));
+	});
+
+	it("returns to idle as soon as nothing is left to queue behind", async () => {
+		const sessionId = "composer-queue-hint-fast-finish";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const props = { draftSessionId: sessionId, onSend };
+		const view = render(<ChatComposer {...props} promptSuggestion={{ id: "before", text: "Run the tests" }} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInComposer(field, "Ship it");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		// Accepted and finished before the composer saw a running turn: the
+		// surface reports nothing to queue behind, so the box is idle at once.
+		view.rerender(<ChatComposer {...props} />);
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe("Message the agent"));
 	});
 });
