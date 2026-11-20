@@ -16,7 +16,7 @@ import (
 )
 
 func TestKiloNativeImportPreparation(t *testing.T) {
-	for _, mode := range []string{"native import", "import failure", "missing row", "wrong directory", "missing history", "export changes source", "import changes source", "unknown version"} {
+	for _, mode := range []string{"native import", "tampered reservation", "lost acknowledgement", "retry pending", "import failure", "missing row", "wrong directory", "missing history", "export changes source", "import changes source", "unknown version"} {
 		t.Run(mode, func(t *testing.T) {
 			dataRoot := t.TempDir()
 			t.Setenv("AO_DATA_DIR", dataRoot)
@@ -85,7 +85,7 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 				if err != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 					t.Fatalf("private native export = %v, %v", info, err)
 				}
-				if mode == "import failure" {
+				if mode == "import failure" || mode == "retry pending" && calls == 3 {
 					return nil, errors.New("synthetic provider refusal")
 				}
 				if mode == "missing row" {
@@ -116,6 +116,21 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 				if transformed.Info.ID == sourceID || transformed.Info.Directory != cwd || transformed.Info.Workspace != nil {
 					t.Fatalf("unsafe import identity: %#v", transformed.Info)
 				}
+				// The receipt must already identify this exact graph BEFORE the
+				// native provider makes any session/message/part rows visible.
+				reservationPath := filepath.Join(dataRoot, "native-imports", "kilo", kiloReservationName(root, sourceID, cwd, ""))
+				proof, err := os.ReadFile(reservationPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reservationInfo, err := os.Stat(reservationPath)
+				if err != nil || runtime.GOOS != "windows" && reservationInfo.Mode().Perm() != 0o600 {
+					t.Fatalf("reservation is not private: %v, %v", reservationInfo, err)
+				}
+				var reservation kiloImportReservation
+				if json.Unmarshal(proof, &reservation) != nil || reservation.NativeID != transformed.Info.ID || string(reservation.Export) != string(data) {
+					t.Fatal("native import ran before its exact identity graph was reserved")
+				}
 				if mode == "wrong directory" {
 					transformed.Info.Directory = "/source"
 				}
@@ -133,17 +148,48 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 						}
 					}
 				}
+				if mode == "lost acknowledgement" {
+					return nil, errors.New("native process lost after committing import")
+				}
 				return nil, nil
 			}
-			ref, err := New().prepareKiloImport(context.Background(), ports.ImportedSessionRelocation{NativeSessionID: sourceID, ConfigDir: root, LaunchCWD: cwd}, run)
-			if mode == "native import" {
+			request := ports.ImportedSessionRelocation{NativeSessionID: sourceID, ConfigDir: root, LaunchCWD: cwd, DataDir: dataRoot}
+			ref, err := New().prepareKiloImport(context.Background(), request, run)
+			if mode == "native import" || mode == "tampered reservation" {
 				if err != nil || ref.NativeSessionID == "" || ref.NativeSessionID == sourceID || ref.ConfigDir != root {
 					t.Fatalf("native import = %#v, %v", ref, err)
 				}
 			} else if err == nil || ref.NativeSessionID != "" {
 				t.Fatalf("failed import published identity: %#v, %v", ref, err)
 			}
+			if mode == "native import" || mode == "lost acknowledgement" || mode == "retry pending" {
+				again, retryErr := New().prepareKiloImport(context.Background(), request, run)
+				if retryErr != nil || again.NativeSessionID == "" || mode == "native import" && again != ref {
+					t.Fatalf("reservation retry = %#v, %v", again, retryErr)
+				}
+				var copies int
+				if err := db.QueryRow(`SELECT COUNT(*) FROM session WHERE id != ?`, sourceID).Scan(&copies); err != nil || copies != 1 {
+					t.Fatalf("retry forked native history: copies=%d, %v", copies, err)
+				}
+			}
+			if mode == "tampered reservation" {
+				path := filepath.Join(dataRoot, "native-imports", "kilo", kiloReservationName(root, sourceID, cwd, ""))
+				if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "missing history" || mode == "wrong directory" || mode == "import changes source" || mode == "tampered reservation" {
+				if _, err := New().prepareKiloImport(context.Background(), request, run); err == nil {
+					t.Fatal("retry accepted rejected publication")
+				}
+			}
 			wantCalls := 3
+			if mode == "native import" || mode == "lost acknowledgement" || mode == "missing history" || mode == "wrong directory" || mode == "import changes source" || mode == "tampered reservation" {
+				wantCalls = 4 // retry checks version but never exports/imports again
+			}
+			if mode == "retry pending" {
+				wantCalls = 5 // version plus import reuses the unpublished reservation
+			}
 			if mode == "unknown version" {
 				wantCalls = 1
 			}
