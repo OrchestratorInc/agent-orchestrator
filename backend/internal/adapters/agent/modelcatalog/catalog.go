@@ -256,7 +256,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak", "open-interpreter":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak", "open-interpreter", "mastra-code":
 		return ports.CustomModelEntryDirect
 	case "docker-agent", "minimax-code", "continue", "cline", "kilocode", "vibe", "pi", "tau", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
