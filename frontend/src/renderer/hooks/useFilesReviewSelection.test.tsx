@@ -291,17 +291,43 @@ describe("useFilesReviewSelection", () => {
 		expect(selectionRequests().map((call) => call[1]?.params.path.sessionId)).toEqual([SESSION]);
 	});
 
-	it("offers a workspace project only Uncommitted, the one scope its manifest fills", async () => {
+	it("offers a workspace project Uncommitted and its commits as one range", async () => {
 		useUiStore.getState().setFilesSelection(SESSION, { branch: CHECKED_OUT, changes: { kind: "staged" } });
 		const { result } = renderSelection(manifest(), { projectKind: "workspace" });
 		await waitFor(() => expect(result.current.branchMenu?.state).toBe("ready"));
 
 		expect(result.current.changesMenu.scopes).toEqual([{ scope: "uncommitted", stats: { additions: 3, deletions: 1 }, empty: false }]);
-		expect(result.current.changesMenu).toMatchObject({ commitsAvailable: false, value: { kind: "uncommitted" } });
+		expect(result.current.changesMenu).toMatchObject({ commitsAvailable: true, value: { kind: "uncommitted" } });
+		expect(result.current.changesMenu.commits).toMatchObject({ state: "ready", rows: [], rangeOnly: true, allStats: { additions: 5, deletions: 2 } });
 		expect(result.current.target).toMatchObject({ scope: "uncommitted", state: "ready", files: [file("a.ts", 3, 1)] });
 		// Its pull requests are still listed to view.
 		expect(result.current.branchMenu?.rows.map((row) => row.id)).toContain(`pr:${PR_URL}`);
 		expect(requests("/workspace/history")).toHaveLength(0);
+	});
+
+	// #8172: a child repository's commit with a clean worktree is listed, not just counted.
+	it("opens a workspace project with only commits on its committed files, read from the worktree", async () => {
+		const { result } = renderSelection(manifest({ uncommitted: [], unstaged: [] }), { projectKind: "workspace" });
+		await waitFor(() => expect(result.current.branchMenu?.state).toBe("ready"));
+
+		expect(result.current.changesMenu).toMatchObject({ commitsAvailable: true, value: { kind: "commits", shas: [] }, stats: { additions: 5, deletions: 2 } });
+		expect(result.current.target).toMatchObject({ scope: "committed", state: "ready", files: [file("c.ts", 5, 2)], commitShas: undefined, view: undefined });
+		// Snapshots read one repository, so the review keeps the worktree source.
+		expect(result.current.target.source).toBeUndefined();
+		expect(requests("/workspace/history")).toHaveLength(0);
+		expect(selectionRequests()).toHaveLength(0);
+	});
+
+	it("reads a ticked commit on a workspace project as All commits, and Uncommitted once it has none", async () => {
+		useUiStore.getState().setFilesSelection(SESSION, { branch: CHECKED_OUT, changes: { kind: "commits", shas: [SHA("a")] } });
+		const { result, rerender } = renderSelection(manifest(), { projectKind: "workspace" });
+		await waitFor(() => expect(result.current.branchMenu?.state).toBe("ready"));
+		expect(result.current.changesMenu.value).toEqual({ kind: "commits", shas: [] });
+		expect(result.current.target).toMatchObject({ scope: "committed", state: "ready", files: [file("c.ts", 5, 2)] });
+
+		rerender({ sessionId: SESSION, manifest: manifest({ committed: [] }) });
+		expect(result.current.changesMenu).toMatchObject({ commitsAvailable: false, value: { kind: "uncommitted" } });
+		expect(result.current.target).toMatchObject({ scope: "uncommitted", state: "ready" });
 	});
 
 	it("offers a scratch session only its uncommitted files, with no commits or branches", async () => {

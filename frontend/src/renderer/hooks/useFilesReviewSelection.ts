@@ -99,9 +99,14 @@ export function useFilesReviewSelection({
 
 	const legacy = isLegacyManifest(manifest);
 	const scratch = projectKind === "scratch";
-	// Scratch sessions have no Git, and a workspace project's manifest fills
-	// only Uncommitted for its repositories, so neither has the other scopes.
-	const uncommittedOnly = !legacy && (scratch || projectKind === "workspace");
+	// A workspace project's manifest fills Uncommitted and Committed across its
+	// repositories. Each repository has its own commits, so there is no history
+	// to list: its commits are reviewed as one range, All commits (#8172).
+	const workspaceProject = !legacy && projectKind === "workspace";
+	// Scratch sessions have no Git, and a workspace project has no staged or
+	// unstaged scopes, so neither has the other working scopes.
+	const uncommittedOnly = !legacy && (scratch || workspaceProject);
+	const workspaceHasCommits = workspaceProject && (manifest?.sections.committed.length ?? 0) > 0;
 	// An older daemon and a scratch session read only the worktree, so a picked branch reads as it.
 	const selection: FilesSelection = (legacy || scratch) && stored.branch.kind !== "checked_out" ? DEFAULT_FILES_SELECTION : stored;
 	const branch = selection.branch;
@@ -126,11 +131,13 @@ export function useFilesReviewSelection({
 	const historyBranch: FilesBranchTarget = branch.kind === "checked_out" || !selectedRow?.tipSha || prBranchRow ? branch : { ...branch, tipSha: selectedRow.tipSha };
 	const historyQuery = useQuery({
 		...sessionWorkspaceHistoryQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId, historyBranch),
-		enabled: Boolean(manifest) && !(uncommittedOnly && branch.kind === "checked_out"),
+		enabled: Boolean(manifest) && !((scratch || workspaceProject) && branch.kind === "checked_out"),
 	});
 	const history = historyQuery.data;
 
-	const changes = uncommittedOnly && branch.kind === "checked_out" ? scopeChanges("uncommitted") : normalizeChanges(selection, manifest, legacy, history);
+	const changes = branch.kind !== "checked_out" || !uncommittedOnly ? normalizeChanges(selection, manifest, legacy, history)
+		: workspaceProject ? workspaceProjectChanges(normalizeChanges(selection, manifest, legacy), workspaceHasCommits)
+		: scopeChanges("uncommitted");
 	// Keyed by session too: the explorer stays mounted across a session switch, which is no tick.
 	const settledChanges = useSettledChanges(changes, `${uiKey}|${branchKey(branch)}`);
 	const request = commitSelectionRequest(branch, settledChanges, manifest, history);
@@ -159,12 +166,15 @@ export function useFilesReviewSelection({
 				historyError: historyQuery.error,
 				selection: request ? { data: selectionQuery.data, error: selectionQuery.error, pending: selectionQuery.isPending } : undefined,
 			});
+			// A workspace project's All commits reads the manifest's Committed
+			// section and the worktree: snapshots read one repository.
+			if (workspaceProject && branch.kind === "checked_out") return { ...built, source: undefined };
 			return settledChanges.kind === "commits" && !history
 				? { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined }
 				: built;
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- settledChanges and branch are read through their keys: normalizing rebuilds equal values on every render.
-		[branchKey(branch), settledKey, manifest, legacy, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],
+		[branchKey(branch), settledKey, manifest, legacy, workspaceProject, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],
 	);
 
 	// A moved tip or base fails the read it fenced; the new one arrives under new keys.
@@ -239,9 +249,18 @@ export function useFilesReviewSelection({
 		value: changes,
 		stats,
 		scopes,
-		commitsAvailable: !uncommittedOnly,
+		commitsAvailable: !uncommittedOnly || workspaceHasCommits,
 		onSelectScope: (scope) => pickChanges(scopeChanges(scope)),
-		commits: {
+		commits: workspaceProject && branch.kind === "checked_out" ? {
+			state: "ready",
+			rows: [],
+			truncated: false,
+			rangeOnly: true,
+			allStats,
+			onToggleAll: () => pickChanges(ALL_COMMITS),
+			onToggle: () => {},
+			onRetry: () => {},
+		} : {
 			state: history ? "ready" : historyQuery.isError ? "error" : "loading",
 			rows: commitRows,
 			truncated: history?.commitsTruncated ?? false,
@@ -311,6 +330,14 @@ export function useFilesReviewSelection({
 		},
 		showAllCommits: () => pick({ branch, changes: ALL_COMMITS }),
 	};
+}
+
+/**
+ * A workspace project's checked-out pick: Uncommitted, or All commits while a
+ * repository has commits since its base. No commit can be ticked on its own.
+ */
+export function workspaceProjectChanges(changes: FilesChanges, hasCommits: boolean): FilesChanges {
+	return changes.kind === "commits" && hasCommits ? ALL_COMMITS : scopeChanges("uncommitted");
 }
 
 /**
