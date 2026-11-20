@@ -189,13 +189,20 @@ func ListImportSessions(ctx context.Context, root string) ([]ImportArchive, erro
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	previews := make([]ImportArchive, 0, len(out))
-	for _, item := range out {
+	return readImportPreviews(ctx, s, out)
+}
+
+func readImportPreviews(ctx context.Context, s *importStore, items []ImportArchive) ([]ImportArchive, error) {
+	previews := make([]ImportArchive, 0, len(items))
+	for _, item := range items {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		a, err := readImportArchiveFromStore(ctx, s, item.ID)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			continue
 		}
 		a.MessageCount = len(a.Messages)
