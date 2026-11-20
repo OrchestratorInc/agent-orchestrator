@@ -199,7 +199,7 @@ it("moves focus to the next task, then the composer when focused tasks disappear
 	const renderTasks = (tasks: BackgroundTask[]) => (
 		<div>
 			<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />
-			<textarea aria-label="Message" />
+			<form className="cursor-chat-composer"><textarea aria-label="Message" /></form>
 		</div>
 	);
 	const view = render(renderTasks([a, b]));
@@ -236,4 +236,71 @@ it("does not move disclosure focus when a poll refreshes expanded rows", async (
 	expect(toggle).toHaveFocus();
 	view.rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks.map((task) => ({ ...task })))} />);
 	expect(toggle).toHaveFocus();
+});
+
+
+it.each([false, true])("does not restore stale task focus after a transcript click (stopping=%s)", async (stopping) => {
+	const renderTasks = (tasks: BackgroundTask[]) => <div>
+		<p data-testid="transcript">Select this transcript text</p>
+		<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />
+		<form className="cursor-chat-composer"><textarea aria-label="Message" /></form>
+	</div>;
+	const view = render(renderTasks(reading.tasks));
+	const stop = screen.getByRole("button", { name: "Stop Dev server" });
+	stop.focus();
+	if (stopping) await userEvent.click(stop);
+	const transcript = screen.getByTestId("transcript");
+	await userEvent.click(transcript);
+	// JSDOM retains disabled-button focus until unmount; assert its final
+	// focus below, while the ordinary null-target blur is observable now.
+	if (!stopping) expect(document.body).toHaveFocus();
+	const selection = window.getSelection()!;
+	const range = document.createRange();
+	range.selectNodeContents(transcript);
+	selection.removeAllRanges();
+	selection.addRange(range);
+	view.rerender(renderTasks([]));
+	expect(document.body).toHaveFocus();
+	expect(selection.toString()).toBe("Select this transcript text");
+});
+
+it("returns task focus to the composer rather than queued or elicitation inputs", () => {
+	const renderTasks = (tasks: BackgroundTask[]) => <div>
+		<div data-testid="queued-dock"><textarea aria-label="Queued message" /></div>
+		<div data-testid="elicitation-dock"><input role="textbox" aria-label="Elicitation" /></div>
+		<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />
+		<form className="cursor-chat-composer"><textarea aria-label="Message" /></form>
+	</div>;
+	const view = render(renderTasks(reading.tasks));
+	screen.getByRole("button", { name: "Stop Dev server" }).focus();
+	view.rerender(renderTasks([]));
+	expect(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+});
+
+it("does not restore task focus after leaving the window", () => {
+	const renderTasks = (tasks: BackgroundTask[]) => <div>
+		<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />
+		<form className="cursor-chat-composer"><textarea aria-label="Message" /></form>
+	</div>;
+	const view = render(renderTasks(reading.tasks));
+	const stop = screen.getByRole("button", { name: "Stop Dev server" });
+	stop.focus();
+	stop.blur();
+	window.dispatchEvent(new Event("blur"));
+	view.rerender(renderTasks([]));
+	expect(document.body).toHaveFocus();
+});
+
+
+it("relinquishes task focus on a null-target blur while the control is mounted", () => {
+	const renderTasks = (tasks: BackgroundTask[]) => <div>
+		<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />
+		<form className="cursor-chat-composer"><textarea aria-label="Message" /></form>
+	</div>;
+	const view = render(renderTasks(reading.tasks));
+	const stop = screen.getByRole("button", { name: "Stop Dev server" });
+	stop.focus();
+	stop.blur();
+	view.rerender(renderTasks([]));
+	expect(document.body).toHaveFocus();
 });

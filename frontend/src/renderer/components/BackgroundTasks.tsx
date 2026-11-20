@@ -158,18 +158,30 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	const region = useRef<HTMLElement>(null);
 	const scope = useRef<HTMLElement | null>(null);
 	const focusedElement = useRef<HTMLElement | null>(null);
+	useEffect(() => {
+		const clearFocus = () => { focusedElement.current = null; };
+		const clearOutside = (event: PointerEvent) => {
+			if (!(event.target instanceof Node) || !region.current?.contains(event.target)) clearFocus();
+		};
+		// Clicking non-focusable transcript text blurs to body with no relatedTarget.
+		// Forget ownership at the gesture, before a later poll removes the row.
+		document.addEventListener("pointerdown", clearOutside, true);
+		window.addEventListener("blur", clearFocus);
+		return () => {
+			document.removeEventListener("pointerdown", clearOutside, true);
+			window.removeEventListener("blur", clearFocus);
+		};
+	}, []);
 	useLayoutEffect(() => {
 		if (region.current) scope.current = region.current.parentElement;
 		// A poll must not move focus that still belongs to a mounted control.
 		if (!focusedElement.current || focusedElement.current.isConnected || document.activeElement !== document.body) return;
 		focusedElement.current = null;
-		if (document.activeElement === document.body || region.current?.contains(document.activeElement)) {
-			const next =
-				region.current?.querySelector<HTMLElement>("[data-task-id] button:not(:disabled)") ??
-				region.current?.querySelector<HTMLElement>("button:not(:disabled)");
-			const editor = scope.current?.querySelector<HTMLElement>('[contenteditable="true"], textarea, [role="textbox"]');
-			(next ?? editor)?.focus();
-		}
+		const next =
+			region.current?.querySelector<HTMLElement>("[data-task-id] button:not(:disabled)") ??
+			region.current?.querySelector<HTMLElement>("button:not(:disabled)");
+		const editor = scope.current?.querySelector<HTMLElement>('form.cursor-chat-composer [contenteditable="true"], form.cursor-chat-composer textarea');
+		(next ?? editor)?.focus();
 	}, [tasks]);
 	if (!tasks.length) return null;
 
@@ -218,7 +230,11 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 				focusedElement.current = event.target as HTMLElement;
 			}}
 			onBlurCapture={(event) => {
-				if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) focusedElement.current = null;
+				if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) return;
+				// Disabling/removing Stop can blur it before settlement. Outside
+				// gestures already relinquish ownership through pointerdown above.
+				if (!event.relatedTarget && (!event.target.isConnected || event.target.matches(":disabled"))) return;
+				focusedElement.current = null;
 			}}
 		>
 			{several ? (

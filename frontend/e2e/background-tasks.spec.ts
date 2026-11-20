@@ -215,3 +215,19 @@ test("task rows stay static, scroll vertically and return keyboard focus @T0", a
 	await expect(tab).toHaveCount(0);
 	await expect(page.locator("form.cursor-chat-composer [contenteditable=true]")).toBeFocused();
 });
+
+test("a later task completion leaves outside focus alone @T0", async ({ page }) => {
+	const fixture: { tasks: Task[] } = {
+		tasks: [{ id: "shell", kind: "shell", description: "Dev server", state: "running", stoppable: true }],
+	};
+	await openWorker(page, fixture);
+	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
+	const tab = page.getByRole("region", { name: "Background tasks" });
+	await tab.getByRole("button", { name: "Stop Dev server" }).focus();
+	await page.locator("body").click({ position: { x: 1, y: 1 } });
+	await expect(page.locator("body")).toBeFocused();
+	fixture.tasks = [];
+	// A normal poll observes independent completion; this is not a Stop request.
+	await expect(tab).toHaveCount(0, { timeout: 10_000 });
+	await expect(page.locator("body")).toBeFocused();
+});
