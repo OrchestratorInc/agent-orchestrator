@@ -142,6 +142,30 @@ describe("CloudProvider", () => {
 		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p"]);
 	});
 
+	it("reads the projects again when a polled session names one it hasn't read, once per project", async () => {
+		await mount();
+		const reads = () => fixtures.client.listProjects.mock.calls.length;
+		const before = reads();
+		// An agent started on another device: its session comes before its project.
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		fixtures.client.listProjects.mockImplementation(async (orgId: string, list: { standaloneAgents?: string } = {}) =>
+			list.standaloneAgents === "only" ? page([agent]) : page([project(`${orgId}-p`, orgId)]));
+		fixtures.client.listSessions.mockImplementation(async () => page([{ id: "s1", projectId: "a-agent" }]));
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 2);
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+
+		// Known now: the next poll reads no projects.
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 2);
+
+		// A project that never lists (a session shared from elsewhere) costs one read, not one per poll.
+		fixtures.client.listSessions.mockImplementation(async () => page([{ id: "s1", projectId: "a-agent" }, { id: "s2", projectId: "elsewhere" }]));
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 4);
+	});
+
 	it("comes back to ready when retried from an error, though it kept its organization", async () => {
 		await mount();
 		fixtures.client.getMe.mockImplementation(async () => { throw new Error("offline"); });

@@ -115,6 +115,11 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	// started after one answers for it, deletion included.
 	const upsertClock = useRef(0);
 	const upsertedProjects = useRef(new Map<string, { project: CloudProject; at: number }>());
+	// The projects as last set, for the session poll to spot one it hasn't read
+	// (an agent started on another device), and the ids it already re-read the
+	// projects for, so one that never lists (a shared session's) costs one read.
+	const projectsRef = useRef<CloudProject[] | null>(null);
+	const projectsReadFor = useRef(new Set<string>());
 
 	const client = useMemo(() => createCloudClient({
 		baseUrl: CLOUD_API_BASE_URL,
@@ -135,6 +140,8 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		generation.current++;
 		forgetCloudAccountCaches();
 		upsertedProjects.current.clear();
+		projectsRef.current = null;
+		projectsReadFor.current.clear();
 		setMe(null);
 		setOrg(null);
 		setProjects([]);
@@ -178,6 +185,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 				if (upsert.at > startedAt) next = upsertCloudProject(next, upsert.project);
 				else upsertedProjects.current.delete(id);
 			}
+			projectsRef.current = next;
 			setProjects(next);
 			setProjectsLoaded(true);
 			setProjectsError(null);
@@ -195,6 +203,17 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			const items = await collectPages((cursor) => client.listSessions(current.id, { cursor }), 5);
 			if (own !== generation.current) return;
 			setSessions(items);
+			// A session in a project the list doesn't hold (a standalone agent
+			// started elsewhere) reads as its project only once the projects are read.
+			const known = projectsRef.current;
+			if (known) {
+				const listed = new Set(known.map((project) => project.id));
+				const unread = items.map((item) => item.projectId).filter((id) => id && !listed.has(id) && !projectsReadFor.current.has(id));
+				if (unread.length > 0) {
+					unread.forEach((id) => projectsReadFor.current.add(id));
+					void refreshProjects();
+				}
+			}
 			setSessionsLoaded(true);
 			setSessionsError(null);
 			setError(null);
@@ -202,7 +221,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (own === generation.current) setSessionsError(cloudErrorMessage(cause));
 			fail(cause, own);
 		}
-	}, [client, fail]);
+	}, [client, fail, refreshProjects]);
 
 	const refreshConnections = useCallback(async () => {
 		const own = generation.current;
@@ -244,6 +263,8 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 				own = ++generation.current;
 				forgetCloudAccountCaches();
 				upsertedProjects.current.clear();
+				projectsRef.current = null;
+				projectsReadFor.current.clear();
 				setProjects([]);
 				setProjectsLoaded(false);
 				setSessions([]);
@@ -376,7 +397,11 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 
 	const upsertProject = useCallback((project: CloudProject) => {
 		upsertedProjects.current.set(project.id, { project, at: ++upsertClock.current });
-		setProjects((current) => upsertCloudProject(current, project));
+		setProjects((current) => {
+			const next = upsertCloudProject(current, project);
+			if (projectsRef.current) projectsRef.current = next;
+			return next;
+		});
 	}, []);
 
 	const value = useMemo<CloudState>(() => ({
