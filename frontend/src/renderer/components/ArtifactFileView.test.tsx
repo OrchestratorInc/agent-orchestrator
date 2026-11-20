@@ -115,8 +115,13 @@ describe("ArtifactFileView", () => {
 		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(contentUrl);
 		expect(cancel).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		if (tag === "video") {
+			// Videos play under the app's own controls.
+			expect(media).not.toHaveAttribute("controls");
+			expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+		}
+		if (tag === "audio") expect(media).toHaveAttribute("controls");
 		if (tag !== "img") {
-			expect(media).toHaveAttribute("controls");
 			expect(media).toHaveAttribute("preload", "metadata");
 			expect(media).not.toHaveAttribute("autoplay");
 		}

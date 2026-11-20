@@ -107,6 +107,7 @@ import {
 	Presentation as MynaPresentation,
 	QuestionCircle as MynaQuestionCircle,
 	Refresh as MynaRefresh,
+	Repeat as MynaRepeat,
 	Rows as MynaRows,
 	Save as MynaSave,
 	Search as MynaSearch,
@@ -118,6 +119,8 @@ import {
 	ShieldCheck as MynaShieldCheck,
 	ShieldX as MynaShieldX,
 	Shuffle as MynaShuffle,
+	SkipBack as MynaSkipBack,
+	SkipForward as MynaSkipForward,
 	Sparkles as MynaSparkles,
 	Spinner as MynaSpinner,
 	Square as MynaSquare,
@@ -134,6 +137,8 @@ import {
 	Upload as MynaUpload,
 	User as MynaUser,
 	Users as MynaUsers,
+	VolumeHigh as MynaVolumeHigh,
+	VolumeX as MynaVolumeX,
 	Building as MynaBuilding,
 	Mail as MynaMail,
 	SearchMinus as MynaSearchMinus,
@@ -446,6 +451,7 @@ export const QrCode = fromLucide(LucideQrCode, "qr-code");
 export const Quote = fromLucide(LucideQuote, "quote");
 export const RefreshCw = fromMyna(MynaRefresh, "refresh-cw");
 export const Regex = fromLucide(LucideRegex, "regex");
+export const Repeat = fromMyna(MynaRepeat, "repeat");
 export const RotateCcw = fromLucide(LucideRotateCcw, "rotate-ccw");
 export const RotateCw = fromLucide(LucideRotateCw, "rotate-cw");
 export const Route = fromLucide(LucideRoute, "route");
@@ -469,6 +475,8 @@ export const ShieldCheck = fromMyna(MynaShieldCheck, "shield-check");
 export const ShieldQuestion = fromLucide(LucideShieldQuestion, "shield-question");
 export const ShieldX = fromMyna(MynaShieldX, "shield-x");
 export const Shuffle = fromMyna(MynaShuffle, "shuffle");
+export const SkipBack = fromMyna(MynaSkipBack, "skip-back");
+export const SkipForward = fromMyna(MynaSkipForward, "skip-forward");
 export const SlidersHorizontal = fromLucide(LucideSlidersHorizontal, "sliders-horizontal");
 export const Smartphone = fromMyna(MynaMobile, "smartphone");
 export const Split = fromLucide(LucideSplit, "split");
@@ -489,6 +497,8 @@ export const Undo2 = fromLucide(LucideUndo2, "undo-2");
 export const User = fromMyna(MynaUser, "user");
 export const UserRound = fromMyna(MynaUser, "user-round");
 export const Users = fromMyna(MynaUsers, "users");
+export const Volume2 = fromMyna(MynaVolumeHigh, "volume-2");
+export const VolumeX = fromMyna(MynaVolumeX, "volume-x");
 export const Video = fromMyna(MynaVideo, "video");
 export const WandSparkles = fromMyna(MynaSparkles, "wand-sparkles");
 export const Workflow = fromLucide(LucideWorkflow, "workflow");

@@ -80,8 +80,11 @@ export function OptionMenuContent({
 	steady,
 	children,
 	onPointerDownOutside,
+	container,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+	/** Where the panel portals to; `document.body` by default. A fullscreen element hides everything outside itself. */
+	container?: HTMLElement | null;
 	/**
 	 * Keep the rows still while open. A menu that opens upward is pinned by its bottom
 	 * edge, so a row that disappears would pull every row above it down under the pointer.
@@ -91,7 +94,7 @@ export function OptionMenuContent({
 	const steadyRef = useSteadyHeight(steady);
 	const shield = useContext(ShieldOutsideClick);
 	return (
-		<DropdownMenuPrimitive.Portal>
+		<DropdownMenuPrimitive.Portal container={container}>
 			<DropdownMenuPrimitive.Content
 				ref={steadyRef}
 				onPointerDownOutside={(event) => {
