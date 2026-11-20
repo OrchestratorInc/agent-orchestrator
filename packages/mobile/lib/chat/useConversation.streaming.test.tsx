@@ -23,11 +23,12 @@ vi.mock("./conversationEvents", () => ({
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
 import { REFRESH_INTERVAL_MS, useMobileConversation, type MobileConversation } from "./useConversation";
 
-const cfg = { hostId: "a", host: "192.168.1.20" } as ServerConfig;
+const lan = { hostId: "a", host: "192.168.1.20" } as ServerConfig;
+const tailnet = { hostId: "a", host: "100.64.0.20" } as ServerConfig;
 let renderer: ReactTestRenderer | undefined;
 let conversation!: MobileConversation;
 const shown: string[] = [];
-function Harness({ id }: { id: string }) {
+function Harness({ id, cfg = lan }: { id: string; cfg?: ServerConfig }) {
 	conversation = useMobileConversation(cfg, "host.a", id);
 	const text = conversation.snapshot?.items.at(-1);
 	const latest = text && text.kind === "message" ? text.text : "";
@@ -98,6 +99,7 @@ it("shows a steady reply several times a second instead of waiting for it to sto
 	expect(during).toBeGreaterThanOrEqual(Math.floor(3_000 / REFRESH_INTERVAL_MS) - 1);
 	expect(during).toBeLessThanOrEqual(Math.ceil(3_000 / REFRESH_INTERVAL_MS) + 1);
 	expect(shown.length).toBeGreaterThanOrEqual(during);
+	expect(mostInFlight).toBe(1);
 });
 
 it("on a slow link runs one read at a time and shows every answer", async () => {
@@ -109,6 +111,30 @@ it("on a slow link runs one read at a time and shows every answer", async () => 
 	expect(mostInFlight).toBe(1);
 	// Nine seconds of 1.5 s reads: about six answers, each one put on screen.
 	expect(shown.length - before).toBeGreaterThanOrEqual(5);
+	expect(shown.at(-1)).toBe(`words ${reads}`);
+});
+
+// Switching away from a route that stopped answering leaves its read out until
+// it times out. The new route's changes must read without waiting for it.
+it("reads through the new connection while a read on the old one is still out", async () => {
+	answerAfter(30);
+	await act(async () => { renderer = create(<Harness id="switch" />); await vi.advanceTimersByTimeAsync(50); });
+	const answer = fixture.request.getMockImplementation()!;
+	fixture.request.mockImplementation((target: ServerConfig, ...rest: unknown[]) =>
+		target.host === lan.host ? new Promise(() => {}) : answer(target, ...rest));
+	const readsTo = (host: string) => fixture.request.mock.calls.filter(([target]) => (target as ServerConfig).host === host).length;
+
+	await stream(300);
+	const stuck = readsTo(lan.host);
+	expect(stuck).toBeGreaterThanOrEqual(2); // the opening read, then the one that never answers
+
+	await act(async () => { renderer!.update(<Harness id="switch" cfg={tailnet} />); await vi.advanceTimersByTimeAsync(50); });
+	const reconnected = readsTo(tailnet.host);
+	expect(reconnected).toBeGreaterThanOrEqual(1);
+
+	await stream(1_000);
+	expect(readsTo(tailnet.host)).toBeGreaterThan(reconnected + 1);
+	expect(readsTo(lan.host)).toBe(stuck);
 	expect(shown.at(-1)).toBe(`words ${reads}`);
 });
 
