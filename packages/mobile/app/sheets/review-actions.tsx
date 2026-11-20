@@ -19,6 +19,7 @@ import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { ReviewActionsSheet } from "../../lib/review-actions-sheet";
 import type { ReviewFeedbackItem, ReviewFeedbackSection, ReviewPolicyKey, ReviewPolicyRow } from "../../lib/review-actions-sheet.types";
 import { useReviewBackend, type ReviewSettings } from "../../lib/reviewBackend";
+import { reviewerEffortPick, reviewerModelPick, reviewerModelView, type ReviewerModelState } from "../../lib/reviewer-picker.types";
 import { reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
 import { pullRequestSummaryForURL } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
@@ -35,7 +36,7 @@ type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: str
 const POLICIES: readonly { key: ReviewPolicyKey; title: string; description: string; fallback: boolean }[] = [
 	{ key: "autoReviewEnabled", title: "Auto review", description: "When enabled, PRs will get auto-reviewed. When disabled, you can manually trigger the reviews.", fallback: false },
 	{ key: "autoInjectReview", title: "Automatically fix review comments", description: "Sends review comments to the worker.", fallback: true },
-	{ key: "autoInjectCI", title: "Automatically fix CI failures", description: "Sends CI failures to the worker for this session's PRs.", fallback: true },
+	{ key: "autoInjectCI", title: "Automatically fix CI failures", description: "Sends CI failures and merge conflicts to the worker for this session's PRs.", fallback: true },
 ];
 
 export default function ReviewActionsRoute() {
@@ -55,6 +56,7 @@ function ReviewActionsContent() {
 	const [agents, setAgents] = useState<ReviewSettings["reviewers"]>([]);
 	const [models, setModels] = useState<AgentModelCatalog>();
 	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
+	const [inheritedConfig, setInheritedConfig] = useState<ReviewSettings["inheritedConfig"]>({});
 	const [pr, setPR] = useState<SessionPRSummary>();
 	const [prMissing, setPRMissing] = useState(false);
 	const [reviews, setReviews] = useState<SessionReviews>();
@@ -78,6 +80,7 @@ function ReviewActionsContent() {
 			setReviewerOverride(settings.selectedReviewer);
 			setProjectDefaultReviewer(settings.defaultReviewer);
 			setReviewerConfig(settings.reviewerConfig);
+			setInheritedConfig(settings.inheritedConfig);
 			const matchedPR = pullRequestSummaryForURL(prs, prUrl);
 			setPR(matchedPR);
 			setPRMissing(!matchedPR);
@@ -107,6 +110,10 @@ function ReviewActionsContent() {
 	const availableReviewers = useMemo(() => agents
 		.filter((agent) => agent.selectable || agent.id === reviewerOverride)
 		.map((agent) => ({ id: agent.id, label: agent.label || agent.id })), [agents, reviewerOverride]);
+	// What the next review runs with: the session's own model and effort, else
+	// the project's for this reviewer, else the catalog's defaults.
+	const modelState: ReviewerModelState = { catalog: effectiveReviewer ? models : undefined, saved: reviewerConfig, inherited: inheritedConfig[effectiveReviewer] ?? {} };
+	const modelView = reviewerModelView(modelState);
 	const comments = useMemo(() => reviewComments(pr, false), [pr]);
 	const resolvedComments = useMemo(() => reviewComments(pr, true), [pr]);
 	const externalReviews = useMemo(() => (pr?.review.reviews ?? []).filter((item) => item.reviewerId !== pr?.author && ![...aoReviewIds].some((id) => item.reviewUrl?.includes(`pullrequestreview-${id}`))), [aoReviewIds, pr]);
@@ -156,8 +163,11 @@ function ReviewActionsContent() {
 	}
 
 	function chooseModel(value: string) {
-		const key = models?.selectionMode === "mode" ? "mode" : "model";
-		void confirmReviewerChange(reviewerOverride, { ...reviewerConfig, [key]: value });
+		void confirmReviewerChange(reviewerOverride, reviewerModelPick(modelState, value));
+	}
+
+	function chooseEffort(level: string) {
+		void confirmReviewerChange(reviewerOverride, reviewerEffortPick(modelState, level));
 	}
 
 	async function updatePolicy(key: ReviewPolicyKey, value: boolean) {
@@ -305,10 +315,10 @@ function ReviewActionsContent() {
 			selectedReviewer: reviewerOverride,
 			effectiveReviewer,
 			onSelectReviewer: chooseReviewer,
-			models: effectiveReviewer ? (models?.models ?? []).map((model) => ({ id: model.id, label: model.label || model.id })) : [],
-			modelTitle: models?.selectionMode === "mode" ? "Mode" : "Model",
-			selectedModel: (models?.selectionMode === "mode" ? reviewerConfig.mode : reviewerConfig.model) ?? "",
+			model: modelView.model,
 			onSelectModel: chooseModel,
+			effort: modelView.effort,
+			onSelectEffort: chooseEffort,
 			busy: Boolean(busy),
 			modelChoice: Boolean(backend?.reviewerModels),
 		} : undefined}

@@ -22,7 +22,7 @@ const defaultThemeCSS = `:root{color-scheme:dark;--background:oklch(0.210 0.002 
 // The inline frame grows to fit the page, so a scrollbar inside the reply would
 // read as a box within the thread; it stays hidden. Fullscreen shows it again
 // (render_bootstrap.js). The page's own CSS overrides all of this.
-const baseCSS = `html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}` +
+const baseCSS = `html{font:14px/1.5 var(--font-sans);color:var(--foreground);background:var(--background);-webkit-font-smoothing:antialiased}body{margin:0}pre,code,kbd,samp{font-family:var(--font-mono)}html{scrollbar-width:none}html::-webkit-scrollbar{display:none}` +
 	// Pages written for Codex's visualize skill use these token names; they map onto the AO theme.
 	// This rule follows #ao-theme, so each alias resolves to the live host theme.
 	`:root{--viz-series-1:var(--chart-1);--viz-series-2:var(--chart-2);--viz-series-3:var(--chart-3);--viz-series-4:var(--chart-4);--viz-series-5:var(--chart-5);--viz-series-6:var(--chart-6);--viz-text:var(--foreground);--viz-muted:var(--muted-foreground);--viz-bg:var(--background);--viz-panel:var(--card);--viz-border:var(--border);--viz-accent:var(--accent);--viz-accent-text:var(--accent-foreground);--viz-accent-bg:var(--muted);--viz-warning:var(--warning);--blue:var(--chart-1);--green:var(--success);--orange:var(--warning);--yellow:var(--chart-3);--purple:var(--chart-4);--red:var(--destructive)}`
@@ -31,20 +31,24 @@ var (
 	// A BOM, whitespace, and comments may precede the doctype. Anything inserted
 	// before the doctype would drop the page into quirks mode.
 	leadingDoctype = regexp.MustCompile(`(?is)^\x{FEFF}?(?:\s|<!--.*?-->)*<!doctype[^>]*>`)
-	pageViewport   = regexp.MustCompile(`(?i)<meta\s[^>]*name\s*=\s*["']?viewport`)
-	// Characters a file system refuses, and control characters.
-	unsafeFileNameChars = regexp.MustCompile(`[\\/:*?"<>|\p{Cc}]+`)
+	// A <meta> whose name attribute is exactly viewport, in any letter case.
+	pageViewport = regexp.MustCompile(`(?i)<meta\s(?:[^>]*?\s)?name\s*=\s*(?:"viewport"|'viewport'|viewport[\s/>])`)
 )
 
-// FileName is the file a saved render is written to: its title, without
-// characters a file system refuses, whitespace collapsed, capped at 120 runes.
-// A port of renderFileName in frontend/src/renderer/lib/render-frame.ts.
+// maxFileNameChars caps a saved render's file name, in runes, before ".html".
+const maxFileNameChars = 120
+
+// FileName is the file a saved render is written to: the words of its title,
+// split at whitespace, control characters, and characters a file system
+// refuses. renderFileName in frontend/src/renderer/lib/render-frame.ts names
+// it the same way, so U+FEFF, which JavaScript counts as whitespace, splits too.
 func FileName(title string) string {
-	// JS \s, which the renderer collapses, also matches U+FEFF.
-	isSpace := func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' }
-	name := strings.Join(strings.FieldsFunc(unsafeFileNameChars.ReplaceAllString(title, " "), isSpace), " ")
-	if runes := []rune(name); len(runes) > 120 {
-		name = strings.TrimSpace(string(runes[:120]))
+	words := strings.FieldsFunc(title, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r) || r == '\uFEFF' || strings.ContainsRune(`\/:*?"<>|`, r)
+	})
+	name := strings.Join(words, " ")
+	if runes := []rune(name); len(runes) > maxFileNameChars {
+		name = strings.TrimRight(string(runes[:maxFileNameChars]), " ")
 	}
 	if name == "" {
 		name = "Page"
@@ -94,10 +98,9 @@ func Document(stored []byte) []byte {
 // markup. Right after the doctype the HTML parser opens the implied <head> for
 // them; the page's own <html> start tag then only merges its attributes and its
 // <head> start tag is ignored, so the page's styles and scripts still come
-// after the bootstrap. This needs neither an HTML tokenizer (golang.org/x/net
-// is not a dependency) nor T3's backreference regex, which RE2 cannot express.
-// The viewport meta follows the script, outside the block Document removes, so
-// injecting twice yields the same document.
+// after the bootstrap, with no HTML tokenizer (golang.org/x/net is not a
+// dependency). The viewport meta follows the script, outside the block
+// Document removes, so injecting twice yields the same document.
 func inject(page string) string {
 	var b strings.Builder
 	b.WriteString(themeStyleOpen + defaultThemeCSS + `</style>`)

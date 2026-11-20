@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,6 +39,7 @@ import (
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -50,6 +52,10 @@ type fakeSessionService struct {
 	registerArtifactsErr  error
 	deleted               []domain.SessionID
 	deleteCleanup         []bool
+	keptSessions          map[domain.SessionID]domain.Session
+	keptSets              []sessionsvc.KeptArtifacts
+	keepingDeleted        []domain.SessionID
+	forgottenKept         []string
 	deleteErr             error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
@@ -66,6 +72,7 @@ type fakeSessionService struct {
 	sentDeliveryOptions        ports.MessageDeliveryOptions
 	delegationInput            sessionsvc.DelegateTaskInput
 	delegationErr              error
+	sendErr                    error
 	preparedProject            domain.ProjectID
 	canceledPreparation        string
 	cleanupProjects            []domain.ProjectID
@@ -499,14 +506,14 @@ func (f *fakeSessionService) Rename(_ context.Context, id domain.SessionID, disp
 func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
 	f.sent = message
 	f.sentAttachment = attachment
-	return nil
+	return f.sendErr
 }
 
 func (f *fakeSessionService) SendWithOptions(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
 	f.sent = message
 	f.sentAttachment = attachment
 	f.sentDeliveryOptions = options
-	return nil
+	return f.sendErr
 }
 
 func (f *fakeSessionService) DelegateTask(_ context.Context, in sessionsvc.DelegateTaskInput) (sessionsvc.DelegateTaskOutcome, error) {
@@ -1153,9 +1160,43 @@ func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 	}
 }
 
+// The Merged list on a phone pages archived workers by PR state. The filter
+// reaches the service, and the response echoes it with the match count so the
+// phone can tell this daemon from one that ignored the parameter.
+func TestSessionsAPI_ListFiltersByPRState(t *testing.T) {
+	svc := newFakeSessionService()
+	total := 7
+	svc.listPage = &sessionsvc.ListPage{Sessions: []domain.Session{svc.sessions["ao-1"]}, NextCursor: "more", Total: &total, Version: "9f3a"}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?active=false&kind=worker&prState=merged&limit=50", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if f := svc.lastListFilter; f.PRState != domain.PRStateMerged || f.Active == nil || *f.Active || f.Limit != 50 {
+		t.Fatalf("filter = %+v, want archived merged page of 50", f)
+	}
+	var page struct {
+		PRState    string `json:"prState"`
+		Total      *int   `json:"total"`
+		NextCursor string `json:"nextCursor"`
+		Version    string `json:"version"`
+	}
+	mustJSON(t, body, &page)
+	if page.PRState != "merged" || page.Total == nil || *page.Total != 7 || page.NextCursor != "more" || page.Version != "9f3a" {
+		t.Fatalf("page = %+v, want prState merged, total 7, cursor more, version 9f3a", page)
+	}
+
+	svc.listPage = nil
+	body, _, _ = doRequest(t, srv, "GET", "/api/v1/sessions", "")
+	if strings.Contains(string(body), "prState") || strings.Contains(string(body), "\"total\"") || strings.Contains(string(body), "\"version\"") {
+		t.Fatalf("unfiltered list carries PR-state fields: %s", body)
+	}
+}
+
 func TestSessionsAPI_ListRejectsBadPagingQuery(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
-	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc"} {
+	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc", "prState=shipped"} {
 		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?"+query, "")
 		if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_QUERY") {
 			t.Fatalf("GET sessions?%s = %d %s, want 400 INVALID_QUERY", query, status, body)
@@ -1837,13 +1878,14 @@ func TestSessionsAPI_SpawnRejectsOversizedBody(t *testing.T) {
 	srv := newSessionTestServer(t, svc)
 
 	// A body past the ~135 MiB maxSpawnBodyBytes cap is rejected while decoding
-	// (MaxBytesReader), before the attachment size caps and without materializing
+	// (MaxBytesReader), without materializing
 	// the whole body. The oversized bytes live in an *attachment* payload (not the
 	// prompt, which has its own much smaller PROMPT_TOO_LONG cap), so this pins the
 	// body cap specifically: MaxBytesReader makes the read/decode fail with
-	// INVALID_JSON. If that line were removed the body would decode fully and be
-	// rejected later with an attachment-specific code (ATTACHMENT_TOO_LARGE),
-	// failing this test. 150 MiB of base64 comfortably exceeds the ~135 MiB cap.
+	// INVALID_JSON. If that line were removed the body would decode fully (inline
+	// data has no decoded cap of its own; large files go through
+	// /api/v1/attachment-uploads), failing this test. 150 MiB of base64
+	// comfortably exceeds the ~135 MiB cap.
 	oversized := `{"projectId":"ao","attachments":[{"mimeType":"image/png","data":"` +
 		strings.Repeat("A", 150<<20) + `"}]}`
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", oversized)
@@ -4959,12 +5001,6 @@ func TestSessionsAPI_DelegateTaskRejectsInvalidAttachments(t *testing.T) {
 			body: `{"projectId":"ao","brief":"Fix it","attachments":[{"mimeType":"image/svg+xml","data":"PHN2Zy8+"}]}`,
 			code: "UNSUPPORTED_ATTACHMENT_TYPE",
 		},
-		{
-			name: "too large",
-			body: `{"projectId":"ao","brief":"Fix it","attachments":[{"mimeType":"image/png","data":"` +
-				base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", (50<<20)+1))) + `"}]}`,
-			code: "ATTACHMENT_TOO_LARGE",
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4992,6 +5028,16 @@ func TestSessionsAPI_DelegateTaskRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_SendDuringAHandoffIsARetryableConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrControllerHandoff)
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"hi"}`)
+	if status != http.StatusConflict || !strings.Contains(string(body), "CHAT_INTERFACE_TRANSITION") {
+		t.Fatalf("send = %d %s, want 409 CHAT_INTERFACE_TRANSITION", status, body)
+	}
+}
+
 func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
@@ -5013,6 +5059,15 @@ func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	if svc.sentDeliveryOptions.AuthoredByUser {
 		t.Fatal("ordinary automation send was marked user-authored")
 	}
+}
+
+func TestSessionsAPI_SendToAChatOpenElsewhereIsAConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrChatOpenElsewhere)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Do the next step","senderSessionId":"ao-orchestrator"}`)
+	assertErrorCode(t, body, status, http.StatusConflict, "CHAT_OPEN_ELSEWHERE")
 }
 
 func TestSessionsAPI_SendCarriesUserAuthorshipSeparatelyFromDelivery(t *testing.T) {
