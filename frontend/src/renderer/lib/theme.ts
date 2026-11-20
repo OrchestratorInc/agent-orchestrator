@@ -67,6 +67,20 @@ export function isDocumentThemeStyle(style: ThemeStyle): boolean {
 }
 
 let previewing = false;
+const previewEndListeners = new Set<() => void>();
+
+/** True while the theme menu shows a preview (`previewDocumentThemeStyle`). */
+export function isThemeStylePreviewActive(): boolean {
+	return previewing;
+}
+
+/** Calls `listener` once, when the active preview ends and the saved theme is back. */
+export function onThemeStylePreviewEnd(listener: () => void): () => void {
+	previewEndListeners.add(listener);
+	return () => {
+		previewEndListeners.delete(listener);
+	};
+}
 
 /**
  * Show `style` while the user browses the theme menu; `null` ends the preview
@@ -87,6 +101,9 @@ export function previewDocumentThemeStyle(style: ThemeStyle | null, saved: Theme
 	if (!previewing) return;
 	previewing = false;
 	applyDocumentThemeStyle(saved);
+	const listeners = [...previewEndListeners];
+	previewEndListeners.clear();
+	for (const listener of listeners) listener();
 	requestAnimationFrame(() =>
 		requestAnimationFrame(() => {
 			if (!previewing) delete root.dataset.themeTransition;

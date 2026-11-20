@@ -20,6 +20,7 @@ import { Trans, useTranslation } from "react-i18next";
 import type { MessageKey } from "../../i18n";
 import { useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import {
+	type AgentReadiness,
 	agentReadinessQueryKey,
 	cacheAgentReadiness,
 	ensureAgentReadiness,
@@ -40,7 +41,23 @@ import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
 import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
-import { useOnboardingStep } from "../../lib/onboarding-telemetry";
+import { noteSignInSource } from "../../lib/cloud-telemetry";
+import type { OnboardingStep } from "../../lib/onboarding-steps";
+import {
+	beginOnboardingRun,
+	completeOnboardingRun,
+	ensureOnboardingStepViewed,
+	finishOnboardingAction,
+	onboardingActionAttempt,
+	onboardingActionPending,
+	reportOnboardingBack,
+	reportOnboardingStep,
+	skipOnboardingStep,
+	startOnboardingAction,
+	supersedeOnboardingRun,
+	useOnboardingStep,
+} from "../../lib/onboarding-telemetry";
+import type { OnboardingMissing, OnboardingRunKind } from "../../lib/onboarding-telemetry-schema";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
 import { useShell } from "../../lib/shell-context";
 import { cn } from "../../lib/utils";
@@ -78,8 +95,12 @@ const LEGACY_STEPS: Record<string, Step> = {
 	start: "tools",
 	project: "tools",
 };
+/** Each page's step in the onboarding funnel (onboarding-steps.ts). */
+const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools" };
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
+/** Longest the Tools page's view waits for its checks before reporting what it knows. */
+const TOOLS_VIEW_WAIT_MS = 3_000;
 // Always listed so a machine with no agents still has something to install.
 const SUGGESTED_AGENTS = ["claude-code", "codex"];
 // Where to get the GitHub CLI when it can't be installed from here.
@@ -172,6 +193,8 @@ export function FirstRunOnboarding() {
 	useEffect(() => {
 		if (status !== "pending" || !ready || open) return;
 		if (projectCount > 0 || migrationOffer.data?.show) {
+			// A run left open on an earlier launch ends here, for the person.
+			supersedeOnboardingRun();
 			markSeen();
 			return;
 		}
@@ -183,6 +206,8 @@ export function FirstRunOnboarding() {
 	const replayRequest = useUiStore((state) => state.onboardingReplayRequest);
 	const handledReplay = useRef(replayRequest);
 	const replaySimulated = useRef(false);
+	// A replay is its own run in the funnel (run_kind: replay).
+	const runKind = useRef<OnboardingRunKind>("first_run");
 	// Drop what was read before, so every check is asked again under the new answers.
 	const resetToolChecks = () => {
 		for (const queryKey of [systemRequirementsQueryKey, agentReadinessQueryKey, githubAuthRequirementQueryOptions.queryKey]) {
@@ -192,6 +217,7 @@ export function FirstRunOnboarding() {
 	useEffect(() => {
 		if (replayRequest === handledReplay.current) return;
 		handledReplay.current = replayRequest;
+		runKind.current = "replay";
 		storeStep(null);
 		// A replay walks the flow as a new machine (dev builds only), so the
 		// Tools page shows its installs instead of being skipped on a machine
@@ -208,7 +234,9 @@ export function FirstRunOnboarding() {
 	if (!open) return null;
 	return (
 		<OnboardingFlow
+			runKind={runKind.current}
 			onFinish={({ tour = true } = {}) => {
+				completeOnboardingRun(tour ? "finished" : "skipped_setup");
 				setOpen(false);
 				markSeen();
 				if (replaySimulated.current) {
@@ -219,7 +247,8 @@ export function FirstRunOnboarding() {
 				// The tour starts on Home, where projects are added, once it's
 				// showing (not on whatever page was behind the onboarding). A
 				// skipped setup has no harness to show it with, so it goes without.
-				if (tour) void navigate({ to: "/" }).then(startGuidedTour);
+				const replay = runKind.current === "replay";
+				if (tour) void navigate({ to: "/" }).then(() => startGuidedTour({ replay }));
 			}}
 		/>
 	);
@@ -230,7 +259,7 @@ export function FirstRunOnboarding() {
 const PRESS_CLASS =
 	"[&_button:active]:!scale-100 [&_button:active]:!translate-y-0 [&_button:not(:disabled):active]:brightness-[0.85]";
 
-function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean }) => void }) {
+function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onFinish: (options?: { tour?: boolean }) => void }) {
 	const { t } = useTranslation();
 	// Settings open over the app (a harness's installers, from Your tools).
 	const settingsAside = useUiStore((state) => state.settingsModal?.scope === "global");
@@ -240,6 +269,9 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 		setStepState(next);
 	};
 	const index = STEPS.indexOf(step);
+	// Started, or resumed on a later launch, before any page reports its view.
+	const openedOn = useRef(step);
+	useLayoutEffect(() => beginOnboardingRun(runKind, FUNNEL_STEP[openedOn.current]), [runKind]);
 	const reduceMotion = useReducedMotion();
 	const harnessLogin = useOnboardingLogin();
 	// The window's width, for the copy column / stage split (stage from 900px).
@@ -269,9 +301,20 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 		: candidate === "tools" ? ghReady && agentReady
 		: false;
 	// Past the last page with something to do, setup is over: the app takes
-	// over with the guided tour.
-	const goNext = () => {
-		const next = STEPS.slice(index + 1).find((candidate) => !skips(candidate));
+	// over with the guided tour. `skipped`: the person moved on without doing
+	// the page (Sign in's "do it later").
+	const goNext = ({ skipped = false }: { skipped?: boolean } = {}) => {
+		// Tools reports its view once its checks answer; leaving sooner still reads viewed, then completed.
+		if (step === "tools") ensureOnboardingStepViewed("tools", toolsViewed());
+		if (skipped) skipOnboardingStep(FUNNEL_STEP[step], "user");
+		else reportOnboardingStep(FUNNEL_STEP[step], "completed", pageCompletion());
+		const passed: Step[] = [];
+		const next = STEPS.slice(index + 1).find((candidate) => {
+			if (!skips(candidate)) return true;
+			passed.push(candidate);
+			return false;
+		});
+		for (const candidate of passed) skipOnboardingStep(FUNNEL_STEP[candidate], "already_done");
 		if (next) setStep(next);
 		else onFinish();
 	};
@@ -279,12 +322,50 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 		for (let i = index - 1; i >= 0; i--) {
 			const previous = STEPS[i]!;
 			if (i === 0 || !skips(previous)) {
+				reportOnboardingBack(FUNNEL_STEP[step], FUNNEL_STEP[previous]);
 				setStep(previous);
 				return;
 			}
 		}
 	};
-	useOnboardingStep("welcome", step === "welcome");
+	// Pages report their view here and their completion from goNext, never on
+	// leaving, since Back leaves a page without finishing it.
+	// Unknown (not sent) until the check answers, rather than a false 0.
+	// A harness still being checked doesn't count as not ready (as in useAgentInventoryTelemetry).
+	const readinessSettled = agentReadiness.data?.agents.every((agent) => agent.installation.freshness !== "checking" && agent.authentication.freshness !== "checking");
+	const readyAgentCount = readinessSettled ? agentReadiness.data?.agents.filter((agent) => agent.effectiveReadiness === "ready").length : undefined;
+	const ghInstalled = toolsGate.requirements.find((requirement) => requirement.id === "gh")?.satisfied;
+	const toolsMissing = (): string | undefined => {
+		const agents = agentReadiness.data?.agents;
+		const missing: OnboardingMissing[] = [];
+		if (ghInstalled === false) missing.push("gh");
+		if (ghInstalled === true && ghAuth.data?.satisfied === false) missing.push("gh_auth");
+		if (agents && !agents.some((agent) => agent.installation.state === "installed")) missing.push("agent");
+		else if (agents && !agentReady) missing.push("agent_auth");
+		return missing.join(",") || undefined;
+	};
+	useOnboardingStep("welcome", step === "welcome", { autoComplete: false });
+	useOnboardingStep("sign_in", step === "signin", { autoComplete: false });
+	const toolsViewed = () => ({ missing: toolsMissing(), agents_ready: readyAgentCount });
+	// Tools' view carries what it found missing, so it waits for the checks
+	// behind that (a resumed run can open straight onto it), or TOOLS_VIEW_WAIT_MS.
+	const toolsChecksAnswered = !toolsGate.checking && !ghAuth.isPending && readinessSettled === true;
+	const [toolsWaitOver, setToolsWaitOver] = useState(false);
+	useEffect(() => {
+		if (step !== "tools" || toolsWaitOver) return;
+		const timer = window.setTimeout(() => setToolsWaitOver(true), TOOLS_VIEW_WAIT_MS);
+		return () => window.clearTimeout(timer);
+	}, [step, toolsWaitOver]);
+	useOnboardingStep("tools", step === "tools", {
+		autoComplete: false,
+		viewReady: toolsChecksAnswered || toolsWaitOver,
+		viewed: step === "tools" ? toolsViewed() : undefined,
+	});
+	// A browser sign-in started on the Sign in page can come back after the
+	// person moved on; it still ends that attempt.
+	useEffect(() => {
+		if (cloud.status === "authenticated") finishOnboardingAction("cloud_sign_in", "succeeded");
+	}, [cloud.status]);
 	// The welcome story plays on its own and loops; each loop replays the chat.
 	const [point, setPoint] = useState(0);
 	const [cycle, setCycle] = useState(0);
@@ -315,6 +396,12 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 	}, [sorting, sortKey]);
 	const sortBeat = !sorting ? SORT_ORDER.length : sort.key === sortKey ? sort.beat : 0;
 	const githubShown = sorting;
+	// What the funnel records about a page as it's finished.
+	function pageCompletion(): Record<string, unknown> {
+		if (step === "welcome") return { story_points_seen: cycle > 0 ? ORCH_POINTS.length : point + 1, story_completed: cycle > 0 };
+		if (step === "tools") return { agents_ready: readyAgentCount, gh_ready: ghReady };
+		return {};
+	}
 	const toolAgents = useToolAgents();
 	const scene = (
 		<OnboardingScene
@@ -363,9 +450,18 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 							exit={{ opacity: 0, transition: { duration: 0 } }}
 							transition={FADE}
 						>
-							{step === "welcome" ? <WelcomeStep point={point} onNext={goNext} /> : null}
-							{step === "signin" ? <SignInStep onNext={goNext} /> : null}
-							{step === "tools" ? <ToolsStep onNext={goNext} onSkip={() => onFinish({ tour: false })} login={harnessLogin} /> : null}
+							{step === "welcome" ? <WelcomeStep point={point} onNext={() => goNext()} /> : null}
+							{step === "signin" ? <SignInStep onNext={() => goNext()} onSkip={() => goNext({ skipped: true })} /> : null}
+							{step === "tools" ? (
+								<ToolsStep
+									onNext={() => goNext()}
+									onSkip={() => {
+										skipOnboardingStep("tools", "user");
+										onFinish({ tour: false });
+									}}
+									login={harnessLogin}
+								/>
+							) : null}
 						</motion.div>
 					</AnimatePresence>
 				</div>
@@ -787,7 +883,7 @@ const SIGN_IN_PERKS: Array<{ icon: AppIcon; title: MessageKey; detail: MessageKe
 	{ icon: Cloud, title: "firstRun.signInPerkCloud", detail: "firstRun.signInPerkCloudDetail", pro: true },
 ];
 
-function SignInStep({ onNext }: { onNext: () => void }) {
+function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
 	const { t } = useTranslation();
 	const cloud = useCloudSession();
 	const localAuth = useCloudLocalAuth();
@@ -798,6 +894,9 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 	const accountName = account ? (account.user.displayName?.trim() || account.user.email) : "";
 	const browserWaiting = waiting && !localAuth.available;
 	const signIn = () => {
+		// cloud_signed_in reads where the sign-in started (source: onboarding).
+		noteSignInSource("onboarding");
+		startOnboardingAction("cloud_sign_in", { step: "sign_in" });
 		if (localAuth.available) {
 			openLocalSignIn();
 			return;
@@ -805,7 +904,10 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 		// The hosted sign-in page opens in the browser; the session arrives
 		// through cloud:sessionChanged and flips this page to the account row.
 		setWaiting(true);
-		cloud.signIn();
+		// As cloud.signIn, but the browser failing to open ends the attempt.
+		void aoBridge.cloud.signIn().catch(() => {
+			finishOnboardingAction("cloud_sign_in", "failed", { reason: "start_failed" });
+		});
 	};
 	return (
 		<StepSplit
@@ -873,7 +975,11 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 										<button
 											type="button"
 											className="!h-auto !rounded-sm !px-0 !text-sm text-foreground underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground"
-											onClick={onNext}
+											onClick={() => {
+												// Moving on while the browser still has the sign-in page.
+												finishOnboardingAction("cloud_sign_in", "cancelled");
+												onSkip();
+											}}
 										/>
 									),
 								}}
@@ -992,12 +1098,20 @@ function ToolsStep({ onNext, onSkip, login }: {
 	const signIn = async (agentId: string) => {
 		setAuthError(null);
 		const plan = authPlans.data?.find((candidate) => candidate.agentId === agentId);
+		startOnboardingAction("agent_sign_in", { target: agentId, step: "tools" });
 		if (plan?.launchMode === "documentation" && plan.documentationUrl) {
+			// Signs in outside AO: its guide opens, and the attempt ends here.
+			finishOnboardingAction("agent_sign_in", "handed_off", { target: agentId, reason: "documentation" });
 			await aoBridge.app.openExternal(plan.documentationUrl);
 			return;
 		}
 		// The daemon allows one login at a time: a previous one must close first.
-		if (workflow && !(await closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed")))) return;
+		if (workflow && !(await closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed")))) {
+			finishOnboardingAction("agent_sign_in", "failed", { target: agentId, reason: "cleanup_failed" });
+			return;
+		}
+		// Another harness's login was open; it ends here unless it already signed in.
+		if (workflow && workflow.agentId !== agentId) settleSignIn(workflow.agentId, "cancelled");
 		try {
 			const result = await startAuth.mutateAsync(agentId);
 			setWorkflow({
@@ -1010,9 +1124,31 @@ function ToolsStep({ onNext, onSkip, login }: {
 				startedAt: Date.now(),
 			});
 		} catch (error) {
+			finishOnboardingAction("agent_sign_in", "failed", { target: agentId, reason: "start_failed" });
 			setAuthError(error instanceof Error ? error.message : String(error));
 		}
 	};
+	// Once a verify has settled, a sign-in still pending ends as signed in or not.
+	// `attempt`: the one the verify was started for, so a newer one is left alone.
+	const settleSignIn = (agentId: string, notReady: "cancelled" | "failed", attempt?: number) => {
+		if (!onboardingActionPending("agent_sign_in", agentId)) return;
+		const ready = queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey)?.agents
+			.some((agent) => agent.id === agentId && agent.effectiveReadiness === "ready");
+		if (ready) finishOnboardingAction("agent_sign_in", "succeeded", { target: agentId, attempt });
+		else finishOnboardingAction("agent_sign_in", notReady, { target: agentId, attempt, reason: notReady === "failed" ? "not_signed_in" : undefined });
+	};
+	// A harness that turns ready ends its sign-in, wherever the login finished.
+	const readyIds = [...agents, ...more].filter((row) => row.state === "ready").map((row) => row.agent.id).join(",");
+	useEffect(() => {
+		for (const agentId of readyIds.split(",")) if (agentId) finishOnboardingAction("agent_sign_in", "succeeded", { target: agentId });
+	}, [readyIds]);
+	const loginPhase = workflow?.phase;
+	const loginAgent = workflow?.agentId;
+	useEffect(() => {
+		if (!loginAgent) return;
+		if (loginPhase === "timed_out") finishOnboardingAction("agent_sign_in", "timed_out", { target: loginAgent });
+		if (loginPhase === "cleanup_failed") finishOnboardingAction("agent_sign_in", "failed", { target: loginAgent, reason: "cleanup_failed" });
+	}, [loginPhase, loginAgent]);
 
 	// Close the terminal first, then verify that harness afresh, so the row
 	// settles as soon as Close returns instead of on the next 5 s check.
@@ -1021,7 +1157,12 @@ function ToolsStep({ onNext, onSkip, login }: {
 			void refresh();
 			return;
 		}
-		if (await closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed"))) await verify([workflow.agentId]);
+		const attempt = onboardingActionAttempt("agent_sign_in", workflow.agentId);
+		if (await closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed"))) {
+			await verify([workflow.agentId]);
+			// Closed by the person before the harness was signed in.
+			if (attempt !== undefined) settleSignIn(workflow.agentId, "cancelled", attempt);
+		}
 	};
 	useLoginLifetime(workflow, setWorkflow, { timedOut: t("settings.harness.authTimedOut"), failed: t("settings.harness.authFailed") }, (agentId) => void verify([agentId]));
 
@@ -1181,7 +1322,11 @@ function ToolsStep({ onNext, onSkip, login }: {
 						onClose={() => void closeLogin()}
 						onRetry={() => void signIn(workflow.agentId)}
 						onTerminalState={(state) => {
-							if (state === "exited" || state === "error") void verify([workflow.agentId]);
+							if (state === "exited" || state === "error") {
+								const agentId = workflow.agentId;
+								const attempt = onboardingActionAttempt("agent_sign_in", agentId);
+								void verify([agentId]).then(() => { if (attempt !== undefined) settleSignIn(agentId, "failed", attempt); });
+							}
 						}}
 					/>
 				</div>

@@ -493,7 +493,7 @@ function FileChip({ path, line, end }: { path: string; line?: number; end?: numb
 			accessibilityRole={files ? "button" : undefined}
 			accessibilityLabel={`Open ${path}`}
 			disabled={!files}
-			onPress={() => { haptics.tap(); files?.openFile(path); }}
+			onPress={() => { haptics.tap(); files?.openFile(path, undefined, line); }}
 			style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
 		>
 			<Feather name="file-text" size={12} color={t.textTertiary} />
