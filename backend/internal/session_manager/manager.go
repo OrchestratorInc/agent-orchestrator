@@ -510,6 +510,9 @@ type Manager struct {
 	// killTeardown bounds Kill's detached teardown. Zero means
 	// killTeardownBudget; tests shrink it to prove what survives its expiry.
 	killTeardown time.Duration
+	// killResumeWait bounds Kill's wait for an in-flight resume. Zero means
+	// killResumeWaitBudget; tests shrink it to prove Kill still gives up.
+	killResumeWait time.Duration
 	// openTranscriptFile is os.Open in production. The narrow seam lets tests
 	// deterministically prove that a post-stop transcript read failure falls
 	// back without advertising the provider path.
@@ -3086,7 +3089,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		return KillResult{}, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
 	}
 
-	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
+	if err := m.beginKillOperation(ctx, id); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrOperationInProgress
 		}
