@@ -832,6 +832,9 @@ func TestPersistentACPReconnectAcknowledgesAlreadyCommittedPrompt(t *testing.T) 
 
 type fakeAgent struct {
 	conn *acpsdk.AgentSideConnection
+	// wire is the agent's end of the connection, for a frame the SDK will not
+	// send, such as a notification whose method has no "_" prefix.
+	wire io.Writer
 
 	mu                sync.Mutex
 	initParams        acpsdk.InitializeRequest
@@ -4849,6 +4852,7 @@ func fakeSpawn(agent *fakeAgent) spawnFunc {
 		clientToAgentR, clientToAgentW := io.Pipe()
 		agentToClientR, agentToClientW := io.Pipe()
 		agent.conn = acpsdk.NewAgentSideConnection(agent, agentToClientW, clientToAgentR)
+		agent.wire = agentToClientW
 		var once sync.Once
 		return &process{
 			stdin: clientToAgentW, stdout: agentToClientR,

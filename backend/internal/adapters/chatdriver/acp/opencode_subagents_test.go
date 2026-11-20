@@ -1,0 +1,304 @@
+package acp
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"testing"
+	"time"
+
+	acpsdk "github.com/coder/acp-go-sdk"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// startOpenCode opens a conversation for harness on a fake agent, inside "turn-1".
+func startOpenCode(t *testing.T, harness domain.AgentHarness) (*fakeAgent, *conversation) {
+	t.Helper()
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      harness,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	_ = nextEvent(t, opened.Events())
+	conv := opened.(*conversation)
+	setActiveTurn(conv, "turn-1")
+	return agent, conv
+}
+
+func setActiveTurn(conv *conversation, turn string) {
+	conv.mu.Lock()
+	conv.activeTurn = turn
+	conv.mu.Unlock()
+}
+
+func sendUpdate(t *testing.T, agent *fakeAgent, conv *conversation, update acpsdk.SessionUpdate) {
+	t.Helper()
+	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+		SessionId: acpsdk.SessionId(conv.ProviderConversationID()), Update: update,
+	}); err != nil {
+		t.Fatalf("session update: %v", err)
+	}
+}
+
+// sendChild writes one opencode/session/child_update as OpenCode 2 does: a plain
+// notification, whose method the SDK's extension helper would refuse.
+func sendChild(t *testing.T, agent *fakeAgent, conv *conversation, child string, payload map[string]any) {
+	t.Helper()
+	payload["rootSessionId"] = conv.ProviderConversationID()
+	payload["childSessionId"] = child
+	payload["parentSessionId"] = conv.ProviderConversationID()
+	payload["depth"] = 1
+	payload["title"] = "Find tests"
+	frame, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": openCodeChildUpdateMethod, "params": payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.wire.Write(append(frame, '\n')); err != nil {
+		t.Fatalf("child update: %v", err)
+	}
+}
+
+func childToolCall(id, title string, status acpsdk.ToolCallStatus) map[string]any {
+	return map[string]any{
+		"sessionUpdate": "tool_call", "toolCallId": id, "title": title, "kind": "read", "status": status,
+		"rawInput": map[string]any{"path": "go.mod"},
+	}
+}
+
+// nextActivity is the next activity event, past any controller or usage event.
+func nextActivity(t *testing.T, conv *conversation) ports.ChatEvent {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-conv.Events():
+			switch event.Kind {
+			case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventActivityText:
+				return event
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for an activity event")
+			return ports.ChatEvent{}
+		}
+	}
+}
+
+func detailOf(t *testing.T, event ports.ChatEvent) map[string]any {
+	t.Helper()
+	detail := map[string]any{}
+	if len(event.Detail) > 0 {
+		if err := json.Unmarshal(event.Detail, &detail); err != nil {
+			t.Fatalf("detail of %#v: %v", event, err)
+		}
+	}
+	return detail
+}
+
+// launchSubagent sends OpenCode 2's subagent call up to the point where it runs,
+// and returns the launch's running event.
+func launchSubagent(t *testing.T, agent *fakeAgent, conv *conversation, id string) ports.ChatEvent {
+	t.Helper()
+	sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+		SessionUpdate: "tool_call", ToolCallId: acpsdk.ToolCallId(id), Title: "subagent",
+		Kind: acpsdk.ToolKindThink, Status: acpsdk.ToolCallStatusPending, RawInput: map[string]any{},
+	}})
+	_ = nextActivity(t, conv)
+	running := acpsdk.ToolCallStatusInProgress
+	sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+		SessionUpdate: "tool_call_update", ToolCallId: acpsdk.ToolCallId(id), Status: &running,
+		RawInput: map[string]any{"agent": "explore", "description": "Find tests", "prompt": "Find the Go tests"},
+	}})
+	return nextActivity(t, conv)
+}
+
+// completeLaunch answers the subagent call the way OpenCode 2 does: at once,
+// naming the child it queued.
+func completeLaunch(t *testing.T, agent *fakeAgent, conv *conversation, id, child string) ports.ChatEvent {
+	t.Helper()
+	done := acpsdk.ToolCallStatusCompleted
+	sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+		SessionUpdate: "tool_call_update", ToolCallId: acpsdk.ToolCallId(id), Status: &done,
+		Content:   []acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock("The subagent is working in the background"))},
+		RawOutput: map[string]any{"metadata": map[string]any{"sessionID": child, "status": "running"}},
+	}})
+	return nextActivity(t, conv)
+}
+
+func TestOpenCodeV2SubagentFilesChildWorkUnderItsLaunch(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+	agent.mu.Lock()
+	asked := agent.initParams.ClientCapabilities.Meta[openCodeChildUpdatesCapability]
+	agent.mu.Unlock()
+	if asked != true {
+		t.Fatalf("initialize did not ask OpenCode 2 for child session updates: %#v", agent.initParams.ClientCapabilities.Meta)
+	}
+
+	running := launchSubagent(t, agent, conv, "call_launch")
+	if detail := detailOf(t, running); detail["providerToolName"] != openCodeSubagentTool ||
+		detail["background"] != true || detail["subagentType"] != "explore" {
+		t.Fatalf("launch detail = %#v", detail)
+	}
+
+	// The child starts before the launch names it, so its work has to wait.
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": "created"})
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update",
+		"update": childToolCall("ses_child:call_read", "Find tests: read", "pending")})
+
+	launched := completeLaunch(t, agent, conv, "call_launch", "ses_child")
+	if launched.Kind != ports.ChatEventActivityCompleted || launched.ProviderItemID != "call_launch" {
+		t.Fatalf("event after the launch completed = %#v, want the launch itself first", launched)
+	}
+	step := nextActivity(t, conv)
+	if step.Kind != ports.ChatEventActivityStarted || step.ProviderItemID != "ses_child:call_read" ||
+		step.ProviderTurnID != "turn-1" || step.Summary != "read" {
+		t.Fatalf("child step = %#v", step)
+	}
+	if detail := detailOf(t, step); detail["parentProviderItemId"] != "call_launch" {
+		t.Fatalf("child step detail = %#v", detail)
+	}
+
+	// The parent's turn ends; the child keeps working and its steps still join it.
+	setActiveTurn(conv, "")
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update", "update": map[string]any{
+		"sessionUpdate": "agent_message_chunk", "messageId": "msg_1",
+		"content": map[string]any{"type": "text", "text": "Found 3 tests."},
+	}})
+	said := nextActivity(t, conv)
+	if detail := detailOf(t, said); said.Kind != ports.ChatEventActivityStarted || said.ProviderTurnID != "turn-1" ||
+		said.ActivityKind != domain.ActivityKindMCPTool || detail["nestedAgent"] != true ||
+		detail["parentProviderItemId"] != "call_launch" || detail["providerToolName"] != nil {
+		t.Fatalf("child message = %#v, detail %#v", said, detail)
+	}
+	if text := nextActivity(t, conv); text.Kind != ports.ChatEventActivityText || text.Delta != "Found 3 tests." {
+		t.Fatalf("child message text = %#v", text)
+	}
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update", "update": map[string]any{
+		"sessionUpdate": "tool_call_update", "toolCallId": "ses_child:call_read", "status": "completed",
+	}})
+	if read := nextActivity(t, conv); read.Kind != ports.ChatEventActivityCompleted ||
+		read.ProviderTurnID != "turn-1" || detailOf(t, read)["parentProviderItemId"] != "call_launch" {
+		t.Fatalf("child step completion = %#v", read)
+	}
+
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": "completed"})
+	if finished := nextActivity(t, conv); finished.Kind != ports.ChatEventActivityCompleted ||
+		finished.ProviderItemID != said.ProviderItemID || finished.Text != "Found 3 tests." {
+		t.Fatalf("child message completion = %#v", finished)
+	}
+	handback := nextActivity(t, conv)
+	detail := detailOf(t, handback)
+	input, _ := detail["input"].(map[string]any)
+	if handback.Kind != ports.ChatEventActivityCompleted || handback.ActivityStatus != domain.ActivityStatusCompleted ||
+		handback.ProviderTurnID != "turn-1" || detail["providerToolName"] != subagentHandbackTool ||
+		detail["parentProviderItemId"] != "call_launch" || input["message"] != "Found 3 tests." {
+		t.Fatalf("hand-back = %#v, detail %#v", handback, detail)
+	}
+}
+
+func TestOpenCodeV2SubagentReportsHowTheChildEnded(t *testing.T) {
+	for _, tc := range []struct {
+		status  string
+		error   map[string]any
+		want    domain.ActivityStatus
+		message string
+	}{
+		{status: "failed", error: map[string]any{"type": "provider", "message": "rate limited"},
+			want: domain.ActivityStatusFailed, message: "rate limited"},
+		{status: "interrupted", want: domain.ActivityStatusCancelled},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+			_ = launchSubagent(t, agent, conv, "call_launch")
+			_ = completeLaunch(t, agent, conv, "call_launch", "ses_child")
+			ended := map[string]any{"type": "status", "status": tc.status}
+			if tc.error != nil {
+				ended["error"] = tc.error
+			}
+			sendChild(t, agent, conv, "ses_child", ended)
+			handback := nextActivity(t, conv)
+			detail := detailOf(t, handback)
+			input, _ := detail["input"].(map[string]any)
+			if handback.ActivityStatus != tc.want || detail["providerToolName"] != subagentHandbackTool ||
+				detail["parentProviderItemId"] != "call_launch" {
+				t.Fatalf("hand-back = %#v, detail %#v", handback, detail)
+			}
+			if got, _ := input["message"].(string); got != tc.message {
+				t.Fatalf("hand-back message = %q, want %q", got, tc.message)
+			}
+		})
+	}
+}
+
+// A child no launch could have started still shows, as OpenCode would have sent
+// it without the capability.
+func TestOpenCodeV2ChildWithNoLaunchStaysVisible(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+	sendChild(t, agent, conv, "ses_orphan", map[string]any{"type": "update",
+		"update": childToolCall("ses_orphan:call_read", "Find tests: read", "pending")})
+	step := nextActivity(t, conv)
+	if step.ProviderItemID != "ses_orphan:call_read" || step.ProviderTurnID != "turn-1" {
+		t.Fatalf("unfiled child step = %#v", step)
+	}
+	if parent := detailOf(t, step)["parentProviderItemId"]; parent != nil {
+		t.Fatalf("unfiled child step has parent %v", parent)
+	}
+}
+
+func TestOpenCodeV1TaskReportsItsResult(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCode)
+	if asked := agent.initParams.ClientCapabilities.Meta[openCodeChildUpdatesCapability]; asked != nil {
+		t.Fatalf("OpenCode 1 was asked for child session updates")
+	}
+	// runTask sends a task call and its result, and returns the call's completion.
+	runTask := func(id, state string) ports.ChatEvent {
+		sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+			SessionUpdate: "tool_call", ToolCallId: acpsdk.ToolCallId(id), Title: "Find tests",
+			Kind: acpsdk.ToolKindThink, Status: acpsdk.ToolCallStatusInProgress,
+			RawInput: map[string]any{"description": "Find tests", "prompt": "Find the Go tests", "subagent_type": "explore"},
+		}})
+		_ = nextActivity(t, conv)
+		done := acpsdk.ToolCallStatusCompleted
+		sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+			SessionUpdate: "tool_call_update", ToolCallId: acpsdk.ToolCallId(id), Status: &done,
+			RawOutput: map[string]any{"output": `<task id="ses_child" state="` + state + `">` +
+				"\n<task_result>\nFound 3 tests.\n</task_result>\n</task>"},
+		}})
+		return nextActivity(t, conv)
+	}
+
+	inline := runTask("call_inline", "completed")
+	if inline.ProviderItemID != "call_inline" || detailOf(t, inline)["background"] != nil {
+		t.Fatalf("inline task = %#v", inline)
+	}
+	handback := nextActivity(t, conv)
+	detail := detailOf(t, handback)
+	report, _ := detail["input"].(map[string]any)
+	if detail["providerToolName"] != subagentHandbackTool || detail["parentProviderItemId"] != "call_inline" ||
+		report["message"] != "Found 3 tests." || handback.ActivityStatus != domain.ActivityStatusCompleted {
+		t.Fatalf("hand-back = %#v, detail %#v", handback, detail)
+	}
+
+	// A background task's result is a note to the model, not the child's report.
+	background := runTask("call_background", "running")
+	if background.ProviderItemID != "call_background" || detailOf(t, background)["background"] != true {
+		t.Fatalf("background task = %#v", background)
+	}
+	select {
+	case event := <-conv.Events():
+		if event.Kind == ports.ChatEventActivityCompleted && detailOf(t, event)["providerToolName"] == subagentHandbackTool {
+			t.Fatalf("background task handed back at launch: %#v", event)
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+}

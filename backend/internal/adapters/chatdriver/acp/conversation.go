@@ -80,6 +80,9 @@ type toolState struct {
 	rawOutput      any
 	meta           map[string]any
 	terminalOutput string
+	// parentID is the native id of the subagent launch this tool ran under,
+	// for a provider that names it outside the tool's own metadata.
+	parentID string
 }
 
 type nestedMessageState struct {
@@ -124,6 +127,8 @@ type conversation struct {
 	configOptions     []ports.ChatConfigOption
 	skills            []ports.ChatSkill
 	skillsKnown       bool
+	// subagents follows OpenCode 2's child sessions; see opencode_subagents.go.
+	subagents *openCodeSubagents
 	// compactAdvertised is whether the agent's own list, before HideCommand,
 	// named compact; start derives compaction from it, not from the shown skills.
 	compactAdvertised bool

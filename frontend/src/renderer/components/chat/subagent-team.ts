@@ -14,8 +14,11 @@
 
 import { fileChangeFiles, type ConversationActivity, type ConversationItem } from "../../types/conversation";
 
-/** Tool names a provider uses for "start a subagent". `Task` is Claude's older name. */
-const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
+/**
+ * Tool names a provider uses for "start a subagent". `Task` is Claude's older name;
+ * `subagent` is OpenCode 2's, which its ACP driver names since ACP carries no tool name.
+ */
+const LAUNCH_TOOLS = new Set(["Agent", "Task", "subagent"]);
 
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";
