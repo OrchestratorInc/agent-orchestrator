@@ -75,6 +75,10 @@ const IDLE_QUIET_DELAY_MS = 250;
 const SWALLOWED_TARGET_METHODS = new Set([
 	"Emulation.setDeviceMetricsOverride",
 	"Emulation.clearDeviceMetricsOverride",
+	// The Browser panel decides which tab is in front, and the person's keyboard
+	// focus is theirs: in Electron this would hand it to the agent's page (often
+	// one hidden behind the person's tab), wiping what they were typing.
+	"Page.bringToFront",
 ]);
 
 export class AgentBrowserCDPBridge {

@@ -95,6 +95,8 @@ import { browserTabLabel } from "../lib/browser-tab-label";
 import { reorderBrowserTabs } from "../lib/browser-tab-order";
 import { handleTabListKeyDown } from "../lib/terminal-tabs";
 import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
+import { AOMascot } from "./AOMascot";
+import { BrowserAgentFrame } from "./BrowserAgentFrame";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
@@ -447,6 +449,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		stopFindInPage = async () => undefined,
 		tabs,
 		activeTabId,
+		agentTabId = "",
 		tabNotice,
 		selectTab,
 		closeTab,
@@ -456,6 +459,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
+		agentGreeting = null,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -481,6 +485,10 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
 	// Not on an agent tab: its page is its viewer's picture of the agent's page.
 	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
+	// The tab in front is one the agent works in: the view host insets its page
+	// and the panel draws the agent's frame around it.
+	const shownTab = tabs.find((tab) => tab.id === activeTabId);
+	const framedForAgent = hasNativeBrowser && shownTab?.owner === "agent" && !shownTab.remote;
 	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url && !onAgentTab);
 	// An agent tab's localhost page is the host's: opened here it would be this
 	// computer's own. Before the viewer's first report the tab shows the viewer
@@ -873,6 +881,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 
 	const endUrlEditing = (event: FocusEvent<HTMLInputElement>) => {
 		if (event.relatedTarget instanceof Node && historyMenuRef.current?.contains(event.relatedTarget)) return;
+		// The app lost focus, not the field (another window, or a page that took
+		// the keyboard for a moment): like any browser, keep what was typed.
+		if (!document.hasFocus()) return;
 		historyRequestGenerationRef.current += 1;
 		setUrlEditing(false);
 		setUrlInput(navState.url);
@@ -968,6 +979,20 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
+	// Acting in the tab in front: the agent's frame glows only around the tab
+	// its commands land in.
+	// The tab the agent is acting in right now, in front or behind.
+	const agentActingIn = agentStatusLabel ? agentTabId : "";
+	// The agent's greeting (it started working after a quiet spell): a light
+	// runs around its page while the mascot is up, if its tab is in front.
+	const [greetingShown, setGreetingShown] = useState(0);
+	useEffect(() => {
+		if (!agentGreeting) return;
+		setGreetingShown(agentGreeting.seq);
+		const timer = window.setTimeout(() => setGreetingShown(0), AGENT_GREETING_MS);
+		return () => window.clearTimeout(timer);
+	}, [agentGreeting]);
+	const greetingInFront = greetingShown !== 0 && agentGreeting?.tabId === activeTabId ? greetingShown : 0;
 	const runtimeState = useBrowserRuntimeState();
 	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
 	// not a disconnect yet; alarming then would flash the alert on every relink.
@@ -1153,6 +1178,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									onClose={handleCloseTab}
 									onSelect={handleSelectTab}
 									selected={tab.id === activeTabId}
+									agentActing={agentActingIn === tab.id}
 									tab={tab}
 								/>
 							))}
@@ -1823,6 +1849,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							data-testid="browser-device-frame"
 							ref={slotRef}
 						/>
+						{framedForAgent ? (
+							<BrowserAgentFrame greeting={greetingInFront} />
+						) : null}
 					</div>
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
 					{navState.url === "" ? (
@@ -1877,11 +1906,14 @@ function BrowserControlTooltip({
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
+	agentActing,
 	onSelect,
 	onClose,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 	selected: boolean;
+	// The agent is acting in this tab right now.
+	agentActing: boolean;
 	onSelect: (tabId: string) => void;
 	onClose: (tabId: string) => void;
 }) {
@@ -1889,10 +1921,15 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
 	const label = browserTabLabel(tab.title, tab.url);
 	const close = useCallback(() => onClose(tab.id), [onClose, tab.id]);
+	// A tab the agent works in: it keeps working there whichever tab is in front.
+	const agentTab = tab.owner === "agent";
+	const tabName = agentTab ? t("browser.agentTab", { title: label.title }) : label.title;
 	return (
 		<div
 			className={cn("browser-panel__tab", isDragging && "browser-panel__tab--drag-placeholder")}
+			data-agent-acting={agentActing ? "true" : undefined}
 			data-browser-tab-id={tab.id}
+			data-browser-tab-owner={tab.owner}
 			ref={setNodeRef}
 			style={{ transform: CSS.Transform.toString(transform), transition }}
 		>
@@ -1903,14 +1940,33 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 				buttonProps={{
 					...attributes,
 					...listeners,
+					"aria-label": agentTab ? tabName : undefined,
 					"aria-selected": selected,
 					onClick: () => void onSelect(tab.id),
 					role: "tab",
 					tabIndex: selected ? 0 : -1,
-					title: label.title,
+					title: tabName,
 					type: "button",
 				}}
-				icon={<BrowserTabIcon favicon={tab.favicon} />}
+				icon={
+					<span className="relative inline-flex shrink-0">
+						<BrowserTabIcon favicon={tab.favicon} />
+						{agentTab ? (
+							// The agent works here: the AO mascot in the corner, keeping the
+							// site's icon. The tab's underline says when it is acting.
+							<span className="browser-panel__tab-agent-mark" data-testid="browser-agent-tab-mark">
+								<AOMascot className="size-full" />
+							</span>
+						) : null}
+						{tab.unseen ? (
+							<span
+								aria-hidden="true"
+								className="absolute -right-0.5 -top-0.5 inline-flex size-dot-sm rounded-full bg-primary ring-2 ring-background"
+								data-testid="browser-tab-unseen-indicator"
+							/>
+						) : null}
+					</span>
+				}
 				label={label.title}
 				onClose={close}
 			/>
@@ -1956,6 +2012,9 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 		</div>
 	);
 });
+
+// As long as the mascot's pop-up (main/browser-agent-badge.ts AGENT_BADGE_SHOW_MS).
+const AGENT_GREETING_MS = 3_200;
 
 function agentActivityLabel(activity: BrowserViewModel["agentBrowserActivity"], active: boolean): string {
 	if (!active && !activity?.active) return "";

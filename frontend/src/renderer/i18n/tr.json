@@ -518,6 +518,7 @@
 	"home.never": "Hiçbir zaman",
 	"home.starUs": "Bize yıldız verin",
 	"browser.agentAction": "Aracı {{verb}}",
+	"browser.agentTab": "Ajanın sekmesi: {{title}}",
 	"browser.agentUsing": "Aracı tarayıcıyı kullanıyor",
 	"browser.find.close": "Aramayı kapatın",
 	"browser.find.matchCount": "{{active}} / {{total}}",

@@ -517,6 +517,7 @@
 	"home.starUs": "Поставить звезду",
 	"browser.agentAction": "Агент: {{verb}}",
 	"browser.agentUsing": "Агент использует браузер",
+	"browser.agentTab": "Вкладка агента: {{title}}",
 	"browser.find.close": "Закрыть поиск",
 	"browser.find.matchCount": "{{active}} из {{total}}",
 	"browser.find.next": "Следующее совпадение",

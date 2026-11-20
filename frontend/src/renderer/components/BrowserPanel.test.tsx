@@ -20,7 +20,7 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
 import type { BrowserDownloadsState } from "../../shared/browser-downloads";
-import type { BrowserRuntimeState } from "../../main/browser-view-host";
+import type { BrowserRuntimeState, BrowserTabState } from "../../main/browser-view-host";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
@@ -63,8 +63,10 @@ const hookState = vi.hoisted(() => ({
 	annotationMode: false,
 	annotationState: { count: 0, screenshotCount: 0, hasDraft: false },
 	runtimeState: { connected: true, connecting: false, rejected: false } as BrowserRuntimeState | null,
-	tabs: [{ id: "t1", url: "", title: "", active: true }],
+	tabs: [{ id: "t1", url: "", title: "", active: true }] as BrowserTabState[],
 	activeTabId: "t1",
+	agentTabId: "",
+	agentGreeting: null as { tabId: string; seq: number } | null,
 	tabNotice: "",
 	agentBrowserActive: false,
 	agentBrowserActivity: null as { active: boolean; action?: string; phase?: "started" | "finished" } | null,
@@ -102,6 +104,8 @@ vi.mock("../hooks/useBrowserView", () => ({
 			findState: hookState.findState,
 			tabs: hookState.tabs,
 			activeTabId: hookState.activeTabId,
+			agentTabId: hookState.agentTabId,
+			agentGreeting: hookState.agentGreeting,
 			tabNotice: hookState.tabNotice,
 			selectTab: hookState.selectTab,
 			closeTab: hookState.closeTab,
@@ -339,6 +343,10 @@ describe("BrowserPanel", () => {
 		hookState.profileState = { viewId: "42:sess-1", profileId: null, temporary: true };
 		hookState.tabs = [{ id: "t1", url: "", title: "", active: true }];
 		hookState.activeTabId = "t1";
+		hookState.agentTabId = "";
+		hookState.agentGreeting = null;
+		hookState.agentBrowserActive = false;
+		hookState.agentBrowserActivity = null;
 		hookState.tabNotice = "";
 		hookState.navState = {
 			viewId: "42:sess-1",
@@ -1236,6 +1244,132 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("button", { name: "Close tab First app" }).closest("[data-terminal-tab-action]")?.previousElementSibling).toBe(firstTab);
 		await userEvent.click(firstTab);
 		expect(hookState.selectTab).toHaveBeenCalledWith("t1");
+	});
+
+	it("frames the agent's tab in front, and not a tab of the person's", () => {
+		hookState.navState = { ...hookState.navState, url: "http://localhost:3000/" };
+		hookState.tabs = [
+			{ id: "t1", url: "http://localhost:3000/", title: "Agent app", active: true, owner: "agent" as const },
+			{ id: "t2", url: "http://localhost:4173/", title: "My app", active: false },
+		];
+		hookState.activeTabId = "t1";
+		hookState.agentTabId = "t1";
+		const { rerender } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const frame = screen.getByTestId("browser-agent-frame");
+		expect(frame).toHaveAttribute("aria-hidden", "true");
+		expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+
+		hookState.tabs = hookState.tabs.map((tab) => ({ ...tab, active: tab.id === "t2" }));
+		hookState.activeTabId = "t2";
+		rerender(<TooltipProvider><BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} /></TooltipProvider>);
+		expect(screen.queryByTestId("browser-agent-frame")).toBeNull();
+	});
+
+	it("runs a light around the agent's page when it greets, then lets it fade, and not around another tab", () => {
+		vi.useFakeTimers();
+		try {
+			hookState.navState = { ...hookState.navState, url: "http://localhost:3000/" };
+			hookState.tabs = [
+				{ id: "t1", url: "http://localhost:3000/", title: "Agent app", active: true, owner: "agent" as const },
+				{ id: "t2", url: "http://localhost:4173/", title: "Agent two", active: false, owner: "agent" as const },
+			];
+			hookState.activeTabId = "t1";
+			hookState.agentTabId = "t1";
+			const panel = () => <TooltipProvider><BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} /></TooltipProvider>;
+			const { rerender } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+			expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+
+			hookState.agentGreeting = { tabId: "t1", seq: 1 };
+			rerender(panel());
+			expect(screen.getByTestId("browser-agent-frame-sweep")).toBeInTheDocument();
+			act(() => {
+				vi.advanceTimersByTime(3_300);
+			});
+			expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+
+			// A greeting in the agent's other tab, behind: no light around this one.
+			hookState.agentGreeting = { tabId: "t2", seq: 2 };
+			rerender(panel());
+			expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("marks the agent's tab while the agent acts in it, in front or behind", () => {
+		hookState.navState = { ...hookState.navState, url: "http://localhost:3000/" };
+		hookState.tabs = [
+			{ id: "t1", url: "http://localhost:3000/", title: "Agent app", active: true, owner: "agent" as const },
+			{ id: "t2", url: "http://localhost:4173/", title: "My app", active: false },
+		];
+		hookState.activeTabId = "t1";
+		hookState.agentTabId = "t1";
+		hookState.agentBrowserActive = true;
+		hookState.agentBrowserActivity = { active: true, action: "click", phase: "started" };
+		const { rerender } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		// Acting alone lights no light around the page: only the greeting does.
+		expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const agentTabRow = () => within(tabList).getByRole("tab", { name: "Agent's tab: Agent app" }).closest("[data-browser-tab-id]");
+		const myTabRow = () => within(tabList).getByRole("tab", { name: "My app" }).closest("[data-browser-tab-id]");
+		expect(agentTabRow()).toHaveAttribute("data-agent-acting", "true");
+		expect(myTabRow()).not.toHaveAttribute("data-agent-acting");
+
+		// The person moves to their own tab: no frame there, the agent's tab still shows it acting.
+		hookState.tabs = hookState.tabs.map((tab) => ({ ...tab, active: tab.id === "t2" }));
+		hookState.activeTabId = "t2";
+		rerender(<TooltipProvider><BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} /></TooltipProvider>);
+		expect(screen.queryByTestId("browser-agent-frame")).toBeNull();
+		expect(agentTabRow()).toHaveAttribute("data-agent-acting", "true");
+
+		hookState.agentBrowserActive = false;
+		hookState.agentBrowserActivity = { active: false, action: "click", phase: "finished" };
+		rerender(<TooltipProvider><BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} /></TooltipProvider>);
+		expect(agentTabRow()).not.toHaveAttribute("data-agent-acting");
+	});
+
+	it("keeps what the person typed in the address bar when the app loses focus for a moment", () => {
+		hookState.navState = { ...hookState.navState, url: "" };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		const address = screen.getByRole("textbox", { name: "Browser URL" });
+		fireEvent.focus(address);
+		fireEvent.change(address, { target: { value: "github.com" } });
+
+		// A page took the keyboard for a moment (the window lost focus, not the field).
+		const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		try {
+			fireEvent.blur(address);
+		} finally {
+			hasFocus.mockRestore();
+		}
+		expect(address).toHaveValue("github.com");
+
+		// Leaving the field for something else in the app still ends the edit.
+		const appFocused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		try {
+			fireEvent.blur(address);
+		} finally {
+			appFocused.mockRestore();
+		}
+		expect(address).toHaveValue("");
+	});
+
+	it("names and marks the agent's tab, keeping its site icon, and marks a preview not seen yet", () => {
+		const agentTabState = { id: "t1", url: "http://localhost:3000/", title: "Agent app", active: false, owner: "agent" as const, unseen: true as const, favicon: "data:image/png;base64,AA==" };
+		hookState.tabs = [agentTabState, { id: "t2", url: "http://localhost:4173/", title: "My app", active: true }];
+		hookState.activeTabId = "t2";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const agentTab = within(tabList).getByRole("tab", { name: "Agent's tab: Agent app" });
+		expect(agentTab.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,AA==");
+		expect(within(agentTab).getByTestId("browser-agent-tab-mark")).toBeInTheDocument();
+		expect(within(agentTab).getByTestId("browser-tab-unseen-indicator")).toBeInTheDocument();
+		const myTab = within(tabList).getByRole("tab", { name: "My app" });
+		expect(within(myTab).queryByTestId("browser-agent-tab-mark")).toBeNull();
+		expect(within(myTab).queryByTestId("browser-tab-unseen-indicator")).toBeNull();
 	});
 
 	it("renders the complete tab chrome in the drag overlay", () => {
