@@ -572,15 +572,19 @@ describe("onboarding Sentry reports", () => {
 		expect(capture).not.toHaveBeenCalled();
 	});
 
-	it("tags Sentry events with the onboarding flow while the window or a tour step shows", () => {
+	it("tags Sentry events with the onboarding flow while the window or a tour step shows", async () => {
+		// The source is whichever module copy registered last (another test
+		// reloads the module), so load a fresh copy and drive that one.
+		vi.resetModules();
+		const telemetry = await import("./onboarding-telemetry");
 		expect(sentry.flowSource.current()).toBeUndefined();
-		const close = beginOnboardingRun("first_run", "welcome");
+		const close = telemetry.beginOnboardingRun("first_run", "welcome");
 		expect(sentry.flowSource.current()).toBe("onboarding");
 		close();
 		expect(sentry.flowSource.current()).toBeUndefined();
-		setOnboardingTourStep("tour_project");
+		telemetry.setOnboardingTourStep("tour_project");
 		expect(sentry.flowSource.current()).toBe("onboarding");
-		setOnboardingTourStep(undefined);
+		telemetry.setOnboardingTourStep(undefined);
 		expect(sentry.flowSource.current()).toBeUndefined();
 	});
 });
