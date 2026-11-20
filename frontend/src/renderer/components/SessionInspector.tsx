@@ -322,7 +322,7 @@ export const SessionInspector = memo(function SessionInspector({
 				ariaLabel={t("inspector.aria")}
 				artifactsView={
 					session ? (
-						<SessionArtifactsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
+						<SessionArtifactsView active={isInspectorVisible && view === "artifacts"} hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
 					) : undefined
 				}
 				browserPoppedOut={browserPoppedOut}

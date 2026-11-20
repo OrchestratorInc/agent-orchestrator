@@ -177,6 +177,29 @@ describe("ArtifactFileView", () => {
 		expect(screen.getByLabelText("clip.mp4")).toBeInTheDocument();
 	});
 
+	it("pauses a playing video when the view is hidden, as when the inspector closes", async () => {
+		const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+		try {
+			fetchMock.mockResolvedValue(new Response(null));
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = renderWithQuery(<ArtifactFileView active artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" />, client);
+			const player = await screen.findByLabelText<HTMLVideoElement>("clip.mp4");
+			expect(player).toHaveAttribute("autoplay");
+			Object.defineProperty(player, "paused", { configurable: true, value: false });
+
+			view.rerender(
+				<QueryClientProvider client={client}>
+					<TooltipProvider><ArtifactFileView active={false} artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" /></TooltipProvider>
+				</QueryClientProvider>,
+			);
+
+			expect(screen.getByLabelText("clip.mp4")).toBe(player);
+			expect(pause).toHaveBeenCalledTimes(1);
+		} finally {
+			pause.mockRestore();
+		}
+	});
+
 	it("fetches a local artifact through the explicit loopback artifact API and renders its content", async () => {
 		fetchMock.mockResolvedValue(new Response("hello world", { status: 200 }));
 
