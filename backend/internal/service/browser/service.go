@@ -20,7 +20,7 @@ var actions = map[string]struct{}{
 	"uncheck": {}, "get": {}, "wait": {}, "screenshot": {}, "network-start": {},
 	"network-status": {}, "network-list": {}, "network-stop": {}, "network-clear": {},
 	"console": {}, "errors": {}, "frame": {}, "dialog": {},
-	"devtools-open": {}, "devtools-close": {}, "target": {},
+	"devtools-open": {}, "devtools-close": {}, "target": {}, "profile": {},
 }
 
 type sessionReader interface {
@@ -110,6 +110,12 @@ func (s *Service) Execute(
 		return result, action, err
 	}
 	target := s.targetFor(sessionID)
+	if action == "profile" && target == TargetChrome {
+		// Chrome mode drives the user's own Chrome, signed in as they are.
+		return browserruntime.Result{Value: map[string]interface{}{
+			"profileId": nil, "profileName": "your Chrome", "persistent": true,
+		}}, action, nil
+	}
 	if target == TargetChrome {
 		// Chrome mode acts with the user's real identity; keep an audit line
 		// per command (never arguments, which can hold typed text).

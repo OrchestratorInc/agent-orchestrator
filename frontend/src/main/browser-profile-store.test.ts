@@ -194,20 +194,85 @@ describe("BrowserProfileStore", () => {
 		expect(store.getDefaultProfileId()).toBeNull();
 	});
 
-	it("lets a deferred first profile claim the default only while it is the oldest", async () => {
+	it("makes a completed import the default even when other profiles exist (#8190)", async () => {
 		const store = new BrowserProfileStore({ stateDir: await makeStateDir() });
-		const imported = await store.createProfile("Imported", { claimDefault: false });
-		expect(store.getDefaultProfileId()).toBeNull();
-		const later = await store.createProfile("Later", { claimDefault: false });
+		const first = await store.createProfile("Personal");
+		expect(store.getDefaultProfileId()).toBe(first.id);
+		const imported = await store.createProfile("Chrome", { claimDefault: false });
+		expect(store.getDefaultProfileId()).toBe(first.id);
 
-		await store.claimDefaultIfFirst(later.id);
-		expect(store.getDefaultProfileId()).toBeNull();
-		await store.claimDefaultIfFirst(imported.id);
+		await store.claimDefaultForImport(imported.id);
 		expect(store.getDefaultProfileId()).toBe(imported.id);
+	});
 
-		await store.setDefaultProfileId(later.id);
-		await store.claimDefaultIfFirst(imported.id);
-		expect(store.getDefaultProfileId()).toBe(later.id);
+	it("creates one persistent default profile on first run so sessions start signed in", async () => {
+		const stateDir = await makeStateDir();
+		const store = new BrowserProfileStore({ stateDir });
+		const created = await store.ensureDefaultProfile("Personal");
+		expect(created).not.toBeNull();
+		expect(store.profiles.map((profile) => profile.name)).toEqual(["Personal"]);
+		expect(store.getDefaultProfileId()).toBe(created);
+
+		// Idempotent, and survives a restart.
+		expect(await store.ensureDefaultProfile("Personal")).toBe(created);
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(await reloaded.ensureDefaultProfile("Personal")).toBe(created);
+		expect(reloaded.profiles).toHaveLength(1);
+	});
+
+	it("does not recreate the default profile after the user deletes every profile", async () => {
+		const stateDir = await makeStateDir();
+		const store = new BrowserProfileStore({ stateDir });
+		const created = await store.ensureDefaultProfile("Personal");
+		await store.deleteProfile(created!);
+
+		expect(await store.ensureDefaultProfile("Personal")).toBeNull();
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(await reloaded.ensureDefaultProfile("Personal")).toBeNull();
+		expect(reloaded.profiles).toEqual([]);
+	});
+
+	it("does not create a default after deleting every pre-existing profile from an older registry", async () => {
+		const stateDir = await makeStateDir();
+		await writeFile(path.join(stateDir, "browser-profiles.json"), JSON.stringify(registryWithProfiles(1)));
+		const store = new BrowserProfileStore({ stateDir });
+		await store.load();
+		await store.ensureDefaultProfile("Personal");
+		await store.deleteProfile(profileId(1));
+
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(await reloaded.ensureDefaultProfile("Personal")).toBeNull();
+		expect(reloaded.profiles).toEqual([]);
+	});
+
+	it("does not create a default for an existing registry with no profiles from before the marker", async () => {
+		const stateDir = await makeStateDir();
+		// Saved by an older version after the user deleted every profile.
+		await writeFile(path.join(stateDir, "browser-profiles.json"), JSON.stringify(registryWithProfiles(0)));
+		const store = new BrowserProfileStore({ stateDir });
+		await store.load();
+
+		expect(await store.ensureDefaultProfile("Personal")).toBeNull();
+		expect(store.profiles).toEqual([]);
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(await reloaded.ensureDefaultProfile("Personal")).toBeNull();
+		expect(reloaded.profiles).toEqual([]);
+	});
+
+	it("keeps a registry whose default was deliberately unset without a default", async () => {
+		const stateDir = await makeStateDir();
+		await writeFile(
+			path.join(stateDir, "browser-profiles.json"),
+			JSON.stringify(registryWithProfiles(1)),
+		);
+		const store = new BrowserProfileStore({ stateDir });
+		await store.load();
+		expect(await store.ensureDefaultProfile("Personal")).toBeNull();
+		expect(store.profiles).toHaveLength(1);
 	});
 
 	it("promotes the oldest remaining profile when the default is deleted", async () => {

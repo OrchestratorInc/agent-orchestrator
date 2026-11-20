@@ -20,6 +20,9 @@ type browserRequestCapture struct {
 	body                   browserCommandRequestDTO
 	annotationsUnavailable bool
 	annotationsIgnored     bool
+	statusPath             string
+	profileResult          string
+	actions                []string
 }
 
 func browserCLIServer(t *testing.T, capture *browserRequestCapture) *httptest.Server {
@@ -29,6 +32,7 @@ func browserCLIServer(t *testing.T, capture *browserRequestCapture) *httptest.Se
 		capture.capability = r.Header.Get(browserCapabilityHeader)
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/browser/status" {
+			capture.statusPath = r.URL.RequestURI()
 			_, _ = io.WriteString(w, `{"sessionId":"ao-1","connected":true,"transport":"electron-webcontents-debugger"}`)
 			return
 		}
@@ -39,8 +43,19 @@ func browserCLIServer(t *testing.T, capture *browserRequestCapture) *httptest.Se
 		if err := json.NewDecoder(r.Body).Decode(&capture.body); err != nil {
 			t.Fatalf("decode command: %v", err)
 		}
+		capture.actions = append(capture.actions, capture.body.Action)
 		result := `{"ok":true}`
 		switch capture.body.Action {
+		case "profile":
+			result = capture.profileResult
+			if result == "" {
+				result = `{"profileId":"11111111-1111-4111-8111-111111111111","profileName":"Personal","persistent":true}`
+			}
+			if result == "unsupported" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":{"code":"BROWSER_ACTION_UNSUPPORTED","message":"Unsupported browser action"}}`)
+				return
+			}
 		case "snapshot":
 			result = `{"text":"button Save [ref=e1]"}`
 		case "get":
@@ -89,8 +104,8 @@ func TestBrowserStatusAndSnapshot(t *testing.T) {
 	if err != nil || !strings.Contains(out, "Browser runtime: connected") {
 		t.Fatalf("status err=%v stderr=%s stdout=%s", err, errOut, out)
 	}
-	if capture.path != "/api/v1/browser/status?sessionId=ao-1" {
-		t.Fatalf("status path = %q", capture.path)
+	if capture.statusPath != "/api/v1/browser/status?sessionId=ao-1" {
+		t.Fatalf("status path = %q", capture.statusPath)
 	}
 	if capture.capability != "capability-1" {
 		t.Fatalf("status capability = %q", capture.capability)
@@ -109,6 +124,46 @@ func TestBrowserStatusAndSnapshot(t *testing.T) {
 		!strings.Contains(out, "<<<BEGIN UNTRUSTED EXTERNAL CONTENT>>>") ||
 		!strings.Contains(out, "<<<END UNTRUSTED EXTERNAL CONTENT>>>") {
 		t.Fatalf("get text err=%v stderr=%s stdout=%s", err, errOut, out)
+	}
+}
+
+func TestBrowserStatusPrintsActiveProfile(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	capture := &browserRequestCapture{}
+	srv := browserCLIServer(t, capture)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, errOut, err := executeCLI(t, deps, "browser", "status")
+	if err != nil || !strings.Contains(out, "Browser profile: Personal (persistent: sign-ins carry over to other sessions)") {
+		t.Fatalf("status err=%v stderr=%s stdout=%s", err, errOut, out)
+	}
+
+	capture.profileResult = `{"profileId":null,"profileName":"Temporary","persistent":false}`
+	out, _, err = executeCLI(t, deps, "browser", "status")
+	if err != nil || !strings.Contains(out, "Browser profile: Temporary (not persistent: signed out, cleared when this session ends)") {
+		t.Fatalf("temporary status err=%v stdout=%s", err, out)
+	}
+
+	out, _, err = executeCLI(t, deps, "browser", "status", "--json")
+	if err != nil {
+		t.Fatalf("json status: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("decode %q: %v", out, err)
+	}
+	profile, _ := decoded["profile"].(map[string]any)
+	if profile["profileName"] != "Temporary" || profile["persistent"] != false {
+		t.Fatalf("json profile = %#v", decoded)
+	}
+
+	// An older desktop app without the profile query still prints the runtime line.
+	capture.profileResult = "unsupported"
+	out, errOut, err = executeCLI(t, deps, "browser", "status")
+	if err != nil || !strings.Contains(out, "Browser runtime: connected") || strings.Contains(out, "Browser profile:") {
+		t.Fatalf("fallback status err=%v stderr=%s stdout=%s", err, errOut, out)
 	}
 }
 
