@@ -641,6 +641,7 @@
 	"browser.pickElement": "Sélectionner un élément",
 	"browser.pinTabs": "Épingler la liste des onglets",
 	"browser.popOut": "Ouvrir dans une fenêtre",
+	"browser.profile.defaultName": "Personnel",
 	"browser.profile.temporary": "Temporaire",
 	"browser.profile.label": "Profil",
 	"browser.profile.manage": "Gérer les profils",
