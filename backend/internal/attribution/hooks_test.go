@@ -257,6 +257,48 @@ grep -v '^Signed-off-by: ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`)
 	}
 }
 
+// Sign-offs written in the template are part of it: removing one is an edit,
+// so git commits and the commit gets the trailer. Only the sign-off git adds
+// for -s is left out of the comparison.
+func TestHookKeepsSignoffsWrittenInTheTemplate(t *testing.T) {
+	r := newRepo(t, testCoAuthor, func(r repo) {
+		tpl := filepath.Join(r.main, ".gitmessage")
+		if err := os.WriteFile(tpl, []byte("Example subject\n\nSigned-off-by: Template Author <ta@example.com>\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r.git(r.main, "config", "commit.template", tpl)
+	})
+	dir := t.TempDir()
+	dropSignoffs := filepath.Join(dir, "drop-signoffs.sh")
+	if err := os.WriteFile(dropSignoffs, []byte("#!/bin/sh\ngrep -v '^Signed-off-by: ' \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(ed string, args ...string) (string, error) {
+		cmd := exec.Command("git", append([]string{"-C", r.worktree, "commit", "--allow-empty"}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_EDITOR="+ed,
+			"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	// Untouched, with or without -s: git aborts.
+	for _, args := range [][]string{nil, {"-s"}} {
+		before := r.git(r.worktree, "rev-parse", "HEAD")
+		if out, err := run("true", args...); err == nil || !strings.Contains(out, "did not edit the message") {
+			t.Fatalf("untouched %v: want git's abort, got %v:\n%s", args, err, out)
+		}
+		if after := r.git(r.worktree, "rev-parse", "HEAD"); after != before {
+			t.Fatalf("untouched %v: HEAD moved", args)
+		}
+	}
+	// The template's own sign-off removed: an edit, so it commits with the trailer.
+	if out, err := run(dropSignoffs); err != nil {
+		t.Fatalf("template sign-off removed: %v\n%s", err, out)
+	}
+	if msg := r.message("HEAD"); !strings.HasPrefix(msg, "Example subject") || countTrailer(msg) != 1 {
+		t.Fatalf("want the commit with one trailer, got:\n%s", msg)
+	}
+}
+
 // Git only cuts a message at the scissors line when it carries the comment
 // prefix; an uncommented copy is message text, so the commit keeps it and gets
 // the trailer. A real scissors line still drops the diff below it, whatever the

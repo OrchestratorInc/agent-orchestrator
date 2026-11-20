@@ -102,12 +102,20 @@ snapshot_template() {
 	[ -n "$snap" ] || return 0
 	rm -f "$snap"
 	if [ "$2" = template ] && [ -n "$1" ] && [ -f "$1" ]; then
-		# With -s git has already added a sign-off; git compares against the
-		# template without it, so the snapshot leaves trailing sign-offs out.
-		message_text "$1" | awk '
+		# With -s git has already added the committer's sign-off; git compares
+		# against the template without it, so the snapshot leaves that one
+		# line out. Sign-offs written in the template itself stay.
+		ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed 's/ [0-9]* [-+][0-9]*$//')
+		message_text "$1" | ORCHESTRATOR_SIGNOFF="Signed-off-by: $ident" awk '
 			{ line[NR] = $0 }
-			!/^[[:space:]]*$/ && !/^Signed-off-by: / { last = NR }
-			END { for (i = 1; i <= last; i++) print line[i] }
+			!/^[[:space:]]*$/ { last = NR }
+			END {
+				if (last && line[last] == ENVIRON["ORCHESTRATOR_SIGNOFF"]) {
+					last--
+					while (last && line[last] ~ /^[[:space:]]*$/) last--
+				}
+				for (i = 1; i <= last; i++) print line[i]
+			}
 		' >"$snap" || rm -f "$snap"
 	fi
 }
