@@ -29,10 +29,11 @@ const repinPOSIX = `if [ -n "$AO_PATH_PIN" ]; then case ":$PATH:" in ":$AO_PATH_
 const repinPromptHook = `if [ -z "$_AO_PATH_REPINNED" ]; then _AO_PATH_REPINNED=1; ` + repinPOSIX + `; fi`
 
 const bashEnvWrapper = "# Written by Orchestrator: runs your BASH_ENV, then keeps Orchestrator's ao first on PATH.\n" +
-	// The exported PID blocks re-entry through a user hook or another AO
-	// wrapper, but an independently started child shell gets its own turn.
+	// Keep the PID shell-local, even if an older wrapper exported it. An
+	// exec replacement has the same PID but must run its own startup hook.
+	`export -n _AO_BASH_ENV_PID` + "\n" +
 	`if [ "${_AO_BASH_ENV_PID:-}" != "$$" ]; then` + "\n" +
-	`export _AO_BASH_ENV_PID="$$"` + "\n" +
+	`export -n _AO_BASH_ENV_PID="$$"` + "\n" +
 	`if [ -n "$AO_USER_BASH_ENV" ] && [ -r "$AO_USER_BASH_ENV" ]; then . "$AO_USER_BASH_ENV"; fi` + "\n" +
 	"fi\n" +
 	repinPOSIX + "\n"
@@ -105,8 +106,9 @@ func zshWrapper(name string) string {
 	// .zprofile/.zshrc/.zlogin from running later in the same shell.
 	sentinel := "_AO_" + strings.ToUpper(strings.TrimPrefix(name, ".")) + "_PID"
 	return "# Written by Orchestrator: runs your " + name + ", then keeps Orchestrator's ao first on PATH.\n" +
+		"typeset -g +x " + sentinel + "\n" +
 		"if [[ \"${" + sentinel + ":-}\" != \"$$\" ]]; then\n" +
-		"export " + sentinel + "=\"$$\"\n" +
+		"typeset -g +x " + sentinel + "=\"$$\"\n" +
 		"_ao_zdotdir=\"$ZDOTDIR\"\n" +
 		"ZDOTDIR=\"${AO_USER_ZDOTDIR:-$HOME}\"\n" +
 		// /etc/zshrc names the history file after ZDOTDIR before .zshrc runs.

@@ -161,6 +161,47 @@ func TestBashWrapperSourcesUserHookOncePerShell(t *testing.T) {
 	}
 }
 
+func TestLoginShellWrappersRunUserHooksAfterExec(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		shell    string
+		sentinel string
+	}{
+		{"bash", "/bin/bash", "_AO_BASH_ENV_PID"},
+		{"zsh", "/bin/zsh", "_AO_ZSHENV_PID"},
+	} {
+		for _, inherited := range []bool{false, true} {
+			name := tc.name + "/fresh-sentinel"
+			if inherited {
+				name = tc.name + "/inherited-exported-sentinel"
+			}
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				user := map[string]string{
+					"BASH_ENV": filepath.Join(root, "user_bash_env"),
+					"ZDOTDIR":  filepath.Join(root, "user_zsh"),
+				}
+				// Functions are shell-local unless explicitly exported: the
+				// replacement must source the hook to define this one again.
+				const hook = "user_setup() { printf initialized; }\n"
+				writeNestedShellFile(t, user["BASH_ENV"], hook)
+				writeNestedShellFile(t, filepath.Join(user["ZDOTDIR"], ".zshenv"), hook)
+				env, err := LoginShellEnv(root+":/usr/bin:/bin", func(key string) string { return user[key] }, nil, t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				env["HOME"], env["PATH"] = root, root+":/usr/bin:/bin"
+				if inherited {
+					env[tc.sentinel] = "inherited"
+				}
+				if got := runNestedLoginShell(t, tc.shell, env, "exec "+tc.shell+" -c user_setup"); got != "initialized" {
+					t.Fatalf("replacement shell hook output = %q, want initialized", got)
+				}
+			})
+		}
+	}
+}
+
 func TestZshWrappersGuardEachStartupFile(t *testing.T) {
 	root := t.TempDir()
 	userZsh := filepath.Join(root, "user_zsh")
