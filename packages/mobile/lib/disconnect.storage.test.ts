@@ -29,9 +29,10 @@ import { activeHost, loadHosts, migrateLegacyConfig, persistResolvedConfig, save
 import { resolveActiveConfig } from "./resolveConfig";
 import { createConversationSaver, loadSavedConversation } from "./chat/savedConversations";
 import { resetSavedChatFakes, savedFileNames } from "./chat/savedConversations.fakes";
+import { resetSavedChatMachines } from "./chat/savedChatMachines";
 
 const host = { id: "h_one", name: "One", platform: "darwin", endpoints: [{ kind: "lan" as const, host: "host-one", port: 3011, secure: false }], token: "secret", lastConnected: 1, accountUserId: "user-a" };
-beforeEach(() => { plain.clear(); secure.clear(); resetSavedChatFakes(); });
+beforeEach(() => { plain.clear(); secure.clear(); resetSavedChatFakes(); resetSavedChatMachines(); });
 
 it("does not resurrect the last account host from cached connection data after sign-out", async () => {
 	await saveHost(host);
@@ -111,4 +112,22 @@ it("removes a forgotten machine's chats saved on the phone and keeps another mac
 	expect(await loadSavedConversation("host.h_one/s")).toBeNull();
 	expect(await loadSavedConversation("host.h_other/s")).not.toBeNull();
 	expect(savedFileNames()).toEqual(["host.h_other%2Fs.page"]);
+});
+
+it("saves none of a forgotten machine's chats from a read that answers late, until it is paired again", async () => {
+	await saveHost(host);
+	const saver = createConversationSaver();
+	const page = { sessionId: "s", items: [], turns: [] } as unknown as import("./chat/snapshot").ConversationPage;
+
+	await forgetPairedHost(host, { ignoreAccount: false });
+	saver.schedule("host.h_one/s", page);
+	saver.schedule("host.h_other/s", page);
+	await saver.flush();
+	expect(savedFileNames()).toEqual(["host.h_other%2Fs.page"]);
+
+	// Paired again: its chats are saved again.
+	await saveHost(host);
+	saver.schedule("host.h_one/s", page);
+	await saver.flush();
+	expect(savedFileNames()).toEqual(["host.h_one%2Fs.page", "host.h_other%2Fs.page"]);
 });

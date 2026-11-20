@@ -23,8 +23,9 @@ vi.mock("expo-secure-store", () => import("./savedConversations.fakes").then((fa
 vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
 import { requestDockModel } from "./requestDockModel";
-import { createConversationSaver } from "./savedConversations";
-import { resetSavedChatFakes } from "./savedConversations.fakes";
+import { conversationSaver, createConversationSaver, forgetSavedConversations } from "./savedConversations";
+import { resetSavedChatFakes, savedFileNames } from "./savedConversations.fakes";
+import { resetSavedChatMachines } from "./savedChatMachines";
 import type { ConversationPage } from "./snapshot";
 import { activeTurn, pendingApproval } from "./types";
 import { useMobileConversation, type MobileConversation } from "./useConversation";
@@ -52,6 +53,7 @@ beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.stored.clear();
 	resetSavedChatFakes();
+	resetSavedChatMachines();
 	// Saved on the phone before the app was closed.
 	const saver = createConversationSaver();
 	saver.schedule("host.a/saved-chat", savedMidTurn);
@@ -80,4 +82,22 @@ it("shows the saved page read-only until the first live read replaces it", async
 	await act(async () => renderer!.update(<Harness cfg={lan} />));
 	expect(conversation.saved).toBe(false);
 	expect(conversation.snapshot?.conversationId).toBe("c-a");
+});
+
+it("saves nothing from a read that answers after its machine was forgotten", async () => {
+	let answer!: () => void;
+	fixture.request.mockReset().mockImplementation((cfg: ServerConfig) => new Promise((resolve) => {
+		answer = () => resolve({ json: async () => ({ controller: "ready", capabilities: [], messages: [], conversationId: `c-late-${cfg.hostId}` }) });
+	}));
+	await act(async () => { renderer = create(<Harness cfg={lan} />); });
+	expect(fixture.request).toHaveBeenCalled();
+
+	// Forgotten while the read is under way; the screen has not caught up yet.
+	await forgetSavedConversations({ id: "a", name: "A", platform: "darwin", endpoints: [], lastConnected: 1 });
+	expect(savedFileNames()).toEqual([]);
+	await act(async () => answer());
+	expect(conversation.snapshot?.conversationId).toBe("c-late-a");
+	await conversationSaver.flush();
+
+	expect(savedFileNames()).toEqual([]);
 });
