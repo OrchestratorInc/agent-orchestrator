@@ -153,6 +153,46 @@ func (c *backgroundConfigConversation) SetConfigOption(_ context.Context, id str
 	return c.options, c.setErr
 }
 
+func TestClaudeNamingPrefersAdvertisedHaiku(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		choice     ports.ChatConfigOptionChoice
+		setErr     error
+		suggestion bool
+		wantSwitch string
+	}{
+		{name: "alias", choice: ports.ChatConfigOptionChoice{Value: "haiku"}, wantSwitch: "haiku"},
+		{name: "provider ID", choice: ports.ChatConfigOptionChoice{Value: "custom-fast", Name: "Haiku 5.5"}, wantSwitch: "custom-fast"},
+		{name: "no Haiku", choice: ports.ChatConfigOptionChoice{Value: "sonnet"}},
+		{name: "switch rejected", choice: ports.ChatConfigOptionChoice{Value: "haiku"}, setErr: errors.New("model unavailable"), wantSwitch: "haiku"},
+		{name: "prompt suggestion", choice: ports.ChatConfigOptionChoice{Value: "haiku"}, suggestion: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			conversation := &backgroundConfigConversation{
+				backgroundTestConversation: &backgroundTestConversation{terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()}},
+				options: []ports.ChatConfigOption{{
+					ID: "model", Category: "model", Type: ports.ChatConfigOptionSelect,
+					Current: ports.ChatConfigOptionValue{Select: "opus"},
+					Choices: []ports.ChatConfigOptionChoice{{Value: "opus"}, tt.choice},
+				}},
+				setErr: tt.setErr,
+			}
+			var started ports.ChatStartConfig
+			service := chatsvc.New(chatsvc.Options{Drivers: fakeRegistry{driver: fakeDriver{conv: conversation, startCfg: &started}}, NewID: func() string { return "id" }})
+			cfg := ports.ChatStartConfig{Model: "opus"}
+			var err error
+			if tt.suggestion {
+				_, err = service.RunPromptSuggestionTask(context.Background(), "source", "turn", domain.HarnessClaudeCode, cfg, "Suggest a prompt")
+			} else {
+				_, err = service.RunBackgroundTask(context.Background(), domain.HarnessClaudeCode, cfg, "Name the task")
+			}
+			if err != nil || started.Model != "opus" || conversation.setValue.Select != tt.wantSwitch || len(conversation.sentMessages()) != 1 {
+				t.Fatalf("initial model %q, switch %q, messages %d, error %v", started.Model, conversation.setValue.Select, len(conversation.sentMessages()), err)
+			}
+		})
+	}
+}
+
 func TestRunBackgroundTaskUsesAdvertisedNativeEffort(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
