@@ -167,6 +167,12 @@ describe("jump to latest", () => {
 		expect(source).toContain("followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
 		expect(source).toContain("if (!dragging.current && atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP)) followsTail.current = true;");
 	});
+	// The jump shows past the wider slop on every path; a drag that came to rest
+	// between the two slops showed it here and hid it on the next scroll event.
+	it("shows the jump to the newest message past the same slop when a drag settles as when it scrolls", () => {
+		expect(source).toContain("setShowJump(!followsTail.current && !atTail(event.nativeEvent, keyboardInset.current));");
+		expect(source).toContain("setShowJump(!followsTail.current && !tail);");
+	});
 	// Under a floating composer the list keeps its size and moves its content with the keyboard.
 	it("moves its own content with the keyboard under a floating composer", () => {
 		expect(source).toContain('keyboardLiftBehavior="always"');

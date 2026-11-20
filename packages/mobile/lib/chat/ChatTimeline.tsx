@@ -498,7 +498,8 @@ function Timeline({
 		}
 		dragging.current = false;
 		followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
-		setShowJump(!followsTail.current);
+		// The jump shows past the wider slop, as `onScroll` decides it.
+		setShowJump(!followsTail.current && !atTail(event.nativeEvent, keyboardInset.current));
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
