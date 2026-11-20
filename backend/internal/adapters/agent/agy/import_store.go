@@ -16,9 +16,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"google.golang.org/protobuf/encoding/protowire"
 	"modernc.org/sqlite/vfs"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const maxImportDB = 256 << 20
@@ -188,31 +189,12 @@ func readImportArchive(ctx context.Context, root, path string, immutable bool) (
 		return a, errors.New("agy: unsupported native schema version")
 	}
 	// Unknown tables may contain state outside the audited conversation layout.
-	tables, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-	if err != nil {
+	var totalTables, knownTables int
+	if err := db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(name IN ('trajectory_meta','steps','gen_metadata','executor_metadata','parent_references','trajectory_metadata_blob','battle_mode_infos')),0) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&totalTables, &knownTables); err != nil {
 		return a, err
 	}
-	allowed := map[string]bool{"trajectory_meta": true, "steps": true, "gen_metadata": true, "executor_metadata": true, "parent_references": true, "trajectory_metadata_blob": true, "battle_mode_infos": true}
-	seen := 0
-	for tables.Next() {
-		var name string
-		if err := tables.Scan(&name); err != nil {
-			_ = tables.Close()
-			return a, err
-		}
-		if !allowed[name] {
-			_ = tables.Close()
-			return a, errors.New("agy: unsupported native table layout")
-		}
-		seen++
-	}
-	err = tables.Err()
-	_ = tables.Close()
-	if err != nil {
-		return a, err
-	}
-	if seen != len(allowed) {
-		return a, errors.New("agy: incomplete native table layout")
+	if totalTables != 7 || knownTables != 7 {
+		return a, errors.New("agy: unsupported or incomplete native table layout")
 	}
 	var count int
 	var id string
@@ -258,7 +240,7 @@ func readImportArchive(ctx context.Context, root, path string, immutable bool) (
 		if format != 0 || child != 0 || payload == nil {
 			return a, errors.New("agy: unsupported native step format, subtrajectory or oversized payload")
 		}
-		field := protowire.Number(0)
+		var field protowire.Number
 		role := domain.MessageRoleAssistant
 		switch typ {
 		case 14:
@@ -461,25 +443,26 @@ func importStepTime(data []byte) time.Time {
 		return time.Time{}
 	}
 	for _, f := range fields {
-		if f.number == 1 && f.kind == protowire.BytesType {
-			parts, err := importFields(f.data)
-			if err != nil {
-				return time.Time{}
+		if f.number != 1 || f.kind != protowire.BytesType {
+			continue
+		}
+		parts, err := importFields(f.data)
+		if err != nil {
+			return time.Time{}
+		}
+		var sec, nano uint64
+		for _, p := range parts {
+			_, _, n := protowire.ConsumeTag(p.raw)
+			v, _ := protowire.ConsumeVarint(p.raw[n:])
+			if p.number == 1 {
+				sec = v
 			}
-			var sec, nano uint64
-			for _, p := range parts {
-				_, _, n := protowire.ConsumeTag(p.raw)
-				v, _ := protowire.ConsumeVarint(p.raw[n:])
-				if p.number == 1 {
-					sec = v
-				}
-				if p.number == 2 {
-					nano = v
-				}
+			if p.number == 2 {
+				nano = v
 			}
-			if sec > 0 && nano < 1e9 {
-				return time.Unix(int64(sec), int64(nano))
-			}
+		}
+		if sec > 0 && nano < 1e9 {
+			return time.Unix(int64(sec), int64(nano))
 		}
 	}
 	return time.Time{}

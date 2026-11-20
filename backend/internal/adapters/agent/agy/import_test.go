@@ -8,8 +8,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"google.golang.org/protobuf/encoding/protowire"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const importTestID = "00000000-0000-4000-8000-000000000522"
@@ -147,9 +148,9 @@ func TestPrepareImportedSessionRemapsOnlyPrivateCopyAndReusesIt(t *testing.T) {
 	if ref.NativeSessionID != importTestID || ref.ConfigDir == root {
 		t.Fatalf("ref = %+v", ref)
 	}
-	copy, err := ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath)
-	if err != nil || copy.CWD != launch || len(copy.Messages) != 2 {
-		t.Fatalf("copy = %+v, %v", copy, err)
+	copied, err := ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath)
+	if err != nil || copied.CWD != launch || len(copied.Messages) != 2 {
+		t.Fatalf("copy = %+v, %v", copied, err)
 	}
 	db, err := sql.Open("sqlite", ref.TranscriptPath)
 	if err != nil {

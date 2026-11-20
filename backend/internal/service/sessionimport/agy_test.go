@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protowire"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"google.golang.org/protobuf/encoding/protowire"
 )
 
 func TestAgyScanUsesEligibleCWDAndNativeIdentity(t *testing.T) {

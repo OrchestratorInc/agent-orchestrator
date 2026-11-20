@@ -296,6 +296,7 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	return "", false, nil
 }
 
+// ProbeNativeSession checks native history without launching the provider.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	_, found, err := p.LocateTranscript(ctx, ref)
 	if err != nil {
@@ -311,9 +312,18 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 // missing proof/database and an upgrade to an unverified native binary. Normal
 // Agy launches outside this adapter's private import directory are unaffected.
 func ValidateImportedACP(ctx context.Context, dataDir, root, id, cwd, binary string) error {
+	if dataDir == "" {
+		return nil
+	}
 	base := filepath.Join(dataDir, "native-imports", "agy")
+	if !strings.EqualFold(filepath.VolumeName(base), filepath.VolumeName(root)) {
+		return nil
+	}
 	rel, err := filepath.Rel(base, root)
-	if dataDir == "" || err != nil || !filepath.IsLocal(rel) || filepath.Dir(rel) != "." {
+	if err != nil {
+		return err
+	}
+	if !filepath.IsLocal(rel) || filepath.Dir(rel) != "." {
 		return nil
 	}
 	if binary == "" {
@@ -333,6 +343,7 @@ func ValidateImportedACP(ctx context.Context, dataDir, root, id, cwd, binary str
 	return validatePreparedImport(ctx, ports.NativeSessionRef{NativeSessionID: id, ConfigDir: root, TranscriptPath: filepath.Join(root, ACPStorageDir, "conversations", id+".db")}, launch, nil)
 }
 
+// PrepareRuntimeLaunch verifies an imported binding before terminal startup.
 func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if cfg.ImportConfigDir == "" {
 		return nil
