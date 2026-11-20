@@ -412,6 +412,11 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 					cached.Catalog.RefreshState = "refreshing"
 				}
 			} else if retriesExhausted {
+				// A rediscovery another read started may still be running; keep
+				// reporting it so open views poll until its result is saved.
+				if s.modelLoadInFlight(agentID, projectID) && (cached.Catalog.RefreshState == "" || cached.Catalog.RefreshState == "error") {
+					cached.Catalog.RefreshState = "refreshing"
+				}
 				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 			} else if !due && agentID != "claude-code" {
 				time.AfterFunc(10*time.Millisecond, func() {
@@ -728,6 +733,14 @@ func (s *Service) requeueCatalog(projectID string, catalog ports.AgentModelCatal
 	catalog.LastSuccessAt = nil
 	catalog.RetryAt = nil
 	_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
+}
+
+// modelLoadInFlight reports whether a model load for the agent and scope is
+// running now.
+func (s *Service) modelLoadInFlight(agentID, projectID string) bool {
+	s.modelCallMu.Lock()
+	defer s.modelCallMu.Unlock()
+	return s.modelCalls[agentID+"\x00"+projectID] != nil
 }
 
 func (s *Service) coalesceModelLoad(
@@ -1327,6 +1340,11 @@ func modelCatalogFailureIsSettled(err error) bool {
 func storedFailureIsSettled(catalog ports.AgentModelCatalog) bool {
 	if catalog.RefreshState != "error" {
 		return false
+	}
+	// A sign-in failure keeps its code; its saved text may be provider wording
+	// (an expired Claude Code login, say) that no phrase below matches.
+	if catalog.WarningCode != "" {
+		return true
 	}
 	text := catalog.RefreshError
 	if text == "" {

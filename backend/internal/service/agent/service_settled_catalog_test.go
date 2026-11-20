@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,6 +141,28 @@ func TestReadRediscoversASettledFailureAfterARestart(t *testing.T) {
 	}
 }
 
+// An expired login is saved with provider wording that names no sentinel; its
+// sign-in code still marks it settled, so a read after a restart rediscovers.
+func TestReadRediscoversAnExpiredLoginAfterARestart(t *testing.T) {
+	discoverer := successfulModelDiscoverer()
+	discoverer.err = wrapAuthError(ports.ErrAgentModelDiscoveryCredentialExpired, "the saved login token expired; it renews the next time it runs")
+	cache := &fakeModelCache{}
+	agents := []agentregistry.HarnessAgent{harnessAgent("auggie", "Auggie", nil)}
+	if _, err := newService(agents, cache, discoverer).Models(context.Background(), "auggie", "", true); err != nil {
+		t.Fatal(err)
+	}
+	discoverer.mu.Lock()
+	discoverer.err = nil
+	discoverer.mu.Unlock()
+	read, err := newService(agents, cache, discoverer).Models(context.Background(), "auggie", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.RefreshState != "refreshing" {
+		t.Fatalf("read after a restart reports %q, want refreshing", read.RefreshState)
+	}
+}
+
 // A settled failure spends the retry budget at once. When the rediscovery a
 // read starts then fails differently (a timeout, say), the normal timed
 // retries come back.
@@ -162,7 +185,8 @@ func TestTransientFailureAfterASettledOneRetriesAgain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if discoverer.discoverCalls.Load() >= 2 && got.RefreshState == "error" {
+		// Wait for the timeout itself to be saved, not a read of the settled one.
+		if got.RefreshState == "error" && strings.Contains(got.RefreshError, "deadline exceeded") {
 			if got.RetryAt == nil {
 				t.Fatalf("a timeout after a settled failure scheduled no retry: %#v", got)
 			}
