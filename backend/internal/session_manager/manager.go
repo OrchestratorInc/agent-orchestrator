@@ -487,6 +487,7 @@ type Manager struct {
 	defaultBranchRefreshTimeout time.Duration
 	defaultBranchFetchMu        sync.Mutex
 	defaultBranchFetchedAt      map[string]time.Time
+	defaultBranchFreshAt        map[string]time.Time // last successful fetch, per repository and base ref
 	taskPreparationsMu          sync.Mutex
 	taskPreparations            map[domain.TaskPreparationToken]*taskPreparation
 	taskNamingSlots             chan struct{}
@@ -494,6 +495,7 @@ type Manager struct {
 	// Snapshot before the listener binds; background cleanup must never reclaim
 	// a preparation opened in this daemon after the listener is live.
 	startupTaskPreparations []domain.SessionRecord
+	startupHealthCutoff     time.Time
 	// Only pre-listener provisioning writes that failed may be retried after
 	// bind; scanning then would also sweep tasks created by this daemon.
 	startupProvisioningRetries []domain.SessionRecord
@@ -2227,11 +2229,25 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 
-	// Resolve every canonical ref before starting network I/O. This preserves
+	// One deadline covers the complete workspace refresh, resolution and fetch
+	// alike. A slow or offline repository cannot multiply spawn latency by the
+	// number of child repos.
+	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
+	defer cancel()
+	resolve := refresher.ResolveDefaultBranch
+	if budgeted, ok := refresher.(ports.WorkspaceDefaultBranchBudgetedResolver); ok {
+		resolve = func(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+			return budgeted.ResolveDefaultBranchWithin(ctx, fetchCtx, repoPath, configuredBranch)
+		}
+	}
+
+	// Resolve every canonical ref before the fetches below. This preserves
 	// each repository's own inferred origin/HEAD even if an earlier fetch uses
-	// the entire shared refresh budget.
+	// the entire shared refresh budget. Resolution is local except for an
+	// automatic default's live remote HEAD lookup when Git has none cached,
+	// which stops at the shared deadline.
 	for i := range targets {
-		resolved, err := refresher.ResolveDefaultBranch(ctx, targets[i].repoPath, targets[i].configuredBranch)
+		resolved, err := resolve(ctx, targets[i].repoPath, targets[i].configuredBranch)
 		if err != nil {
 			m.logger.Warn("spawn: default branch resolution failed; continuing with adapter fallback",
 				"projectID", project.ID,
@@ -2247,12 +2263,14 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 
-	// One deadline covers the complete workspace refresh. A slow or offline
-	// repository cannot multiply spawn latency by the number of child repos.
-	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
-	defer cancel()
 	for _, target := range targets {
 		if target.resolved.BaseRef == "" {
+			continue
+		}
+		// Resolving an automatic default can itself fetch the branch; fetching
+		// it again straight after would only repeat the download.
+		if target.resolved.Fetched {
+			m.recordDefaultBranchFetch(target.repoPath, target.resolved.BaseRef)
 			continue
 		}
 		// A base fetched moments ago for another start of the same project is
@@ -2260,23 +2278,59 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		if m.defaultBranchFetchedRecently(target.repoPath, target.resolved.BaseRef) {
 			continue
 		}
-		if err := refresher.FetchDefaultBranch(fetchCtx, target.repoPath, target.resolved); err != nil {
-			m.logger.Warn("spawn: default branch refresh failed; continuing with local refs",
-				"projectID", project.ID,
-				"repoPath", target.repoPath,
-				"remote", target.resolved.Remote,
-				"branch", target.resolved.Branch,
-				"baseRef", target.resolved.BaseRef,
-				"error", err,
-			)
+		// A base fetched within the fresh window starts this session as it is;
+		// the download runs in the background for the starts after it.
+		if m.defaultBranchFresh(target.repoPath, target.resolved.BaseRef) {
+			m.fetchDefaultBranchInBackground(project.ID, refresher, target)
+			continue
 		}
+		if err := refresher.FetchDefaultBranch(fetchCtx, target.repoPath, target.resolved); err != nil {
+			m.logDefaultBranchFetchFailure(project.ID, target, err)
+			continue
+		}
+		m.recordDefaultBranchFresh(target.repoPath, target.resolved.BaseRef)
 	}
 	return baseRefs
+}
+
+// fetchDefaultBranchInBackground refreshes a base off the spawn's path. It has
+// a longer limit than a fetch a spawn waits for, since nobody waits for it.
+func (m *Manager) fetchDefaultBranchInBackground(projectID string, refresher ports.WorkspaceDefaultBranchRefresher, target defaultBranchRefreshTarget) {
+	m.runInBackground(func() {
+		ctx, cancel := context.WithTimeout(m.backgroundContext, defaultBranchBackgroundFetchTimeout)
+		defer cancel()
+		if err := refresher.FetchDefaultBranch(ctx, target.repoPath, target.resolved); err != nil {
+			m.logDefaultBranchFetchFailure(projectID, target, err)
+			return
+		}
+		m.recordDefaultBranchFresh(target.repoPath, target.resolved.BaseRef)
+	})
+}
+
+func (m *Manager) logDefaultBranchFetchFailure(projectID string, target defaultBranchRefreshTarget, err error) {
+	m.logger.Warn("spawn: default branch refresh failed; continuing with local refs",
+		"projectID", projectID,
+		"repoPath", target.repoPath,
+		"remote", target.resolved.Remote,
+		"branch", target.resolved.Branch,
+		"baseRef", target.resolved.BaseRef,
+		"error", err,
+	)
 }
 
 // defaultBranchFetchWindow is how long a fetched base ref counts as current for
 // the next start of the same project.
 const defaultBranchFetchWindow = 30 * time.Second
+
+// defaultBranchFreshWindow is how old a base may be, since its last successful
+// fetch, for a start to use it without waiting and refresh it in the
+// background. A start after a longer gap, or after a daemon restart, waits for
+// the fetch as before.
+const defaultBranchFreshWindow = 10 * time.Minute
+
+// defaultBranchBackgroundFetchTimeout bounds a background base refresh. Nobody
+// waits for it, so it can outlast the budget of a fetch a start waits for.
+const defaultBranchBackgroundFetchTimeout = time.Minute
 
 // defaultBranchFetchedRecently reports whether baseRef of repoPath was fetched
 // within defaultBranchFetchWindow, and otherwise records this fetch.
@@ -2293,6 +2347,46 @@ func (m *Manager) defaultBranchFetchedRecently(repoPath, baseRef string) bool {
 	}
 	m.defaultBranchFetchedAt[key] = now
 	return false
+}
+
+// recordDefaultBranchFetch notes a successful fetch of baseRef that happened
+// elsewhere, so starts within defaultBranchFetchWindow skip their own.
+func (m *Manager) recordDefaultBranchFetch(repoPath, baseRef string) {
+	key := filepath.Clean(repoPath) + "\x00" + baseRef
+	now := m.clock()
+	m.defaultBranchFetchMu.Lock()
+	defer m.defaultBranchFetchMu.Unlock()
+	if m.defaultBranchFetchedAt == nil {
+		m.defaultBranchFetchedAt = make(map[string]time.Time)
+	}
+	m.defaultBranchFetchedAt[key] = now
+	if m.defaultBranchFreshAt == nil {
+		m.defaultBranchFreshAt = make(map[string]time.Time)
+	}
+	m.defaultBranchFreshAt[key] = now
+}
+
+// recordDefaultBranchFresh notes that a fetch of baseRef succeeded.
+func (m *Manager) recordDefaultBranchFresh(repoPath, baseRef string) {
+	key := filepath.Clean(repoPath) + "\x00" + baseRef
+	now := m.clock()
+	m.defaultBranchFetchMu.Lock()
+	defer m.defaultBranchFetchMu.Unlock()
+	if m.defaultBranchFreshAt == nil {
+		m.defaultBranchFreshAt = make(map[string]time.Time)
+	}
+	m.defaultBranchFreshAt[key] = now
+}
+
+// defaultBranchFresh reports whether a fetch of baseRef succeeded within
+// defaultBranchFreshWindow.
+func (m *Manager) defaultBranchFresh(repoPath, baseRef string) bool {
+	key := filepath.Clean(repoPath) + "\x00" + baseRef
+	now := m.clock()
+	m.defaultBranchFetchMu.Lock()
+	defer m.defaultBranchFetchMu.Unlock()
+	at, ok := m.defaultBranchFreshAt[key]
+	return ok && now.Sub(at) < defaultBranchFreshWindow
 }
 
 func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.ProjectRecord, cfg ports.SpawnConfig, id domain.SessionID, branch string, baseRefs map[string]string) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
@@ -2342,17 +2436,8 @@ func (m *Manager) createSessionWorkspaceAt(ctx context.Context, project domain.P
 		return ports.WorkspaceInfo{}, nil, err
 	}
 	childRepos := make([]ports.WorkspaceProjectRepoConfig, 0, len(repos))
-	assets := make([]ports.WorkspaceProjectAssetConfig, 0)
 	for _, repo := range repos {
 		if repo.GitStatus == domain.GitStatusNeedsInit {
-			repoPath := filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
-			if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
-				continue
-			}
-			assets = append(assets, ports.WorkspaceProjectAssetConfig{
-				RelativePath: repo.RelativePath,
-				SourcePath:   repoPath,
-			})
 			continue
 		}
 		repoPath := filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
@@ -2380,7 +2465,6 @@ func (m *Manager) createSessionWorkspaceAt(ctx context.Context, project domain.P
 		BaseRef:          baseRefs[filepath.Clean(project.Path)],
 		StartRef:         startRef,
 		Repos:            childRepos,
-		Assets:           assets,
 	})
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
@@ -4670,6 +4754,7 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	}
 	// Capture only rows that predate the listener. Git cleanup belongs in the
 	// background, where a slow or unavailable repository cannot delay boot.
+	m.startupHealthCutoff = m.clock()
 	m.startupTaskPreparations = []domain.SessionRecord{}
 	m.startupProvisioningRetries = nil
 	// No branch naming survives a restart; clients show the branch it left.
@@ -4763,6 +4848,11 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	candidates := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
 	for _, rec := range recs {
+		// A spawn accepted after the listener opened can still be between
+		// inserting its seed row and creating its workspace.
+		if !m.startupHealthCutoff.IsZero() && !rec.CreatedAt.Before(m.startupHealthCutoff) {
+			continue
+		}
 		if rec.IsTerminated || rec.IsTaskPreparation || rec.HibernatedAt != nil || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 			continue
 		}

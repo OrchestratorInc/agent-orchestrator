@@ -1134,8 +1134,9 @@ describe("CommandPalette actions", () => {
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.change(input, { target: { value: "toggle theme" } });
 		fireEvent.keyDown(input, { key: "Enter" });
-		expect(useUiStore.getState().resolvedTheme).toBe("light");
 		expect(input).toHaveValue("toggle theme");
+		// The toggle reads the OS appearance first, so the switch lands a tick later.
+		await waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("light"));
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 

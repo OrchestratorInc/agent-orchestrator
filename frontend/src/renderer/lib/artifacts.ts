@@ -11,6 +11,7 @@ import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
 import type { TFunction } from "i18next";
 import type { CloudShareAccess, HostShareLink } from "../../shared/cloud-share";
 import { CloudCpError } from "./cloud-cp/errors";
+import type { CloudCpSharedArtifact } from "./cloud-cp/types";
 import { fileMediaKind } from "./file-media";
 import { isSvgPath } from "./image-files";
 import { sessionUiKey } from "./hosts";
@@ -57,7 +58,58 @@ export type ArtifactRow = {
 	 * session; a new one can start from it.
 	 */
 	kept?: "session-deleted" | "project-removed";
+	/**
+	 * Set on a link someone else published and shared with this person, by
+	 * their email or a team they are in, or one they opened from its page. It
+	 * has no session; it opens through the link's viewer access.
+	 */
+	shared?: { linkId: string; viewerUrl?: string; access: CloudShareAccess };
 };
+
+/** The group ID of the links shared with this person. */
+export const SHARED_WITH_ME_GROUP_ID = "shared-with-me";
+
+/** What a shared link's row is made from: a listed link, or one opened from its page. */
+export type SharedArtifactLink = Pick<CloudCpSharedArtifact, "linkId" | "name" | "contentType" | "updatedAt" | "access" | "viewerUrl">
+	& Partial<Pick<CloudCpSharedArtifact, "via" | "teams" | "workspaces">>;
+
+/**
+ * The team or workspace a link reached this person through, for its row: a
+ * link shared with their email names neither.
+ */
+export function sharedThrough(item: SharedArtifactLink): string {
+	if (item.via === "team") return item.teams?.[0]?.name ?? "";
+	if (item.via === "workspace") return item.workspaces?.[0]?.name ?? "";
+	return "";
+}
+
+/** A shared link's row; see ArtifactRow.shared. */
+export function sharedArtifactRow(item: SharedArtifactLink): ArtifactRow {
+	const name = item.name;
+	const kind: ArtifactKind = /^text\/html\b/i.test(item.contentType) || /\.html?$/i.test(name)
+		? "html"
+		: /^text\/markdown\b/i.test(item.contentType) || /\.(md|markdown)$/i.test(name) ? "markdown" : "file";
+	return {
+		id: `shared:${item.linkId}`,
+		path: name,
+		name,
+		kind,
+		updatedAt: item.updatedAt,
+		sessionId: `shared:${item.linkId}`,
+		// Where a session's file names its session, a team's link names the team.
+		sessionTitle: sharedThrough(item),
+		shared: { linkId: item.linkId, ...(item.viewerUrl ? { viewerUrl: item.viewerUrl } : {}), access: item.access },
+	};
+}
+
+/**
+ * The links shared with this person as one Cloud group, newest change first,
+ * or undefined when there are none.
+ */
+export function sharedArtifactGroup(items: readonly CloudCpSharedArtifact[] | undefined, name: string): ArtifactGroup | undefined {
+	const rows = (items ?? []).map(sharedArtifactRow).sort(newestFirst);
+	return rows.length > 0 ? { id: SHARED_WITH_ME_GROUP_ID, name, isScratchpad: false, cloud: true, rows } : undefined;
+}
 
 /**
  * Whether this person may change or take a copy of a session's artifact files:
@@ -219,15 +271,15 @@ function keptArtifactRows(set: KeptArtifactSet, projectId: string | undefined): 
 }
 
 /**
- * Where a row comes from, after its name: its project and session, and why it
- * is view only. An archived session's files stay listed, and so do those of a
- * deleted session or removed project that were kept.
+ * What a card says after its name: the machine it is on, whose it is, and why
+ * it is view only. An archived session's files stay listed, and so do those
+ * of a deleted session or removed project that were kept.
  */
-export function artifactContext(t: TFunction, row: Pick<ArtifactRow, "archived" | "kept" | "sessionTitle">, projectName: string): string {
+export function artifactContext(t: TFunction, row: Pick<ArtifactRow, "archived" | "kept">, placeName: string, owner: ArtifactOwner): string {
 	const reason = row.kept === "session-deleted"
 		? t("artifacts.deletedSession")
 		: row.kept === "project-removed" ? t("artifacts.removedProject") : row.archived ? t("artifacts.archivedSession") : "";
-	return reason ? `${projectName} · ${row.sessionTitle} · ${reason}` : `${projectName} · ${row.sessionTitle}`;
+	return [placeName, t(`artifacts.owner.${owner}`), reason].filter(Boolean).join(" · ");
 }
 
 /** Total artifacts across groups, for the sidebar badge. */
@@ -269,11 +321,35 @@ export function artifactLocation(row: Pick<ArtifactRow, "cloud" | "hostId">, gro
 export type ArtifactFilters = {
 	query: string;
 	projectIds?: readonly string[];
-	/** Undefined for both locations. */
+	/** Undefined for every location. */
 	location?: ArtifactLocation;
 	types?: readonly ArtifactType[];
 	sharings?: readonly ArtifactSharing[];
+	/** Undefined for anyone's. */
+	owner?: ArtifactOwner;
+	/** The control-plane user ID that owner compares a cloud session's creator with. */
+	cloudUserId?: string;
+	/** Keys (artifactKey) of the only rows to keep, for the Pinned filter; undefined keeps every row. */
+	onlyKeys?: ReadonlySet<string>;
 };
+
+/** Whether an artifact is this person's ("mine") or someone else's they can see ("shared"). */
+export type ArtifactOwner = "mine" | "shared";
+
+export const ARTIFACT_OWNERS: readonly ArtifactOwner[] = ["mine", "shared"];
+
+/**
+ * Whose an artifact is. A file on this machine or a remote host is this
+ * person's; a cloud session's belongs to whoever started it. A session with
+ * no creator on record, or one read before this person's control-plane ID is
+ * known, counts as theirs, as canChangeSessionArtifacts first treats it. A
+ * link someone else published is always shared.
+ */
+export function artifactOwner(row: Pick<ArtifactRow, "cloud" | "shared">, cloudUserId: string | undefined): ArtifactOwner {
+	if (row.shared) return "shared";
+	const creator = row.cloud?.createdByUserId;
+	return creator && cloudUserId && creator !== cloudUserId ? "shared" : "mine";
+}
 
 /**
  * Whether an artifact has a public link ("public"), a private one, open only
@@ -293,7 +369,8 @@ export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "shared"
  * link list says who its link opens for: until then, or when the list cannot
  * be read, it is neither called public nor counted as such.
  */
-export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud">): ArtifactSharing | undefined {
+export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud" | "shared">): ArtifactSharing | undefined {
+	if (row.shared) return row.shared.access === "restricted" ? "shared" : "public";
 	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : row.shareAccess === "anyone" ? "public" : undefined;
 	return row.cloud ? undefined : "private";
 }
@@ -344,9 +421,9 @@ export function withHostShareLinks(groups: readonly ArtifactGroup[], links: read
 }
 
 /**
- * Keeps groups matching the project filter, and rows matching the location
- * and type filters whose project, file name or session title contains the
- * query. Groups left without rows are dropped.
+ * Keeps groups matching the project filter, and rows matching the location,
+ * type, sharing, owner and pinned filters whose project, file name or session
+ * title contains the query. Groups left without rows are dropped.
  */
 export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ArtifactGroup[] {
 	const { location } = filters;
@@ -363,6 +440,8 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 				...group,
 				rows: group.rows.filter((row) =>
 					(!location || artifactLocation(row, group) === location)
+					&& (!filters.owner || artifactOwner(row, filters.cloudUserId) === filters.owner)
+					&& (!filters.onlyKeys || filters.onlyKeys.has(artifactKey(row)))
 					&& (types.length === 0 || types.includes(artifactType(row)))
 					&& (sharings.length === 0 || matchesSharing(sharings, artifactSharing(row)))
 					&& (groupMatches
@@ -372,6 +451,22 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 			};
 		})
 		.filter((group) => group.rows.length > 0);
+}
+
+/**
+ * How many artifacts each location holds under every other filter, for the
+ * location chips; "all" counts every location together.
+ */
+export function artifactLocationCounts(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ReadonlyMap<ArtifactLocation | "all", number> {
+	const counts = new Map<ArtifactLocation | "all", number>([["all", 0]]);
+	for (const group of filterArtifactGroups(groups, { ...filters, location: undefined }, scratchpadName)) {
+		for (const row of group.rows) {
+			const location = artifactLocation(row, group);
+			counts.set(location, (counts.get(location) ?? 0) + 1);
+			counts.set("all", (counts.get("all") ?? 0) + 1);
+		}
+	}
+	return counts;
 }
 
 /** A sharing filter keeps only rows whose state is known and chosen. */

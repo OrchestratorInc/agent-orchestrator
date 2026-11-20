@@ -5,6 +5,7 @@ import {
   chmod,
   mkdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -143,10 +144,57 @@ export function isLocalSession(
 }
 
 const emptyStore = (): AuthStore => ({ session: null, pkce: null });
-const memoryStores = new Map<string, AuthStore>();
+
+// A store written while protected storage was unavailable, kept in this process
+// until it can be saved. One holding a credential (a sign-in or a rotated token)
+// replaces the file, which was deleted then. One without only adds a pending
+// sign-in on top of the file, which stays for when storage is back.
+interface MemoryStore {
+  store: AuthStore;
+  replacesFile: boolean;
+}
+const memoryStores = new Map<string, MemoryStore>();
+// Data dirs whose file could not be read during an outage, so the signed-out
+// store handed out then is not a sign-out.
+const unreadFiles = new Set<string>();
+// Data dirs whose file did not decrypt this run: the keychain was locked, its
+// access prompt was denied, or the key is not the one the file was saved
+// with. The file is kept for the next launch and not decrypted again in this
+// one, so a denied prompt does not come back on every read.
+const undecryptable = new Set<string>();
+// The session the file held when this run last read or wrote it, so a store
+// written during an outage that only carries that session on (a sign-in
+// started, an expired one cleared) is not taken for a new credential.
+const fileSessions = new Map<string, StoredSession | null>();
+
+// Whether two sessions are the same credential, not just the same account.
+function sameCredential(a: StoredSession | null | undefined, b: StoredSession | null | undefined): boolean {
+  return !!a && !!b && a.accessToken === b.accessToken && a.refreshToken === b.refreshToken;
+}
+const storeOps = new Map<string, Promise<void>>();
 const refreshes = new Map<string, Promise<CloudAccount | null>>();
 const authGenerations = new Map<string, number>();
 const authMutations = new Map<string, Promise<void>>();
+
+// Runs one operation per data dir at a time, in call order.
+async function serialize<T>(
+  queue: Map<string, Promise<void>>,
+  dataDir: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = queue.get(dataDir) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  queue.set(dataDir, settled);
+  try {
+    return await result;
+  } finally {
+    if (queue.get(dataDir) === settled) queue.delete(dataDir);
+  }
+}
 
 function authGeneration(dataDir: string): number {
   return authGenerations.get(dataDir) ?? 0;
@@ -158,24 +206,11 @@ export function invalidateAuthOperations(dataDir: string): number {
   return generation;
 }
 
-export async function withAuthMutation<T>(
+export function withAuthMutation<T>(
   dataDir: string,
   mutation: () => Promise<T>,
 ): Promise<T> {
-  const previous = authMutations.get(dataDir) ?? Promise.resolve();
-  const result = previous.catch(() => undefined).then(mutation);
-  const settled = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  authMutations.set(dataDir, settled);
-  try {
-    return await result;
-  } finally {
-    if (authMutations.get(dataDir) === settled) {
-      authMutations.delete(dataDir);
-    }
-  }
+  return serialize(authMutations, dataDir, mutation);
 }
 
 /**
@@ -211,50 +246,204 @@ function encodeStore(store: AuthStore): Buffer {
   return safeStorage.encryptString(JSON.stringify(store));
 }
 
-function decodeStore(value: Buffer): AuthStore {
-  return JSON.parse(safeStorage.decryptString(value)) as AuthStore;
-}
-
-export async function readAuthStore(dataDir: string): Promise<AuthStore> {
-  const memoryStore = memoryStores.get(dataDir);
-  if (memoryStore) return memoryStore;
-  if (!protectedStorageAvailable()) {
-    await rm(storePath(dataDir), { force: true });
-    return emptyStore();
-  }
+// The file's store, or null when the file is there but did not decrypt. A
+// file that decrypts but holds no store is removed: no later read can use it.
+async function readStoreFile(dataDir: string): Promise<AuthStore | null> {
   try {
-    return decodeStore(await readFile(storePath(dataDir)));
+    const value = await readFile(storePath(dataDir));
+    let text: string;
+    try {
+      text = safeStorage.decryptString(value);
+    } catch {
+      return null;
+    }
+    return JSON.parse(text) as AuthStore;
   } catch {
     await rm(storePath(dataDir), { force: true });
     return emptyStore();
   }
 }
 
-export async function writeAuthStore(
+// The file did not decrypt. Keep it, and read as signed out until a restart
+// tries again or a new sign-in is saved over it.
+function noteUndecryptable(dataDir: string): void {
+  if (!undecryptable.has(dataDir)) {
+    console.warn(
+      "Orchestrator Cloud sign-in could not be decrypted. It is kept, and the next launch tries again.",
+    );
+  }
+  undecryptable.add(dataDir);
+  unreadFiles.add(dataDir);
+}
+
+// Writes a temporary file and renames it over the store, so a write that fails
+// partway leaves the saved sign-in as it was.
+async function writeStoreFile(dataDir: string, store: AuthStore): Promise<void> {
+  await mkdir(dataDir, { recursive: true });
+  const target = storePath(dataDir);
+  const staging = `${target}.${process.pid}.tmp`;
+  try {
+    await writeFile(staging, encodeStore(store), { mode: 0o600 });
+    await chmod(staging, 0o600);
+    await rename(staging, target);
+  } catch (error) {
+    await rm(staging, { force: true });
+    throw error;
+  }
+}
+
+// A pending sign-in written during an outage goes onto the session the file
+// still holds, so a sign-in that was started but never finished keeps it.
+// Null when the file did not decrypt, so there is nothing to merge onto.
+async function onFileSession(dataDir: string, store: AuthStore): Promise<AuthStore | null> {
+  const file = await readStoreFile(dataDir);
+  if (file === null) {
+    noteUndecryptable(dataDir);
+    return null;
+  }
+  return { ...file, pkce: store.pkce };
+}
+
+// The file was read for the first time since an outage hid it: show its
+// account again in every renderer.
+function noteFileRead(dataDir: string, store: AuthStore): void {
+  if (unreadFiles.delete(dataDir) && store.session) {
+    notifyRenderersFn?.(publicAccount(store.session));
+  }
+}
+
+/**
+ * Whether the saved sign-in is hidden right now (secure storage is out, or
+ * the file did not decrypt), so the signed-out store read from it is not a
+ * sign-out. Callers that would clear account data on a signed-out read wait.
+ */
+export function isSavedSignInHidden(dataDir: string): boolean {
+  return unreadFiles.has(dataDir);
+}
+
+/**
+ * Reads the store again when a sign-in is waiting on secure storage and it is
+ * available now. Nothing announces that storage is back, so the app calls
+ * this when it is focused or the screen is unlocked: the read saves a sign-in
+ * kept in memory and shows a hidden one again in every renderer.
+ */
+export function recheckSavedSignIn(dataDir: string): void {
+  if (!unreadFiles.has(dataDir) && !memoryStores.has(dataDir)) return;
+  if (!protectedStorageAvailable() || undecryptable.has(dataDir)) return;
+  void readAuthStore(dataDir).catch(() => undefined);
+}
+
+export function readAuthStore(dataDir: string): Promise<AuthStore> {
+  return serialize(storeOps, dataDir, async () => {
+    const memory = memoryStores.get(dataDir);
+    if (!protectedStorageAvailable() || undecryptable.has(dataDir)) {
+      // An outage, such as a locked keychain or a keyring that has not started
+      // yet, is often temporary. The file stays for when storage is back and
+      // reads as signed out until then, unless this run signed in since.
+      if (!memory?.replacesFile) unreadFiles.add(dataDir);
+      return memory?.store ?? emptyStore();
+    }
+    if (memory) {
+      // Storage is back: save what was kept in memory.
+      const store = memory.replacesFile
+        ? memory.store
+        : await onFileSession(dataDir, memory.store);
+      if (store === null) return memory.store;
+      try {
+        await writeStoreFile(dataDir, store);
+      } catch {
+        // Keep what was recovered, so a later write that carries the file's
+        // session on is not taken for a new credential and the next read
+        // tries the save again. It is still shown again in every renderer.
+        memoryStores.set(dataDir, { ...memory, store });
+        noteFileRead(dataDir, store);
+        return store;
+      }
+      memoryStores.delete(dataDir);
+      fileSessions.set(dataDir, store.session);
+      noteFileRead(dataDir, store);
+      return store;
+    }
+    const store = await readStoreFile(dataDir);
+    if (store === null) {
+      noteUndecryptable(dataDir);
+      return emptyStore();
+    }
+    fileSessions.set(dataDir, store.session);
+    noteFileRead(dataDir, store);
+    return store;
+  });
+}
+
+export function writeAuthStore(
   dataDir: string,
   store: AuthStore,
 ): Promise<void> {
-  if (!protectedStorageAvailable()) {
-    // A rotating refresh token must never fall back to plaintext persistence.
-    // Linux's basic_text backend also reports encryption as available despite
-    // using an unprotected hardcoded password, so keep that process-local too.
-    memoryStores.set(dataDir, store);
-    await rm(storePath(dataDir), { force: true });
-    return;
-  }
-  memoryStores.delete(dataDir);
-  await mkdir(dataDir, { recursive: true });
-  const target = storePath(dataDir);
-  await writeFile(target, encodeStore(store), { mode: 0o600 });
-  await chmod(target, 0o600);
+  return serialize(storeOps, dataDir, async () => {
+    if (!protectedStorageAvailable()) {
+      // A rotating refresh token must never fall back to plaintext persistence.
+      // Linux's basic_text backend also reports encryption as available despite
+      // using an unprotected hardcoded password, so keep that process-local too.
+      const memory = memoryStores.get(dataDir);
+      const wasReplacing = memory?.replacesFile === true;
+      // A store that only carries the session already held (in memory, or in
+      // the file when it was last read) on, with a sign-in started or cleared,
+      // keeps the file.
+      const held = memory ? memory.store.session : fileSessions.get(dataDir);
+      const newCredential = store.session !== null && !sameCredential(store.session, held);
+      memoryStores.set(dataDir, { store, replacesFile: wasReplacing || newCredential });
+      if (newCredential) {
+        // This credential is newer than the file's. Delete the file so the
+        // account it replaced can never come back.
+        unreadFiles.delete(dataDir);
+        undecryptable.delete(dataDir);
+        fileSessions.delete(dataDir);
+        await rm(storePath(dataDir), { force: true });
+        if (!wasReplacing) {
+          console.warn(
+            "Orchestrator Cloud sign-in is kept in memory only: secure storage is unavailable, so it will not survive a restart until storage is available again.",
+          );
+        }
+      }
+      return;
+    }
+    // What is kept in memory is dropped only once the file is saved, so a
+    // failed write cannot lose a sign-in held nowhere else.
+    if (store.session === null && unreadFiles.has(dataDir)) {
+      // Read during the outage, this store never saw the file's session.
+      const next = undecryptable.has(dataDir) ? null : await onFileSession(dataDir, store);
+      if (next === null) {
+        // The file did not decrypt, so its session cannot be kept in a new
+        // one. Hold this store (a pending sign-in) in memory and leave the
+        // file for the next launch; a sign-in it completes is saved over it.
+        memoryStores.set(dataDir, { store, replacesFile: false });
+        return;
+      }
+      await writeStoreFile(dataDir, next);
+      memoryStores.delete(dataDir);
+      fileSessions.set(dataDir, next.session);
+      noteFileRead(dataDir, next);
+      return;
+    }
+    await writeStoreFile(dataDir, store);
+    memoryStores.delete(dataDir);
+    fileSessions.set(dataDir, store.session);
+    unreadFiles.delete(dataDir);
+    undecryptable.delete(dataDir);
+  });
 }
 
-export async function removeAuthStore(dataDir: string): Promise<void> {
-  memoryStores.delete(dataDir);
-  await Promise.all([
-    rm(storePath(dataDir), { force: true }),
-    rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
-  ]);
+export function removeAuthStore(dataDir: string): Promise<void> {
+  return serialize(storeOps, dataDir, async () => {
+    memoryStores.delete(dataDir);
+    unreadFiles.delete(dataDir);
+    undecryptable.delete(dataDir);
+    fileSessions.delete(dataDir);
+    await Promise.all([
+      rm(storePath(dataDir), { force: true }),
+      rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
+    ]);
+  });
 }
 
 function displayName(user: User): string {
@@ -413,8 +602,10 @@ export async function getCloudAccessToken(
   if (account === null) {
     // The auth store may also have been cleared by another dev-app process.
     // A proxied request is authoritative evidence that this renderer can no
-    // longer use AO Cloud, so retire any cached signed-in UI.
-    notifyRenderersFn?.(null);
+    // longer use AO Cloud, so retire any cached signed-in UI. A sign-in hidden
+    // by a secure storage outage is not gone: a signed-out notice would clear
+    // the account's share links and previews, which do not come back with it.
+    if (!isSavedSignInHidden(dataDir)) notifyRenderersFn?.(null);
     return null;
   }
   const refreshed = await readAuthStore(dataDir);

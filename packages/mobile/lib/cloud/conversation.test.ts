@@ -57,6 +57,18 @@ describe("cloud conversation projection", () => {
 		expect(ended.items[1]).toMatchObject({ status: "cancelled" });
 	});
 
+	// The approval card picks its primary action by kind, so cloud keeps it too.
+	it("keeps each approval decision's kind", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Deploy" }),
+			event("chat.approval_requested", { turnId: "t1", requestId: "r1", decisions: [{ id: "reject", kind: "reject_once", label: "Deny" }, { id: "allow", kind: "allow_once", label: "Allow Once" }, { id: "x", kind: 7, label: "Odd" }] }),
+		]);
+		expect(snapshot.items[1]).toMatchObject({ decisions: [{ id: "reject", kind: "reject_once", label: "Deny" }, { id: "allow", kind: "allow_once", label: "Allow Once" }, { id: "x", label: "Odd" }] });
+		const decisions = (snapshot.items[1] as { decisions?: Array<Record<string, unknown>> }).decisions ?? [];
+		expect("kind" in decisions[2]).toBe(false);
+	});
+
 	it("merges streamed activity output and attaches the turn diff to file changes", () => {
 		sequence = 0;
 		const diff = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more\n";
