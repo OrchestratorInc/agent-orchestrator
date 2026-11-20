@@ -3,7 +3,7 @@
 // the same split as orchestratorView.ts / projectFilter.ts.
 import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
-import { hostRouteMatches } from "../hostRoute";
+import { hostRouteMatches, machineOffline } from "../hostRoute";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
@@ -133,10 +133,17 @@ export function sessionLookupDue(args: {
  * route that read it as "unknown" swapped a listed chat for this loader and
  * then remounted it, which was the resume flicker. `loading` is the store's:
  * true from each start of its poll until that poll's first tick.
+ *
+ * Nor is a closed connection read as offline: the app closes it on purpose every
+ * time it goes to the background, so a session the lists do not hold (opened
+ * from a notification, say) flashed "offline" during every reconnect. The
+ * machine is offline only by the shared rule (`machineOffline`, over the
+ * store's `unreachable`); until then the route waits.
  */
 export function sessionRouteView(args: {
 	listed: RouteSession | undefined;
 	paired: boolean | null;
+	unreachable: boolean;
 	connection: ConnStatus;
 	loading: boolean;
 	lookup: SessionLookup;
@@ -145,7 +152,8 @@ export function sessionRouteView(args: {
 }): SessionRouteView {
 	if (args.paired === null && args.loading) return { kind: "loading" };
 	if (!hostRouteMatches(args.routeHostId, args.currentHostId)) return { kind: "wrongHost" };
-	if (args.paired === null) return args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
+	const offline = machineOffline({ unreachable: args.unreachable, paired: args.paired });
+	if (args.paired === null) return offline ? { kind: "offline" } : { kind: "loading" };
 	if (!args.paired) return { kind: "unpaired" };
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;
@@ -155,9 +163,12 @@ export function sessionRouteView(args: {
 			: { kind: "screen", session: lookup.session };
 	}
 	if (lookup.state === "failed" && isSessionGone(lookup.status)) return { kind: "missing" };
-	if (args.connection !== "open") {
-		return args.loading || args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
-	}
+	// A rejected lookup (401/403/429) is the daemon's own answer, not an app
+	// switch: it is handed to the board, with no Retry, connected or not. Waiting
+	// instead would spin for good, since the board's poll stops on the same
+	// rejection and nothing asks again until it is open.
+	if (lookup.state === "failed" && !shouldKeepPolling(lookup.status)) return { kind: "offline" };
+	if (args.connection !== "open") return offline ? { kind: "offline" } : { kind: "loading" };
 	if (lookup.state === "pending") return { kind: "loading" };
-	return shouldKeepPolling(lookup.status) ? { kind: "failed" } : { kind: "offline" };
+	return { kind: "failed" };
 }

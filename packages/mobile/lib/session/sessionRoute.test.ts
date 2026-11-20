@@ -35,7 +35,7 @@ const pending: SessionLookup = { state: "pending" };
 
 type ViewArgs = Parameters<typeof sessionRouteView>[0];
 const view = (over: Partial<ViewArgs> = {}) =>
-	sessionRouteView({ listed: undefined, paired: true, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
+	sessionRouteView({ listed: undefined, paired: true, unreachable: false, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
 
 type DueArgs = Parameters<typeof sessionLookupDue>[0];
 const due = (over: Partial<DueArgs> = {}) =>
@@ -50,8 +50,16 @@ describe("sessionRouteView", () => {
 	it("waits for the saved config before judging anything", () => {
 		expect(view({ paired: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
 	});
-	it("shows an offline paired host instead of another-machine or a permanent loader", () => {
-		expect(view({ paired: null, connection: "closed" })).toEqual({ kind: "offline" });
+	it("shows an unreachable paired host as offline instead of another-machine or a permanent loader", () => {
+		expect(view({ paired: null, connection: "closed", unreachable: true })).toEqual({ kind: "offline" });
+		expect(view({ paired: null, connection: "closed", unreachable: true, currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
+	});
+
+	// Before the first resolution a closed connection is not an outage either.
+	it("waits for a host that has not resolved yet unless it is unreachable", () => {
+		for (const connection of ["closed", "connecting"] as const) {
+			expect(view({ paired: null, connection })).toEqual({ kind: "loading" });
+		}
 		expect(view({ paired: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
 	});
 
@@ -107,12 +115,28 @@ describe("sessionRouteView", () => {
 
 	// The bug this replaces: "Session not found" was the fallback for anything the
 	// cache did not hold, including a request that never reached the daemon.
-	it.each([undefined, 401, 403, 429, 500])("leaves a %s failure to the board while it is disconnected", (status) => {
+	it.each([undefined, 500])("waits out a %s failure while the board reconnects, and asks again once it is open", (status) => {
+		expect(view({ connection: "closed", lookup: failed(status) })).toEqual({ kind: "loading" });
+		expect(view({ connection: "closed", lookup: failed(status), unreachable: true })).toEqual({ kind: "offline" });
+	});
+
+	// A rejection is the daemon's answer: the board's poll stops on it too, so
+	// waiting would spin for good.
+	it.each([401, 403, 429])("leaves a %s failure to the board while it is disconnected", (status) => {
 		expect(view({ connection: "closed", lookup: failed(status) })).toEqual({ kind: "offline" });
 	});
 
-	it("reports the board disconnected before anything was asked", () => {
-		expect(view({ connection: "closed" })).toEqual({ kind: "offline" });
+	// The app closes its connection on purpose every time it goes to the
+	// background, so a session opened from a notification (not in the lists)
+	// flashed "This machine is offline" during every reconnect.
+	it("waits through the closed connection an app switch leaves behind", () => {
+		expect(view({ connection: "closed" })).toEqual({ kind: "loading" });
+		expect(view({ connection: "closed", lookup: failed(undefined) })).toEqual({ kind: "loading" });
+	});
+
+	it("reports the machine offline by the shared rule: unreachable after the link tracker gave up", () => {
+		expect(view({ connection: "closed", unreachable: true })).toEqual({ kind: "offline" });
+		expect(view({ connection: "closed", unreachable: true, lookup: failed(undefined) })).toEqual({ kind: "offline" });
 	});
 
 	it("waits while the board is still reaching the machine", () => {
