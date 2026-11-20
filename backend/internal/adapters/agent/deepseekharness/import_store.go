@@ -247,12 +247,12 @@ func decodeImportHeader(header []byte, expectedID string) (ImportArchive, error)
 
 type importSurfaceNode struct {
 	seq int64
-	m   *domain.ImportedMessage
 }
 
 func (a *ImportArchive) project(ctx context.Context) error {
 	nodes := list.New()
 	bySeq := make(map[int64]*list.Element)
+	openingUser, held := -1, 0
 	var expected int64
 	for rest := a.body; len(rest) > 0; {
 		if err := ctx.Err(); err != nil {
@@ -281,8 +281,17 @@ func (a *ImportArchive) project(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		node := importSurfaceNode{*e.Seq, m}
+		node := importSurfaceNode{seq: *e.Seq}
 		if string(e.SurfaceOp) == `"append"` {
+			// Surface replacement compacts model context. The human transcript keeps
+			// append-origin messages, exactly as the native post-resume replay does.
+			if m != nil {
+				if openingUser < 0 && m.Role == "user" && strings.TrimSpace(m.Text) != "" {
+					openingUser = len(a.Messages)
+				}
+				a.Messages = append(a.Messages, *m)
+				held += len(m.Text)
+			}
 			bySeq[*e.Seq] = nodes.PushBack(node)
 			continue
 		}
@@ -322,21 +331,6 @@ func (a *ImportArchive) project(ctx context.Context) error {
 		} else {
 			bySeq[*e.Seq] = nodes.InsertAfter(node, anchor)
 		}
-	}
-	openingUser, held := -1, 0
-	for el := nodes.Front(); el != nil; el = el.Next() {
-		n, ok := el.Value.(importSurfaceNode)
-		if !ok {
-			return errors.New("deepseek: invalid surface node")
-		}
-		if n.m == nil {
-			continue
-		}
-		if openingUser < 0 && n.m.Role == "user" && strings.TrimSpace(n.m.Text) != "" {
-			openingUser = len(a.Messages)
-		}
-		a.Messages = append(a.Messages, *n.m)
-		held += len(n.m.Text)
 	}
 	if openingUser < 0 {
 		return errors.New("deepseek: native history has no visible user message")

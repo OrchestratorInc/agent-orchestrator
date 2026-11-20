@@ -97,7 +97,7 @@ func TestImportReadsAllCompressedFramesWithoutChangingSource(t *testing.T) {
 	}
 }
 
-func TestImportFoldsSurfaceReplacementsAndHidesRuntimeContext(t *testing.T) {
+func TestImportValidatesSurfaceReplacementsAndPreservesAppendTranscript(t *testing.T) {
 	root, path, _ := importFixture(t, false)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -115,7 +115,7 @@ func TestImportFoldsSurfaceReplacementsAndHidesRuntimeContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, err := ReadImportArchive(context.Background(), root, path)
-	if err != nil || len(a.Messages) != 2 || a.Messages[0].Text != "edited opening" || a.Messages[1].Text != "remembered" {
+	if err != nil || len(a.Messages) != 2 || a.Messages[0].Text != "opening marker" || a.Messages[1].Text != "remembered" {
 		t.Fatalf("replacement=%+v,%v", a, err)
 	}
 }
@@ -128,6 +128,7 @@ func TestImportShorteningPreservesOpeningUserAfterAssistant(t *testing.T) {
 	a.body = append(a.body, importTestEvent(1, "user/message", importTestUser("keep this user", "user"), "append")...)
 	a.body = append(a.body, importTestEvent(2, "assistant/message", assistant, "append")...)
 	a.body = append(a.body, importTestEvent(3, "assistant/message", assistant, "append")...)
+	a.body = append(a.body, importTestEvent(4, "user/message", importTestUser("compacted model context", "runtime-context"), map[string]any{"op": "replace", "startSeq": 0, "endSeq": 3})...)
 	if err := a.project(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -634,5 +635,60 @@ func TestImportNativeIdentityAllowsOnlyKnownSpellings(t *testing.T) {
 	}
 	if _, err := ReadImportArchive(context.Background(), root, path); err == nil {
 		t.Fatal("accepted directory/header identity mismatch")
+	}
+}
+
+func TestImportAdmissionPreservesHumanTranscriptWhenSourceEndsAfterCompaction(t *testing.T) {
+	for _, compressed := range []bool{false, true} {
+		for _, later := range []bool{false, true} {
+			t.Run(fmt.Sprintf("compressed=%v/later=%v", compressed, later), func(t *testing.T) {
+				root, path, _ := importFixtureWithID(t, false, "session-"+importTestID)
+				original, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				header, _, _ := bytes.Cut(original, []byte("\n"))
+				body := importTestEvent(0, "user/message", importTestUser("keep original user marker", "user"), "append")
+				body = append(body, importTestEvent(1, "assistant/message", map[string]any{"message": map[string]any{"id": "assistant1", "content": []map[string]string{{"type": "text", "text": "remembered original marker"}}}}, "append")...)
+				body = append(body, importTestEvent(2, "user/message", importTestUser("summary model context", "runtime-context"), map[string]any{"op": "replace", "startSeq": 0, "endSeq": 1})...)
+				if later {
+					body = append(body, importTestEvent(3, "user/message", importTestUser("later private turn", "user"), "append")...)
+				}
+				data := append(append(header, '\n'), body...)
+				if compressed {
+					enc, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true))
+					if err != nil {
+						t.Fatal(err)
+					}
+					data = enc.EncodeAll(data, nil)
+					enc.Close()
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+					path += ".zstd"
+				}
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				archive, err := ReadImportArchive(context.Background(), root, path)
+				want := 2
+				if later {
+					want++
+				}
+				if err != nil || len(archive.Messages) != want {
+					t.Fatalf("compacted source lost human history: %+v,%v", archive, err)
+				}
+				if archive.Messages[0].Text != "keep original user marker" || archive.Messages[1].Text != "remembered original marker" {
+					t.Fatalf("compaction changed human transcript: %+v", archive.Messages)
+				}
+				if later && archive.Messages[2].Text != "later private turn" {
+					t.Fatal("later turn displaced earlier human history")
+				}
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(data, after) {
+					t.Fatalf("source changed: %v", err)
+				}
+			})
+		}
 	}
 }
