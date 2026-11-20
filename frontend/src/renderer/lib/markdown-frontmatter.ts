@@ -21,12 +21,18 @@ export function stripMarkdownFrontmatter(content: string): string {
 	return closing ? rest.slice(closing.index + closing[0].length) : content;
 }
 
+const MARKDOWN_FILE = /\.(?:md|markdown)$/i;
+
 export function isMarkdownPreviewPath(path: string): boolean {
+	// A caller may already have decoded the target into a real filename, where
+	// a literal "#" or "?" is part of the name. Check the whole reference first
+	// so those files still resolve by their extension.
+	if (MARKDOWN_FILE.test(path)) return true;
 	const withoutQuery = path.split("?", 1)[0] ?? "";
-	if (/\.(?:md|markdown)$/i.test(withoutQuery)) return true;
+	if (MARKDOWN_FILE.test(withoutQuery)) return true;
 	const hashIndex = withoutQuery.lastIndexOf("#");
 	if (hashIndex < 0) return false;
-	return /\.(?:md|markdown)$/i.test(withoutQuery.slice(0, hashIndex));
+	return MARKDOWN_FILE.test(withoutQuery.slice(0, hashIndex));
 }
 
 export function parseMarkdownFrontmatter(content: string): MarkdownFrontmatter {

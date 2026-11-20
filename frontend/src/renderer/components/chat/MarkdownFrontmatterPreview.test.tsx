@@ -88,6 +88,37 @@ describe("MarkdownFrontmatterPreview", () => {
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
+	it("resolves an absolute workspace path before reading it", async () => {
+		getMock.mockImplementation((url: string) => {
+			if (url === "/api/v1/sessions/{sessionId}/workspace/resolve") {
+				return Promise.resolve({ data: { kind: "workspace", path: "docs/check.md" }, error: undefined });
+			}
+			return Promise.resolve(fileResponse(doc));
+		});
+		renderCard("/Users/me/worktree/docs/check.md", { kind: "workspace", sessionId: "sess-1" });
+		expect(await screen.findByText("Deployment checklist")).toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/resolve", expect.objectContaining({
+			params: { path: { sessionId: "sess-1" }, query: { path: "/Users/me/worktree/docs/check.md" } },
+		}));
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.objectContaining({
+			params: { path: { sessionId: "sess-1" }, query: { path: "docs/check.md" } },
+		}));
+	});
+
+	it("rejects an absolute path the daemon does not place in the workspace", async () => {
+		getMock.mockResolvedValue({ data: { kind: "outside", path: "/etc/passwd.md" }, error: undefined });
+		renderCard("/etc/passwd.md", { kind: "workspace", sessionId: "sess-1" });
+		expect(await screen.findByText("Unable to load this file.")).toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.anything());
+	});
+
+	it("reads a cloud sibling repository through a scoped client", async () => {
+		cloudGet.mockResolvedValue({ content: doc, binary: false, deleted: false });
+		renderCard("../second-repo/docs/check.md", { kind: "cloud", orgId: "org-1", sessionId: "sess-1" });
+		expect(await screen.findByText("Deployment checklist")).toBeInTheDocument();
+		expect(cloudGet).toHaveBeenCalledWith("org-1", "sess-1", { path: "docs/check.md", scope: "combined" }, { repository: "second-repo" });
+	});
+
 	it("does not fetch when cloud is not ready", () => {
 		cloudState.ready = false;
 		renderCard("docs/check.md", { kind: "cloud", orgId: "org-1", sessionId: "sess-1" });
@@ -241,6 +272,16 @@ describe("markdown link hover", () => {
 		expect(await screen.findByText("Steps to verify a build before deployment.")).toBeInTheDocument();
 		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.objectContaining({
 			params: { path: { sessionId: "sess-1" }, query: { path: "docs/a#b.md" } },
+		}));
+	});
+
+	it("renders preview for a file with a literal ? in its name", async () => {
+		getMock.mockResolvedValue(fileResponse(doc));
+		renderLinks("[Draft](docs/check%3Fdraft.md)", { kind: "workspace", sessionId: "sess-1" });
+		fireEvent.pointerOver(screen.getByRole("link", { name: "Draft" }), { pointerType: "mouse" });
+		expect(await screen.findByText("Steps to verify a build before deployment.")).toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.objectContaining({
+			params: { path: { sessionId: "sess-1" }, query: { path: "docs/check?draft.md" } },
 		}));
 	});
 
