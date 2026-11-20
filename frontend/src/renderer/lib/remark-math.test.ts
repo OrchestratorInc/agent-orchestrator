@@ -35,4 +35,14 @@ describe("createDollarDelimiters", () => {
 	it("keeps an open display formula open", () => {
 		expect(createDollarDelimiters()("\\[\nE = m")).toBe("$$\nE = m");
 	});
+
+	it("fences a display formula with a blank line, since Words ends a $$ block there", () => {
+		const text = "$$\n\nx^2\n$$\n\n> $$\n>\n> y\n> $$\n\n\\[\na\n\nb\n\\]\n\n$$\nz\n\n";
+		const expected = "```math\n\nx^2\n```\n\n> ```math\n> \n> y\n> ```\n\n```math\na\n\nb\n```\n\n```math\nz\n";
+		const convert = createDollarDelimiters();
+		let out = "";
+		for (let end = 1; end <= text.length; end++) out = convert(text.slice(0, end));
+		expect(out).toBe(expected);
+		expect(createDollarDelimiters()(text)).toBe(expected);
+	});
 });

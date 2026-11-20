@@ -43,6 +43,12 @@ function backslashFormulas(node: Nodes, source: string, edits: Edit[]): void {
 		const start = node.position!.start.offset!;
 		const end = node.position!.end.offset!;
 		const raw = source.slice(start, end);
+		const indent = source.slice(source.lastIndexOf("\n", start - 1) + 1, start).replace(/[^\s>]/g, " ");
+		if (node.type === "math" && node.value.trim() && /(^|\n)[ \t]*(\n|$)/.test(node.value)) {
+			const closed = raw[0] === "\\" ? raw.endsWith("\\]") : /\n[\s>]*\$\$[ \t]*$/.test(raw);
+			edits.push({ start, end, text: `\`\`\`math\n${indent}${node.value.replaceAll("\n", `\n${indent}`)}${closed ? `\n${indent}\`\`\`` : ""}` });
+			return;
+		}
 		if (raw[0] !== "\\") {
 			const tex = node.value.trim();
 			if (node.type !== "inlineMath" || raw[1] === "$" || !tex) return;
@@ -51,7 +57,6 @@ function backslashFormulas(node: Nodes, source: string, edits: Edit[]): void {
 			return;
 		}
 		const closed = raw.endsWith(raw[1] === "(" ? "\\)" : "\\]");
-		const indent = source.slice(source.lastIndexOf("\n", start - 1) + 1, start).replace(/[^\s>]/g, " ");
 		const fence = raw[1] === "[" || /\d/.test(source[end] ?? "") ? "$$" : "$";
 		const text = node.type !== "math"
 			? `${fence}${raw.slice(2, -2).trim()}${fence}`
