@@ -65,7 +65,9 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await expect(page.getByTestId("sidebar-update-downloading").getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
 	await expect(page.getByTestId("update-status-line")).toContainText("42.0 / 100.0 MB");
 	await expect(page.getByTestId("app-version")).toHaveText("v1.0.0");
-	await expect(page.getByText("Updating to v2.0.0")).toBeVisible();
+	// The headline names the target; the status line keeps it for assistive tech.
+	await expect(page.getByTestId("update-target-version")).toHaveText("v2.0.0");
+	await expect(page.getByTestId("update-status-line")).toContainText("Updating to v2.0.0");
 
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } });
@@ -83,7 +85,7 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 });
 
 for (const width of [1400, 900]) {
-	test(`@P0 download progress track spans the text column at ${width}px`, async ({ page }) => {
+	test(`@P0 download progress track spans the card at ${width}px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 800 });
 		await installFakeBridge(page, {
 			version: "0.14.10-nightly.202611042028",
@@ -95,7 +97,7 @@ for (const width of [1400, 900]) {
 
 		const progress = page.getByRole("progressbar", { name: "Download progress" });
 		const statusLine = page.getByTestId("update-status-line");
-		const action = page.getByRole("button", { name: /^Updating…/ });
+		const control = page.getByRole("switch", { name: "Automatic updates" });
 		const widths: number[] = [];
 		for (const percent of [0, 10, 57, 100]) {
 			await page.evaluate((value) => {
@@ -104,12 +106,13 @@ for (const width of [1400, 900]) {
 			await expect(progress).toHaveAttribute("value", String(percent));
 			const bar = (await progress.boundingBox())!;
 			const line = (await statusLine.boundingBox())!;
-			const button = (await action.boundingBox())!;
-			// Starts at the text column and runs up to the actions, not just under
-			// the longest text line (the old track stopped under "Built …").
+			const edge = (await control.boundingBox())!;
+			// No action is shown during a download, so the track starts at the
+			// text column and runs to the edge the controls below sit on, not
+			// just under the longest text line (the old track stopped under
+			// "Built …").
 			expect(Math.abs(bar.x - line.x)).toBeLessThan(1);
-			expect(button.x - (bar.x + bar.width)).toBeGreaterThanOrEqual(0);
-			expect(button.x - (bar.x + bar.width)).toBeLessThan(48);
+			expect(Math.abs(bar.x + bar.width - (edge.x + edge.width))).toBeLessThan(1);
 			widths.push(bar.width);
 		}
 		// The track never depends on progress; only the fill does.
