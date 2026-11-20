@@ -1717,6 +1717,8 @@ func turnDiffPayload(diff *domain.ConversationTurnDiff) *ConversationTurnDiffRes
 			Deletions: file.Deletions,
 			Status:    file.Status,
 			OldPath:   file.OldPath,
+
+			OutsideWorkspace: file.OutsideWorkspace,
 		})
 	}
 	return out

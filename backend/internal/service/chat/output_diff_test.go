@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -291,6 +292,50 @@ func TestTurnDiffOverwritesAndAddsNoTimelineRows(t *testing.T) {
 	}
 	if diff.Files[1].Path != "b.txt" || diff.Files[1].Status != "added" {
 		t.Errorf("second file = %+v", diff.Files[1])
+	}
+}
+
+// A provider edit outside the worktree, such as the memory file Claude keeps
+// under its own home directory, is still part of the turn, but the Files panel
+// cannot open it. The diff says which rows those are so a client does not offer
+// a link that leads nowhere.
+func TestTurnDiffMarksFilesOutsideTheWorkspace(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "remember this", ClientMessageID: "c1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	inside := filepath.Join(h.workspace, "docs", "plan.md")
+	memory := filepath.Join(t.TempDir(), ".claude", "projects", "demo", "memory", "rate-limiting-deferred.md")
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"},
+		ports.ChatEvent{
+			Kind:           ports.ChatEventTurnDiff,
+			ProviderTurnID: "provider-turn-1",
+			Diff: &ports.ChatTurnDiff{Files: []ports.ChatDiffFile{
+				{Path: inside, Additions: 2, Status: "added"},
+				{Path: "src/a.go", Additions: 1, Status: "modified"},
+				{Path: memory, Additions: 11, Status: "added"},
+			}},
+		},
+	)
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].Diff != nil && len(s.Turns[0].Diff.Files) == 3
+	})
+	outside := map[string]bool{}
+	for _, file := range snapshot.Turns[0].Diff.Files {
+		outside[file.Path] = file.OutsideWorkspace
+	}
+	if outside[inside] || outside["src/a.go"] {
+		t.Errorf("worktree files marked outside: %v", outside)
+	}
+	if !outside[memory] {
+		t.Errorf("memory file outside the worktree not marked: %v", outside)
 	}
 }
 

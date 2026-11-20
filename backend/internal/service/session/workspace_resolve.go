@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/fspath"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
@@ -111,28 +112,9 @@ func relativeWithinRoot(root, target string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-// resolveInFilesystemOrder resolves an absolute path one component at a time,
-// following each symlink before applying the ".." after it. Cleaning first
-// would be wrong: with link -> /elsewhere/dir, "root/link/../file" names
-// /elsewhere/file, not root/file. Once a component does not exist the rest is
-// joined as written, since a missing directory holds no links to follow.
-func resolveInFilesystemOrder(absolute string) string {
-	volume := filepath.VolumeName(absolute)
-	resolved := volume + string(filepath.Separator)
-	parts := strings.FieldsFunc(absolute[len(volume):], func(r rune) bool { return r == '/' || r == filepath.Separator })
-	for i, part := range parts {
-		switch part {
-		case ".":
-			continue
-		case "..":
-			resolved = filepath.Dir(resolved)
-			continue
-		}
-		next, err := resolvedFilesystemPath(filepath.Join(resolved, part))
-		if err != nil {
-			return filepath.Join(append([]string{resolved}, parts[i:]...)...)
-		}
-		resolved = next
-	}
-	return resolved
-}
+// resolveInFilesystemOrder and resolvedFilesystemPath are shared with the chat
+// service, which marks turn-diff paths outside the worktree the same way.
+var (
+	resolveInFilesystemOrder = fspath.ResolveInOrder
+	resolvedFilesystemPath   = fspath.Resolved
+)
