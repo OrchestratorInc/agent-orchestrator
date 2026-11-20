@@ -184,7 +184,8 @@ add_trailer() {
 		# Nothing but sign-offs: git aborts it as an empty message.
 		only_signoffs "$(message_text "$msg")" && return 0
 		insert_trailer "$msg" "Co-authored-by: $coauthor"
-	elif grep -q '[^[:space:]]' "$msg"; then
+	elif ! only_signoffs "$(cat "$msg")"; then
+		# git commit -s -m "" holds only a sign-off, which git aborts as empty.
 		insert_trailer "$msg" "Co-authored-by: $coauthor" literal
 	fi
 }

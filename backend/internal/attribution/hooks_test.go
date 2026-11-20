@@ -217,6 +217,10 @@ awk '{ print } /------------------------ >8 ------------------------/ { exit }' 
 		{"sign-off appended", addSignoff, nil},
 		{"with -s", "true", []string{"-s"}},
 		{"only a sign-off", onlySignoff, nil},
+		// Literal messages follow the same rule: git ignores sign-offs.
+		{"-s -m empty", "true", []string{"-s", "-m", ""}},
+		{"-s -m empty with --no-verify", "true", []string{"-s", "--no-verify", "-m", ""}},
+		{"-m with only a sign-off", "true", []string{"-m", "Signed-off-by: Dev <dev@example.com>"}},
 	} {
 		before := r.git(r.worktree, "rev-parse", "HEAD")
 		out, err := run(tc.editor, tc.args...)
@@ -238,6 +242,14 @@ awk '{ print } /------------------------ >8 ------------------------/ { exit }' 
 	msg := r.message("HEAD")
 	if !strings.Contains(msg, "Signed-off-by: Dev <dev@example.com>") || countTrailer(msg) != 1 || !strings.HasSuffix(strings.TrimSpace(msg), testCoAuthor) {
 		t.Fatalf("want sign-off kept and one trailer last, got:\n%s", msg)
+	}
+	// A literal message with text and -s still gets one trailer, last.
+	if out, err := run("true", "-s", "-m", "feat: literal"); err != nil {
+		t.Fatalf("-s -m: %v\n%s", err, out)
+	}
+	msg = r.message("HEAD")
+	if !strings.Contains(msg, "Signed-off-by: Dev <dev@example.com>") || countTrailer(msg) != 1 || !strings.HasSuffix(strings.TrimSpace(msg), testCoAuthor) {
+		t.Fatalf("-s -m: want sign-off kept and one trailer last, got:\n%s", msg)
 	}
 }
 
