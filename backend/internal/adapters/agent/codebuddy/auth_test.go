@@ -74,6 +74,9 @@ func TestAuthCancellationStopsNativeProbe(t *testing.T) {
 
 func TestNativeAuthResultRequiresCompletedInference(t *testing.T) {
 	success := `{"type":"result","subtype":"success","is_error":false,"result":"OK","usage":{"output_tokens":1}}`
+	// Native 2.164 JSON history names the requested model on each assistant reply.
+	customReply := `{"type":"message","role":"assistant","providerData":{"requestModelId":"custom-local:gpt-4.1-mini"}}`
+	accountReply := `{"type":"message","role":"assistant","providerData":{"requestModelId":"default-model"}}`
 	cases := []struct {
 		name, raw      string
 		exitOK         bool
@@ -81,6 +84,10 @@ func TestNativeAuthResultRequiresCompletedInference(t *testing.T) {
 		code           string
 	}{
 		{"native-array", "[" + success + "]", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusAuthorized, "provider_accepted"},
+		{"account-model", "[" + accountReply + "," + success + "]", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusAuthorized, "provider_accepted"},
+		{"custom-model-only", "[" + customReply + "," + success + "]", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusConfigured, "custom_model_only"},
+		{"custom-and-account-models", "[" + customReply + "," + accountReply + "," + success + "]", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusAuthorized, "provider_accepted"},
+		{"custom-model-failed", "[" + customReply + "," + strings.Replace(success, `"output_tokens":1`, `"output_tokens":0`, 1) + "]", true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
 		{"cancelled-success", strings.Replace(success, `"result":"OK"`, `"result":"OK","terminal_reason":"aborted_streaming"`, 1), true, ports.AgentAuthStatusConfigured, ports.AgentAuthStatusConfigured, "provider_inconclusive"},
 		{"empty-success", strings.Replace(success, `"result":"OK"`, `"result":""`, 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},
 		{"no-inference-usage", strings.Replace(success, `"output_tokens":1`, `"output_tokens":0`, 1), true, ports.AgentAuthStatusUnknown, ports.AgentAuthStatusUnknown, "provider_inconclusive"},

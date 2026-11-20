@@ -284,3 +284,20 @@ func TestExactRestoreRejectsHistoryWithOnlyEmptyContent(t *testing.T) {
 		}
 	}
 }
+
+// Native prompt suggestions prefill the empty composer, which reads as an
+// unsent draft and would refuse every AO message after the first turn.
+func TestRuntimeLaunchDisablesNativePromptSuggestions(t *testing.T) {
+	env := map[string]string{}
+	(&Plugin{}).AugmentRuntimeLaunchEnv(env, "", "s1", "")
+	for key, want := range map[string]string{
+		"CODEBUDDY_PROMPT_SUGGESTION_DISABLED":    "1",
+		"CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS": "1",
+		"CODEBUDDY_DISABLE_CRON":                  "1",
+		"DISABLE_AUTOUPDATER":                     "1",
+	} {
+		if env[key] != want {
+			t.Errorf("%s = %q, want %q", key, env[key], want)
+		}
+	}
+}

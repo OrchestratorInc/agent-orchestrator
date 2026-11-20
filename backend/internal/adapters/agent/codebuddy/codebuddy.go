@@ -174,6 +174,10 @@ func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, _ string, _ domain
 	env["CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
 	env["CODEBUDDY_DISABLE_CRON"] = "1"
 	env["DISABLE_AUTOUPDATER"] = "1"
+	// Native prompt suggestions prefill the empty composer with dim text behind an
+	// inverse cursor cell, which reads as an unsent draft and blocks every AO
+	// message. They also spend a provider request after each turn.
+	env["CODEBUDDY_PROMPT_SUGGESTION_DISABLED"] = "1"
 }
 
 // SessionInfo returns identity captured by native hooks.

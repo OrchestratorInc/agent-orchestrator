@@ -58,6 +58,9 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		case "provider_quota_exhausted":
 			step.Reason = "CodeBuddy's selected provider reported a quota or billing limit; credentials remain configured."
 			step.NextStep = "Review the provider's quota or billing, then check again."
+		case "custom_model_only":
+			step.Reason = "CodeBuddy answered with a custom model from its models.json, not a CodeBuddy account. Its terminal opens the native login screen at every start."
+			step.NextStep = "Press Esc on that screen to continue with your custom model, or sign in to CodeBuddy with Set up."
 		}
 		if status.HasCredential() {
 			ports.RecordAuthEvidence(ctx, identity)
@@ -192,11 +195,13 @@ func classifyAuthResult(raw []byte, exitedOK bool, fallback ports.AgentAuthStatu
 	if len(raw) == 0 {
 		return fallback, "provider_inconclusive"
 	}
+	customOnly := false
 	if raw[0] == '[' {
 		var history []json.RawMessage
 		if json.Unmarshal(raw, &history) != nil || len(history) == 0 {
 			return fallback, "provider_inconclusive"
 		}
+		customOnly = answeredOnlyByCustomModels(history[:len(history)-1])
 		raw = history[len(history)-1]
 	}
 	var r result
@@ -204,6 +209,12 @@ func classifyAuthResult(raw []byte, exitedOK bool, fallback ports.AgentAuthStatu
 		return fallback, "provider_inconclusive"
 	}
 	if !*r.IsError && exitedOK && r.Subtype == "success" && r.TerminalReason == "" && len(r.Errors) == 0 && len(r.ErrorsInfo) == 0 && strings.TrimSpace(r.Result) != "" && r.Usage.OutputTokens > 0 {
+		if customOnly {
+			// The reply came from a model in the user's own models.json, which
+			// works without a CodeBuddy account. The interactive TUI still opens
+			// its native login screen on every start, so this is not a sign-in.
+			return ports.AgentAuthStatusConfigured, "custom_model_only"
+		}
 		return ports.AgentAuthStatusAuthorized, "provider_accepted"
 	}
 	if *r.IsError && r.Subtype == "error_during_execution" {
@@ -227,4 +238,33 @@ func classifyAuthResult(raw []byte, exitedOK bool, fallback ports.AgentAuthStatu
 		}
 	}
 	return fallback, "provider_inconclusive"
+}
+
+// customModelPrefix marks a native request routed to a model the user defined
+// in CodeBuddy's models.json rather than one served through a CodeBuddy account.
+const customModelPrefix = "custom-local:"
+
+// answeredOnlyByCustomModels reports whether every assistant reply in a JSON
+// history names a user-defined custom model. Unknown shapes return false, so
+// the account-backed reading stays the default.
+func answeredOnlyByCustomModels(history []json.RawMessage) bool {
+	type message struct {
+		Type         string `json:"type"`
+		Role         string `json:"role"`
+		ProviderData struct {
+			RequestModelID string `json:"requestModelId"`
+		} `json:"providerData"`
+	}
+	seen := false
+	for _, raw := range history {
+		var m message
+		if json.Unmarshal(raw, &m) != nil || m.Type != "message" || m.Role != "assistant" {
+			continue
+		}
+		if !strings.HasPrefix(m.ProviderData.RequestModelID, customModelPrefix) {
+			return false
+		}
+		seen = true
+	}
+	return seen
 }
