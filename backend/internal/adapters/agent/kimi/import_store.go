@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -36,6 +37,7 @@ type kimiImportState struct {
 type ImportedSession struct {
 	Path, CWD, Model, Fingerprint string
 	State, Wire                   []byte
+	Blobs                         map[string][]byte
 }
 
 func kimiSessionDirForWire(path string) string { return filepath.Dir(filepath.Dir(filepath.Dir(path))) }
@@ -87,7 +89,8 @@ func readKimiFile(ctx context.Context, root *os.Root, name string, limit int64) 
 }
 
 // ReadImportedSession reads only sessions/*/<exact-id>/state.json and the main
-// wire.jsonl. Duplicate IDs, links, archived state and unknown formats fail.
+// wire.jsonl and its verified media blobs. Duplicate IDs, links, archived state
+// and unknown formats fail.
 func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession, error) {
 	var result ImportedSession
 	if !kimiNativeSessionID.MatchString(id) {
@@ -157,11 +160,24 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 	if err != nil {
 		return result, err
 	}
+	blobs, err := readKimiBlobs(ctx, root, filepath.Join(base, "agents", "main"), wire)
+	if err != nil {
+		return result, err
+	}
 	h := sha256.New()
 	_, _ = h.Write(state)
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write(wire)
-	result = ImportedSession{Path: filepath.Join(home, base, "agents", "main", "wire.jsonl"), State: state, Wire: wire, CWD: metadata.CWD, Model: model, Fingerprint: fmt.Sprintf("kimi:v1:%x", h.Sum(nil))}
+	keys := make([]string, 0, len(blobs))
+	for key := range blobs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		_, _ = h.Write([]byte("\x00" + key + "\x00"))
+		_, _ = h.Write(blobs[key])
+	}
+	result = ImportedSession{Path: filepath.Join(home, base, "agents", "main", "wire.jsonl"), State: state, Wire: wire, Blobs: blobs, CWD: metadata.CWD, Model: model, Fingerprint: fmt.Sprintf("kimi:v1:%x", h.Sum(nil))}
 	return result, nil
 }
 
@@ -177,17 +193,6 @@ func validateKimiWire(wire []byte, cwd string) (string, error) {
 		var record map[string]json.RawMessage
 		if json.Unmarshal(scan.Bytes(), &record) != nil {
 			return "", errors.New("kimi: incomplete native journal")
-		}
-		// Native replay rehydrates blobref URLs from agents/main/blobs. This
-		// snapshot copies no blob storage, so accepting one would lose media.
-		var payload any
-		decoder := json.NewDecoder(bytes.NewReader(scan.Bytes()))
-		decoder.UseNumber() // Opaque numeric tokens need not fit in float64.
-		if err := decoder.Decode(&payload); err != nil {
-			return "", err
-		}
-		if kimiHasBlobMedia(payload) {
-			return "", errors.New("kimi: blob-backed media is unsupported for native import")
 		}
 		var kind string
 		_ = json.Unmarshal(record["type"], &kind)
@@ -240,29 +245,6 @@ func validateKimiWire(wire []byte, cwd string) (string, error) {
 		return "", errors.New("kimi: native conversation has no prompt history")
 	}
 	return model, nil
-}
-
-func kimiHasBlobMedia(value any) bool {
-	switch value := value.(type) {
-	case map[string]any:
-		for key, child := range value {
-			if key == "url" {
-				if url, ok := child.(string); ok && strings.HasPrefix(url, "blobref:") {
-					return true
-				}
-			}
-			if kimiHasBlobMedia(child) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range value {
-			if kimiHasBlobMedia(child) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // remapKimiWire rewrites only the replayable local-runtime workspace identity.

@@ -161,6 +161,17 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 			return zero, err
 		}
 	}
+	if len(original.Blobs) != 0 {
+		blobDir := filepath.Join(mainDir, "blobs")
+		if err := os.MkdirAll(blobDir, 0o700); err != nil {
+			return zero, err
+		}
+		for key, data := range original.Blobs {
+			if err := os.WriteFile(filepath.Join(blobDir, key), data, 0o600); err != nil {
+				return zero, err
+			}
+		}
+	}
 	entry, _ := json.Marshal(map[string]string{"sessionId": r.NativeSessionID, "sessionDir": sessionDir, "workDir": cwd})
 	if err := os.WriteFile(filepath.Join(home, "session_index.jsonl"), append(entry, '\n'), 0o600); err != nil {
 		return zero, err

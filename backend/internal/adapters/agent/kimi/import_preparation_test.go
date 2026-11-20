@@ -1,8 +1,14 @@
 package kimi
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,32 +153,150 @@ func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
 	}
 }
 
-func TestKimiPreparationRefusesBlobBackedMedia(t *testing.T) {
-	r := kimiImportFixture(t)
+func kimiMediaFixture(t *testing.T, r ports.ImportedSessionRelocation) (string, []byte, []byte) {
+	t.Helper()
+	var pngData bytes.Buffer
+	encoder := png.Encoder{CompressionLevel: png.NoCompression}
+	if err := encoder.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 64, 64))); err != nil {
+		t.Fatal(err)
+	}
+	blob := pngData.Bytes()
+	encoded := base64.StdEncoding.EncodeToString(blob)
+	if len(encoded) <= 4096 {
+		t.Fatal("fixture must cross native media offload threshold")
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(encoded)))
 	wire, err := os.ReadFile(r.TranscriptPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Native 2.4.1 stores image URLs in imageUrl.url, with the payload in
-	// agents/main/blobs/<hash>. The journal alone cannot preserve that media.
-	media := `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"describe this image"},{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + strings.Repeat("a", 64) + `"}}],"origin":{"kind":"user"}}}` + "\n"
+	media := `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"describe this image"},{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + hash + `"}}],"origin":{"kind":"user"}}}` + "\n"
 	wire = append(wire, []byte(media)...)
 	if err := os.WriteFile(r.TranscriptPath, wire, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID); err == nil || !strings.Contains(err.Error(), "blob-backed media") {
-		t.Fatalf("blob-backed snapshot accepted: %v", err)
+	dir := filepath.Join(filepath.Dir(r.TranscriptPath), "blobs")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if ref, err := prepareKimiImport(t.Context(), r, "2.4.1"); err == nil || ref.NativeSessionID != "" {
-		t.Fatalf("blob-backed copy published: %#v %v", ref, err)
+	if err := os.WriteFile(filepath.Join(dir, hash), blob, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	entries, err := os.ReadDir(filepath.Join(r.DataDir, "native-imports", "kimi"))
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("refused import left a copy or checkpoint: %v %v", entries, err)
+	return hash, blob, wire
+}
+
+func TestKimiPreparationPreservesVerifiedMediaAndRetry(t *testing.T) {
+	r := kimiImportFixture(t)
+	hash, blob, wire := kimiMediaFixture(t, r)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(r.TranscriptPath), "blobs", "unreferenced"), []byte("unrelated data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.SourceFingerprint = before.Fingerprint
+	ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(filepath.Dir(ref.TranscriptPath), "blobs", hash)
+	got, err := os.ReadFile(copyPath)
+	if err != nil || !bytes.Equal(got, blob) {
+		t.Fatalf("native image payload lost: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(copyPath), "unreferenced")); !os.IsNotExist(err) {
+		t.Fatal("copied an unreferenced source blob")
 	}
 	after, err := os.ReadFile(r.TranscriptPath)
-	if err != nil || string(after) != string(wire) {
-		t.Fatal("refusing media changed the source journal")
+	if err != nil || !bytes.Equal(after, wire) {
+		t.Fatal("copy changed the source journal")
+	}
+	afterBlob, err := os.ReadFile(filepath.Join(filepath.Dir(r.TranscriptPath), "blobs", hash))
+	if err != nil || !bytes.Equal(afterBlob, blob) {
+		t.Fatal("copy changed the source media")
+	}
+	if err := os.RemoveAll(r.ConfigDir); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := prepareKimiImport(t.Context(), r, "2.4.1"); err != nil || again != ref {
+		t.Fatalf("media checkpoint retry: %#v %v", again, err)
+	}
+	if err := os.WriteFile(copyPath, []byte("tampered image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareKimiImport(t.Context(), r, "2.4.1"); err == nil {
+		t.Fatal("retry accepted changed private media")
+	}
+}
+
+func TestKimiPreparationRefusesInvalidMedia(t *testing.T) {
+	for _, mode := range []string{"missing", "hash", "oversize", "symlink", "escape", "selection"} {
+		t.Run(mode, func(t *testing.T) {
+			r := kimiImportFixture(t)
+			hash, blob, _ := kimiMediaFixture(t, r)
+			path := filepath.Join(filepath.Dir(r.TranscriptPath), "blobs", hash)
+			switch mode {
+			case "missing":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			case "hash":
+				if err := os.WriteFile(path, []byte("changed image"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "oversize":
+				if err := os.Truncate(path, kimiBlobFileBudget+1); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(t.TempDir(), "image")
+				if err := os.WriteFile(target, blob, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Skip(err)
+				}
+			case "escape":
+				wire, err := os.ReadFile(r.TranscriptPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wire = bytes.ReplaceAll(wire, []byte(hash), []byte("../../outside"))
+				if err := os.WriteFile(r.TranscriptPath, wire, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "selection":
+				// A changed valid reference/payload changes the selection fingerprint.
+				plain, err := os.ReadFile(r.TranscriptPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.SourceFingerprint = snapshot.Fingerprint
+				newBlob := append(bytes.Clone(blob), 0)
+				newHash := fmt.Sprintf("%x", sha256.Sum256([]byte(base64.StdEncoding.EncodeToString(newBlob))))
+				if err := os.WriteFile(filepath.Join(filepath.Dir(path), newHash), newBlob, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(r.TranscriptPath, bytes.ReplaceAll(plain, []byte(hash), []byte(newHash)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if ref, err := prepareKimiImport(t.Context(), r, "2.4.1"); err == nil || ref.NativeSessionID != "" {
+				t.Fatalf("invalid media published: %#v %v", ref, err)
+			}
+			entries, err := os.ReadDir(filepath.Join(r.DataDir, "native-imports", "kimi"))
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("refused media left a copy/checkpoint: %v %v", entries, err)
+			}
+		})
 	}
 }
 

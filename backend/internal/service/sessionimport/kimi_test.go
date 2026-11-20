@@ -3,6 +3,7 @@ package sessionimport
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -151,24 +152,30 @@ func TestKimiRejectsConversationWithoutTypedPrompt(t *testing.T) {
 	}
 }
 
-func TestKimiPreviewRefusesBlobMediaWithoutRejectingLiteralText(t *testing.T) {
+func TestKimiPreviewRequiresVerifiedBlobMedia(t *testing.T) {
+	blob := []byte("native media payload")
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(base64.StdEncoding.EncodeToString(blob))))
 	for _, tc := range []struct {
-		name, part string
-		refuse     bool
+		name, part        string
+		refuse, available bool
 	}{
-		{"image", `{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + strings.Repeat("a", 64) + `"}}`, true},
-		{"escaped audio", `{"type":"audio_url","audioUrl":{"url":"\u0062lobref:audio/wav;` + strings.Repeat("b", 64) + `"}}`, true},
-		{"video", `{"type":"video_url","videoUrl":{"url":"blobref:video/mp4;` + strings.Repeat("c", 64) + `"}}`, true},
-		{"literal text", `{"type":"text","text":"explain blobref:image/png;hash"}`, false},
+		{"missing image", `{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + strings.Repeat("a", 64) + `"}}`, true, false},
+		{"missing escaped audio", `{"type":"audio_url","audioUrl":{"url":"\u0062lobref:audio/wav;` + strings.Repeat("b", 64) + `"}}`, true, false},
+		{"missing video", `{"type":"video_url","videoUrl":{"url":"blobref:video/mp4;` + strings.Repeat("c", 64) + `"}}`, true, false},
+		{"literal text", `{"type":"text","text":"explain blobref:image/png;hash"}`, false, false},
+		{"verified image", `{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + hash + `"}}`, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			record := `{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"readable prompt"},` + tc.part + `],"origin":{"kind":"user"}}}` + "\n"
 			path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, "", record)
+			if tc.available {
+				writeFile(t, filepath.Join(filepath.Dir(path), "blobs", hash), string(blob))
+			}
 			got, err := readKimiTranscript(t.Context(), root, path)
 			if tc.refuse {
-				if err == nil || !strings.Contains(err.Error(), "blob-backed media") {
-					t.Fatalf("blob-backed preview accepted: %v", err)
+				if err == nil || !strings.Contains(err.Error(), "media blob") {
+					t.Fatalf("unresolved blob preview accepted: %v", err)
 				}
 			} else if err != nil || len(got.messages) == 0 {
 				t.Fatalf("ordinary prompt text refused: %v", err)
