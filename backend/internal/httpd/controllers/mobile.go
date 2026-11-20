@@ -492,6 +492,15 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	if st.LoopbackOnly {
 		lan, ts = nil, nil
 	}
+	sp := b.securePairingStatus(st.SecurePairing, enabled)
+	secureHost := ""
+	if !st.LoopbackOnly && sp.Active {
+		secureHost = sp.Host
+	}
+	tsHost := first(ts)
+	if secureHost != "" {
+		tsHost = secureHost
+	}
 	res := MobileStatusResponse{
 		Enabled:             enabled,
 		AccountLinked:       st.AccountTokenHash != "",
@@ -499,7 +508,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 		LoopbackOnly:        st.LoopbackOnly,
 		NoPublicTunnel:      st.NoPublicTunnel,
 		Host:                first(lan),
-		TailscaleHost:       first(ts),
+		TailscaleHost:       tsHost,
 		Port:                b.LAN.BoundPort(),
 		Warning:             mobileUnencryptedWarning,
 		BrowserRemoteAccess: st.BrowserRemoteAccess,
@@ -507,6 +516,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 			LANHosts:       lan,
 			TailscaleHosts: ts,
 			Port:           b.LAN.BoundPort(),
+			SecureHost:     secureHost,
 			Tunnel:         b.tunnelEndpoint(),
 		}),
 		Tunnel:                   b.tunnelStatus(),
@@ -524,7 +534,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	if enabled {
 		res.Password = st.Password
 	}
-	res.SecurePairing = b.securePairingStatus(st.SecurePairing, enabled)
+	res.SecurePairing = sp
 	if st.ServeCleanupPending && res.SecurePairing.Reason == "" {
 		res.SecurePairing.Reason = "clear_failed"
 	}
@@ -556,13 +566,18 @@ func (b *BridgeService) SetBrowserRemoteAccess(on bool) (MobileStatusResponse, e
 func (b *BridgeService) AdvertisedEndpoints() []mobilebridge.Endpoint {
 	st, _ := mobilebridge.Load(b.ConfigPath)
 	var lan, ts []string
+	secureHost := ""
 	if !st.LoopbackOnly {
 		lan, ts = b.lanHosts(), b.tailscaleHosts()
+		if sp := b.securePairingStatus(st.SecurePairing, st.Enabled && b.LAN.Running()); sp.Active {
+			secureHost = sp.Host
+		}
 	}
 	return mobilebridge.Endpoints(mobilebridge.EndpointInputs{
 		LANHosts:       lan,
 		TailscaleHosts: ts,
 		Port:           b.LAN.BoundPort(),
+		SecureHost:     secureHost,
 		Tunnel:         b.tunnelEndpoint(),
 	})
 }

@@ -49,6 +49,22 @@ func TestEndpointsPutsTailscaleAfterLAN(t *testing.T) {
 	assertEndpoints(t, got, want)
 }
 
+func TestEndpointsPutsSecureHostBeforeRawTailscale(t *testing.T) {
+	got := Endpoints(EndpointInputs{
+		LANHosts:       []string{"192.168.1.42"},
+		TailscaleHosts: []string{"100.72.46.7"},
+		Port:           3011,
+		SecureHost:     "host.tailnet.ts.net",
+	})
+
+	want := []Endpoint{
+		{Kind: KindLAN, Host: "192.168.1.42", Port: 3011},
+		{Kind: KindTailscale, Host: "host.tailnet.ts.net", Port: 443, Secure: true},
+		{Kind: KindTailscale, Host: "100.72.46.7", Port: 3011},
+	}
+	assertEndpoints(t, got, want)
+}
+
 func TestEndpointsAppendsReadyTunnelLast(t *testing.T) {
 	// The tunnel reaches any network but is the slowest path, so it sorts last.
 	// It carries its own host and port and is always TLS.
