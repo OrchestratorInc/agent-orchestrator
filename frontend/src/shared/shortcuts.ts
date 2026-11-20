@@ -162,8 +162,12 @@ const binding = (
 export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): readonly ShortcutBinding[] {
 	const primary = isMac ? { meta: true } : { ctrl: true };
 	switch (id) {
+		// A focused terminal keeps Ctrl+F for its own find bar
+		// (see shortcutYieldsToTerminal). Ctrl+Shift+F is not a terminal shortcut,
+		// so it runs the command from anywhere, like the Shift variants of the other
+		// terminal-colliding keys.
 		case "find-in-chat":
-			return [binding("f", primary)];
+			return isMac ? [binding("f", primary)] : [binding("f", { ctrl: true }), binding("f", { ctrl: true, shift: true })];
 		case "add-selection-to-chat":
 			return [binding("l", primary)];
 		case "new-session":
@@ -363,12 +367,32 @@ const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortc
 	"close-shell-terminal", // Ctrl+W unix-word-rubout
 	"toggle-sidebar", // Ctrl+B backward-char / tmux prefix
 	"keyboard-shortcuts", // Ctrl+/ readline undo
+	"find-in-chat", // Ctrl+F opens terminal search
+	// Ctrl+L clear-screen. No listener claims this id generically today — the chat
+	// and diff selection actions own their chord — but the entry keeps the plain
+	// chord terminal-owned for any shared listener that does.
+	"add-selection-to-chat",
 ]);
 
-/** True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only). */
-export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord): boolean {
-	if (id === "find-in-chat" || id === "add-selection-to-chat") return true;
+/**
+ * True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only).
+ * A chord the user bound themselves is never withheld: rebinding a command is how
+ * a terminal-safe chord is chosen, so it has to work from the terminal too.
+ */
+export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord, userOverrode = false): boolean {
+	if (userOverrode) return false;
 	return YIELDS_TO_FOCUSED_TERMINAL.has(id) && !chord.shift && !chord.meta && chord.ctrl !== chord.alt;
+}
+
+/** Saved overrides hold the whole list, including defaults retained after editing. */
+export function matchedByUserOverride(
+	id: AppShortcutId,
+	chord: ShortcutChord,
+	isMac: boolean,
+	overrides: KeybindingOverrides = {},
+): boolean {
+	return (overrides[id] ?? []).some((candidate) => matchesShortcutBinding(chord, candidate)) &&
+		!defaultShortcutBindings(id, isMac).some((candidate) => matchesShortcutBinding(chord, candidate));
 }
 
 export function matchesAppShortcut(

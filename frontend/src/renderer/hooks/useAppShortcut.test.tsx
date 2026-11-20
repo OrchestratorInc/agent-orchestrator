@@ -2,11 +2,19 @@ import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import { useUiStore } from "../stores/ui-store";
+import { useKeybindingsStore } from "../stores/keybindings-store";
 import { useAppShortcut, useSessionShortcut } from "./useAppShortcut";
 import type { AppShortcutId } from "../../shared/shortcuts";
 
+vi.mock("../lib/platform", () => ({ isMacPlatform: () => false }));
+
 const ID = "command-palette" as AppShortcutId;
 const OTHER = "quick-open-file" as AppShortcutId;
+
+function FindShortcut({ handler, shouldHandle }: { handler: () => void; shouldHandle?: () => boolean }) {
+	useAppShortcut("find-in-chat", handler, true, shouldHandle);
+	return null;
+}
 
 function App({ handler, enabled = true }: { handler: () => void; enabled?: boolean }) {
 	useAppShortcut(ID, handler, enabled);
@@ -61,6 +69,70 @@ describe("useAppShortcut", () => {
 		rerender(<App handler={handler} enabled={false} />);
 		emit();
 		expect(handler).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("useAppShortcut terminal yield (Windows/Linux)", () => {
+	beforeEach(() => {
+		appShortcutBus.reset();
+		useKeybindingsStore.setState({ overrides: {} });
+	});
+	afterEach(() => {
+		useKeybindingsStore.setState({ overrides: {} });
+		document.querySelector(".xterm")?.remove();
+	});
+
+	function terminal() {
+		const el = document.createElement("div");
+		el.className = "xterm";
+		document.body.append(el);
+		return el;
+	}
+	function press(target: EventTarget, init: KeyboardEventInit) {
+		act(() => {
+			target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+		});
+	}
+
+	it("leaves plain Ctrl+F to the terminal and runs Ctrl+Shift+F", () => {
+		const handler = vi.fn();
+		render(<FindShortcut handler={handler} />);
+		const term = terminal();
+		press(term, { key: "f", code: "KeyF", ctrlKey: true });
+		expect(handler).not.toHaveBeenCalled();
+		press(term, { key: "F", code: "KeyF", ctrlKey: true, shiftKey: true });
+		expect(handler).toHaveBeenCalledTimes(1);
+	});
+
+	it("runs a chord the user bound themselves even from the terminal", () => {
+		useKeybindingsStore.setState({
+			overrides: { "find-in-chat": [{ key: "j", code: undefined, ctrl: true, meta: false, shift: false, alt: false }] },
+		});
+		const handler = vi.fn();
+		render(<FindShortcut handler={handler} />);
+		const term = terminal();
+		const xtermKeyDown = vi.fn((event: KeyboardEvent) => event.stopPropagation());
+		term.addEventListener("keydown", xtermKeyDown);
+		press(term, { key: "f", code: "KeyF", ctrlKey: true });
+		expect(handler).not.toHaveBeenCalled();
+		expect(xtermKeyDown).toHaveBeenCalledTimes(1);
+		press(term, { key: "j", code: "KeyJ", ctrlKey: true });
+		expect(handler).toHaveBeenCalledTimes(1);
+		expect(xtermKeyDown).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves custom Find input to xterm when no transcript can handle it", () => {
+		useKeybindingsStore.setState({
+			overrides: { "find-in-chat": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }] },
+		});
+		const handler = vi.fn();
+		render(<FindShortcut handler={handler} shouldHandle={() => false} />);
+		const term = terminal();
+		const xtermKeyDown = vi.fn();
+		term.addEventListener("keydown", xtermKeyDown);
+		press(term, { key: "j", code: "KeyJ", ctrlKey: true });
+		expect(handler).not.toHaveBeenCalled();
+		expect(xtermKeyDown).toHaveBeenCalledTimes(1);
 	});
 });
 

@@ -12,11 +12,13 @@ import {
 	matchesPreviousSessionShortcut,
 	matchesPreviousTabShortcut,
 	defaultShortcutBindings,
+	matchedByUserOverride,
 	matchesShortcutBinding,
 	shortcutBindingAccelerator,
 	shortcutBindingKeys,
 	shortcutBindingLabel,
 	shortcutBindingValidationError,
+	shortcutYieldsToTerminal,
 	type AppShortcutId,
 	type ShortcutBinding,
 	type ShortcutChord,
@@ -376,6 +378,38 @@ describe("shortcut binding matching and validation", () => {
 		// macOS bindings are unchanged.
 		expect(defaultShortcutBindings("new-shell-terminal", true)).toHaveLength(1);
 		expect(defaultShortcutBindings("close-shell-terminal", true)).toHaveLength(1);
+	});
+
+	it("gives Find in chat a terminal-safe alternative (issue #8420)", () => {
+		expect(matchesAppShortcut("find-in-chat", chord({ key: "F", ctrl: true, shift: true }), false)).toBe(true);
+		// The plain chord still matches, so it keeps yielding to the terminal.
+		expect(matchesAppShortcut("find-in-chat", chord({ key: "f", ctrl: true }), false)).toBe(true);
+		// Add selection to chat acts on a selection inside the chat/diff pane only, so
+		// it gets no terminal chord; its binding stays one chord per platform.
+		expect(defaultShortcutBindings("add-selection-to-chat", false)).toHaveLength(1);
+		// macOS keeps its single Cmd binding.
+		expect(defaultShortcutBindings("find-in-chat", true)).toHaveLength(1);
+		expect(defaultShortcutBindings("add-selection-to-chat", true)).toHaveLength(1);
+	});
+
+	it("yields the plain chords to a focused terminal but never the terminal-safe ones", () => {
+		expect(shortcutYieldsToTerminal("find-in-chat", chord({ key: "f", ctrl: true }))).toBe(true);
+		expect(shortcutYieldsToTerminal("find-in-chat", chord({ key: "F", ctrl: true, shift: true }))).toBe(false);
+		expect(shortcutYieldsToTerminal("add-selection-to-chat", chord({ key: "l", ctrl: true }))).toBe(true);
+	});
+
+	it("never withholds a chord the user bound themselves", () => {
+		expect(shortcutYieldsToTerminal("find-in-chat", chord({ key: "j", ctrl: true }), true)).toBe(false);
+		expect(shortcutYieldsToTerminal("command-palette", chord({ key: "j", ctrl: true }), true)).toBe(false);
+		expect(shortcutYieldsToTerminal("command-palette", chord({ key: "k", ctrl: true }))).toBe(true);
+	});
+
+	it("reports only non-default chords from a saved override as user-bound", () => {
+		const overrides = { "find-in-chat": [...defaultShortcutBindings("find-in-chat", false), chord({ key: "j", ctrl: true }) as ShortcutBinding] };
+		expect(matchedByUserOverride("find-in-chat", chord({ key: "j", ctrl: true }), false, overrides)).toBe(true);
+		expect(matchedByUserOverride("find-in-chat", chord({ key: "f", ctrl: true }), false, overrides)).toBe(false);
+		expect(matchedByUserOverride("add-selection-to-chat", chord({ key: "j", ctrl: true }), false, overrides)).toBe(false);
+		expect(matchedByUserOverride("find-in-chat", chord({ key: "j", ctrl: true }), false)).toBe(false);
 	});
 
 	it("reserves common platform window and editing chords", () => {
