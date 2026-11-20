@@ -7,12 +7,9 @@ import (
 	"strings"
 )
 
-// codeBuddyHarnessMigration is CodeBuddy's sessions CHECK migration.
-// codeBuddyPreviewHarnessMigrations are the numbers its PR preview builds
-// recorded before it moved above main's latest migration.
+// codeBuddyHarnessMigration is CodeBuddy's sessions CHECK migration. Its PR preview
+// builds recorded 20261023181512240 and 20261114173149181 (burned) first.
 const codeBuddyHarnessMigration int64 = 20261120094922017
-
-var codeBuddyPreviewHarnessMigrations = []int64{20261023181512240, 20261114173149181}
 
 // Preview CodeBuddy builds used 214 and 215 before main assigned them to
 // version refresh and harness releases. Release only identifiable preview
@@ -33,17 +30,18 @@ func repairRenumberedCodeBuddyMigrationHistory(db *sql.DB) error {
 	if !strings.Contains(schema, "'codebuddy'") {
 		return nil
 	}
-	// Preview ledgers predate CodeBuddy's own migration. Once any of its
-	// numbers is recorded, the repair is done for good, so a later migration that
-	// changes these canonical objects can never read as a preview ledger.
-	for _, version := range append([]int64{codeBuddyHarnessMigration}, codeBuddyPreviewHarnessMigrations...) {
-		var applied int
-		if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, version).Scan(&applied); err != nil {
-			return err
-		}
-		if applied != 0 {
-			return nil
-		}
+	// The repair runs before goose, so the first startup of a build carrying
+	// CodeBuddy's migration releases any collided 214/215 receipt and goose then
+	// records that migration. From then on the repair is done for good, and a
+	// later migration that changes these canonical objects can never read as a
+	// preview ledger. Preview-only CodeBuddy numbers do not end the repair: they
+	// prove nothing about the 214/215 receipts.
+	var done int
+	if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, codeBuddyHarnessMigration).Scan(&done); err != nil {
+		return err
+	}
+	if done != 0 {
+		return nil
 	}
 	tx, err := db.Begin()
 	if err != nil {

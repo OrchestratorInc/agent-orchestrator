@@ -107,7 +107,7 @@ func validateTranscript(ctx context.Context, path, cwd, id string) error {
 		if row.SessionID != id || filepath.Clean(row.Cwd) != filepath.Clean(cwd) {
 			return fmt.Errorf("codebuddy: native history identity/workspace mismatch")
 		}
-		if len(row.Content) == 0 || string(row.Content) == "null" {
+		if !hasContent(row.Content) {
 			continue
 		}
 		user = user || row.Role == "user"
@@ -120,4 +120,23 @@ func validateTranscript(ctx context.Context, path, cwd, id string) error {
 		return fmt.Errorf("codebuddy: native history has no completed conversation")
 	}
 	return nil
+}
+
+// hasContent reports whether a native message carries any content: an empty
+// array, object or blank string is a message with nothing in it.
+func hasContent(raw json.RawMessage) bool {
+	var content any
+	if len(raw) == 0 || json.Unmarshal(raw, &content) != nil {
+		return false
+	}
+	switch v := content.(type) {
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	case string:
+		return strings.TrimSpace(v) != ""
+	default:
+		return content != nil
+	}
 }

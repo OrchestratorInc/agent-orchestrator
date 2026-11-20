@@ -42,8 +42,10 @@ func (p *Plugin) ValidateTerminalMessage(output, message string) error {
 }
 
 // TerminalMessageObserved confirms that AO's submission left the idle composer:
-// the native turn started (spinner above the composer), or the transcript above
-// the composer gained one more committed "> " echo holding the whole message.
+// the native turn started (spinner above the composer), the transcript above the
+// composer gained one more committed "> " echo holding the whole message, or the
+// transcript now ends with that echo where the idle baseline ended with a reply.
+// The last case holds even when an earlier identical echo scrolled out of view.
 // Only letters and digits are compared, since the echo may wrap or drop markup.
 func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
 	if screen == baseline || !p.ComposerIsEmpty(baseline) {
@@ -52,7 +54,8 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 	if p.InspectTerminalSurface(screen).Work == ports.TerminalSurfaceWorkActive {
 		return true
 	}
-	return committedEchoes(message, screen) > committedEchoes(message, baseline)
+	now, before := committedEchoes(message, screen), committedEchoes(message, baseline)
+	return now.count > before.count || now.trailing && !before.trailing
 }
 
 // echoKey normalizes text for echo comparison. A message with no letters or
@@ -75,16 +78,28 @@ func echoKey(text string) string {
 	return b.String()
 }
 
-// committedEchoes counts "> " user-message echoes above the current composer
+// echoes describes the committed "> " user-message echoes of one message above
+// the current composer: how many there are, and whether one is the last thing
+// in the transcript.
+type echoes struct {
+	count    int
+	trailing bool
+}
+
+// committedEchoes finds "> " user-message echoes above the current composer
 // whose full text, including indented continuation lines, is message.
-func committedEchoes(message, screen string) int {
+func committedEchoes(message, screen string) echoes {
+	var found echoes
 	want := echoKey(message)
 	if want == "" {
-		return 0
+		return found
 	}
 	lines := terminalui.PlainTerminalLines(strings.TrimRight(screen, "\r\n "))
 	end := transcriptEnd(lines)
-	count := 0
+	last := end - 1
+	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
 	for i := 0; i < end; i++ {
 		text := strings.TrimSpace(lines[i])
 		if !strings.HasPrefix(text, ">") {
@@ -102,10 +117,11 @@ func committedEchoes(message, screen string) int {
 			i++
 		}
 		if echoKey(echo.String()) == want {
-			count++
+			found.count++
+			found.trailing = found.trailing || i == last
 		}
 	}
-	return count
+	return found
 }
 
 // transcriptEnd is the index of the current composer's upper rule, so the

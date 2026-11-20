@@ -218,6 +218,10 @@ func TestTerminalMessageObservedNeedsBusyFrameOrNewEcho(t *testing.T) {
 		{"draft baseline", frame("● Finished.", "human draft"), echoed, false},
 		{"echo already present", echoed, echoed + "\n", false},
 		{"different message echoed", idle, frame("> other task\n● Finished.", ""), false},
+		// An earlier identical echo scrolls out as the new one lands: one match in
+		// each capture and no busy frame, but only the new screen ends with it.
+		{"identical echo scrolled out", echoed, frame("● Finished.\n> next task", ""), true},
+		{"trailing echo already in baseline", frame("● Finished.\n> next task", ""), frame("● Finished.\n> next task", "") + "\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := p.TerminalMessageObserved("next task", tc.baseline, tc.screen); got != tc.want {
@@ -239,5 +243,37 @@ func TestConfiguredCredentialIsNeverReportedAuthorized(t *testing.T) {
 	cancel()
 	if _, err := plugin.AuthStatus(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation=%v", err)
+	}
+}
+
+// Rows that carry no content are not a conversation, so restore must refuse a
+// history whose user and assistant messages are all empty.
+func TestExactRestoreRejectsHistoryWithOnlyEmptyContent(t *testing.T) {
+	t.Setenv("CODEBUDDY_CONFIG_DIR", t.TempDir())
+	ws := t.TempDir()
+	id := "empty-native-id"
+	path := historyFixture(t, id, ws)
+	if err := validateHistory(context.Background(), ws, id, nil); err != nil {
+		t.Fatalf("text-block history refused: %v", err)
+	}
+	cwd, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, empty := range []any{[]any{}, "  ", map[string]any{}} {
+		var lines []string
+		for _, role := range []string{"user", "assistant"} {
+			b, err := json.Marshal(map[string]any{"type": "message", "role": role, "sessionId": id, "cwd": cwd, "content": empty})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, string(b))
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateHistory(context.Background(), ws, id, nil); err == nil {
+			t.Fatalf("history with empty content %#v accepted", empty)
+		}
 	}
 }

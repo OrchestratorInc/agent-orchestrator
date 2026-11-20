@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -170,6 +171,31 @@ func TestAuthProbeBoundsOutput(t *testing.T) {
 	got, _, steps, err := p.AuthStatusWithDiagnostics(context.Background())
 	if err != nil || got != ports.AgentAuthStatusUnknown || len(steps) != 1 || steps[0].Code != "provider_inconclusive" {
 		t.Fatalf("oversized result=%s/%+v err=%v", got, steps, err)
+	}
+}
+
+// os/exec copies stdout with io.Copy, which prefers the destination's ReadFrom.
+// The bound must hold on that path too, and an oversized prefix before a valid
+// success result must not be read as a signed-in provider.
+func TestAuthProbeBoundHoldsThroughIOCopy(t *testing.T) {
+	if _, ok := any(&boundedAuthOutput{}).(io.ReaderFrom); ok {
+		t.Fatal("bounded output exposes ReadFrom, so io.Copy can bypass its limit")
+	}
+	cancelled := false
+	out := &boundedAuthOutput{cancel: func() { cancelled = true }}
+	if _, err := io.Copy(out, strings.NewReader(strings.Repeat("y", 2*authProbeOutputLimit))); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Bytes()) > authProbeOutputLimit || !out.exceeded || !cancelled {
+		t.Fatalf("retained %d bytes (exceeded %v, cancelled %v), want at most %d and cancelled", len(out.Bytes()), out.exceeded, cancelled, authProbeOutputLimit)
+	}
+
+	t.Setenv("CODEBUDDY_API_KEY", "")
+	t.Setenv("CODEBUDDY_AUTH_TOKEN", "")
+	success := `{"type":"result","subtype":"success","is_error":false,"result":"OK","usage":{"output_tokens":1}}`
+	p := fakeAuthCLI(t, strings.Repeat(" ", authProbeOutputLimit+1)+success, "0")
+	if got, err := p.AuthStatus(context.Background()); err != nil || got == ports.AgentAuthStatusAuthorized {
+		t.Fatalf("oversized prefix before success = %s, %v; want not authorized", got, err)
 	}
 }
 

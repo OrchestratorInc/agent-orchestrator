@@ -152,3 +152,25 @@ func TestCodeBuddyPreviewRepairStopsOnceItsMigrationIsRecorded(t *testing.T) {
 		t.Fatalf("canonical ledger entries = %d, %v; want both retained", retained, err)
 	}
 }
+
+// A preview CodeBuddy number proves nothing about the 214/215 receipts, so it
+// must not end the repair: a collided receipt whose canonical effects are
+// absent is still released for goose to apply main's migration.
+func TestCodeBuddyPreviewNumberDoesNotSkipCollidedReceiptRepair(t *testing.T) {
+	for _, preview := range []int64{20261023181512240, 20261114173149181} {
+		t.Run(fmt.Sprint(preview), func(t *testing.T) {
+			db := openMigratedDatabaseCopy(t, 212)
+			mustExec(t, db, `PRAGMA writable_schema = ON`)
+			mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''codebuddy'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
+			mustExec(t, db, `PRAGMA writable_schema = RESET`)
+			mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (214, 1), (?, 1)`, preview)
+			if err := repairRenumberedCodeBuddyMigrationHistory(db); err != nil {
+				t.Fatal(err)
+			}
+			var retained int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 214`).Scan(&retained); err != nil || retained != 0 {
+				t.Fatalf("collided 214 receipt retained = %d, %v; want released", retained, err)
+			}
+		})
+	}
+}

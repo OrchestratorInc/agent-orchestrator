@@ -145,23 +145,28 @@ func authProbeEnv(ctx context.Context) []string {
 	return env
 }
 
+// boundedAuthOutput is only an io.Writer. The buffer is a named field so its
+// ReadFrom is not promoted: io.Copy would otherwise use it and bypass the limit.
 type boundedAuthOutput struct {
-	bytes.Buffer
+	buf      bytes.Buffer
 	exceeded bool
 	cancel   context.CancelFunc
 }
 
 func (b *boundedAuthOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	remaining := authProbeOutputLimit - b.Len()
+	remaining := authProbeOutputLimit - b.buf.Len()
 	if len(p) > remaining {
-		_, _ = b.Buffer.Write(p[:remaining])
+		_, _ = b.buf.Write(p[:remaining])
 		b.exceeded = true
 		b.cancel()
 		return n, nil
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
 }
+
+// Bytes returns the retained output, at most authProbeOutputLimit bytes.
+func (b *boundedAuthOutput) Bytes() []byte { return b.buf.Bytes() }
 
 // Native 2.164 ResultMessage is declared in stream-json-protocol.d.ts and built
 // by result-message-utils. JSON mode emits a history array ending with result.
