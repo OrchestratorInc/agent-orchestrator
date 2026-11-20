@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -42,18 +43,5 @@ func (p *Plugin) importedRestoreCommand(ctx context.Context, cfg ports.RestoreCo
 	}
 	// baseCommand puts the session directory immediately after its first flag.
 	argv[2] = root
-	return primeEndpointCommand(append(argv, "--cwd", workspace, "--resume", path), history.provider, cfg.Env), true, nil
-}
-
-// Reapply only an explicit launch override after shell startup. Without one,
-// the native profile and login shell retain ownership of endpoint routing.
-func primeEndpointCommand(argv []string, provider string, overrides map[string]string) []string {
-	value, explicit := overrides["OPENAI_BASE_URL"]
-	if !strings.EqualFold(strings.TrimSpace(provider), "openai") || !explicit {
-		return argv
-	}
-	if value == "" {
-		return append([]string{"env", "-u", "OPENAI_BASE_URL"}, argv...)
-	}
-	return append([]string{"env", "OPENAI_BASE_URL=" + value}, argv...)
+	return providerenv.Command(append(argv, "--cwd", workspace, "--resume", path), cfg.Env), true, nil
 }

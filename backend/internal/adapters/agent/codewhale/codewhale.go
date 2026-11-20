@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codewhalestore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -68,7 +69,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	cmd = append(cmd, "--fresh")
-	return codewhaleEndpointCommand(cmd, codewhaleProvider(cfg.Config)), nil
+	return providerenv.Command(cmd, cfg.Env), nil
 }
 
 // GetPromptDeliveryStrategy keeps the TUI alive while AO sends its first task.
@@ -112,34 +113,19 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	provider := codewhaleProvider(cfg.Config)
 	if root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]; root != "" {
-		archive, err := codewhalestore.Read(ctx, root, filepath.Join(root, "sessions", nativeID+".json"))
+		_, err := codewhalestore.Read(ctx, root, filepath.Join(root, "sessions", nativeID+".json"))
 		if err != nil {
 			return nil, false, err
 		}
-		if archive.Provider != "" {
-			provider = archive.Provider
-		}
 	}
 	cmd = append(cmd, "--resume", nativeID)
-	return codewhaleEndpointCommand(cmd, provider), true, nil
+	return providerenv.Command(cmd, cfg.Env), true, nil
 }
 
-func codewhaleProvider(cfg ports.AgentConfig) string {
-	if provider, _, qualified := strings.Cut(cfg.Model, "/"); qualified {
-		return provider
-	}
-	return os.Getenv("CODEWHALE_PROVIDER")
-}
-
-// env runs after the login shell, whose startup files may export an unrelated
-// OpenAI-compatible endpoint. Other selected providers retain their settings.
-func codewhaleEndpointCommand(argv []string, provider string) []string {
-	if strings.EqualFold(provider, "openai") {
-		return append([]string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1"}, argv...)
-	}
-	return argv
+// AugmentRuntimeEnv preserves explicit provider overrides across shell startup.
+func (p *Plugin) AugmentRuntimeEnv(env map[string]string, _ string) {
+	providerenv.Capture(env)
 }
 
 func (p *Plugin) baseCommand(ctx context.Context, workspace string, cfg ports.AgentConfig, permissions ports.PermissionMode) ([]string, error) {

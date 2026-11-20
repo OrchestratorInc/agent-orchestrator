@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -216,14 +217,13 @@ func readPrimeImportProof(ctx context.Context, root, marker string, expectedProo
 func runPrimeNativeFork(ctx context.Context, binary, workingDir string, env map[string]string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, args...) //nolint:gosec // Adapter-resolved binary; all arguments are adapter-owned.
 	cmd.Dir = workingDir
-	cmd.Env = os.Environ()
-	for key, value := range env {
-		if key == "OPENAI_BASE_URL" && value == "" {
-			cmd.Env = slices.DeleteFunc(cmd.Env, func(entry string) bool { return strings.HasPrefix(entry, key+"=") })
-			continue
-		}
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
+	// Direct RPC startup has no login shell. Apply every explicit override,
+	// including clears, with the same semantics for every provider.
+	cmd.Env = slices.DeleteFunc(processenv.Merge(env), func(entry string) bool {
+		key, _, _ := strings.Cut(entry, "=")
+		value, explicit := env[key]
+		return explicit && value == ""
+	})
 	// A nil stdin supplies EOF, not a prompt or an RPC command. Prime's RPC
 	// shutdown disposes the engine/kernel and exits after the native fork.
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard

@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -44,6 +45,7 @@ func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 // daemon/config state stays under AO_DATA_DIR instead of the user's normal
 // ~/.prime/agent profile.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
+	providerenv.Capture(env)
 	dir, err := primeDataDir(dataDir)
 	if err != nil {
 		return
@@ -104,8 +106,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if cfg.Prompt != "" {
 		cmd = append(cmd, "--", cfg.Prompt)
 	}
-	provider, _, _ := strings.Cut(cfg.Config.Model, "/")
-	return primeEndpointCommand(cmd, provider, cfg.Env), nil
+	return providerenv.Command(cmd, cfg.Env), nil
 }
 
 func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemPromptFile string, cfg ports.AgentConfig) ([]string, error) {
@@ -183,8 +184,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	provider, _, _ := strings.Cut(cfg.Config.Model, "/")
-	return primeEndpointCommand(append(cmd, "--resume", agentSessionID), provider, cfg.Env), true, nil
+	return providerenv.Command(append(cmd, "--resume", agentSessionID), cfg.Env), true, nil
 }
 
 // SteersActiveTurn reports that Prime queues input submitted during a turn as
