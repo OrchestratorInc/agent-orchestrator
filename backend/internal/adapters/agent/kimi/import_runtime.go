@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 )
 
 // IsImportedHome distinguishes a private S2 native binding from ordinary
@@ -47,6 +48,10 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	}
 	fail := func() (map[string]string, bool, error) {
 		return nil, true, errors.New("kimi: imported native binding or API-key provider is unavailable")
+	}
+	status, err := os.Lstat(home)
+	if err != nil || !status.IsDir() || status.Mode()&os.ModeSymlink != 0 {
+		return fail()
 	}
 	root, err := os.OpenRoot(home)
 	if err != nil {
@@ -130,7 +135,7 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	if err != nil {
 		return nil, true, err
 	}
-	if err := hookutil.AtomicWriteFile(filepath.Join(home, "config.toml"), encoded, 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(filepath.Join(home, "config.toml"), encoded, 0o600); err != nil {
 		return nil, true, err
 	}
 	return map[string]string{"KIMI_CODE_HOME": home, "AO_KIMI_IMPORT_API_KEY": key}, true, nil

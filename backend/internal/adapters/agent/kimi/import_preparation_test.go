@@ -21,14 +21,14 @@ func kimiImportFixture(t *testing.T) ports.ImportedSessionRelocation {
 	wire := writeKimiTranscript(t, root, "wd_source_000000000000", kimiTestSession)
 	state := map[string]any{"id": kimiTestSession, "version": 2, "cwd": "/source", "agents": map[string]any{"main": map[string]any{"homedir": filepath.Dir(wire), "type": "main"}}, "custom": map[string]any{}}
 	b, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(kimiSessionDirForWire(wire), "state.json"), b, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(kimiSessionDirForWire(wire), "state.json"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	history := `{"type":"metadata","protocol_version":"1.5","created_at":1700000000000}` + "\n" + `{"type":"profile.bind","agentId":"main","modelAlias":"zai/glm","time":1700000000001}` + "\n" + `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"remember MARKER"}],"origin":{"kind":"user"}},"time":1700000000002}` + "\n"
-	if err := os.WriteFile(wire, []byte(history), 0600); err != nil {
+	if err := os.WriteFile(wire, []byte(history), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("default_model = 'zai/glm'\n[providers.zai]\ntype = 'openai'\nbase_url = 'https://provider.invalid/v1'\napi_key = 'synthetic-private-key'\n[models.'zai/glm']\nprovider = 'zai'\nmodel = 'glm'\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("default_model = 'zai/glm'\n[providers.zai]\ntype = 'openai'\nbase_url = 'https://provider.invalid/v1'\napi_key = 'synthetic-private-key'\n[models.'zai/glm']\nprovider = 'zai'\nmodel = 'glm'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return ports.ImportedSessionRelocation{NativeSessionID: kimiTestSession, ConfigDir: root, TranscriptPath: wire, SourceCWD: "/source", LaunchCWD: cwd, Chat: true, DataDir: t.TempDir()}
@@ -92,12 +92,12 @@ func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
 				p := filepath.Join(kimiSessionDirForWire(r.TranscriptPath), "state.json")
 				b, _ := os.ReadFile(p)
 				b = []byte(strings.Replace(string(b), `"version":2`, `"version":3`, 1))
-				if err := os.WriteFile(p, b, 0600); err != nil {
+				if err := os.WriteFile(p, b, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			case "protocol":
 				b, _ := os.ReadFile(r.TranscriptPath)
-				if err := os.WriteFile(r.TranscriptPath, []byte(strings.Replace(string(b), `"1.5"`, `"9.0"`, 1)), 0600); err != nil {
+				if err := os.WriteFile(r.TranscriptPath, []byte(strings.Replace(string(b), `"1.5"`, `"9.0"`, 1)), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			case "subagent":
@@ -107,7 +107,7 @@ func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
 				_ = json.Unmarshal(b, &d)
 				d["agents"].(map[string]any)["child"] = map[string]any{"type": "subagent"}
 				b, _ = json.Marshal(d)
-				if err := os.WriteFile(p, b, 0600); err != nil {
+				if err := os.WriteFile(p, b, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			case "symlink":
@@ -120,7 +120,7 @@ func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
 					t.Skip(err)
 				}
 			case "empty":
-				if err := os.WriteFile(r.TranscriptPath, []byte("{\"type\":\"metadata\",\"protocol_version\":\"1.5\"}\n"), 0600); err != nil {
+				if err := os.WriteFile(r.TranscriptPath, []byte("{\"type\":\"metadata\",\"protocol_version\":\"1.5\"}\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -239,5 +239,29 @@ func TestKimiImportWorkspaceHooksDoNotSeedSourceProfile(t *testing.T) {
 	}
 	if _, _, err := New().GetRestoreCommand(t.Context(), ports.RestoreConfig{DataDir: r.DataDir, Env: map[string]string{"KIMI_CODE_HOME": ref.ConfigDir}}); err == nil {
 		t.Fatal("private import entered terminal restore path")
+	}
+}
+
+func TestKimiPrivateHomeLinkCannotRedirectRuntimeWrites(t *testing.T) {
+	r := kimiImportFixture(t)
+	ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aside := ref.ConfigDir + "-aside"
+	if err := os.Rename(ref.ConfigDir, aside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(aside, ref.ConfigDir); err != nil {
+		t.Skip(err)
+	}
+	if _, _, err := ImportedRuntimeEnv(t.Context(), ref.ConfigDir, r.DataDir, r.NativeSessionID, r.LaunchCWD, "", nil); err == nil {
+		t.Fatal("linked private home accepted")
+	}
+	if _, err := prepareKimiImport(t.Context(), r, "2.4.1"); err == nil {
+		t.Fatal("retry followed a linked private home")
+	}
+	if _, err := os.Stat(filepath.Join(aside, "config.toml")); !os.IsNotExist(err) {
+		t.Fatal("runtime wrote through private-home link")
 	}
 }

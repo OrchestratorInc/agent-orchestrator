@@ -147,7 +147,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		return t, err
 	}
 	if filepath.Clean(snapshot.Path) != filepath.Clean(wirePath) {
-		return t, errors.New("Kimi transcript selection changed")
+		return t, errors.New("kimi transcript selection changed")
 	}
 	t.fingerprint = snapshot.Fingerprint
 	providerRoot, err := os.OpenRoot(root)
@@ -313,7 +313,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		return t, err
 	}
 	if current.Fingerprint != snapshot.Fingerprint {
-		return t, errors.New("Kimi source changed during transcript read")
+		return t, errors.New("kimi source changed during transcript read")
 	}
 	return t, nil
 }

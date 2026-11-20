@@ -45,6 +45,7 @@ func (p *Plugin) CheckImportVersion(ctx context.Context) error {
 	return nil
 }
 
+// PrepareImportedSession proves and stages the exact selected native history.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
 	if err := p.CheckImportVersion(ctx); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -69,7 +70,7 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 		return zero, err
 	}
 	staging := filepath.Join(r.DataDir, "native-imports", "kimi")
-	if err := os.MkdirAll(staging, 0700); err != nil {
+	if err := os.MkdirAll(staging, 0o700); err != nil {
 		return zero, err
 	}
 	root, err := os.OpenRoot(staging)
@@ -86,6 +87,10 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 		var proof kimiImportProof
 		if json.Unmarshal(b, &proof) != nil || proof.Source != source || proof.ID != r.NativeSessionID || proof.CWD != cwd || proof.Home == "" || filepath.Base(proof.Home) != proof.Home || !strings.HasPrefix(proof.Home, ".native-") || proof.Selection == "" || (r.SourceFingerprint != "" && proof.Selection != r.SourceFingerprint) {
 			return zero, errors.New("kimi: private import proof does not match selection")
+		}
+		status, err := root.Lstat(proof.Home)
+		if err != nil || !status.IsDir() || status.Mode()&os.ModeSymlink != 0 {
+			return zero, errors.New("kimi: invalid private native home")
 		}
 		home := filepath.Join(staging, proof.Home)
 		copied, err := ReadImportedSession(ctx, home, proof.ID)
@@ -121,7 +126,7 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	}()
 	sessionDir := filepath.Join(home, "sessions", kimiWorkdirKey(cwd), r.NativeSessionID)
 	mainDir := filepath.Join(sessionDir, "agents", "main")
-	if err := os.MkdirAll(mainDir, 0700); err != nil {
+	if err := os.MkdirAll(mainDir, 0o700); err != nil {
 		return zero, err
 	}
 	var state kimiImportState
@@ -148,12 +153,12 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 		return zero, err
 	}
 	for name, data := range map[string][]byte{filepath.Join(sessionDir, "state.json"): b, filepath.Join(mainDir, "wire.jsonl"): original.Wire} {
-		if err := os.WriteFile(name, data, 0600); err != nil {
+		if err := os.WriteFile(name, data, 0o600); err != nil {
 			return zero, err
 		}
 	}
 	entry, _ := json.Marshal(map[string]string{"sessionId": r.NativeSessionID, "sessionDir": sessionDir, "workDir": cwd})
-	if err := os.WriteFile(filepath.Join(home, "session_index.jsonl"), append(entry, '\n'), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "session_index.jsonl"), append(entry, '\n'), 0o600); err != nil {
 		return zero, err
 	}
 	copied, err := ReadImportedSession(ctx, home, r.NativeSessionID)
@@ -169,7 +174,7 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	}
 	proof := kimiImportProof{Source: source, ID: r.NativeSessionID, CWD: cwd, Selection: original.Fingerprint, Home: filepath.Base(home), Copied: copied.Fingerprint, Model: original.Model}
 	proofBytes, _ := json.Marshal(proof)
-	if err := os.WriteFile(filepath.Join(home, ".ao-import.json"), proofBytes, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".ao-import.json"), proofBytes, 0o600); err != nil {
 		return zero, err
 	}
 	if err := importcopy.WriteOnce(ctx, root, key, proofBytes); err != nil {

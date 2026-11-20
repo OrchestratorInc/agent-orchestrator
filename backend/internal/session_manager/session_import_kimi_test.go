@@ -1,8 +1,9 @@
 package sessionmanager
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestKimiImportsUseCurrentConfigHomeHook(t *testing.T) {
