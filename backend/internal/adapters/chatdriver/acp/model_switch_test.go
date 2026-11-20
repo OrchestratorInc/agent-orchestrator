@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -76,6 +77,11 @@ func TestCheckModelSwitchRefusesAnOptionalModelTheSessionCannotUse(t *testing.T)
 	err := c.checkModelSwitch(context.Background(), "claude-fable-5-2")
 	if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
 		t.Fatalf("checkModelSwitch(claude-fable-5-2) = %v, want ErrChatConfigOptionInvalid", err)
+	}
+	// A new chat on the model would keep the agent's own model too, so the
+	// refusal must not send the user there.
+	if msg := err.Error(); strings.Contains(msg, "new chat") || !strings.Contains(msg, "pick one it lists") {
+		t.Fatalf("refusal = %q, want it to point at the listed models, not a new chat", msg)
 	}
 }
 

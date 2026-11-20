@@ -652,7 +652,9 @@ func (c *conversation) checkOptionalModelOffered(model string) error {
 		if !known || offered || c.configOptionValueNamed(option.ID, option.Name) != "" {
 			return nil
 		}
-		return fmt.Errorf("%w: this chat can't switch to %q because its agent doesn't offer that model; start a new chat with it instead",
+		// A new chat on this model would not run it either: the agent keeps its
+		// own model there too, so the message points only at the models it lists.
+		return fmt.Errorf("%w: this chat can't switch to %q because its agent doesn't offer that model; pick one it lists",
 			ports.ErrChatConfigOptionInvalid, model)
 	}
 	return nil
