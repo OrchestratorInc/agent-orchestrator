@@ -115,6 +115,10 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	// started after one answers for it, deletion included.
 	const upsertClock = useRef(0);
 	const upsertedProjects = useRef(new Map<string, { project: CloudProject; at: number }>());
+	// Project reads in the order they started, and the newest one applied: an
+	// older read that lands after a newer one is out of date and is dropped.
+	const projectReadClock = useRef(0);
+	const appliedProjectRead = useRef(0);
 	// The projects as last set, for the session poll to spot one it hasn't read
 	// (an agent started on another device), and the ids it already re-read the
 	// projects for, so one that never lists (a shared session's) costs one read.
@@ -172,6 +176,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		const own = generation.current;
 		if (!current) return;
 		const startedAt = upsertClock.current;
+		const readId = ++projectReadClock.current;
 		try {
 			// The caller's standalone agents are each a project of their own, read
 			// apart from the projects so many agents can't page the projects out.
@@ -179,7 +184,8 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "exclude" })),
 				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "only" })),
 			]);
-			if (own !== generation.current) return;
+			if (own !== generation.current || readId < appliedProjectRead.current) return;
+			appliedProjectRead.current = readId;
 			let next = mergeCloudProjectLists(listed, agents);
 			for (const [id, upsert] of upsertedProjects.current) {
 				if (upsert.at > startedAt) next = upsertCloudProject(next, upsert.project);
