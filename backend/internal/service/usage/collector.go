@@ -516,7 +516,9 @@ func (c *Collector) reactivateSessionLocked(
 			return err
 		}
 	} else if nativeID != "" && nativeUsageIDPattern.MatchString(nativeID) {
-		if err := c.backfillSession(ctx, session, nativeID); err != nil {
+		// A new session's transcript does not exist yet. Hooks and discovery find
+		// it later; searching every project directory here holds up its start.
+		if err := c.backfillSession(ctx, session, nativeID, true); err != nil {
 			return err
 		}
 	} else if family, ok := piFamilyForHarness(session.Harness); ok {
@@ -565,7 +567,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	}
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness != domain.HarnessClaudeCode || finalizing && !existsForDiscovery) {
-		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID, session.Metadata.WorkspacePath)
+		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID, session.Metadata.WorkspacePath, false)
 		if err != nil {
 			return err
 		}
@@ -901,7 +903,7 @@ func (c *Collector) BackfillActive(ctx context.Context) error {
 		if nativeID == "" || !nativeUsageIDPattern.MatchString(nativeID) {
 			continue
 		}
-		if err := c.backfillSession(ctx, session, nativeID); err != nil {
+		if err := c.backfillSession(ctx, session, nativeID, false); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -966,13 +968,13 @@ func (c *Collector) backfillPiFamilyPaths(
 	return errors.Join(errs...)
 }
 
-func (c *Collector) backfillSession(ctx context.Context, session domain.SessionRecord, nativeID string) error {
+func (c *Collector) backfillSession(ctx context.Context, session domain.SessionRecord, nativeID string, direct bool) error {
 	now := c.now().UTC()
 	existing, exists, err := c.store.GetUsageBinding(ctx, session.ID, session.Harness, nativeID)
 	if err != nil {
 		return err
 	}
-	path, err := c.discoverPath(ctx, session.Harness, nativeID, session.ID, session.Metadata.WorkspacePath)
+	path, err := c.discoverPath(ctx, session.Harness, nativeID, session.ID, session.Metadata.WorkspacePath, direct)
 	if err != nil {
 		return err
 	}
@@ -1417,7 +1419,7 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 		targetState = domain.UsageBindingFinalizing
 	}
 
-	path, err := c.discoverPath(ctx, binding.Harness, binding.NativeRootID, binding.SessionID, session.Metadata.WorkspacePath)
+	path, err := c.discoverPath(ctx, binding.Harness, binding.NativeRootID, binding.SessionID, session.Metadata.WorkspacePath, false)
 	if err != nil {
 		return err
 	}
@@ -2835,7 +2837,9 @@ func pathWithinRoot(ctx context.Context, path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarness, nativeID string, sessionID domain.SessionID, workspace string) (string, error) {
+// discoverPath finds a native transcript. direct limits Claude to the
+// workspace's own project directory.
+func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarness, nativeID string, sessionID domain.SessionID, workspace string, direct bool) (string, error) {
 	if !nativeUsageIDPattern.MatchString(nativeID) {
 		return "", nil
 	}
@@ -2849,6 +2853,9 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 			if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 				return path, nil
 			}
+		}
+		if direct {
+			return "", nil
 		}
 		patterns = []string{filepath.Join(c.roots.ClaudeProjects, "*", nativeID+".jsonl")}
 	case domain.HarnessCodex:
