@@ -58,6 +58,13 @@ func historyFixture(t *testing.T, id, cwd string) string {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// Native history records the real path; restore compares against the
+	// symlink-resolved workspace (macOS temp dirs sit under /var -> /private/var).
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd = resolved
 	var lines []string
 	for _, role := range []string{"user", "assistant"} {
 		b, err := json.Marshal(map[string]any{"type": "message", "role": role, "sessionId": id, "cwd": cwd, "content": []any{map[string]any{"type": "text", "text": "native history"}}})
