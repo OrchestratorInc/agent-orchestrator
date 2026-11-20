@@ -245,9 +245,13 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					// model and effort when that agent is also the reviewer. Show that, and
 					// keep it when the user pins the reviewer by editing one field.
 					const inheritsWorker = role === "reviewer" && !selectedAgent && agent !== "" && agent === draft.workerAgent;
-					const savedModel = savedModelValues[fields.agent] !== selectedAgent ? ""
-						: inheritsWorker ? (savedModelValues.workerAgent === agent ? savedModelValues.workerModel : "")
-						: savedModelValues[fields.model];
+					// The saved model is read the same way from what the project holds, so a
+					// reviewer that inherited the worker's model keeps it once a pick sets the
+					// reviewer's own agent, until that pick is saved.
+					const savedSelected = savedModelValues[fields.agent];
+					const savedAgent = savedSelected || (role === "reviewer" ? defaultReviewer(savedModelValues) : "");
+					const savedInherits = role === "reviewer" && !savedSelected && savedAgent !== "" && savedAgent === savedModelValues.workerAgent;
+					const savedModel = savedAgent !== agent ? "" : savedInherits ? savedModelValues.workerModel : savedModelValues[fields.model];
 					const updateConfig = (key: RoleFields["model"] | RoleFields["mode"] | RoleFields["effort"] | RoleFields["permissions"], value: string) => setDraft((current) => ({
 						...current,
 						...(role === "reviewer" && !current.reviewerHarness && agent
