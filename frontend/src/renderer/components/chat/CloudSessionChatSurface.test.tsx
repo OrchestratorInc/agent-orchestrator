@@ -3535,3 +3535,52 @@ describe("toSnapshot agent switches", () => {
 		expect(items[marker].sequence).toBeLessThan(items[held].sequence);
 	});
 });
+
+// A worker takes a turn as soon as it connects, then checks out the project,
+// runs Setup and starts the agent before the agent opens the turn. Until then
+// the turn is waiting for its agent, so the chat says the session is getting
+// ready rather than that the agent is thinking.
+describe("toSnapshot turns waiting for their agent", () => {
+	const event = (sequence: number, type: string, payload: Record<string, unknown>): CloudCpClientEvent => ({
+		sessionId: session.id, sequence, type, payload, createdAt: session.updatedAt,
+	});
+	const pending = (snapshot: ReturnType<typeof toSnapshot>) => snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id);
+	const sent = [event(1, "chat.user_message", { text: "Go", turnId: "turn-1" })];
+	const taken = [...sent, event(2, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 })];
+
+	it("waits from the send, through the worker taking the turn, until the agent opens it", () => {
+		// Sent while the session starts: no worker has taken it yet.
+		expect(pending(toSnapshot(session, sent))).toEqual(["turn-1"]);
+		// Taken by a worker still checking out the project.
+		expect(pending(toSnapshot(session, taken))).toEqual(["turn-1"]);
+		// The agent opened the turn.
+		expect(pending(toSnapshot(session, [...taken, event(3, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: false })]))).toEqual([]);
+		// Output alone shows an agent at work too.
+		expect(pending(toSnapshot(session, [...taken, event(3, "chat.assistant_delta", { turnId: "turn-1", delta: "On it" })]))).toEqual([]);
+	});
+
+	it("waits again for the agent of a new attempt", () => {
+		const retried = [
+			...taken,
+			event(3, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: true }),
+			event(4, "chat.turn_started", { turnId: "turn-1", attempt: 2, workerEpoch: 4 }),
+		];
+		expect(pending(toSnapshot(session, retried))).toEqual(["turn-1"]);
+	});
+
+	it("treats a turn started above the loaded events as the agent's", () => {
+		const page = [event(5, "chat.assistant_delta", { turnId: "turn-1", delta: "still going" })];
+		expect(pending(toSnapshot(session, page, undefined, { partial: true }))).toEqual([]);
+	});
+
+	it("leaves a worker that never reports capabilities as running from its start", () => {
+		const older = [
+			event(1, "chat.user_message", { text: "First", turnId: "turn-0" }),
+			event(2, "chat.turn_started", { turnId: "turn-0", attempt: 1 }),
+			event(3, "chat.turn_completed", { turnId: "turn-0", attempt: 1 }),
+			event(4, "chat.user_message", { text: "Second", turnId: "turn-1" }),
+			event(5, "chat.turn_started", { turnId: "turn-1", attempt: 1 }),
+		];
+		expect(pending(toSnapshot(session, older))).toEqual([]);
+	});
+});

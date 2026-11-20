@@ -1012,6 +1012,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// before the agent started on it from one that ran.
 	const promptedTurns = new Set<string>();
 	const startedTurns = new Set<string>();
+	// Which turns an agent has taken: the worker reports a turn's capabilities
+	// once its agent opened the turn, before the agent's first output. A worker
+	// can take a turn while it still checks out the project, so a start alone is
+	// not the agent working. capabilityTurns tells a worker that reports them
+	// from an older one that never does.
+	const agentTurns = new Set<string>();
+	const capabilityTurns = new Set<string>();
 	// Queued messages the person deleted (turn_interrupted of reason deleted).
 	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
@@ -1069,6 +1076,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 					: { id: turnID, state: "queued", requestedAt: event.createdAt }),
 				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
 			});
+			// Its start is above the loaded events, and so is whatever its agent did.
+			if (startedEarlier) agentTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
 		if (turnID && event.type === "chat.turn_started") {
@@ -1076,9 +1085,16 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
 			startedTurns.add(turnID);
+			// A new attempt (a retry, a new worker) waits for its own agent.
+			agentTurns.delete(turnID);
 		}
-		if (turnID && event.type === "chat.turn_capabilities" && eventPayload(event).steering === true) {
-			steerableTurns.add(turnID);
+		if (turnID && event.type === "chat.turn_capabilities") {
+			agentTurns.add(turnID);
+			capabilityTurns.add(turnID);
+			if (eventPayload(event).steering === true) steerableTurns.add(turnID);
+		}
+		if (turnID && (event.type === "chat.assistant_delta" || event.type === "chat.activity" || event.type === "chat.approval_requested")) {
+			agentTurns.add(turnID);
 		}
 		if (turnID && (event.type === "chat.turn_completed" || event.type === "chat.turn_interrupted" || event.type === "chat.turn_aborted")) {
 			const turn = turns.get(turnID)!;
@@ -1385,6 +1401,14 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const setupEnd = [...scriptRuns.values()].filter((run) => run.phase === "setup" && run.status !== "running").at(-1)?.lastEventAt;
 			if (setupEnd && Date.parse(setupEnd) > Date.parse(next.requestedAt)) next.startedAt = setupEnd;
 		}
+	}
+	// A running turn no agent has taken yet (sent while the session starts, or
+	// taken by a worker still checking out) reads as getting ready. A worker
+	// that never reports capabilities finished a turn without them; its turns
+	// read as running from their start, as before.
+	const reportsAgentStart = !orderedTurns.some((turn) => turn.state === "completed" && startedTurns.has(turn.id) && !capabilityTurns.has(turn.id));
+	if (reportsAgentStart) {
+		for (const turn of orderedTurns) if (turn.state === "running" && !agentTurns.has(turn.id)) turn.agentPending = true;
 	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
