@@ -218,10 +218,12 @@ func clientSource(r *http.Request) string {
 }
 
 // lockoutKey groups IPv6 sources by /64, since one client usually holds a
-// whole /64 and could otherwise rotate addresses past the lockout.
+// whole /64 and could otherwise rotate addresses past the lockout. Link-local
+// and private addresses are not grouped: devices on one LAN share those
+// prefixes and must not lock each other out.
 func lockoutKey(src string) string {
 	ip := net.ParseIP(src)
-	if ip == nil || ip.To4() != nil {
+	if ip == nil || ip.To4() != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
 		return src
 	}
 	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
