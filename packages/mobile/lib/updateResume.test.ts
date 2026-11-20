@@ -25,6 +25,23 @@ describe("classifyRoute", () => {
 		expect(classifyRoute("/", ["(tabs)", "(workers)"], {})).toEqual({ kind: "root" });
 	});
 
+	it("leaves root-level sheets to the page underneath", () => {
+		expect(classifyRoute("/conversation-actions", ["conversation-actions"], { sessionId: "abc" })).toEqual({ kind: "transient" });
+		expect(classifyRoute("/files/abc/review", ["files", "[sessionId]", "review"], { sessionId: "abc" })).toEqual({
+			kind: "transient",
+		});
+		expect(classifyRoute("/cloud/new-project", ["cloud", "new-project"], {})).toEqual({ kind: "transient" });
+		expect(classifyRoute("/connect", ["connect"], {})).toEqual({ kind: "transient" });
+	});
+
+	it("keeps the pages beside those sheets resumable", () => {
+		expect(classifyRoute("/files/abc/file", ["files", "[sessionId]", "file"], { sessionId: "abc", path: "a.ts" })).toEqual({
+			kind: "page",
+			href: "/files/abc/file?path=a.ts",
+		});
+		expect(classifyRoute("/cloud/terminal", ["cloud", "terminal"], {})).toEqual({ kind: "page", href: "/cloud/terminal" });
+	});
+
 	it("leaves sheets, onboarding and pairing to the page underneath", () => {
 		expect(classifyRoute("/sheets/model", ["sheets", "model"], {})).toEqual({ kind: "transient" });
 		expect(classifyRoute("/onboarding", ["onboarding"], {})).toEqual({ kind: "transient" });

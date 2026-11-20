@@ -21,13 +21,24 @@ export type RouteKind =
 	/** The board itself: nothing to reopen. */
 	| { kind: "root" }
 	/**
-	 * A sheet, the onboarding flow or the pairing scanner: not a place to come
+	 * A sheet, the onboarding flow or pairing: not a place to come
 	 * back to on its own (a picker sheet returns its result to the page that
 	 * opened it), so the page underneath is what gets reopened.
 	 */
 	| { kind: "transient" };
 
-const TRANSIENT = [/^\/sheets(\/|$)/, /^\/onboarding(\/|$)/, /^\/pair(\/|$)/];
+// Every route the root layout presents as a sheet — the `sheets/` group plus
+// the ones declared beside it — and the setup screens. Pages beside them, such
+// as the Files pages next to `files/[id]/review`, stay resumable.
+const TRANSIENT = [
+	/^\/sheets(\/|$)/,
+	/^\/conversation-actions$/,
+	/^\/files\/[^/]+\/review$/,
+	/^\/cloud\/new-project$/,
+	/^\/onboarding(\/|$)/,
+	/^\/pair(\/|$)/,
+	/^\/connect$/,
+];
 const DYNAMIC_SEGMENT = /^\[(?:\.\.\.)?([^\]]+)\]$/;
 
 /**
