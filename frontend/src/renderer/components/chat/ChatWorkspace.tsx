@@ -658,6 +658,12 @@ export interface ChatWorkspaceProps {
 	/** Renderer-only human messages awaiting their exact durable counterpart. */
 	localEchos?: ConversationLocalEcho[];
 	/**
+	 * A send this surface made was accepted, but the turn it starts is not in the
+	 * snapshot yet. For a surface without local echoes (Cloud), which tell this
+	 * themselves.
+	 */
+	sendAwaitingTurn?: boolean;
+	/**
 	 * Writes staged images into the worktree and answers with the paths the agent
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
@@ -942,6 +948,7 @@ function ChatWorkspaceContent({
 	onFileQuery,
 	composerStarting = false,
 	localEchos,
+	sendAwaitingTurn = false,
 	onStageAttachments,
 	cloudAttachments,
 	nativeImages,
@@ -2011,6 +2018,16 @@ function ChatWorkspaceContent({
 	// A local or other-provider orchestrator opens its composer once it is up.
 	const startupQueues = cloudStarting || (session?.provisionState === "provisioning" && sessionRole !== "orchestrator");
 	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
+	// A message the user sent whose turn the snapshot does not hold yet: still on
+	// its way, or accepted before the next read lands. A next message waits behind
+	// it, so the composer keeps saying so until the turn itself is in the snapshot,
+	// and from then on the turn's own state decides (a turn that already finished
+	// reads as idle). A failed send drops its echo; one kept to show a failure is
+	// not waiting on anything, and an opening brief has the startup's own words.
+	const sentTurnPending = sendAwaitingTurn || (localEchos ?? []).some((echo) =>
+		!echo.opening && !echo.delivery &&
+		!(echo.turnId && snapshot.turns.some((entry) => entry.id === echo.turnId)) &&
+		!snapshot.items.some((item) => echoMatchesItem(echo, item, NO_TURN_IDS)));
 	// One steady line for the whole start. A local start runs its steps in a
 	// second or two, and naming each one flickered through the placeholder.
 	const setupPlaceholder = "Starting your orchestrator";
@@ -2475,7 +2492,7 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || startupQueues || accountMoveQueues}
+										willQueue={Boolean(turn) || sentTurnPending || startupQueues || accountMoveQueues}
 										queuePlaceholder={
 											session?.provisionState === "provisioning" || cloudStarting || accountMoveQueues
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
@@ -6801,6 +6818,8 @@ function withLocalSwitchMarker(echo: ConversationLocalEcho, items: ConversationI
 	};
 	return [marker, message];
 }
+
+const NO_TURN_IDS: ReadonlySet<string> = new Set();
 
 /** Whether a durable row is the one a local echo stands in for. */
 function echoMatchesItem(
