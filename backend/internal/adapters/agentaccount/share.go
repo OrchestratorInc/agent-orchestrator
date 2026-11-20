@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"syscall"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -54,9 +56,22 @@ func linkShared(home, shared, name string, file, replaceable bool) (err error) {
 		return nil // the account's own copy; leave it rather than lose it
 	}
 	if err := os.Symlink(target, link); err != nil && !errors.Is(err, fs.ErrExist) {
+		if needsDeveloperMode(err) {
+			return fmt.Errorf("link %s: %w: %w", name, ports.ErrAgentAccountNeedsDeveloperMode, err)
+		}
 		return fmt.Errorf("link %s: %w", name, err)
 	}
 	return nil
+}
+
+// errPrivilegeNotHeld is Windows' ERROR_PRIVILEGE_NOT_HELD, which a symlink
+// gets outside Developer Mode (or an elevated process).
+const errPrivilegeNotHeld = syscall.Errno(1314)
+
+// needsDeveloperMode reports a link Windows refused only for want of
+// Developer Mode, so the user is told to turn it on and not for other failures.
+func needsDeveloperMode(err error) bool {
+	return runtime.GOOS == "windows" && errors.Is(err, errPrivilegeNotHeld)
 }
 
 // createShared makes the missing shared target. When only the account has the

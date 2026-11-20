@@ -989,6 +989,7 @@ func Run(buildVersion string) (retErr error) {
 	defer agentAuthSvc.Close()
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
+	agentAccountSvc.SetUILogin(accountUILogin{auth: agentAuthSvc})
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
@@ -1926,6 +1927,21 @@ func stabilizeWorkingDirectory(dataDir string) error {
 	return nil
 }
 
+// accountUILogin runs an account folder's sign-in through the harness's
+// in-app sign-in, so adding an account shows the same link, device code and
+// code field as signing the CLI in, instead of a terminal.
+type accountUILogin struct{ auth *agentauth.Service }
+
+func (l accountUILogin) StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret string, env map[string]string) (string, error) {
+	snapshot, err := l.auth.StartAccountLogin(ctx, string(harness), method, secret, env)
+	return snapshot.ID, err
+}
+
+func (l accountUILogin) CancelAccountLogin(ctx context.Context, harness domain.AgentHarness, id string) error {
+	_, err := l.auth.CancelLogin(ctx, string(harness), id)
+	return err
+}
+
 // newAgentAccounts builds the Claude Code and Codex account catalog. Each
 // account is a config folder under the state dir; "This computer" is the CLI's
 // own folder, which AO never changes the login of.
@@ -1948,7 +1964,26 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
-	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	// An account's API key is checked with its provider before it is saved.
+	accounts.SetKeyCheck(func(ctx context.Context, p domain.AgentAccountProvider, key string) error {
+		name := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "ANTHROPIC_API_KEY", domain.AgentAccountProviderCodex: "OPENAI_API_KEY"}[p]
+		if name == "" {
+			return ports.ErrAgentAccountProviderMismatch
+		}
+		result, err := providerkeys.Check(ctx, name, key)
+		switch {
+		case err != nil:
+			return err
+		case result.Status == providerkeys.CheckValid:
+			return nil
+		case result.Status == providerkeys.CheckInvalid:
+			return ports.ErrAgentAccountKeyRejected
+		default:
+			return fmt.Errorf("%s check: %s", name, result.Status)
+		}
+	})
+	return accounts
 }
 
 // claudeModelGate marks Claude models the installed Claude Code is too old to
