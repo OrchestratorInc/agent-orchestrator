@@ -5,6 +5,7 @@ import type { CatalogProvider } from "../../../hooks/useAgentAuth";
 import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
 import { Skeleton } from "../../ui/skeleton";
+import { NATIVE_BOUNCE_Y } from "../../../lib/native-overscroll";
 
 /**
  * A harness's provider catalog as a search box over a short scrollable list,
@@ -70,7 +71,7 @@ export function CatalogProviderPicker({ providers, value, onChange, disabled, la
 			onChange={(event) => setQuery(event.target.value)}
 			onKeyDown={onKeyDown}
 		/>
-		<div ref={listRef} id={listId} role="listbox" aria-labelledby={labelledBy} className="relative max-h-48 overflow-y-auto overscroll-contain rounded-lg border border-border py-1">
+		<div ref={listRef} id={listId} role="listbox" aria-labelledby={labelledBy} className={`relative max-h-48 overflow-y-auto ${NATIVE_BOUNCE_Y} rounded-lg border border-border py-1`}>
 			{visible.map((provider, index) => {
 				const selected = provider.id === value;
 				return <div

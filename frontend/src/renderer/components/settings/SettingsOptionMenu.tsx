@@ -9,6 +9,7 @@ import {
 	SETTINGS_MENU_SURFACE,
 	SettingsMenuTrigger,
 } from "./SettingsMenuTrigger";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 export type SettingsOption<T extends string> = {
 	value: T;
@@ -136,7 +137,7 @@ export function SettingsOptionMenu<T extends string>({
 				>
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
+						className={`model-menu-scroll edge-fade min-h-0 overflow-y-auto ${NATIVE_BOUNCE_Y}`}
 					>
 						{visibleOptions.map((option, index) => (
 							<Fragment key={option.value}>

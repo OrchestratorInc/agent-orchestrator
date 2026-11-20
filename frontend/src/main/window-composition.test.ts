@@ -62,6 +62,13 @@ describe("createWindowComposition", () => {
 		});
 	});
 
+	it("turns on the native macOS scroll bounce for the shell", () => {
+		const { FakeWebContentsView } = setup("darwin");
+		expect(FakeWebContentsView).toHaveBeenCalledWith({
+			webPreferences: expect.objectContaining({ scrollBounce: true }),
+		});
+	});
+
 	it("creates a transparent shell at window bounds and reorders it for overlays", () => {
 		const { addChildView, composition, view } = setup();
 

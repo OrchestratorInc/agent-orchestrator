@@ -22,6 +22,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 const MAX_VISIBLE_MODELS = 50;
 const MODEL_SEARCH_THRESHOLD = 5;
@@ -422,7 +423,7 @@ export function AgentModelCombobox({
 				<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
+						className={`model-menu-scroll edge-fade min-h-0 overflow-y-auto ${NATIVE_BOUNCE_Y}`}
 					>
 						{onUseDefault && normalizedSearch === "" && (
 							<>

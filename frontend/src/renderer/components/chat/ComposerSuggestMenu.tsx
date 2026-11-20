@@ -19,6 +19,7 @@ import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 export function ComposerSuggestMenu({
 	id,
@@ -78,7 +79,7 @@ export function ComposerSuggestMenu({
 					role="listbox"
 					// Rows are 32px, so the edge fade is short enough to leave a row readable.
 					// The scroll padding keeps a keyboard-highlighted row clear of it.
-					className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
+					className={`model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto ${NATIVE_BOUNCE_Y} [--edge-fade-size:16px]`}
 				>
 					{items.map((item, index) => {
 						const active = index === highlighted;

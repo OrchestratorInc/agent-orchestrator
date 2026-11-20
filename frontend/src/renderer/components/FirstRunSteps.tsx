@@ -451,7 +451,7 @@ export function AnimatedStepBody({ children }: { children: ReactNode }) {
 	}, []);
 	return (
 		<motion.div
-			className="relative min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
+			className="relative min-h-0 overflow-y-auto overflow-x-hidden overscroll-none"
 			initial={false}
 			animate={{ height }}
 			transition={reduceMotion ? { duration: 0 } : { type: "spring", duration: 0.25, bounce: 0 }}

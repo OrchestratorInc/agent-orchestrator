@@ -8,6 +8,7 @@ import { Search } from "@/components/app-icons";
 
 import { cn } from "@/lib/utils";
 import { ShortcutCaps } from "./kbd";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 const commandClassName = "flex w-full flex-col overflow-hidden rounded-[var(--radius-command-palette)] text-foreground outline-none";
 
@@ -142,7 +143,8 @@ function CommandList({ className, ...props }: React.ComponentProps<typeof Comman
 		<CommandPrimitive.List
 			data-slot="command-list"
 			className={cn(
-				"max-h-command-palette-list scrollbar-none scroll-py-1.5 overflow-y-auto overflow-x-hidden overscroll-contain pb-1.5 outline-none",
+				"max-h-command-palette-list scrollbar-none scroll-py-1.5 overflow-y-auto overflow-x-hidden pb-1.5 outline-none",
+				NATIVE_BOUNCE_Y,
 				className,
 			)}
 			{...props}

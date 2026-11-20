@@ -27,7 +27,7 @@ function GlobalToastStack({ placement, toasts }: { placement: NonNullable<Toast[
 	return (
 		<div
 			className={`pointer-events-none fixed z-[calc(var(--z-overlay)+1)] flex max-w-[calc(100vw-24px)] gap-2 ${
-				placement === "top-center" ? "w-[min(360px,calc(100vw-24px))] items-stretch left-1/2 top-12 max-h-[184px] -translate-x-1/2 flex-col overflow-y-auto overscroll-contain" : placement === "bottom-center" ? "left-1/2 bottom-3 -translate-x-1/2 w-max items-center flex-col-reverse" : "w-[min(360px,calc(100vw-24px))] items-stretch right-3 bottom-3 flex-col-reverse"
+				placement === "top-center" ? "w-[min(360px,calc(100vw-24px))] items-stretch left-1/2 top-12 max-h-[184px] -translate-x-1/2 flex-col overflow-y-auto overscroll-none" : placement === "bottom-center" ? "left-1/2 bottom-3 -translate-x-1/2 w-max items-center flex-col-reverse" : "w-[min(360px,calc(100vw-24px))] items-stretch right-3 bottom-3 flex-col-reverse"
 			}`}
 			data-browser-native-overlay="true"
 			data-state="open"

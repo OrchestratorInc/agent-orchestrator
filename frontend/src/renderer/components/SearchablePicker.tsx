@@ -1,10 +1,11 @@
 import { Check, ChevronDown, Loader2, Lock, Plus, Search } from "@/components/app-icons";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
 import { LiveStatus } from "./LiveStatus";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Pressable } from "./ui/pressable";
+import { NATIVE_BOUNCE_Y } from "../lib/native-overscroll";
 
 
 /** Lists with more options than this get a search box. */
@@ -62,31 +63,6 @@ export function SearchablePicker({
 		`${option.label} ${option.description ?? ""}`.toLowerCase().includes(search.trim().toLowerCase()),
 	);
 
-	// The popover is portaled to <body>, i.e. a sibling of any modal Dialog this
-	// picker lives inside — not a DOM descendant of it. Radix Dialog locks
-	// scrolling via react-remove-scroll, whose document-level (passive:false)
-	// wheel listener calls preventDefault() on every wheel whose target is not
-	// inside the dialog's allow-listed node, so the browser never scrolls this
-	// portaled list. We drive the scroll ourselves instead: apply the wheel
-	// delta to scrollTop directly (immune to preventDefault) and cancel the
-	// native scroll so nothing double-scrolls when no lock is active. A native
-	// non-passive listener is required because React registers `wheel` passively,
-	// which makes preventDefault() from a React onWheel handler a no-op. Guarded
-	// on real overflow so short (non-scrolling) lists behave normally. Attached
-	// via a ref callback so it binds the moment Radix commits the portaled list,
-	// regardless of when that mount lands relative to this component's effects.
-	const listRef = useCallback((list: HTMLDivElement | null) => {
-		if (!list) return;
-		const onWheel = (event: WheelEvent) => {
-			if (list.scrollHeight <= list.clientHeight) return;
-			const delta =
-				event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * list.clientHeight : event.deltaY;
-			list.scrollTop += delta;
-			event.preventDefault();
-		};
-		list.addEventListener("wheel", onWheel, { passive: false });
-		return () => list.removeEventListener("wheel", onWheel);
-	}, []);
 
 	return (
 		<Popover
@@ -133,12 +109,15 @@ export function SearchablePicker({
 					</div>
 				) : null}
 				<div
-					ref={listRef}
 					id={`${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-options`}
 					role="listbox"
 					aria-label={ariaLabel}
+					// Stretches natively at its ends. Inside a modal dialog the scroll lock
+					// would cancel this portaled list's wheel; lib/native-overscroll.ts lets
+					// it through to the native scroll.
 					className={cn(
-						"overscroll-contain p-1",
+						"p-1",
+						NATIVE_BOUNCE_Y,
 						fixedScroll ? "repository-picker-scrollbar max-h-72 overflow-y-auto" : "settings-thin-scrollbar max-h-72 overflow-y-auto",
 					)}
 				>

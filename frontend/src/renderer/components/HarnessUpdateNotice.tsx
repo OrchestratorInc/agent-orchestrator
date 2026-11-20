@@ -422,7 +422,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				className={cn("-mx-3 overflow-hidden transition-[height,opacity] duration-200 ease-out [interpolate-size:allow-keywords] motion-reduce:transition-none",
 					isExpanded ? "h-auto opacity-100" : "h-0 opacity-0")}>
 				<div id={stackId} ref={stackRef} onScroll={updateStackCue}
-					className={cn("mt-2 max-h-[min(280px,calc(100dvh-240px))] divide-y divide-(--color-border-overlay) overflow-x-hidden overflow-y-auto overscroll-contain border-y border-(--color-border-overlay)",
+					className={cn("mt-2 max-h-[min(280px,calc(100dvh-240px))] divide-y divide-(--color-border-overlay) overflow-x-hidden overflow-y-auto overscroll-none border-y border-(--color-border-overlay)",
 						stackOverflows && "[mask-image:linear-gradient(to_bottom,black_calc(100%-32px),transparent)]")}>
 					{updates.map((update) => updateItem(update, "row"))}
 				</div>

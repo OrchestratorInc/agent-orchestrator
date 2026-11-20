@@ -3,6 +3,7 @@ import { ChevronDownIcon, ChevronUpIcon } from "@/components/app-icons";
 import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { NATIVE_BOUNCE_Y } from "@/lib/native-overscroll";
 
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
 	return <SelectPrimitive.Root data-slot="select" {...props} />;
@@ -67,7 +68,7 @@ function SelectContent({
 			>
 				{showScrollButtons ? <SelectScrollUpButton /> : null}
 				<SelectPrimitive.Viewport
-					className={cn("p-1", position === "popper" && "w-full min-w-(--radix-select-trigger-width) scroll-my-1")}
+					className={cn("p-1", NATIVE_BOUNCE_Y, position === "popper" && "w-full min-w-(--radix-select-trigger-width) scroll-my-1")}
 				>
 					{children}
 				</SelectPrimitive.Viewport>

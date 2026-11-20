@@ -488,7 +488,7 @@ export function SessionArchiveModal({
 						/>
 					</CommandBar>
 					<div
-						className="h-[calc(88vh-6rem)] max-h-[calc(88vh-6rem)] scrollbar-none scroll-py-1.5 overflow-y-auto overflow-x-hidden overscroll-contain px-3 pt-1 pb-3 outline-none"
+						className="h-[calc(88vh-6rem)] max-h-[calc(88vh-6rem)] scrollbar-none scroll-py-1.5 overflow-y-auto overflow-x-hidden overscroll-none px-3 pt-1 pb-3 outline-none"
 						data-slot="command-list"
 						onScroll={onListScroll}
 						ref={scrollerRef}

@@ -50,6 +50,7 @@ import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
 import { sharesAgentMark } from "../AgentAvatar";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 export interface PendingAgentSwitch {
 	harness: string;
@@ -483,7 +484,7 @@ export function AgentModelPicker({
 								<OptionMenuSub closeOnSelect>
 									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} />
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
-										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+										<div className={`model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto ${NATIVE_BOUNCE_Y}`}>
 											{agents.map((agent) => (
 												<OptionMenuItem
 													key={agent.id}
@@ -596,7 +597,7 @@ function AccountRows({ account }: { account: AccountChoice }) {
 		<OptionMenuSub closeOnSelect>
 			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
 			<OptionMenuSubContent scrollable className={SUB_CLASS}>
-				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+				<div className={`model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto ${NATIVE_BOUNCE_Y}`}>
 					{account.options.map((option) => (
 						<OptionMenuItem
 							key={option.id}

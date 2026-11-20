@@ -99,6 +99,7 @@ import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
 import { isHostLocalWebLink } from "../lib/loopback";
+import { NATIVE_BOUNCE_Y } from "../lib/native-overscroll";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -1550,7 +1551,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							{t("browser.deviceFit")}
 						</DropdownMenuItem>
 						<div className="my-1 h-px bg-border" role="separator" />
-						<div className="board-scrollbar flex max-h-72 flex-col gap-px overflow-y-auto pr-0.5">
+						<div className={`board-scrollbar flex max-h-72 flex-col gap-px overflow-y-auto ${NATIVE_BOUNCE_Y} pr-0.5`}>
 							{DEVICE_PRESETS.map((preset) => {
 								const PresetIcon = preset.category === "tablet" ? Tablet : Smartphone;
 								return (

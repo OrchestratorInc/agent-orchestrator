@@ -237,7 +237,7 @@ export function ArtifactVersionPreview({
 				<div className="flex min-h-0 flex-1 flex-col">
 					<FileMediaPreview hostId={hostId} kind={media} path={path} sessionId={sessionId} source={{ kind: "artifact", rawUrl, savedVersion: version }} version={version} />
 				</div>
-			) : <div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain">
+			) : <div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-none">
 				{query.isPending ? (
 					<PanelMessage>
 						<LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />

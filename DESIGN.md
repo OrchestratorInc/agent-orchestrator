@@ -343,6 +343,7 @@ Motion is functional and modest.
 - For a light sweep across text, copy `.sidebar-working-shimmer` in `styles.css`: a masked copy of the text moved with `transform`. Do not add new uses of `.chat-working-shimmer`, which animates `background-position`.
 - Check a new looping animation in a DevTools performance trace: while the page is otherwise idle it should show no Recalculate Style or Paint on every frame.
 - Respect reduced-motion preferences: remove nonessential transforms and reduce transitions to immediate state changes.
+- Rubber band at a list's ends is native, never a wheel handler or animation loop. The shell's `scrollBounce` stretches any scroller with `overscroll-behavior: contain` on a Mac trackpad, so a list or menu opts in with `NATIVE_BOUNCE_Y` (`lib/native-overscroll.ts`) on its own scroller (headers stay outside it) and is added to `native-overscroll.test.ts`. Dropdowns, sub-menus, context menus, selects, command lists and the settings menu surface already carry it. Radix scroll locks would cancel the stretch; the pass-through in that file lets an opted-in list inside a menu, popover or dialog keep it. Other scrollers that must not chain use `overscroll-none`. Never put `overscroll-behavior: none` on the document root: it turns every list's bounce off.
 
 ## 11. Platform and responsive behavior
 

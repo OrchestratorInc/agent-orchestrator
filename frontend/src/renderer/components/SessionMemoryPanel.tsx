@@ -575,7 +575,7 @@ export function SessionMemoryPanel({
 					</DialogClose>
 				</div>
 				<div
-					className={cn(settingsDialogBodyClass, "settings-dialog-body min-h-0 flex-1 gap-(--size-settings-section-gap,1.5rem) overscroll-contain px-(--size-modal-padding) pt-0")}
+					className={cn(settingsDialogBodyClass, "settings-dialog-body min-h-0 flex-1 gap-(--size-settings-section-gap,1.5rem) overscroll-none px-(--size-modal-padding) pt-0")}
 					ref={scroller}
 				>
 					<DiagnosticsBody projectId={projectId} scroller={scroller} />

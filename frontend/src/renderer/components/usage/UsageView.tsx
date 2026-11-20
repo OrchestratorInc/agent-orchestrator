@@ -191,7 +191,7 @@ export function UsageView() {
 			</div>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
-					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
+					<ScrollArea.Viewport className="h-full w-full overscroll-none focus-visible:outline-none">
 						<div className="mx-auto w-full max-w-6xl px-6 pt-5 pb-6">
 							{isWindows ? (
 								limitWindows.data ? (

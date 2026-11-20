@@ -8,6 +8,7 @@ import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 export interface ChatAnnotationSummaryItem {
 	snapshot?: ChatExcerptSnapshot;
@@ -109,7 +110,7 @@ export function ChatAnnotationSummary({
 					interactedOutside.current = false;
 				}}
 			>
-				<div className="max-h-[min(24rem,60vh)] space-y-1.5 overflow-y-auto p-0.5" aria-label={t("chat.annotationReferences")}>
+				<div className={`max-h-[min(24rem,60vh)] space-y-1.5 overflow-y-auto ${NATIVE_BOUNCE_Y} p-0.5`} aria-label={t("chat.annotationReferences")}>
 					{annotations.map((annotation, index) => (
 						<div key={annotation.id ?? `${annotation.messageId ?? "annotation"}-${index}`} className="relative min-w-0 rounded bg-interactive-hover">
 							<div className={cn("px-2.5 py-1.5 text-xs", onRemove && "pr-7")}>

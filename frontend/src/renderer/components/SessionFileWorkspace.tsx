@@ -107,7 +107,7 @@ export function SessionFileWorkspace({
 	return (
 		<section className="relative flex h-full min-h-0 flex-col bg-background" data-testid="session-file-workspace">
 			<div
-				className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+				className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none"
 				data-testid="session-file-scroll"
 				data-code-selection-keyboard-scope=""
 				role="region"

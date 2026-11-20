@@ -940,8 +940,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			<div ref={layoutRef} data-harness-detail="" className={cn("relative flex w-full min-w-0 max-w-full min-h-0 flex-1 flex-col overflow-hidden", split && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
 					<div className={cn("flex w-full flex-col", split
-						? "relative h-full min-h-0 max-h-full harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
-						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
+						? "relative h-full min-h-0 max-h-full harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-none bg-(--color-bg-secondary)"
+						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-none rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
 							const cloudSide = cloudState(agentId);
@@ -1013,7 +1013,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
 								{importable ? <TabsTrigger className={HARNESS_TAB_CLASS} value="import">{t("settings.harness.tabImport")}</TabsTrigger> : null}
 							</TabsList>
-							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
+							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none pt-4">{accountTab(selectedDetails)}</TabsContent>
 							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
 								<HarnessModelsPanel
 									agentId={selectedDetails.agentId}
@@ -1023,7 +1023,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									onOpenAccount={() => setDetailTab("account")}
 								/>
 							</TabsContent>
-							<TabsContent value="health" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">
+							<TabsContent value="health" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none pt-4">
 								<HarnessHealthTab
 									details={selectedDetails}
 									checking={checkingAuth.includes(selectedDetails.agentId) || agents.isFetching || Boolean(selectedDetails.advisoryQuery?.isFetching)}

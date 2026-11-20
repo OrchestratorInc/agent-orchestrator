@@ -8,6 +8,7 @@ import { looksLikeEmail, useShareCandidates } from "../../hooks/useTeams";
 import { useCloudSession } from "../../lib/cloud-session";
 import { PersonAvatar, TeamTile } from "./TeamVisuals";
 import { Button } from "../ui/button";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 /** Someone picked in a people field: a team, or a person by email. */
 export type Recipient =
@@ -353,7 +354,7 @@ export function PeopleField({
 						onInteractOutside={(event) => {
 							if (!fieldRef.current?.contains(event.target as Node)) setOpen(false);
 						}}
-						className="z-overlay flex max-h-[min(20rem,var(--radix-popover-content-available-height))] w-(--radix-popover-trigger-width) flex-col gap-px overflow-y-auto rounded-lg border border-(--color-border-overlay) bg-overlay p-1 shadow-(--shadow-popover) outline-none"
+						className={`z-overlay flex max-h-[min(20rem,var(--radix-popover-content-available-height))] w-(--radix-popover-trigger-width) flex-col gap-px overflow-y-auto ${NATIVE_BOUNCE_Y} rounded-lg border border-(--color-border-overlay) bg-overlay p-1 shadow-(--shadow-popover) outline-none`}
 						onMouseDown={(event) => event.preventDefault()}
 						data-people-suggestions=""
 					>

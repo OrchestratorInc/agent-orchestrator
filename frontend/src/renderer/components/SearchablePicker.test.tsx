@@ -69,10 +69,10 @@ it("gives repository selectors a visibly scrollable result area that fits short 
 	expect(screen.getAllByRole("option")).toHaveLength(40);
 });
 
-// The popover is portaled to <body>, so inside a modal Dialog react-remove-scroll
-// preventDefault()s the native wheel scroll. The picker drives the scroll itself
-// from a non-passive wheel listener, which must survive that preventDefault.
-it("scrolls an overflowing result list from the wheel and cancels the native scroll", async () => {
+// The list scrolls natively so a Mac trackpad can stretch it at its ends. Inside
+// a modal Dialog the scroll lock would cancel the wheel on this portaled list;
+// lib/native-overscroll.ts lets it through (covered in native-overscroll.test.ts).
+it("leaves an overflowing result list's wheel to the native scroll so it can bounce", async () => {
 	const user = userEvent.setup();
 	render(<SearchablePicker
 		ariaLabel="Repository"
@@ -85,6 +85,7 @@ it("scrolls an overflowing result list from the wheel and cancels the native scr
 	/>);
 	await user.click(screen.getByRole("combobox", { name: "Repository" }));
 	const list = screen.getByRole("listbox", { name: "Repository" });
+	expect(list).toHaveClass("overscroll-y-contain", "motion-reduce:overscroll-y-none");
 
 	// jsdom does no layout, so drive scrollTop/overflow through explicit descriptors.
 	let scrollTop = 0;
@@ -94,8 +95,8 @@ it("scrolls an overflowing result list from the wheel and cancels the native scr
 
 	const wheel = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
 	list.dispatchEvent(wheel);
-	expect(scrollTop).toBe(120);
-	expect(wheel.defaultPrevented).toBe(true);
+	expect(scrollTop).toBe(0);
+	expect(wheel.defaultPrevented).toBe(false);
 });
 
 it("leaves a non-overflowing result list to scroll natively", async () => {

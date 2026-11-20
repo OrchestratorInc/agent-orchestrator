@@ -45,6 +45,12 @@ export function createWindowComposition(options: {
 			nodeIntegration: false,
 			sandbox: true,
 			transparent: true,
+			// Native trackpad rubber band. Electron reads this only on macOS and
+			// it applies to the whole shell: Chromium then stretches any scroller
+			// with `overscroll-behavior: contain` at its edge. Lists opt in with
+			// `overscroll-y-contain`; native-overscroll.test.ts holds the list.
+			// The page itself never stretches (body is overflow: hidden).
+			scrollBounce: true,
 		},
 	});
 	shellView.setBackgroundColor("#00000000");

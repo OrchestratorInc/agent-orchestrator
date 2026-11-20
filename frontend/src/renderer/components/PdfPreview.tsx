@@ -184,7 +184,7 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 	}
 	if (tooLarge !== null) return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(tooLarge) })}</PanelMessage>;
 	return (
-		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface p-3" ref={scrollRef} role="document">
+		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto overscroll-none bg-surface p-3" ref={scrollRef} role="document">
 			{!loaded ? (
 				<PanelMessage>{t("files.loading")}</PanelMessage>
 			) : width > 0 ? (

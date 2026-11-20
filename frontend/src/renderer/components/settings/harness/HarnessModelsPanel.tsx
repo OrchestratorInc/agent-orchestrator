@@ -187,7 +187,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? null
 			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty")}</p>
-			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
+			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-none")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
 					<span className="min-w-0 flex-1">
 						<span className="flex flex-wrap items-center gap-2 text-sm leading-5 text-settings-label">

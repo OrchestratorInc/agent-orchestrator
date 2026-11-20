@@ -600,7 +600,7 @@ function UpdateActions({
 					<p className="text-sm font-medium text-settings-label">{t("update.restart.whatsNew")}</p>
 					<DesktopReleaseNotes
 						notes={status.releaseNotes}
-						textClassName="settings-thin-scrollbar max-h-40 overflow-y-auto overscroll-contain text-pretty text-sm leading-5 text-settings-label"
+						textClassName="settings-thin-scrollbar max-h-40 overflow-y-auto overscroll-none text-pretty text-sm leading-5 text-settings-label"
 					/>
 				</div>
 			) : null}

@@ -488,7 +488,7 @@ describe("ElicitationDock", () => {
 		expect(dock).toHaveClass("flex", "max-h-[min(65vh,32rem)]", "flex-col", "overflow-hidden");
 
 		const scrollBody = screen.getByTestId("elicitation-scroll-body");
-		expect(scrollBody).toHaveClass("chat-composer-scrollbar", "min-h-0", "flex-1", "overflow-y-auto", "overscroll-contain");
+		expect(scrollBody).toHaveClass("chat-composer-scrollbar", "min-h-0", "flex-1", "overflow-y-auto", "overscroll-none");
 	});
 
 	it("keeps multi-question generic forms in a scrollable body with pinned footer", () => {

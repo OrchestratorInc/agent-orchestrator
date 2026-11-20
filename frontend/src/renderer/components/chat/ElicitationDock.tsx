@@ -191,7 +191,7 @@ function DockHeader({
 				<p
 					id={id}
 					data-testid="elicitation-question"
-					className="chat-composer-scrollbar mt-0.5 max-h-[min(25vh,8rem)] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground"
+					className="chat-composer-scrollbar mt-0.5 max-h-[min(25vh,8rem)] overflow-y-auto overscroll-none whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground"
 				>
 					{title}
 				</p>
@@ -260,7 +260,7 @@ function URLRequest({
 			<DockHeader title={activity.detail?.message || activity.summary} />
 			<div
 				data-testid="elicitation-scroll-body"
-				className="chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+				className="chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-none"
 			>
 				{parsed ? (
 					<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
@@ -424,7 +424,7 @@ function FormRequest({
 				    because scroll offsets round to whole pixels. */}
 				<div
 					data-testid="elicitation-scroll-body"
-					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-contain py-1"
+					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-none py-1"
 				>
 					{!questionGroups && schema?.description ? (
 						<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>

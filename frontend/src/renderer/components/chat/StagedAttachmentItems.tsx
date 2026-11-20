@@ -23,7 +23,7 @@ export function AttachmentStrip({ className, children }: { className?: string; c
 	useEdgeFade(scroller, "x");
 	return (
 		// Padded out and pulled back so a tile's focus ring isn't clipped by the scroller.
-		<div ref={scroller} className={cn("edge-fade edge-fade-x scrollbar-none -m-0.5 max-w-[min(78%,560px)] overflow-x-auto overflow-y-hidden overscroll-x-contain p-0.5", className)}>
+		<div ref={scroller} className={cn("edge-fade edge-fade-x scrollbar-none -m-0.5 max-w-[min(78%,560px)] overflow-x-auto overflow-y-hidden overscroll-x-none p-0.5", className)}>
 			<div className="flex w-max items-start gap-2">{children}</div>
 		</div>
 	);

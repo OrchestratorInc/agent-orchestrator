@@ -566,7 +566,7 @@ export function SessionFileExplorer({
 function ContentScrollArea({ children }: { children: ReactNode }) {
 	return (
 		<div
-			className="board-scrollbar h-full min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-background"
+			className="board-scrollbar h-full min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none bg-background"
 			data-files-scroll-root=""
 		>
 			<div className="flex h-full min-h-0 w-full flex-col px-0">{children}</div>

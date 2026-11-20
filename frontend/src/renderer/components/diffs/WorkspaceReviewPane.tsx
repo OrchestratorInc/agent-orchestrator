@@ -725,7 +725,7 @@ export function WorkspaceReviewPane({
 					<CodeView<"feedback">
 						key={`${pageKey}:${pageIndex}`}
 						ref={codeViewRef}
-						className="ao-pierre-surface board-scrollbar h-full min-h-0 select-text overflow-y-auto overscroll-contain"
+						className="ao-pierre-surface board-scrollbar h-full min-h-0 select-text overflow-y-auto overscroll-none"
 						disableWorkerPool={typeof Worker === "undefined"}
 						items={items}
 						renderCodeViewFooter={renderFallbackFiles}

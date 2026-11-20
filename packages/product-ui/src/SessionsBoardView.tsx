@@ -209,7 +209,10 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 				</span>
 				<span className="ml-auto tabular-nums text-xs leading-none text-passive">{ordered.length}</span>
 			</div>
-			<div className="scrollbar-none min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
+			{/* The lane stretches at its ends under a Mac trackpad (native rubber band)
+			    while the lane header stays put. Only the vertical axis is contained:
+			    a sideways swipe still reaches the horizontal board scroller. */}
+			<div className="scrollbar-none min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 pb-3 pt-3 motion-reduce:overscroll-y-none">
 				<div className="flex min-h-full flex-col gap-2.5">
 					{ordered.map((session) => (
 						<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>

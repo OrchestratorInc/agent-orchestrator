@@ -75,7 +75,7 @@ export function HarnessCloudLine({ state, standaloneUpdate, onUpdate, onReset }:
 			{job?.status === "failed" ? <>
 				<p className="text-error">{t("settings.harness.cloud.installFailed", { tested: versionLabel(details.defaultVersion) })}</p>
 				{job.error ? <p className="whitespace-pre-wrap break-words text-error">{job.error}</p> : null}
-				{job.output ? <pre className="settings-thin-scrollbar max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
+				{job.output ? <pre className="settings-thin-scrollbar max-h-40 overflow-auto overscroll-none whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
 			</> : null}
 			{!details.editable ? <p>{t("settings.harness.cloud.readOnly")}</p> : null}
 			{details.editable && !details.onDefault ? <div>

@@ -188,7 +188,7 @@ export function AutomationsView() {
 			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<CalendarClock className="size-icon-md" aria-hidden="true" />}>{t("automations.title")}</PageTopbarTitle>} />
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 			<main className="relative min-h-0 flex-1 overflow-hidden">
-				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
+				<ScrollArea.Viewport className="h-full w-full overscroll-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
 				<div className="@container pt-4 pr-4 pb-4 pl-(--space-4_5)">
 					{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 					{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}

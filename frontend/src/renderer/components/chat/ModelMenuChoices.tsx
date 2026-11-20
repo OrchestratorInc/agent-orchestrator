@@ -3,6 +3,7 @@ import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type Re
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { NATIVE_BOUNCE_Y } from "../../lib/native-overscroll";
 
 const INITIAL_VISIBLE_COUNT = 100;
 const MAX_SEARCH_RESULTS = 50;
@@ -151,7 +152,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 			<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 				<div
 					ref={scrollRef}
-					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
+					// Stretches natively at its ends on a Mac trackpad; the search row stays put.
+					className={`model-menu-scroll edge-fade min-h-0 overflow-y-auto ${NATIVE_BOUNCE_Y}`}
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {
 						// A submenu's keys bubble here through React, not the DOM; they are its own.

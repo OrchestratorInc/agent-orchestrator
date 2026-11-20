@@ -205,7 +205,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						/>
 						{t("sessionImport.selectAll", { count: eligible.length })}
 					</label>
-					<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+					<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none">
 						{visible.map((c) => (
 							<ImportRow
 								key={c.id}

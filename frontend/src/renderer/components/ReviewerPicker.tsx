@@ -24,6 +24,7 @@ import {
 	OptionMenuSubTrigger,
 	OptionMenuTrigger,
 } from "./ui/option-menu";
+import { NATIVE_BOUNCE_Y } from "../lib/native-overscroll";
 
 export type ReviewerModelConfig = { model?: string; mode?: string; effort?: string };
 
@@ -200,7 +201,7 @@ export function ReviewerPicker({
 							<OptionMenuSub closeOnSelect>
 								<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(harness)} />
 								<OptionMenuSubContent scrollable className={CHAT_PICKER_SUB_CLASS}>
-									<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+									<div className={`model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto ${NATIVE_BOUNCE_Y}`}>
 										{/* The project default comes first: picking it follows the project. */}
 										<OptionMenuItem active={value === ""} radio onSelect={() => pickAgent("")} className="text-xs text-foreground">
 											<ProviderMark provider={defaultHarness} className="mr-2 size-3.5" />
@@ -238,7 +239,7 @@ export function ReviewerPicker({
 								<OptionMenuSub closeOnSelect>
 									<OptionMenuSubTrigger label={t(isMode ? "settings.cloudProject.mode" : "agentSwitch.model")} value={runsWithLabel} />
 									<OptionMenuSubContent scrollable className={CHAT_PICKER_SUB_CLASS}>
-										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+										<div className={`model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto ${NATIVE_BOUNCE_Y}`}>
 											{model || mode ? (
 												<OptionMenuItem onSelect={() => pickModel("")} className="text-xs text-foreground">
 													{t(isMode ? "settings.models.useAgentMode" : "settings.models.useAgentModel")}

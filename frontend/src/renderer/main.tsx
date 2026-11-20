@@ -25,11 +25,14 @@ import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
+import { installScrollLockBouncePassThrough } from "./lib/native-overscroll";
 
 // Bind before the first render: errors during route setup and the first
 // render used to fire before TelemetryBoundary's effect bound these. Captures
 // made before the consent policy arrives are held by preload.
 bindRendererErrorHandlers();
+// Before the first render, so it runs ahead of every scroll lock's wheel listener.
+installScrollLockBouncePassThrough();
 void preloadMarkdownFonts();
 const router = createAppRouter(queryClient);
 

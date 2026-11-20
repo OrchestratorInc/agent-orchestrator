@@ -197,7 +197,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 				{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
-				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
+				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-none whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
 				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
 			</div> : null}
 		</div> : null}

@@ -1069,7 +1069,7 @@ export const ComposerEditor = forwardRef<
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerImages.Provider value={images}>
-			<div className={cn("relative", suggestion && cn("max-h-40 overflow-y-auto overscroll-contain", COMPOSER_SCROLL_GUTTER))}>
+			<div className={cn("relative", suggestion && cn("max-h-40 overflow-y-auto overscroll-none", COMPOSER_SCROLL_GUTTER))}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
@@ -1095,7 +1095,7 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								"max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-none bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
 								COMPOSER_TEXT_INSET,
 								COMPOSER_SCROLL_GUTTER,
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",

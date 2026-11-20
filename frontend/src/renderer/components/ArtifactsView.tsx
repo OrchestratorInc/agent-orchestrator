@@ -566,7 +566,7 @@ export function ArtifactsView() {
 					{/* Radix wraps the content in a display:table box that grows to its widest
 					    row, so long names never truncate and push each row's time out of
 					    view in a narrow panel; a block box keeps the rows to the panel's width. */}
-					<ScrollArea.Viewport ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] h-full w-full overscroll-contain focus-visible:outline-none [&>div]:block!">
+					<ScrollArea.Viewport ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] h-full w-full overscroll-none focus-visible:outline-none [&>div]:block!">
 						<div className="@container pt-3 pr-4 pb-4 pl-(--space-4_5)">
 							{workspaceQuery.isLoading ? (
 								<p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("artifacts.loading")}</p>

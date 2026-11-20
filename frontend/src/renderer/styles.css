@@ -1229,7 +1229,12 @@ button.settings-row-bar {
 	flex-direction: column;
 	overflow-x: hidden;
 	overflow-y: auto;
-	overscroll-behavior: contain;
+	/* Stretches natively at its ends on a Mac trackpad (lib/native-overscroll.ts). */
+	overscroll-behavior-y: contain;
+	overscroll-behavior-x: none;
+	@media (prefers-reduced-motion: reduce) {
+		overscroll-behavior-y: none;
+	}
 	border-radius: var(--radius-settings-panel);
 	border: 1px solid var(--color-border-settings-menu);
 	background-color: var(--color-bg-settings-menu);
@@ -3338,7 +3343,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	height: 100%;
 	justify-content: flex-start;
 	overflow-y: auto;
-	overscroll-behavior: contain;
+	overscroll-behavior: none;
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-scrollbar-board) transparent;
 }
@@ -3512,7 +3517,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
    would hide the line being typed. */
 .chat-human-fold[data-folded][data-scroll-folded]:not([data-animating]) {
 	overflow-y: auto;
-	overscroll-behavior: contain;
+	overscroll-behavior: none;
 	mask-image: none;
 }
 
