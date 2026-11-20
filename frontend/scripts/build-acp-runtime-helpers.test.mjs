@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -333,6 +334,38 @@ describe("patchClaudeBackgroundTasks output", () => {
 		await expect(h.output("watch")).rejects.toThrow("is gone");
 		h.session.queryClosed = true;
 		await expect(h.output("watch")).rejects.toThrow("Live Claude session unavailable");
+	});
+
+	it("keeps an output path that contains spaces", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "Jane Doe", "tasks");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "spaced.output");
+		writeFileSync(file, "tick\n");
+		launch(h, { taskId: "spaced", toolUseId: "toolu_4", command: "npm run dev", file });
+		await expect(h.output("spaced")).resolves.toEqual({ output: "tick\n", truncated: false });
+		for (const [taskId, path] of [
+			["win", "C:\\Users\\Jane Doe\\AppData\\Local\\Temp\\claude\\tasks\\win.output"],
+			["unc", "\\\\server\\share\\Jane Doe\\unc.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", file: path });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("refuses a symlink or a FIFO in place of the output file", async () => {
+		const h = harness();
+		const dir = temporaryDirectory();
+		const target = join(dir, "secret.txt");
+		writeFileSync(target, "not task output\n");
+		const link = join(dir, "link.output");
+		symlinkSync(target, link);
+		launch(h, { taskId: "link", toolUseId: "toolu_5", command: "make", file: link });
+		await expect(h.output("link")).rejects.toThrow("is gone");
+		const fifo = join(dir, "fifo.output");
+		execFileSync("mkfifo", [fifo]);
+		launch(h, { taskId: "fifo", toolUseId: "toolu_6", command: "make", file: fifo });
+		await expect(h.output("fifo")).rejects.toThrow("is gone");
 	});
 });
 

@@ -5903,12 +5903,14 @@ export interface components {
             /** @description The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed. */
             output: string;
             sessionId: string;
+            /** @description True when the provider stopped sending this task's output, so anything it printed since is missing. */
+            stale?: boolean;
             taskId: string;
-            /** @description True when older output was left out. */
+            /** @description True when older output was left out or is missing. */
             truncated?: boolean;
         };
         BackgroundTaskResponse: {
-            /** @description The shell command line, when the provider reports one apart from the description. */
+            /** @description The shell command line, when the provider reports one. Credentials in it are redacted. */
             command?: string;
             description: string;
             /** Format: date-time */

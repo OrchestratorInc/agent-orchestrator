@@ -2450,7 +2450,7 @@ type BackgroundTaskResponse struct {
 	RunID       string     `json:"runId,omitempty"`
 	Kind        string     `json:"kind" enum:"shell,agent,other"`
 	Description string     `json:"description"`
-	Command     string     `json:"command,omitempty" description:"The shell command line, when the provider reports one apart from the description."`
+	Command     string     `json:"command,omitempty" description:"The shell command line, when the provider reports one. Credentials in it are redacted."`
 	State       string     `json:"state" enum:"running,paused,completed,failed,stopped"`
 	StartedAt   *time.Time `json:"startedAt,omitempty" description:"When the provider started the task, or else when the daemon first observed it."`
 	EndedAt     *time.Time `json:"endedAt,omitempty"`
@@ -2463,7 +2463,8 @@ type BackgroundTaskOutputResponse struct {
 	TaskID       string           `json:"taskId"`
 	Availability string           `json:"availability" enum:"ready,unavailable" description:"unavailable when this provider or session cannot report the task's output; output is then empty."`
 	Output       string           `json:"output" description:"The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed."`
-	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out."`
+	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out or is missing."`
+	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
 }
 
 // BackgroundTaskIDParam names one provider-owned background task.

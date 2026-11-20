@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -74,11 +75,85 @@ func TestOutputBufferKeepsATailPerItemAndEvictsTheStalest(t *testing.T) {
 	for i := range outputBufferKeys {
 		b.Append(fmt.Sprintf("other-%d", i), "x\n")
 	}
-	if _, ok := b.Read("cmd-1"); ok {
-		t.Fatal("the least recently written command was not evicted")
+	// Evicted output says it was dropped rather than reading as none.
+	if got, ok := b.Read("cmd-1"); !ok || got.Text != "" || !got.Truncated {
+		t.Fatalf("the least recently written command was not evicted: %+v ok=%v", got, ok)
 	}
 	if _, ok := b.Read(fmt.Sprintf("other-%d", outputBufferKeys-1)); !ok {
 		t.Fatal("evicted a recent command")
+	}
+	b.Append("cmd-1", "again\n")
+	if got, _ := b.Read("cmd-1"); got.Text != "again" || !got.Truncated {
+		t.Fatalf("output after eviction lost its gap: %+v", got)
+	}
+}
+
+func TestOutputBufferNeverEvictsAPinnedCommand(t *testing.T) {
+	var b OutputBuffer
+	b.Append("server", "QUIET-START server on http://localhost:4000\n")
+	b.Pin([]string{"server"})
+	for i := range 3 * outputBufferKeys {
+		b.Append(fmt.Sprintf("ping-%d", i), "Reply from 127.0.0.1\n")
+	}
+	if got, ok := b.Read("server"); !ok || got.Text != "QUIET-START server on http://localhost:4000" || got.Truncated {
+		t.Fatalf("listed terminal's output was evicted: %+v ok=%v", got, ok)
+	}
+	b.Pin(nil)
+	b.Append("ping-new", "x\n")
+	if got, _ := b.Read("server"); got.Text != "" || !got.Truncated {
+		t.Fatalf("an unpinned command was kept past the bound: %+v", got)
+	}
+}
+
+func TestOutputBufferMarksMissedStartsAndStoppedStreams(t *testing.T) {
+	b := OutputBuffer{MaxDeltas: 3}
+	b.MarkDropped("late")
+	b.Append("late", "tick-9\n")
+	if got, _ := b.Read("late"); got.Text != "tick-9" || !got.Truncated || got.Stale {
+		t.Fatalf("late attach: %+v", got)
+	}
+	for i := range 3 {
+		b.Append("flood", fmt.Sprintf("flood-%d\n", i))
+	}
+	if got, _ := b.Read("flood"); !got.Stale {
+		t.Fatalf("stream cap not reported: %+v", got)
+	}
+	// The completed item's full output replaces the gaps.
+	b.Replace("flood", "start\nflood-0\nflood-1\nflood-2\nflood-3\n")
+	if got, _ := b.Read("flood"); got.Text != "start\nflood-0\nflood-1\nflood-2\nflood-3" || got.Stale || got.Truncated {
+		t.Fatalf("replaced output: %+v", got)
+	}
+}
+
+func TestTailOutputKeepsConPTYBlanksAndStripsRawEscapes(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		// Measured from Codex under Windows ConPTY.
+		{"colored", "A-sgr:\x1b[31m\x1b[1Cred \x1b[32m\x1b[1mbold\x1b[m\x1b[38;5;208m\x1b[1C256", "A-sgr: red bold 256"},
+		{"tabs", "tab:\x1b[2CA\x1b[7CBB\x1b[6CCCC", "tab:  A       BB      CCC"},
+		{"bounded", "a\x1b[99999999Cb", "a" + strings.Repeat(" ", maxCursorForward) + "b"},
+		// Raw files, as Claude Code writes them.
+		{"charset", "\x1b(Bplain\x1b)0", "plain"},
+		{"two-byte", "\x1b7saved\x1b8\x1b=\x1b>", "saved"},
+		{"dcs", "\x1bPq#0;2;0;0;0\x1b\\after", "after"},
+		{"8-bit csi", "\u009b31mred\u009b0m", "red"},
+		{"unterminated osc", "\x1b]0;title\nnext line", "\nnext line"},
+		{"bidi", "abc\u202eevil\u202c zero\u200bwidth \U0001F468\u200d\U0001F469", "abcevil zerowidth \U0001F468\u200d\U0001F469"},
+	} {
+		if got := TailOutput(tc.raw, false); got.Text != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got.Text, tc.want)
+		}
+	}
+}
+
+func TestTailOutputKeepsTheEndOfAnOverlongLastLine(t *testing.T) {
+	line := "é" + strings.Repeat("x", MaxOutputBytes-2) + "end"
+	got := TailOutput("before\n"+line, false)
+	if !got.Truncated || !strings.HasSuffix(got.Text, "end") || len(got.Text) > MaxOutputBytes || !utf8.ValidString(got.Text) || strings.Contains(got.Text, "before") {
+		t.Fatalf("len=%d truncated=%v", len(got.Text), got.Truncated)
+	}
+	exact := strings.Repeat("x", MaxOutputBytes)
+	if got := TailOutput(exact, false); got.Text != exact || got.Truncated {
+		t.Fatalf("a line of exactly the budget: len=%d truncated=%v", len(got.Text), got.Truncated)
 	}
 }
 

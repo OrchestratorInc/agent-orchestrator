@@ -404,9 +404,7 @@ function aoObserveBackgroundLaunch(session, message) {
 	for (const block of results) {
 		const text = typeof block.content === "string" ? block.content
 			: Array.isArray(block.content) ? block.content.map(part => typeof part?.text === "string" ? part.text : "").join("\n") : "";
-		// The file is named for the task; the sentence around it may change.
-		const outputPath = text.split(/\s+/).map(word => word.replace(/[.,;:)'"]+$/, ""))
-			.find(word => /^(?:\/|[A-Za-z]:[\\/])/.test(word) && (word.endsWith(`/${fileName}`) || word.endsWith(`\\${fileName}`)));
+		const outputPath = aoBackgroundOutputPath(text, fileName);
 		if (!outputPath && results.length > 1) continue;
 		const command = session.toolUseCache?.[block.tool_use_id]?.input?.command;
 		launch = { command: typeof command === "string" ? command : undefined, outputPath };
@@ -419,13 +417,34 @@ function aoObserveBackgroundLaunch(session, message) {
 	while (launches.size > 128) launches.delete(launches.keys().next().value);
 }
 
+// The output file a launch result names, which ends with the task's file name.
+// The path may contain spaces (a Windows profile such as "C:\Users\Jane Doe"),
+// so it runs from "written to:" when the sentence has it, else from the first
+// path root on that line, up to the file name.
+function aoBackgroundOutputPath(text, fileName) {
+	const root = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
+	for (const line of text.split(/\r?\n/)) {
+		const end = line.lastIndexOf(fileName);
+		if (end < 1 || (line[end - 1] !== "/" && line[end - 1] !== "\\")) continue;
+		const head = line.slice(0, end + fileName.length);
+		const anchored = /written to:\s*(.+)$/i.exec(head)?.[1];
+		const starts = anchored ? [anchored] : [...head.matchAll(/(?:^|[\s'"(])(?=\/|[A-Za-z]:[\\/]|\\\\)/g)].map(m => head.slice(m.index + m[0].length));
+		const path = starts.map(start => start.trim().replace(/^['"(]/, "")).find(start => root.test(start));
+		if (path) return path;
+	}
+	return undefined;
+}
+
 // The tail of a task's output file, at most maxBytes, starting on a whole line.
-// Null when the file is gone or not a regular file.
+// Null when the file is gone or not a regular file. The agent can write that
+// directory, so a symlink is not followed and a FIFO never blocks the read.
 async function aoReadBackgroundOutput(path, maxBytes) {
-	const { open } = process.getBuiltinModule("node:fs/promises");
+	const { lstat, open } = process.getBuiltinModule("node:fs/promises");
+	const { constants } = process.getBuiltinModule("node:fs");
 	let file;
 	try {
-		file = await open(path, "r");
+		if (!(await lstat(path)).isFile()) return null;
+		file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
 	} catch {
 		return null;
 	}
@@ -499,7 +518,7 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             return {};
         })
         `;
-	const helpers = [aoObserveBackgroundTasks, aoObserveBackgroundLaunch, aoReadBackgroundOutput].map(String).join("\n");
+	const helpers = [aoObserveBackgroundTasks, aoObserveBackgroundLaunch, aoBackgroundOutputPath, aoReadBackgroundOutput].map(String).join("\n");
 	writeFileSync(adapterPath, `${helpers}\n${source.replace(marker, registration + marker)}`);
 	return true;
 }

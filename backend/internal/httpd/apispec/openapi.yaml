@@ -17414,10 +17414,14 @@ components:
           type: string
         sessionId:
           type: string
+        stale:
+          description: True when the provider stopped sending this task's output,
+            so anything it printed since is missing.
+          type: boolean
         taskId:
           type: string
         truncated:
-          description: True when older output was left out.
+          description: True when older output was left out or is missing.
           type: boolean
       required:
       - sessionId
@@ -17428,8 +17432,8 @@ components:
     BackgroundTaskResponse:
       properties:
         command:
-          description: The shell command line, when the provider reports one apart
-            from the description.
+          description: The shell command line, when the provider reports one. Credentials
+            in it are redacted.
           type: string
         description:
           type: string

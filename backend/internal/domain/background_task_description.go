@@ -30,3 +30,17 @@ func SanitizeTaskDescription(text string) string {
 	}
 	return text
 }
+
+// SanitizeTaskCommand cleans an untrusted provider command line for display.
+// Unlike a description it keeps its line breaks and length, but redacts the
+// same credential forms, so the command never shows what the description hides.
+func SanitizeTaskCommand(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) || (unicode.IsControl(r) && r != '\n' && r != '\t') {
+			return -1
+		}
+		return r
+	}, text)
+	text = taskCredentialAssignment.ReplaceAllString(text, "$1=[redacted]")
+	return taskBearerCredential.ReplaceAllString(text, "Bearer [redacted]")
+}

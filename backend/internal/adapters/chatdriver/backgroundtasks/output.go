@@ -2,8 +2,10 @@ package backgroundtasks
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -16,9 +18,22 @@ const (
 	MaxOutputLines = 200
 )
 
-// Terminal escapes: CSI (colors, cursor moves), OSC (titles, links) and the
-// two-byte forms. Removed before control characters so no parameters leak.
-var terminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[\x40-\x5a\x5c-\x5f])`)
+// Cursor-forward (CSI n C). Windows ConPTY draws blanks this way, often next
+// to a color change, so it becomes spaces instead of being stripped.
+var cursorForward = regexp.MustCompile(`(?:\x1b\[|\x{9b})(\d*)C`)
+
+// maxCursorForward bounds the spaces one cursor-forward can add.
+const maxCursorForward = 256
+
+// Terminal escapes, 7-bit and 8-bit: CSI (colors, cursor moves); OSC, DCS
+// and the other string controls, ending at their terminator or the line end
+// so an unterminated one cannot swallow later lines; character-set
+// designations such as ESC(B; then the remaining two-byte forms such as ESC7
+// and ESC=. Removed before control characters so no parameters leak.
+var terminalEscape = regexp.MustCompile(`(?:\x1b\[|\x{9b})[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]` +
+	`|(?:\x1b[\]PX^_]|[\x{9d}\x{90}\x{98}\x{9e}\x{9f}])[^\x07\x1b\n\x{9c}]*(?:\x07|\x1b\\|\x{9c})?` +
+	`|\x1b[\x20-\x2f]+[\x30-\x7e]` +
+	`|\x1b[\x30-\x7e]`)
 
 // TailOutput turns raw terminal output into its readable tail: escapes and
 // control characters removed, a carriage-return redraw reduced to what the
@@ -41,7 +56,11 @@ func TailOutput(raw string, dropped bool) ports.ChatBackgroundTaskOutput {
 	if !utf8.ValidString(raw) {
 		raw = strings.ToValidUTF8(raw, "�")
 	}
-	text := terminalEscape.ReplaceAllString(raw, "")
+	text := cursorForward.ReplaceAllStringFunc(raw, func(seq string) string {
+		n, _ := strconv.Atoi(cursorForward.FindStringSubmatch(seq)[1])
+		return strings.Repeat(" ", min(max(n, 1), maxCursorForward))
+	})
+	text = terminalEscape.ReplaceAllString(text, "")
 	text = strings.TrimRight(text, "\r\n")
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
@@ -50,15 +69,27 @@ func TailOutput(raw string, dropped bool) ports.ChatBackgroundTaskOutput {
 		if at := strings.LastIndexByte(line, '\r'); at >= 0 {
 			line = line[at+1:]
 		}
-		lines[i] = domain.SanitizeControlChars(line)
+		lines[i] = strings.Map(dropInvisible, domain.SanitizeControlChars(line))
 	}
 	if len(lines) > MaxOutputLines {
 		lines = lines[len(lines)-MaxOutputLines:]
 		dropped = true
 	}
+	last := len(lines) - 1
+	if len(lines[last]) > MaxOutputBytes {
+		// A newest line over the budget keeps its end rather than emptying the read.
+		cut := len(lines[last]) - MaxOutputBytes
+		for cut < len(lines[last]) && !utf8.RuneStart(lines[last][cut]) {
+			cut++
+		}
+		lines, dropped = []string{lines[last][cut:]}, true
+	}
 	size := 0
 	for i := len(lines) - 1; i >= 0; i-- {
-		size += len(lines[i]) + 1
+		size += len(lines[i])
+		if i < len(lines)-1 {
+			size++ // The newline after this line.
+		}
 		if size > MaxOutputBytes {
 			lines = lines[i+1:]
 			dropped = true
@@ -68,23 +99,47 @@ func TailOutput(raw string, dropped bool) ports.ChatBackgroundTaskOutput {
 	return ports.ChatBackgroundTaskOutput{Text: strings.Join(lines, "\n"), Truncated: dropped}
 }
 
-// outputBufferKeys bounds how many commands keep output at once. Output is
-// buffered before a provider says a command runs in the background, so
-// foreground commands pass through too; the least recently written goes first.
+// dropInvisible removes bidi controls and zero-width spaces, which make text
+// display differently from what it is. Joiners stay, since emoji and some
+// scripts need them.
+func dropInvisible(r rune) rune {
+	if r == '\u200b' || unicode.Is(unicode.Bidi_Control, r) {
+		return -1
+	}
+	return r
+}
+
+// outputBufferKeys bounds how many unpinned commands keep output at once.
+// Output is buffered before a provider says a command runs in the background,
+// so foreground commands pass through too; the least recently written goes
+// first. Pinned commands are never evicted.
 const outputBufferKeys = 16
+
+// evictedKeys bounds how many evicted commands are remembered, so a later read
+// can say their output was dropped instead of reporting none.
+const evictedKeys = 64
 
 // OutputBuffer keeps the latest raw output of recent commands, by provider
 // item. Its zero value is ready.
 type OutputBuffer struct {
+	// MaxDeltas, when set, is how many deltas the provider streams for one
+	// command before it stops. A command that reaches it reads as stale.
+	MaxDeltas int
+
 	mu      sync.Mutex
 	entries map[string]*outputEntry
+	pinned  map[string]bool
+	evicted []string
 	clock   uint64
 }
 
 type outputEntry struct {
-	data    []byte
-	dropped bool
-	written uint64
+	data []byte
+	// dropped: earlier output is missing. midLine: data was cut by size, so
+	// it may start part way through a line.
+	dropped, midLine bool
+	deltas           int
+	written          uint64
 }
 
 // Append adds streamed output for one item, keeping only a bounded tail.
@@ -94,57 +149,130 @@ func (b *OutputBuffer) Append(key, delta string) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	entry := b.entry(key)
+	entry.deltas++
+	entry.data = append(entry.data, delta...)
+	// Trim in batches so a chatty process does not copy on every line. The
+	// tail moves to the front of the same array, so later appends do not regrow.
+	if len(entry.data) > 2*MaxOutputBytes {
+		entry.data = entry.data[:copy(entry.data, entry.data[len(entry.data)-MaxOutputBytes:])]
+		entry.dropped, entry.midLine = true, true
+	}
+}
+
+// MarkDropped records that an item's earlier output was missed, for a
+// command first seen part way through.
+func (b *OutputBuffer) MarkDropped(key string) {
+	if key == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.entry(key).dropped = true
+}
+
+// Replace sets an item's whole output, as reported once the command ends.
+// It fills whatever the stream missed.
+func (b *OutputBuffer) Replace(key, output string) {
+	if key == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.entry(key)
+	entry.data, entry.dropped, entry.midLine, entry.deltas = []byte(output), false, false, 0
+	if len(entry.data) > MaxOutputBytes {
+		entry.data, entry.dropped, entry.midLine = entry.data[len(entry.data)-MaxOutputBytes:], true, true
+	}
+}
+
+// Pin keeps these items' output however many other commands write, and
+// releases items pinned before. Callers pin the commands still listed.
+func (b *OutputBuffer) Pin(keys []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pinned = make(map[string]bool, len(keys))
+	for _, key := range keys {
+		b.pinned[key] = true
+	}
+}
+
+// Read returns an item's readable tail; ok is false when nothing was kept.
+// Output that was evicted reads as empty and truncated.
+func (b *OutputBuffer) Read(key string) (ports.ChatBackgroundTaskOutput, bool) {
+	b.mu.Lock()
+	entry := b.entries[key]
+	if entry == nil {
+		evicted := false
+		for _, k := range b.evicted {
+			evicted = evicted || k == key
+		}
+		b.mu.Unlock()
+		return ports.ChatBackgroundTaskOutput{Truncated: evicted}, evicted
+	}
+	raw, dropped, midLine := string(entry.data), entry.dropped, entry.midLine
+	stale := b.MaxDeltas > 0 && entry.deltas >= b.MaxDeltas
+	b.mu.Unlock()
+	if len(raw) > MaxOutputBytes {
+		raw, dropped, midLine = raw[len(raw)-MaxOutputBytes:], true, true
+	}
+	if midLine {
+		// The cut can land mid-line; that partial first line is not output.
+		if at := strings.IndexByte(raw, '\n'); at >= 0 {
+			raw = raw[at+1:]
+		}
+	}
+	out := TailOutput(raw, dropped)
+	out.Stale = stale
+	return out, true
+}
+
+// entry returns key's entry, creating it and evicting as needed. Caller holds mu.
+func (b *OutputBuffer) entry(key string) *outputEntry {
 	if b.entries == nil {
 		b.entries = make(map[string]*outputEntry)
 	}
 	b.clock++
 	entry := b.entries[key]
 	if entry == nil {
-		if len(b.entries) >= outputBufferKeys {
+		unpinned := 0
+		for k := range b.entries {
+			if !b.pinned[k] {
+				unpinned++
+			}
+		}
+		if unpinned >= outputBufferKeys {
 			b.evictOldest()
 		}
 		entry = &outputEntry{}
+		for i, k := range b.evicted {
+			if k == key {
+				// Output is arriving again for an evicted command; its start is gone.
+				b.evicted = append(b.evicted[:i], b.evicted[i+1:]...)
+				entry.dropped = true
+				break
+			}
+		}
 		b.entries[key] = entry
 	}
 	entry.written = b.clock
-	entry.data = append(entry.data, delta...)
-	// Trim in batches so a chatty process does not copy on every line. The
-	// tail moves to the front of the same array, so later appends do not regrow.
-	if len(entry.data) > 2*MaxOutputBytes {
-		entry.data = entry.data[:copy(entry.data, entry.data[len(entry.data)-MaxOutputBytes:])]
-		entry.dropped = true
-	}
-}
-
-// Read returns an item's readable tail; ok is false when nothing was kept.
-func (b *OutputBuffer) Read(key string) (ports.ChatBackgroundTaskOutput, bool) {
-	b.mu.Lock()
-	entry := b.entries[key]
-	if entry == nil {
-		b.mu.Unlock()
-		return ports.ChatBackgroundTaskOutput{}, false
-	}
-	raw, dropped := string(entry.data), entry.dropped
-	b.mu.Unlock()
-	if len(raw) > MaxOutputBytes {
-		raw, dropped = raw[len(raw)-MaxOutputBytes:], true
-	}
-	if dropped {
-		// The cut can land mid-line; that partial first line is not output.
-		if at := strings.IndexByte(raw, '\n'); at >= 0 {
-			raw = raw[at+1:]
-		}
-	}
-	return TailOutput(raw, dropped), true
+	return entry
 }
 
 // Caller holds mu.
 func (b *OutputBuffer) evictOldest() {
 	oldest, at := "", uint64(0)
 	for key, entry := range b.entries {
-		if oldest == "" || entry.written < at {
+		if !b.pinned[key] && (oldest == "" || entry.written < at) {
 			oldest, at = key, entry.written
 		}
 	}
+	if oldest == "" {
+		return
+	}
 	delete(b.entries, oldest)
+	b.evicted = append(b.evicted, oldest)
+	if len(b.evicted) > evictedKeys {
+		b.evicted = b.evicted[len(b.evicted)-evictedKeys:]
+	}
 }

@@ -58,6 +58,9 @@ type ChatBackgroundTaskOutput struct {
 	Text string
 	// Truncated is true when older output was left out.
 	Truncated bool
+	// Stale is true when the provider stopped sending this task's output, so
+	// anything it printed since is missing.
+	Stale bool
 }
 
 // ChatBackgroundTaskOutputReader reads one task's recent output. Like a

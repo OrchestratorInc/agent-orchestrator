@@ -68,7 +68,7 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	if task.Command == "" {
 		task.Command = old.Command
 	}
-	task.Command = domain.SanitizeControlChars(task.Command)
+	task.Command = domain.SanitizeTaskCommand(task.Command)
 	if task.Kind == "" {
 		task.Kind = old.Kind
 	}
