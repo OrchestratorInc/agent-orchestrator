@@ -2465,6 +2465,8 @@ type BackgroundTaskOutputResponse struct {
 	Output       string           `json:"output" description:"The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed."`
 	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out or is missing."`
 	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
+	// LogOutsideWorkspace explains an output without the task's log.
+	LogOutsideWorkspace bool `json:"logOutsideWorkspace,omitempty" description:"True when the task's command writes its output to a log file outside the session's workspace, which is not read."`
 }
 
 // BackgroundTaskIDParam names one provider-owned background task.

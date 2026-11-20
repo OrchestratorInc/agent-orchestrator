@@ -282,7 +282,7 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 	// The task's name and time open it in the side panel; the stop square stays its own control.
 	const opener = (task: BackgroundTask, content: ReactNode) => onOpenTask ? (
 		<Pressable
-			className="-mx-1.5 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-sm px-1.5 focus-visible:outline-2 focus-visible:outline-ring"
+			className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
 			onClick={() => onOpenTask(task)}
 		>
 			{content}

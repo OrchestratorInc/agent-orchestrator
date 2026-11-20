@@ -94,6 +94,27 @@ export type BackgroundTaskTab = { task: BackgroundTask; ended?: boolean };
 /** One run of a task: a rerun that fails again is a new failure. */
 export const failedTaskKey = (task: BackgroundTask) => `${task.id}\n${task.runId ?? ""}`;
 
+/**
+ * How many finished tasks the Background tasks tab keeps. The daemon remembers
+ * about this many tasks' commands and output, so an older row would open to
+ * nothing; running tasks and the open one always stay.
+ */
+export const FINISHED_TASK_TABS_KEPT = 32;
+
+/** Drops the oldest finished rows past the cap, and the failures seen on them. */
+function pruneTaskTabs(tabs: BackgroundTaskTab[], active: string | undefined, seenFailedTasks: string[] | undefined) {
+	const finished = tabs.filter((tab) => tab.ended || (tab.task.state !== "running" && tab.task.state !== "paused"));
+	if (finished.length <= FINISHED_TASK_TABS_KEPT) return { taskTabs: tabs, seenFailedTasks };
+	// Tabs are in first-seen order, so the oldest finished ones lead.
+	const dropped = new Set(finished.slice(0, finished.length - FINISHED_TASK_TABS_KEPT).map((tab) => tab.task.id));
+	dropped.delete(active ?? "");
+	const taskTabs = tabs.filter((tab) => !dropped.has(tab.task.id));
+	return {
+		taskTabs,
+		seenFailedTasks: seenFailedTasks?.filter((key) => !dropped.has(key.slice(0, key.indexOf("\n")))),
+	};
+}
+
 export type CloudReviewUiState = {
 	showChanges?: boolean;
 	filter?: string;
@@ -898,7 +919,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, isOpen: true, view: "task", taskTabs, activeTaskTab: task.id },
+					[sessionId]: { ...current, isOpen: true, view: "task", ...pruneTaskTabs(taskTabs, task.id, current.seenFailedTasks), activeTaskTab: task.id },
 				},
 			};
 		}),
@@ -935,7 +956,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 				return { ...tab, ended: true };
 			});
 			if (!changed) return state;
-			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, taskTabs: [...taskTabs, ...added] } } };
+			const pruned = pruneTaskTabs([...taskTabs, ...added], current.activeTaskTab, current.seenFailedTasks);
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, ...pruned } } };
 		}),
 	acknowledgeFailedTask: (sessionId, task) =>
 		set((state) => {

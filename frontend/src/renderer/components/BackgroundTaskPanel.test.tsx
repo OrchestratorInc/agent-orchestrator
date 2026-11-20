@@ -57,7 +57,7 @@ describe("background task panel", () => {
 		expect(screen.getByText("1 error")).toBeVisible();
 		const row = (text: string) => screen.getByText(text, { exact: false, selector: "pre > span" });
 		expect(row("Ready in 1.4s")).toHaveClass("text-(--color-term-green)");
-		expect(row("Fast Refresh")).toHaveClass("bg-(--color-term-yellow)/12");
+		expect(row("Fast Refresh")).toHaveClass("bg-(--color-term-yellow)/8");
 		expect(row("error TS2322")).toHaveClass("bg-(--color-term-red)/12");
 		expect(row("Found 1 error.").className).not.toMatch(/term-/);
 	});
@@ -102,6 +102,44 @@ describe("background task panel", () => {
 		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: true });
 	});
 
+	it("keeps the last output read when the chat stops reporting the task", () => {
+		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
+		// The chat ended: the task reads as ended, and its output as unavailable.
+		outputMock.mockReturnValue(outputOf("", { availability: "unavailable" }));
+		rerender(<Panel isVisible sessionId="s" tab={{ task: task(), ended: true }} />);
+		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("Local: http://localhost:3000/");
+		expect(screen.getByText("The chat stopped reporting this task. This is the last output read.")).toBeVisible();
+		expect(screen.queryByText("This agent doesn't report this task's output")).toBeNull();
+		// A reading that answers again replaces it.
+		outputMock.mockReturnValue(outputOf("restarted"));
+		rerender(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
+		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("restarted");
+		expect(screen.queryByText(/last output read/)).toBeNull();
+	});
+
+	it("says the chat stopped reporting a task whose output was never read", () => {
+		outputMock.mockReturnValue(outputOf("", { availability: "unavailable" }));
+		render(<Panel isVisible sessionId="s" tab={{ task: task(), ended: true }} />);
+		expect(screen.getByText("The chat stopped reporting this task before its output was read.")).toBeVisible();
+	});
+
+	it("keeps the output, and where it was scrolled, when one refresh fails", () => {
+		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
+		const region = screen.getByRole("region", { name: "Output" });
+		// TanStack Query keeps the last data on a failed refetch.
+		outputMock.mockReturnValue({ ...outputOf("> vite\n  Local: http://localhost:3000/"), isError: true });
+		rerender(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
+		expect(screen.getByRole("region", { name: "Output" })).toBe(region);
+		expect(screen.getByRole("status")).toHaveTextContent("Couldn't load the output");
+	});
+
+	it("says why a log outside the workspace isn't shown", () => {
+		outputMock.mockReturnValue(outputOf("", { logOutsideWorkspace: true }));
+		render(<Panel isVisible sessionId="s" tab={{ task: task({ command: "npm run dev > /tmp/dev.log 2>&1" }) }} />);
+		expect(screen.getByText("This task writes its output to a log outside the workspace, which isn't shown here.")).toBeVisible();
+		expect(screen.queryByText("No output yet")).toBeNull();
+	});
+
 	it.each([
 		["unavailable", outputOf("", { availability: "unavailable" }), "This agent doesn't report this task's output"],
 		["empty", outputOf(""), "No output yet"],
@@ -144,6 +182,8 @@ describe("background tasks list", () => {
 		await userEvent.click(within(finished).getByRole("button", { name: /Building/ }));
 		expect(screen.getByRole("region", { name: "Building" })).toBeVisible();
 		expect(screen.getByRole("button", { name: "All background tasks" })).toHaveFocus();
+		// Focus moved for the reader opens no tooltip over the side panel's tabs.
+		expect(screen.queryByRole("tooltip")).toBeNull();
 		expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
 
 		await userEvent.click(screen.getByRole("button", { name: "All background tasks" }));

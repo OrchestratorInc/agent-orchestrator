@@ -462,3 +462,105 @@ func TestBackgroundTaskOutputKeepsAFinishedRunsLogWhenARestartReusesThePath(t *t
 		t.Fatalf("first run output=%+v err=%v", got, err)
 	}
 }
+
+func TestBackgroundTaskOutputKeepsAVanishedRunsLogWhenARestartReusesThePath(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	first := ports.ChatBackgroundTask{ID: "first", Kind: "shell", State: "running", Command: "npm run dev > server.log 2>&1", StartedAt: &started}
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{first}}}
+	h := newHarnessWithConversation(t, conv)
+	logPath := filepath.Join(h.workspace, "server.log")
+	if err := os.WriteFile(logPath, []byte("first run ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	// The provider drops the terminal while it is still running, as Codex
+	// does with one that vanishes: no reading ever sees it settle.
+	conv.tasks = nil
+	h.advance(2 * time.Second)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+
+	// A restart rewrites the same log.
+	restarted := time.Now()
+	second := ports.ChatBackgroundTask{ID: "second", Kind: "shell", State: "running", Command: first.Command, StartedAt: &restarted}
+	conv.tasks = []ports.ChatBackgroundTask{second}
+	if err := os.WriteFile(logPath, []byte("second run ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(2 * time.Second)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "first"); err != nil || got.Text != "first run ready" {
+		t.Fatalf("first run output=%+v err=%v", got, err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "second"); err != nil || got.Text != "second run ready" {
+		t.Fatalf("second run output=%+v err=%v", got, err)
+	}
+
+	// A reading that lists the first run live again follows its log again.
+	conv.tasks = []ports.ChatBackgroundTask{first, second}
+	h.advance(2 * time.Second)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "first"); err != nil || got.Text != "second run ready" {
+		t.Fatalf("listed again output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputDropsALogARestartTookOverBeforeAnyReadingSawTheRunEnd(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	first := ports.ChatBackgroundTask{ID: "first", Kind: "shell", State: "running", Command: "npm run dev > server.log 2>&1", StartedAt: &started}
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{first}}, output: ports.ChatBackgroundTaskOutput{Text: "[killed]"}}
+	h := newHarnessWithConversation(t, conv)
+	logPath := filepath.Join(h.workspace, "server.log")
+	if err := os.WriteFile(logPath, []byte("first run ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	// While nobody read, the first run ended, aged out, and a restart took
+	// over its log.
+	restarted := time.Now()
+	second := ports.ChatBackgroundTask{ID: "second", Kind: "shell", State: "running", Command: first.Command, StartedAt: &restarted}
+	conv.tasks = []ports.ChatBackgroundTask{second}
+	if err := os.WriteFile(logPath, []byte("second run ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Minute)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	// The second run's log is not the first run's output; what the first
+	// run printed itself is all there is.
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "first"); err != nil || got.Text != "[killed]" {
+		t.Fatalf("first run output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputSaysALogOutsideTheWorkspaceIsNotShown(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	outside := filepath.ToSlash(filepath.Join(t.TempDir(), "dev.log"))
+	if err := os.WriteFile(filepath.FromSlash(outside), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Command: "npm run dev > " + outside + " 2>&1", StartedAt: &started}
+	// A harness that keeps no output of its own.
+	plain := &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}
+	h := newHarnessWithConversation(t, plain)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell")
+	if err != nil || got.Text != "" || !got.LogOutsideWorkspace {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}

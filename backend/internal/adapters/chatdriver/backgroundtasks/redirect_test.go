@@ -35,7 +35,16 @@ func TestStdoutFileFollowsWhereACommandSendsItsOutput(t *testing.T) {
 		{`cd {V}/srv/app; ./run > out.log`, "/srv/app/out.log"},
 		{`cd frontend && cd .. && ./run > out.log`, "/work/out.log"},
 		{`(cd frontend && npm run build) > build.log`, "/work/build.log"},
-		{`./a > a.log; ./b > b.log`, "/work/b.log"},
+		// Across commands, the one run with & decides, else the first that redirects.
+		{`npm run dev > dev.log 2>&1 & echo $! > dev.pid`, "/work/dev.log"},
+		{`npm run dev > logs/dev.log 2>&1; echo ok > status.txt`, "/work/logs/dev.log"},
+		{`echo starting > status.txt; npm run dev > dev.log 2>&1 &`, "/work/dev.log"},
+		{`(cd app && npm run dev > ../dev.log 2>&1) & echo $! > dev.pid`, "/work/dev.log"},
+		{`(cd app && npm run dev) > dev.log 2>&1 & echo $! > dev.pid`, "/work/dev.log"},
+		{`npm install && npm run dev > dev.log 2>&1`, "/work/dev.log"},
+		{`npm run dev 2>&1 | grep -v noise > dev.log`, "/work/dev.log"},
+		{`./a > a.log; ./b > b.log`, "/work/a.log"},
+		{`./a > a.log > b.log`, "/work/b.log"},
 		{`2>&1 ./server > out.log`, "/work/out.log"},
 		{"./server \\\n  > out.log", "/work/out.log"},
 		{`./server > out.log # keep it running`, "/work/out.log"},
@@ -44,7 +53,9 @@ func TestStdoutFileFollowsWhereACommandSendsItsOutput(t *testing.T) {
 		{`./server > "$LOG"`, ""},
 		{`./server > logs/*.log`, ""},
 		{`./server > ~other/out.log`, ""},
-		{`./server > out.log; ./other > $LOG`, ""},
+		{`./server > out.log; ./other > $LOG`, "/work/out.log"},
+		{`./server > $LOG; ./other > out.log`, ""},
+		{`npm run dev > /dev/null 2>&1 & echo $! > dev.pid`, ""},
 		{`npm test 2> err.log`, ""},
 		{`npm run dev 2>&1 | tee dev.log`, ""},
 		{`npm run dev > /dev/null 2>&1`, ""},
@@ -159,5 +170,37 @@ func TestRedirectedOutputKeepsTheTailOfALargeLog(t *testing.T) {
 	if !ok || !got.Truncated || !strings.HasSuffix(got.Text, "the newest line") ||
 		!strings.HasPrefix(got.Text, "a fairly long log line") || len(got.Text) > MaxOutputBytes {
 		t.Fatalf("truncated=%v len=%d ok=%v", got.Truncated, len(got.Text), ok)
+	}
+}
+
+func TestRedirectedOutputSaysWhenTheLogIsOutsideTheWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	started := time.Now().Add(-time.Minute)
+	outside := filepath.ToSlash(filepath.Join(t.TempDir(), "dev.log"))
+	if got, ok := RedirectedOutput("npm run dev > "+outside+" 2>&1", dir, &started); ok || !got.LogOutsideWorkspace {
+		t.Fatalf("outside log = %+v, %v", got, ok)
+	}
+	// A log inside the workspace that isn't there yet is simply not shown.
+	if got, ok := RedirectedOutput("npm run dev > dev.log 2>&1", dir, &started); ok || got.LogOutsideWorkspace {
+		t.Fatalf("missing inside log = %+v, %v", got, ok)
+	}
+}
+
+func TestStdoutFileOnWindowsKeepsRootedAndBackslashPathsOutOfTheWorkspace(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path rules")
+	}
+	dir := `C:\work`
+	// Git Bash's /tmp is not under the workspace.
+	if got, ok := stdoutFile(`npm run dev > /tmp/dev.log 2>&1`, dir, ""); !ok || got != `\tmp\dev.log` {
+		t.Errorf("rooted path = %q, %v", got, ok)
+	}
+	started := time.Now().Add(-time.Minute)
+	if got, ok := RedirectedOutput(`npm run dev > /tmp/dev.log 2>&1`, t.TempDir(), &started); ok || !got.LogOutsideWorkspace {
+		t.Errorf("rooted log = %+v, %v", got, ok)
+	}
+	// A backslash is a separator here, not the escape that would make logsdev.log.
+	if got, ok := stdoutFile(`npm run dev > logs\dev.log 2>&1`, dir, ""); ok {
+		t.Errorf("backslash path = %q", got)
 	}
 }

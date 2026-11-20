@@ -3,9 +3,23 @@ export type LineTone = "ok" | "warning" | "error";
 
 // Output arrives without its terminal colors, so a line's tone comes from what
 // common tools print: a compiler's "error TS2322:", npm's "ERR!", a test
-// runner's ✓ and ×, Next's ⚠. A summary such as "Found 1 error." stays plain.
-const ERROR = /^\s*[×✗✘]\s|\b(?:[A-Z][A-Za-z]*)?(?:Error|error)(?: TS\d+)?:|\bERR(?:OR)?\b/;
-const WARNING = /^\s*⚠|\b(?:Warning|warning|Warn|warn)(?: TS\d+)?:|\bWARN(?:ING)?\b/;
+// runner's ✓ and ×, Next's ⚠, a logger's ERROR or level=warn. A word only
+// counts where a tool puts it, at the start of the line after any timestamp or
+// bracketed tag, so "handled error: none" or LOG_LEVEL=ERROR stay plain, as
+// does a summary such as "Found 1 error.".
+const PREFIX = String.raw`^\s*(?:(?:\[[^\]]*\]|\([^)]*\)|\d[\d:.\-TZ/,]*)\s+)*`;
+const tone = (symbol: string, word: string, levels: string, npm: string, level: string) => new RegExp([
+	String.raw`^\s*${symbol}`,
+	// TypeError:, error:, error TS2322:, AssertionError [ERR_ASSERTION]:
+	PREFIX + String.raw`(?:[A-Z][A-Za-z]*)?(?:${word})(?: TS\d+| \[[^\]]*\])?:`,
+	PREFIX + String.raw`\[?(?:${levels})\]?(?=[\s:]|$)`,
+	// src/app.ts(3,4): error TS2322:
+	String.raw`\b(?:${word.toLowerCase()}) TS\d+:`,
+	String.raw`^\s*npm ${npm}`,
+	String.raw`\blevel=(?:${level})\b`,
+].join("|"));
+const ERROR = tone("[×✗✘]\\s", "Error|error", "ERROR|ERR!?|FATAL", "ERR!", "error|fatal");
+const WARNING = tone("⚠", "Warning|warning|Warn|warn", "WARNING|WARN", "WARN\\b", "warn|warning");
 const OK = /^\s*[✓✔]\s/;
 
 export function lineTone(line: string): LineTone | undefined {

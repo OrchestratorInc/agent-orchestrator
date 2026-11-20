@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -17,16 +18,17 @@ import (
 const logClockSlack = 5 * time.Second
 
 // RedirectedOutput reads the log file a background shell command writes its
-// output to. A command like `npm run dev > /tmp/dev.log 2>&1` prints nothing
+// output to. A command like `npm run dev > logs/dev.log 2>&1` prints nothing
 // of its own, so the log is the only output there is.
 //
 // The path comes from the command line, never from a request. Relative paths
 // start at dir, after any plain `cd` the command runs first. Only a log inside
 // dir, the session's workspace, is read: an absolute path elsewhere, or a
-// symlink anywhere on the way that leaves dir, is not followed. The file is
-// read only when it is a regular file, not a symlink, written no earlier than
-// the task started: a stale log from an earlier run, or an existing file the
-// command opened without writing to, is not shown.
+// symlink anywhere on the way that leaves dir, is not followed, and the result
+// says so with LogOutsideWorkspace. The file is read only when it is a regular
+// file, not a symlink, written no earlier than the task started: a stale log
+// from an earlier run, or an existing file the command opened without writing
+// to, is not shown.
 func RedirectedOutput(command, dir string, startedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
 	if startedAt == nil || !filepath.IsAbs(dir) {
 		return ports.ChatBackgroundTaskOutput{}, false
@@ -38,13 +40,25 @@ func RedirectedOutput(command, dir string, startedAt *time.Time) (ports.ChatBack
 	}
 	rel, err := filepath.Rel(dir, path)
 	if err != nil || !filepath.IsLocal(rel) {
-		return ports.ChatBackgroundTaskOutput{}, false
+		return ports.ChatBackgroundTaskOutput{LogOutsideWorkspace: true}, false
 	}
 	raw, dropped, ok := readLogTail(dir, rel, startedAt.Add(-logClockSlack))
 	if !ok {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
 	return TailOutput(raw, dropped), true
+}
+
+// RedirectTarget returns the log file a command writes to, as RedirectedOutput
+// resolves it from dir, or "" when it names none that can be followed. Two
+// runs with the same target share a log.
+func RedirectTarget(command, dir string) string {
+	if !filepath.IsAbs(dir) {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	path, _ := stdoutFile(command, dir, home)
+	return path
 }
 
 // readLogTail reads at most MaxOutputBytes from the end of the log at rel
@@ -88,15 +102,20 @@ func readLogTail(dir, rel string, notBefore time.Time) (raw string, dropped, ok 
 	return raw, start > 0, true
 }
 
-// stdoutFile finds the file a shell command line sends its standard output
-// to: the last redirect of descriptor 1 (`>`, `>>`, `1>`, `&>`, `>|`). It
-// answers only for a path the shell would not expand further, and never for a
-// device such as /dev/null.
+// stdoutFile finds the log file a shell command line sends its standard
+// output to. Within one simple command the last redirect of descriptor 1
+// (`>`, `>>`, `1>`, `&>`, `>|`) decides, as in the shell. Across commands, the
+// one put in the background with `&` decides, since that is the long-running
+// one (`npm run dev > dev.log 2>&1 & echo $! > dev.pid`); otherwise the first
+// command that redirects its output does (`npm run dev > dev.log; echo ok >
+// status.txt`). It answers only for a path the shell would not expand
+// further, and never for a device such as /dev/null.
 //
 // The line is read as a POSIX shell (sh, bash, zsh, Git Bash) reads it, on
-// every platform. On Windows that means a backslash escapes, so only a path
-// written with forward slashes is followed: drive-absolute (C:/logs/dev.log)
-// or relative to dir.
+// every platform. On Windows that means a backslash escapes, so a path written
+// with one is not followed, and only forward-slash paths are: drive-absolute
+// (C:/logs/dev.log), rooted without a drive (/tmp/dev.log, outside dir), or
+// relative to dir.
 func stdoutFile(command, dir, home string) (string, bool) {
 	tokens, ok := lexShell(command)
 	if !ok {
@@ -106,10 +125,23 @@ func stdoutFile(command, dir, home string) (string, bool) {
 		dir   string
 		known bool
 	}
+	// redirect is where one command, or a parenthesized group, sends its output.
+	type redirect struct {
+		target     string
+		found, set bool
+	}
 	cwd := place{dir, filepath.IsAbs(dir)}
 	var subshells []place
-	var words []shellToken // the current simple command's words
-	target, found := "", false
+	var groups []int         // per open `(`, the index in commands where it began
+	var words []shellToken   // the current simple command's words
+	var current redirect     // the current simple command's redirect
+	var commands []redirect  // every finished command's redirect, in order
+	var background *redirect // the redirect of the command run with `&`
+	lastGroup := -1          // after `)`: where that group began in commands
+	finish := func() {
+		commands = append(commands, current)
+		current = redirect{}
+	}
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
 		switch token.kind {
@@ -121,14 +153,36 @@ func stdoutFile(command, dir, home string) (string, bool) {
 				cwd.dir, cwd.known = changeDir(cwd.dir, cwd.known, words[1:], home)
 			}
 			words = nil
+			ran := current
+			hadGroup := lastGroup
+			finish()
+			lastGroup = -1
 			switch token.text {
 			case "(":
 				subshells = append(subshells, cwd)
+				groups = append(groups, len(commands))
 			case ")":
 				// A `cd` inside parentheses ends with them.
 				if len(subshells) > 0 {
 					cwd = subshells[len(subshells)-1]
 					subshells = subshells[:len(subshells)-1]
+				}
+				if len(groups) > 0 {
+					lastGroup = groups[len(groups)-1]
+					groups = groups[:len(groups)-1]
+				}
+			case "&":
+				switch {
+				case ran.set:
+					background = &ran
+				case hadGroup >= 0:
+					// `( cd app && npm run dev > dev.log ) &`: the group's first redirect.
+					for _, inner := range commands[hadGroup:] {
+						if inner.set {
+							background = &inner
+							break
+						}
+					}
 				}
 			}
 		case tokenRedirect:
@@ -144,19 +198,33 @@ func stdoutFile(command, dir, home string) (string, bool) {
 			if token.dup && (to.text == "-" || allDigits(to.text)) {
 				continue
 			}
-			// The last redirect decides, even one that can't be followed.
-			if isDevice(to.text) {
-				target, found = "", false
+			// The command's last redirect decides, even one that can't be followed.
+			current = redirect{set: true}
+			if isDevice(to.text) || (hostWindows && to.escaped) {
 				continue
 			}
-			target, found = resolveShellPath(to, cwd.dir, cwd.known, home)
+			current.target, current.found = resolveShellPath(to, cwd.dir, cwd.known, home)
 		}
 	}
-	if !found || isDevice(target) {
+	finish()
+	chosen := background
+	if chosen == nil {
+		for i := range commands {
+			if commands[i].set {
+				chosen = &commands[i]
+				break
+			}
+		}
+	}
+	if chosen == nil || !chosen.found || isDevice(chosen.target) {
 		return "", false
 	}
-	return target, true
+	return chosen.target, true
 }
+
+// hostWindows: paths follow Windows rules, and a backslash on a command line
+// is more likely a path separator than the escape a POSIX shell reads.
+var hostWindows = runtime.GOOS == "windows"
 
 // isDevice reports a /dev path, checked as written too, since on Windows
 // /dev/null is not absolute and would otherwise resolve under dir.
@@ -192,7 +260,9 @@ func resolveShellPath(word shellToken, cwd string, known bool, home string) (str
 			return "", false
 		}
 	}
-	if filepath.IsAbs(text) {
+	// On Windows a path rooted without a drive, as Git Bash writes /tmp/dev.log,
+	// is not under any workspace; it must not be joined onto one.
+	if filepath.IsAbs(text) || (hostWindows && strings.HasPrefix(text, "/")) {
 		return filepath.Clean(text), true
 	}
 	if !known {
@@ -219,6 +289,8 @@ type shellToken struct {
 	quoted bool
 	// tilde: a word starts with an unquoted ~.
 	tilde bool
+	// escaped: a backslash outside quotes escaped part of a word.
+	escaped bool
 	// fd is a redirect's descriptor; -1 for &>, which redirects 1 and 2.
 	fd    int
 	dup   bool
@@ -255,7 +327,7 @@ func lexShell(line string) ([]shellToken, bool) {
 				i++
 				if line[i] != '\n' {
 					word.WriteByte(line[i])
-					inWord, current.quoted = true, true
+					inWord, current.quoted, current.escaped = true, true, true
 				}
 			}
 		case '\'':

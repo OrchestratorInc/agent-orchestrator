@@ -110,10 +110,14 @@ function BackgroundTaskGroup({ label, note, tasks, now, onOpen }: {
 	now: number;
 	onOpen: (taskId: string) => void;
 }) {
+	const { t } = useTranslation();
 	if (tasks.length === 0) return null;
 	return (
 		<div role="group" aria-label={label}>
-			<InspectorSection surface={false} title={`${label} · ${tasks.length}${note ? ` · ${note}` : ""}`}>
+			<InspectorSection
+				surface={false}
+				title={note ? t("backgroundTasks.panel.groupWithNote", { label, n: tasks.length, note }) : t("backgroundTasks.panel.group", { label, n: tasks.length })}
+			>
 				<ul className="flex min-w-0 flex-col">
 					{tasks.map((entry) => (
 						<li key={entry.task.id}>
@@ -211,6 +215,13 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 	const now = useNow(live ? [task] : []);
 	const { stopping, failed, stop } = useTaskStops(sessionId, live ? task.id : "");
 	const output = useBackgroundTaskOutput(sessionId, task.id, { enabled: isVisible, live: live && isVisible && !stale });
+	// An ended chat or a restarted daemon answers "unavailable" for output it no
+	// longer has: keep the last output read rather than replace it with nothing.
+	const read = output.data?.availability === "ready" ? output.data : undefined;
+	const [lastRead, setLastRead] = useState(read);
+	if (read && read !== lastRead) setLastRead(read);
+	const kept = !read && lastRead?.output ? lastRead : undefined;
+	const shown = read ?? kept;
 	// The last lines land after the task ends: read once more when it does.
 	const { refetch } = output;
 	const wasLive = useRef(live);
@@ -219,22 +230,37 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 		wasLive.current = live;
 	}, [isVisible, live, refetch]);
 	const backButton = useRef<HTMLButtonElement>(null);
+	// Focus moved here for the reader opens no tooltip, which would cover the
+	// side panel's tabs; hovering, or focusing it again, still does.
+	const [backTip, setBackTip] = useState(false);
+	const quietFocus = useRef(false);
 	useEffect(() => {
-		if (autoFocusBack) backButton.current?.focus();
+		if (!autoFocusBack) return;
+		quietFocus.current = true;
+		backButton.current?.focus();
 	}, [autoFocusBack]);
 
 	const backLabel = t("backgroundTasks.panel.back");
 	const time = elapsed(task, now);
 	const command = task.command && task.command !== name ? task.command : null;
-	const text = output.data?.availability === "ready" ? output.data.output : "";
+	const text = shown?.output ?? "";
 	const summary = useMemo(() => (text ? outputSummary(text) : null), [text]);
 
 	return (
 		<section aria-label={name} className="flex h-full min-h-0 flex-col">
 			<div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border py-1.5 pl-1.5 pr-3">
-				<Tooltip>
+				<Tooltip open={backTip} onOpenChange={(open) => setBackTip(open && !quietFocus.current)}>
 					<TooltipTrigger asChild>
-						<Button ref={backButton} type="button" variant="ghost" size="icon-sm" aria-label={backLabel} onClick={onBack}>
+						<Button
+							ref={backButton}
+							type="button"
+							variant="ghost"
+							size="icon-sm"
+							aria-label={backLabel}
+							onClick={onBack}
+							onBlur={() => { quietFocus.current = false; }}
+							onPointerEnter={() => { quietFocus.current = false; }}
+						>
 							<ArrowLeft aria-hidden="true" className="size-3.5" />
 						</Button>
 					</TooltipTrigger>
@@ -256,7 +282,7 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 						disabled={stale || stopping.has(task.id)}
 						onClick={() => stop(task.id)}
 					>
-						<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
+						<Square aria-hidden="true" className="size-2.5 fill-current" />
 						{t("backgroundTasks.stopAction")}
 					</Button>
 				) : null}
@@ -282,14 +308,25 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 				</div>
 			) : null}
 			<div className="flex min-h-0 flex-1 flex-col">
-				{output.isError ? (
+				{/* A failed refresh keeps what was read; only a first read that fails says so in place of output. */}
+				{output.isError && !shown ? (
 					<p className="px-3 py-2.5 text-xs text-muted-foreground">{t("backgroundTasks.output.error")}</p>
+				) : shown ? (
+					<>
+						{kept ? <p className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">{t("backgroundTasks.output.lastRead")}</p> : null}
+						{output.isError ? <p role="status" className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">{t("backgroundTasks.output.error")}</p> : null}
+						{shown.output === "" ? (
+							<p className="px-3 py-2.5 text-xs text-muted-foreground">
+								{shown.logOutsideWorkspace ? t("backgroundTasks.output.outsideWorkspace") : t("backgroundTasks.output.empty")}
+							</p>
+						) : (
+							<TailedOutput key={task.id} label={t("backgroundTasks.output.label")} text={shown.output} truncated={Boolean(shown.truncated)} />
+						)}
+					</>
 				) : output.data?.availability === "unavailable" ? (
-					<p className="px-3 py-2.5 text-xs text-muted-foreground">{t("backgroundTasks.output.unavailable")}</p>
-				) : output.data && output.data.output === "" ? (
-					<p className="px-3 py-2.5 text-xs text-muted-foreground">{t("backgroundTasks.output.empty")}</p>
-				) : output.data ? (
-					<TailedOutput key={task.id} label={t("backgroundTasks.output.label")} text={output.data.output} truncated={Boolean(output.data.truncated)} />
+					<p className="px-3 py-2.5 text-xs text-muted-foreground">
+						{ended ? t("backgroundTasks.output.endedUnavailable") : t("backgroundTasks.output.unavailable")}
+					</p>
 				) : null}
 			</div>
 		</section>
@@ -403,7 +440,8 @@ export function TailedOutput({ text, truncated, label }: { text: string; truncat
 								className={cn(
 									"block min-h-6 px-3 py-[3px] whitespace-pre-wrap [overflow-wrap:anywhere]",
 									tone === "ok" && "text-(--color-term-green)",
-									tone === "warning" && "bg-(--color-term-yellow)/12 text-(--color-term-yellow)",
+									// Lighter than the red tint: the light theme's yellow text needs it for 4.5:1.
+									tone === "warning" && "bg-(--color-term-yellow)/8 text-(--color-term-yellow)",
 									tone === "error" && "bg-(--color-term-red)/12 text-(--color-term-red)",
 								)}
 							>
@@ -414,16 +452,13 @@ export function TailedOutput({ text, truncated, label }: { text: string; truncat
 				</pre>
 			</div>
 			{!following ? (
-				<Button
-					type="button"
-					variant="ghost"
-					size="none"
-					className="h-8 w-full gap-1.5 rounded-none border-t border-border bg-card text-xs font-medium"
+				<Pressable
+					className="flex h-8 w-full shrink-0 items-center justify-center gap-1.5 border-t border-border bg-card text-xs font-medium text-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover"
 					onClick={jumpToLatest}
 				>
 					<ArrowDown aria-hidden="true" className="size-3" />
 					{t("backgroundTasks.output.jumpToLatest")}
-				</Button>
+				</Pressable>
 			) : null}
 		</div>
 	);

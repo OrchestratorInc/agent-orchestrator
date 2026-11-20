@@ -238,7 +238,8 @@ export const SessionInspector = memo(function SessionInspector({
 	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
 	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
 	const tasksWatchable = Boolean(session && supportsLocalBackgroundTasks(session));
-	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task");
+	// Polls every 2 s only while the tab shows; each reading asks the provider.
+	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible);
 	const tasksReading = tasksQuery.data;
 	// A failed refresh keeps the last reading: still shown, but marked stale.
 	const tasksStale = tasksQuery.isError && tasksReading !== undefined;
