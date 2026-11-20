@@ -352,6 +352,9 @@ export function readAuthStore(dataDir: string): Promise<AuthStore> {
       try {
         await writeStoreFile(dataDir, store);
       } catch {
+        // Keep what was recovered, so a later write that carries the file's
+        // session on is not taken for a new credential.
+        memoryStores.set(dataDir, { ...memory, store });
         return store;
       }
       memoryStores.delete(dataDir);
