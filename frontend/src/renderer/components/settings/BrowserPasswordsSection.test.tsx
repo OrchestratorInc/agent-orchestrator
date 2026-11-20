@@ -1,8 +1,27 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AoBridge } from "../../../preload";
+import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { BrowserPasswordsSection } from "./BrowserPasswordsSection";
+
+const projects = [
+	{ id: "proj-a", name: "Alpha" },
+	{ id: "proj-b", name: "Beta" },
+	{ id: "cloud-1", name: "Cloud thing", kind: "cloud" },
+	{ id: "remote-1", name: "Remote thing", hostId: "host-1" },
+];
+
+function renderSection() {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+	client.setQueryData(workspaceQueryKey, projects);
+	return render(
+		<QueryClientProvider client={client}>
+			<BrowserPasswordsSection />
+		</QueryClientProvider>,
+	);
+}
 
 const item = {
 	id: "item-1",
@@ -37,7 +56,7 @@ describe("BrowserPasswordsSection", () => {
 
 	it("lists saved passwords without secrets and shows sign-in activity", async () => {
 		window.ao!.vault = mockBridge();
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		const row = await screen.findByTestId("vault-item");
 		expect(row).toHaveTextContent("Demo login");
 		expect(row).toHaveTextContent("alice · http://localhost:4173 · 2FA code · All projects");
@@ -51,7 +70,7 @@ describe("BrowserPasswordsSection", () => {
 	it("adds a password through the dialog", async () => {
 		const bridge = mockBridge({ list: vi.fn(async () => ({ available: true, items: [] })) });
 		window.ao!.vault = bridge;
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "Add password" }));
 		const dialog = await screen.findByRole("dialog");
 		const save = within(dialog).getByRole("button", { name: "Save" });
@@ -76,23 +95,22 @@ describe("BrowserPasswordsSection", () => {
 
 	it("names every dialog field with an explicit label and describes it with its hint", async () => {
 		window.ao!.vault = mockBridge();
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "Add password" }));
 		const dialog = await screen.findByRole("dialog");
-		for (const name of ["Sites", "Username", "Password", "2FA setup key", "Name", "Projects"]) {
+		for (const name of ["Sites", "Username", "Password", "2FA setup key", "Name"]) {
 			const control = within(dialog).getByLabelText(name);
 			const id = control.getAttribute("id");
 			expect(id, name).toBeTruthy();
 			expect(dialog.querySelector(`label[for="${id}"]`), name).toHaveTextContent(name);
 		}
 		expect(within(dialog).getByLabelText("Sites")).toHaveAccessibleDescription(/Exact origins/);
-		expect(within(dialog).getByLabelText("Projects")).toHaveAccessibleDescription(/comma separated/);
 	});
 
 	it("edits without resending the password and can remove the 2FA key", async () => {
 		const bridge = mockBridge();
 		window.ao!.vault = bridge;
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Demo login" }));
 		const dialog = await screen.findByRole("dialog");
 		expect(within(dialog).getByLabelText("Password")).toHaveValue("");
@@ -109,7 +127,7 @@ describe("BrowserPasswordsSection", () => {
 				throw new Error("Error invoking remote method 'vault:save': Error: Only http and https sites can hold credentials");
 			}),
 		});
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Demo login" }));
 		const dialog = await screen.findByRole("dialog");
 		await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -119,7 +137,7 @@ describe("BrowserPasswordsSection", () => {
 	it("confirms before deleting", async () => {
 		const bridge = mockBridge();
 		window.ao!.vault = bridge;
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "Delete Demo login" }));
 		expect(bridge.delete).not.toHaveBeenCalled();
 		await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
@@ -133,7 +151,7 @@ describe("BrowserPasswordsSection", () => {
 			.mockImplementationOnce(() => new Promise((resolve) => (releaseFirst = resolve)))
 			.mockImplementation(async () => ({ available: true, items: [item] }));
 		window.ao!.vault = mockBridge({ list });
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		// Refresh while the first load is still in flight; the newer one lands first.
 		await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
 		expect(await screen.findByTestId("vault-item")).toHaveTextContent("Demo login");
@@ -142,9 +160,30 @@ describe("BrowserPasswordsSection", () => {
 		expect(screen.getByTestId("vault-item")).toHaveTextContent("Demo login");
 	});
 
+	it("scopes a password to projects picked from the user's local projects, by name", async () => {
+		const bridge = mockBridge({ list: vi.fn(async () => ({ available: true, items: [{ ...item, allowedProjects: ["proj-a", "gone-1"] }] })) });
+		window.ao!.vault = bridge;
+		renderSection();
+		expect(await screen.findByTestId("vault-item")).toHaveTextContent("Alpha, gone-1");
+		await userEvent.click(screen.getByRole("button", { name: "Edit Demo login" }));
+		const dialog = await screen.findByRole("dialog");
+		const group = within(dialog).getByRole("group", { name: "Projects" });
+		expect(within(group).getByRole("checkbox", { name: "Alpha" })).toBeChecked();
+		expect(within(group).getByRole("checkbox", { name: "Beta" })).not.toBeChecked();
+		// A saved id that no longer exists stays visible so it can be removed.
+		expect(within(group).getByRole("checkbox", { name: "gone-1" })).toBeChecked();
+		// Cloud and remote-host projects never reach this computer's browser.
+		expect(within(group).queryByRole("checkbox", { name: "Cloud thing" })).toBeNull();
+		expect(within(group).queryByRole("checkbox", { name: "Remote thing" })).toBeNull();
+		await userEvent.click(within(group).getByRole("checkbox", { name: "Beta" }));
+		await userEvent.click(within(group).getByRole("checkbox", { name: "gone-1" }));
+		await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+		await waitFor(() => expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ allowedProjects: ["proj-a", "proj-b"] })));
+	});
+
 	it("disables adding when the keychain is unavailable", async () => {
 		window.ao!.vault = mockBridge({ list: vi.fn(async () => ({ available: false, items: [] })) });
-		render(<BrowserPasswordsSection />);
+		renderSection();
 		expect(await screen.findByText(/system keychain is unavailable/)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Add password" })).toBeDisabled();
 	});

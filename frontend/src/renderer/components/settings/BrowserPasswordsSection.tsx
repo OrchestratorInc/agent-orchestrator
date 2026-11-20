@@ -1,10 +1,14 @@
 import { Pencil, Plus, RefreshCw, Trash2 } from "@/components/app-icons";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";
+import { workspaceQueryOptions } from "../../hooks/useWorkspaceQuery";
 import { aoBridge } from "../../lib/bridge";
+import { CLOUD_PROJECT_KIND } from "../../types/workspace";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { CloseButton } from "../ui/close-button";
 import {
 	Dialog,
@@ -28,6 +32,20 @@ type AuditEntry = Awaited<ReturnType<VaultBridge["audit"]>>[number];
 
 const AUDIT_ROWS = 50;
 
+type ProjectOption = { id: string; name: string };
+
+/**
+ * Projects whose sessions use this computer's Browser panel: local ones only.
+ * Cloud and remote-host projects run their browsers elsewhere.
+ */
+function useLocalProjects(): ProjectOption[] {
+	const { data } = useQuery(workspaceQueryOptions);
+	return useMemo(
+		() => (data ?? []).filter((project) => !project.hostId && project.kind !== CLOUD_PROJECT_KIND).map(({ id, name }) => ({ id, name })),
+		[data],
+	);
+}
+
 function vaultError(reason: unknown, fallback: string): string {
 	// Electron prefixes main-process errors with IPC plumbing; keep the reason.
 	if (!(reason instanceof Error)) return fallback;
@@ -38,6 +56,8 @@ function vaultError(reason: unknown, fallback: string): string {
 export function BrowserPasswordsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const bridge = (aoBridge as Partial<AoBridge>).vault as VaultBridge | undefined;
+	const projects = useLocalProjects();
+	const projectName = (id: string) => projects.find((project) => project.id === id)?.name ?? id;
 	const [items, setItems] = useState<Item[]>([]);
 	const [available, setAvailable] = useState(true);
 	const [audit, setAudit] = useState<AuditEntry[]>([]);
@@ -119,7 +139,7 @@ export function BrowserPasswordsSection({ titleHidden }: { titleHidden?: boolean
 								item.username || t("settings.passwords.noUsername"),
 								item.origins.join(", "),
 								...(item.hasTotp ? [t("settings.passwords.twoFactor")] : []),
-								item.allowedProjects.length ? item.allowedProjects.join(", ") : t("settings.passwords.allProjects"),
+								item.allowedProjects.length ? item.allowedProjects.map(projectName).join(", ") : t("settings.passwords.allProjects"),
 							].join(" · ")}
 						>
 							<Button
@@ -177,6 +197,7 @@ export function BrowserPasswordsSection({ titleHidden }: { titleHidden?: boolean
 			{editing && bridge ? (
 				<VaultItemDialog
 					bridge={bridge}
+					projects={projects}
 					item={editing === "new" ? null : editing}
 					onClose={() => setEditing(null)}
 					onSaved={() => {
@@ -206,11 +227,13 @@ export function BrowserPasswordsSection({ titleHidden }: { titleHidden?: boolean
 
 function VaultItemDialog({
 	bridge,
+	projects,
 	item,
 	onClose,
 	onSaved,
 }: {
 	bridge: VaultBridge;
+	projects: ProjectOption[];
 	item: Item | null;
 	onClose: () => void;
 	onSaved: () => void;
@@ -222,7 +245,15 @@ function VaultItemDialog({
 	const [password, setPassword] = useState("");
 	const [totpSeed, setTotpSeed] = useState("");
 	const [removeTotp, setRemoveTotp] = useState(false);
-	const [projects, setProjects] = useState(item?.allowedProjects.join(", ") ?? "");
+	const [allowedProjects, setAllowedProjects] = useState<string[]>(item?.allowedProjects ?? []);
+	// A saved project that no longer exists stays listed so it can be unticked.
+	const projectOptions = [
+		...projects,
+		...allowedProjects.filter((id) => !projects.some((project) => project.id === id)).map((id) => ({ id, name: id })),
+	];
+	const projectsLabelId = useId();
+	const projectsHintId = useId();
+	const removeTotpId = useId();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
 	const origins = sites.split(/[\n,]/).map((site) => site.trim()).filter(Boolean);
@@ -238,7 +269,7 @@ function VaultItemDialog({
 				username,
 				password,
 				...(removeTotp ? { totpSeed: null } : totpSeed.trim() ? { totpSeed } : {}),
-				allowedProjects: projects.split(",").map((project) => project.trim()).filter(Boolean),
+				allowedProjects: projectOptions.map((project) => project.id).filter((id) => allowedProjects.includes(id)),
 			});
 			onSaved();
 		} catch (reason) {
@@ -312,17 +343,43 @@ function VaultItemDialog({
 						)}
 					</VaultField>
 					{item?.hasTotp ? (
-						<label className="flex items-center gap-2 text-sm text-settings-label">
-							<input checked={removeTotp} onChange={(event) => setRemoveTotp(event.target.checked)} type="checkbox" />
-							{t("settings.passwords.totpRemove")}
-						</label>
+						<div className="flex items-center gap-2">
+							<Checkbox checked={removeTotp} id={removeTotpId} onCheckedChange={(checked) => setRemoveTotp(checked === true)} />
+							<Label className="text-sm font-normal text-settings-label" htmlFor={removeTotpId}>
+								{t("settings.passwords.totpRemove")}
+							</Label>
+						</div>
 					) : null}
 					<VaultField label={t("settings.passwords.label")}>
 						{(control) => <Input {...control} maxLength={64} onChange={(event) => setLabel(event.target.value)} placeholder={t("settings.passwords.labelPlaceholder")} value={label} />}
 					</VaultField>
-					<VaultField label={t("settings.passwords.projects")} hint={t("settings.passwords.projectsHint")}>
-						{(control) => <Input {...control} onChange={(event) => setProjects(event.target.value)} placeholder={t("settings.passwords.projectsPlaceholder")} value={projects} />}
-					</VaultField>
+					<div aria-describedby={projectsHintId} aria-labelledby={projectsLabelId} className="grid gap-1.5" role="group">
+						<span className="text-xs text-muted-foreground" id={projectsLabelId}>
+							{t("settings.passwords.projects")}
+						</span>
+						{projectOptions.map((project) => {
+							const optionId = `${projectsLabelId}-${project.id}`;
+							return (
+								<div className="flex items-center gap-2" key={project.id}>
+									<Checkbox
+										checked={allowedProjects.includes(project.id)}
+										id={optionId}
+										onCheckedChange={(checked) =>
+											setAllowedProjects((current) =>
+												checked === true ? [...current, project.id] : current.filter((id) => id !== project.id),
+											)
+										}
+									/>
+									<Label className="text-sm font-normal text-settings-label" htmlFor={optionId}>
+										{project.name}
+									</Label>
+								</div>
+							);
+						})}
+						<span className="text-xs text-muted-foreground" id={projectsHintId}>
+							{t("settings.passwords.projectsHint")}
+						</span>
+					</div>
 					{error ? <p className="text-xs text-error" role="alert">{error}</p> : null}
 				</form>
 				<div className={settingsDialogFooterClass}>
