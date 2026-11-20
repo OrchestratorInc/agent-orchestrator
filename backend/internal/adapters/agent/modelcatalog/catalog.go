@@ -152,6 +152,7 @@ var commandSpecs = map[string]commandSpec{
 	"command-code":     {args: []string{"--list-models"}, parser: parseCommandCodeModels},
 	"minimax-code":     {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels, interruptOnCancel: true},
 	"open-interpreter": {args: []string{"debug", "models"}, parser: parseOpenInterpreterModels},
+	"codebuddy":        {args: []string{"--help"}, parser: parseCodeBuddyModels},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
