@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -320,7 +319,7 @@ func (a *ImportArchive) project(ctx context.Context) error {
 			bySeq[*e.Seq] = nodes.InsertAfter(node, anchor)
 		}
 	}
-	user, held := false, 0
+	openingUser, held := -1, 0
 	for el := nodes.Front(); el != nil; el = el.Next() {
 		n, ok := el.Value.(importSurfaceNode)
 		if !ok {
@@ -329,23 +328,27 @@ func (a *ImportArchive) project(ctx context.Context) error {
 		if n.m == nil {
 			continue
 		}
-		user = user || n.m.Role == "user"
+		if openingUser < 0 && n.m.Role == "user" && strings.TrimSpace(n.m.Text) != "" {
+			openingUser = len(a.Messages)
+		}
 		a.Messages = append(a.Messages, *n.m)
 		held += len(n.m.Text)
 	}
-	if !user {
+	if openingUser < 0 {
 		return errors.New("deepseek: native history has no visible user message")
 	}
 	// Keep the opening user and newest messages, without rescanning per event.
-	first := 1
-	for held > maxImportVisible && first < len(a.Messages) {
-		held -= len(a.Messages[first].Text)
-		first++
-		a.Shortened = true
+	retained := a.Messages[:0]
+	for i, message := range a.Messages {
+		if held > maxImportVisible && i != openingUser {
+			held -= len(message.Text)
+			a.Shortened = true
+			continue
+		}
+		retained = append(retained, message)
 	}
-	if first > 1 {
-		a.Messages = slices.Delete(a.Messages, 1, first)
-	}
+	clear(a.Messages[len(retained):])
+	a.Messages = retained
 	if held > maxImportVisible {
 		return errors.New("deepseek: opening message exceeds visible import budget")
 	}

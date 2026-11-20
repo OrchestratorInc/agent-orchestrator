@@ -114,6 +114,41 @@ func TestImportFoldsSurfaceReplacementsAndHidesRuntimeContext(t *testing.T) {
 	}
 }
 
+func TestImportShorteningPreservesOpeningUserAfterAssistant(t *testing.T) {
+	large := strings.Repeat("a", 12<<20)
+	assistant := map[string]any{"message": map[string]any{"content": []map[string]string{{"type": "text", "text": large}}}}
+	a := ImportArchive{}
+	a.body = append(a.body, importTestEvent(0, "assistant/message", assistant, "append")...)
+	a.body = append(a.body, importTestEvent(1, "user/message", importTestUser("keep this user", "user"), "append")...)
+	a.body = append(a.body, importTestEvent(2, "assistant/message", assistant, "append")...)
+	a.body = append(a.body, importTestEvent(3, "assistant/message", assistant, "append")...)
+	if err := a.project(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Shortened || len(a.Messages) != 3 || a.Messages[0].Role != "user" || a.Messages[0].Text != "keep this user" || a.Messages[1].Text != large || a.Messages[2].Text != large {
+		t.Fatal("shortened history lost opening user or reordered retained messages")
+	}
+}
+
+func TestImportAdmissionRejectsBlankOnlyUserText(t *testing.T) {
+	for _, text := range []string{"   ", "\t\n", " nonblank "} {
+		root, path, _ := importFixture(t, false)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, _, _ := bytes.Cut(b, []byte("\n"))
+		b = append(append(header, '\n'), importTestEvent(0, "user/message", importTestUser(text, "user"), "append")...)
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = ReadImportArchive(context.Background(), root, path)
+		if (err != nil) != (strings.TrimSpace(text) == "") {
+			t.Fatalf("source admission for %q: %v", text, err)
+		}
+	}
+}
+
 func TestImportRefusesUnknownOrIncompleteHistory(t *testing.T) {
 	for _, mutation := range []string{"version", "identity", "seeded", "parent", "missing header", "sequence", "empty", "attachment", "child", "torn", "new generation", "competing encoding"} {
 		t.Run(mutation, func(t *testing.T) {
