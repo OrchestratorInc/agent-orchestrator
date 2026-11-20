@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsPlacement,
@@ -321,6 +321,12 @@ function hiddenByFullscreen(node: HTMLElement): boolean {
  *  session's view was the one on screen. A command that began while the user
  *  was elsewhere and finishes after they switch in is not theirs to reveal. */
 export type ObservedBrowserAgentActivity = BrowserAgentActivityState & { startObserved: boolean };
+
+const subscribePageVisibility = (listener: () => void) => {
+	document.addEventListener("visibilitychange", listener);
+	return () => document.removeEventListener("visibilitychange", listener);
+};
+const pageVisible = () => document.visibilityState !== "hidden";
 
 export function useBrowserView({
 	sessionId,
@@ -1200,6 +1206,33 @@ export function useBrowserView({
 		[hasNativeBrowser, navigate, openTab, selectTab],
 	);
 
+	// A cloud agent tab streams the sandbox's screen for as long as it is open,
+	// which costs the sandbox CPU, memory and bandwidth. It is only open while
+	// someone can see it: the Browser panel on screen in a visible window.
+	const windowVisible = useSyncExternalStore(subscribePageVisibility, pageVisible, () => true);
+	const cloudAgentStreamable = active && windowVisible;
+	useEffect(() => {
+		if (!cloudAgentBrowser || cloudAgentStreamable || !hasNativeBrowser || !viewId) return;
+		const agentTabs = tabsStateRef.current.tabs.filter((tab) => tab.remote);
+		if (agentTabs.length === 0) return;
+		let cancelled = false;
+		void (async () => {
+			for (const tab of agentTabs) {
+				if (cancelled || viewIdRef.current !== viewId) return;
+				try {
+					const state = await window.ao!.browser.closeTab({ viewId, tabId: tab.id });
+					if (viewIdRef.current === state.viewId) setTabsState(state);
+				} catch (error) {
+					console.warn("Unable to close the agent browser tab", error);
+				}
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [Boolean(cloudAgentBrowser), cloudAgentStreamable, hasNativeBrowser, viewId]);
+
 	// A remote or cloud session's agent browser (the host's or sandbox's
 	// Chromium its agent drives, streamed) is part of the session's surface:
 	// main shows it as one tab per agent page. It is derived from the host
@@ -1214,6 +1247,7 @@ export function useBrowserView({
 				? () => aoBridge.cloudCp.agentBrowserUrl(cloudAgentBrowser.baseUrl, cloudAgentBrowser.orgId, cloudAgentBrowser.sessionId)
 				: undefined;
 		if (!hasNativeBrowser || !agentBrowserUrl || !viewId || viewIdRef.current !== viewId || terminated) return;
+		if (cloudAgentBrowser && !cloudAgentStreamable) return;
 		let cancelled = false;
 		let retry = 0;
 		// ponytail: polls every 15 s at most while nothing shows; main could
@@ -1237,7 +1271,7 @@ export function useBrowserView({
 			cancelled = true;
 			window.clearTimeout(retry);
 		};
-	}, [hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, cloudAgentBrowser?.baseUrl, cloudAgentBrowser?.orgId, cloudAgentBrowser?.sessionId, terminated, viewId]);
+	}, [hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, cloudAgentBrowser?.baseUrl, cloudAgentBrowser?.orgId, cloudAgentBrowser?.sessionId, cloudAgentStreamable, terminated, viewId]);
 
 	const clear = useCallback(() => {
 		if (!hasNativeBrowser) {
