@@ -104,6 +104,10 @@ type subagentRouter struct {
 	inflight map[string]struct{}
 	// launchOf maps a child thread to the spawn call that started it.
 	launchOf map[string]string
+	// expected holds child threads Codex announced (thread/started with a parent)
+	// that no launch has named yet. A v2 child can start before its launch item, so
+	// its events wait for it until the root turn ends.
+	expected map[string]bool
 	// origin is where each spawn call was made: its thread and native turn. The
 	// root turn a launch belongs to is read from it when routing (rootTurnOf), so a
 	// nested launch still joins the root turn when its own thread is placed only
@@ -130,6 +134,7 @@ func newSubagentRouter(scope func(string) string) *subagentRouter {
 		scope:     scope,
 		inflight:  map[string]struct{}{},
 		launchOf:  map[string]string{},
+		expected:  map[string]bool{},
 		origin:    map[string]launchOrigin{},
 		held:      map[string][]ports.ChatEvent{},
 		streaming: map[string]bool{},
@@ -140,6 +145,16 @@ func newSubagentRouter(scope func(string) string) *subagentRouter {
 // observe records spawn calls. It runs before the notification's events are
 // routed, so a launch is in flight before anything waits on it.
 func (r *subagentRouter) observe(n notification, root string) {
+	if n.Method == codexproto.MethodThreadStarted {
+		var started codexproto.ThreadStartedNotification
+		if json.Unmarshal(n.Params, &started) == nil && deref(started.Thread.ParentThreadID) != "" &&
+			started.Thread.ID != root {
+			if _, placed := r.launchOf[started.Thread.ID]; !placed {
+				r.expected[started.Thread.ID] = true
+			}
+		}
+		return
+	}
 	if n.Method != codexproto.MethodItemStarted && n.Method != codexproto.MethodItemCompleted {
 		return
 	}
@@ -200,6 +215,11 @@ func (r *subagentRouter) rootTurnOf(launch string) string {
 func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.ChatEvent {
 	r.root = root
 	if thread == "" || thread == root {
+		if ev.Kind == ports.ChatEventTurnCompleted {
+			// A child no launch named by the end of the root turn is not coming;
+			// release() lets its events out as they were.
+			r.expected = map[string]bool{}
+		}
 		return []ports.ChatEvent{ev}
 	}
 	_, waiting := r.held[thread]
@@ -210,7 +230,7 @@ func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.
 		}
 		return r.adopt(thread, ev)
 	}
-	if _, placed := r.launchOf[thread]; !placed && len(r.inflight) == 0 && !waiting {
+	if _, placed := r.launchOf[thread]; !placed && len(r.inflight) == 0 && !r.expected[thread] && !waiting {
 		// No spawn could claim this thread, such as a provider-internal one.
 		return []ports.ChatEvent{ev}
 	}
@@ -265,7 +285,7 @@ func (r *subagentRouter) release() []ports.ChatEvent {
 			for _, ev := range events {
 				out = append(out, r.adopt(thread, ev)...)
 			}
-		case len(r.inflight) == 0:
+		case len(r.inflight) == 0 && !r.expected[thread]:
 			out = append(out, events...)
 		default:
 			kept = append(kept, thread)

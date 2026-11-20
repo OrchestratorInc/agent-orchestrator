@@ -297,3 +297,52 @@ func TestV2SubagentLaunchFilesChildUnderIt(t *testing.T) {
 	// The other v2 kinds report on a child that already has its launch.
 	normalizeNone(t, "item/completed", `{"threadId":"thread-1","turnId":"root-turn","item":{"type":"subAgentActivity","id":"act-2","kind":"interacted","agentThreadId":"child-v2","agentPath":"/root/alpha_task"}}`)
 }
+
+// A v2 child can start working before its launch item arrives. Codex announces
+// the child's thread with its parent, so its early steps wait and land under the
+// launch instead of going out as loose rows.
+func TestV2ChildStepsBeforeTheLaunchItemWaitForIt(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"root-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"thread/started","params":{"thread":{"id":"child-v2","parentThreadId":"thread-1"}}}`)
+	srv.push(`{"method":"item/started","params":{"threadId":"child-v2","turnId":"child-turn","item":{"type":"commandExecution","id":"early-cmd","command":"printf AO_ALPHA_COMMAND","status":"inProgress"}}}`)
+	srv.push(`{"method":"item/completed","params":{"threadId":"thread-1","turnId":"root-turn","item":{"type":"subAgentActivity","id":"act-alpha","kind":"started","agentThreadId":"child-v2","agentPath":"/root/alpha_task"}}}`)
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case ev := <-conv.Events():
+			if ev.ProviderItemID != "early-cmd" {
+				continue
+			}
+			if ev.ProviderTurnID != "root-turn" || decodeDetail(t, ev).ParentProviderItemID != "act-alpha" {
+				t.Fatalf("early child step not under its launch: %+v detail %s", ev, ev.Detail)
+			}
+			return
+		case <-deadline:
+			t.Fatal("early child step never arrived")
+		}
+	}
+}
+
+// An announced child that no launch names by the end of the root turn goes out
+// as it was, so nothing waits forever.
+func TestAnnouncedChildWithoutALaunchIsReleasedAtTurnEnd(t *testing.T) {
+	r := newSubagentRouter(func(id string) string { return id })
+	r.observe(notification{Method: "thread/started", Params: json.RawMessage(`{"thread":{"id":"guardian-1","parentThreadId":"thread-1"}}`)}, "thread-1")
+	step := ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: "g-turn", ProviderItemID: "g-step"}
+	if out := r.route("thread-1", "guardian-1", step); out != nil {
+		t.Fatalf("announced child's step went out before its launch could name it: %+v", out)
+	}
+	r.route("thread-1", "thread-1", ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "root-turn"})
+	out := r.release()
+	if len(out) != 1 || out[0].ProviderTurnID != "g-turn" || out[0].Detail != nil {
+		t.Fatalf("released = %+v", out)
+	}
+}
