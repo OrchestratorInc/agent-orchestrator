@@ -34,9 +34,9 @@ import { captureOnboardingFailureToSentry, setSentryFlowSource } from "./sentry"
 //
 // Sentry follows the separate Share error events choice, enforced in Electron
 // main: an install or sign-in started during onboarding that then breaks is
-// one Sentry issue per attempt, and every Sentry event while onboarding shows
-// is tagged flow:onboarding. Only the started action names are held for that,
-// in memory, whatever the analytics choice.
+// one Sentry issue per attempt, and every renderer Sentry event while
+// onboarding shows is tagged flow:onboarding. Only the started action names
+// are held for that, in memory, whatever the analytics choice.
 
 type StepPhase = "viewed" | "completed" | "abandoned";
 export type OnboardingPhase = StepPhase;

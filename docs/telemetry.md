@@ -892,9 +892,12 @@ stop when error sharing is off. They follow the sampling and daily caps above.
   The same panels outside onboarding (the clone dialog's GitHub sign-in) send
   nothing. The target (which agent or tool) and the API error code stay in
   PostHog's `action_finished`.
-- Every other desktop Sentry event (a crash, a failed query, an API error)
-  sent while the onboarding window or a tour step shows carries
+- Every other renderer Sentry event (a render crash, a failed query, an API
+  error) sent while the onboarding window or a tour step shows carries
   `flow:onboarding`. The tag does not change how the event is grouped.
+  Electron main's own events (process crashes, handled update or IPC
+  failures) do not carry it: main does not track which screen the renderer
+  shows.
 - To keep this working while analytics is off, the app holds the names of the
   actions started during onboarding in memory until each ends. Nothing about
   them is stored or sent to PostHog.
