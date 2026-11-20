@@ -74,14 +74,36 @@ comment_awk() {
 	'"$1" "$2"
 }
 
-# has_message reports whether the message file holds anything besides comment
-# lines and whitespace. `git commit -v` appends a diff below a scissors line;
-# it is not message.
+# strips_comments reports whether git drops comment lines from an edited
+# message: commit.cleanup unset, default or strip. whitespace, scissors and
+# verbatim keep them. A --cleanup option on the command line is not visible
+# to the hook.
+strips_comments() {
+	case $(git config --get commit.cleanup 2>/dev/null) in
+	whitespace | scissors | verbatim) return 1 ;;
+	esac
+	return 0
+}
+
+# normalize reads a message on stdin and tidies it as git's cleanup does.
+normalize() {
+	if strips_comments; then
+		git stripspace --strip-comments 2>/dev/null
+	else
+		git stripspace 2>/dev/null
+	fi
+}
+
+# has_message reports whether the message file holds anything besides
+# whitespace and, when git strips them, comment lines. `git commit -v`
+# appends a diff below a scissors line; it is not message.
 has_message() {
+	strip=1
+	strips_comments || strip=0
 	comment_awk '
-		BEGIN { found = 0 }
+		BEGIN { found = 0; strip = '"$strip"' }
 		scissors($0) { exit }
-		!comment($0) && $0 ~ /[^ \t\r]/ { found = 1; exit }
+		!(strip && comment($0)) && $0 ~ /[^ \t\r]/ { found = 1; exit }
 		END { exit !found }
 	' "$1"
 }
@@ -104,13 +126,29 @@ snapshot_template() {
 	if [ "$2" = template ] && [ -n "$1" ] && [ -f "$1" ]; then
 		# With -s git has already added the committer's sign-off; git compares
 		# against the template without it, so the snapshot leaves that one
-		# line out. Sign-offs written in the template itself stay.
+		# line out. Sign-offs written in the template itself stay: when the
+		# configured commit.template ends with the committer's own sign-off,
+		# the line is the template's. (A -t file is not visible to the hook.)
 		ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed 's/ [0-9]* [-+][0-9]*$//')
-		message_text "$1" | ORCHESTRATOR_SIGNOFF="Signed-off-by: $ident" awk '
+		signoff="Signed-off-by: $ident"
+		full=$(message_text "$1")
+		# commit.cleanup=whitespace keeps the help git appends below the
+		# template as comment lines; git compares against the template alone.
+		if [ "$(git config --get commit.cleanup 2>/dev/null)" = whitespace ] &&
+			[ "$(git config --type=bool --get commit.status 2>/dev/null)" != false ]; then
+			full=$(printf '%s\n' "$full" | comment_awk '
+				{ line[NR] = $0 }
+				!comment($0) && $0 ~ /[^ \t\r]/ { last = NR }
+				END { for (i = 1; i <= last; i++) print line[i] }
+			' -)
+		fi
+		tpl=$(git config --path --get commit.template 2>/dev/null) &&
+			[ -f "$tpl" ] && [ "$(normalize <"$tpl")" = "$full" ] && signoff=
+		printf '%s\n' "$full" | ORCHESTRATOR_SIGNOFF=$signoff awk '
 			{ line[NR] = $0 }
 			!/^[[:space:]]*$/ { last = NR }
 			END {
-				if (last && line[last] == ENVIRON["ORCHESTRATOR_SIGNOFF"]) {
+				if (last && ENVIRON["ORCHESTRATOR_SIGNOFF"] != "" && line[last] == ENVIRON["ORCHESTRATOR_SIGNOFF"]) {
 					last--
 					while (last && line[last] ~ /^[[:space:]]*$/) last--
 				}
@@ -121,9 +159,10 @@ snapshot_template() {
 }
 
 # message_text prints the message in file $1 the way git reads it: without
-# comment lines, and without the `commit -v` scissors line and the diff below it.
+# the `commit -v` scissors line and the diff below it, and without comment
+# lines when the cleanup mode strips them.
 message_text() {
-	comment_awk 'scissors($0) { exit } { print }' "$1" | git stripspace --strip-comments 2>/dev/null
+	comment_awk 'scissors($0) { exit } { print }' "$1" | normalize
 }
 
 # only_signoffs reports whether text $1 holds nothing but blank lines and
@@ -138,6 +177,11 @@ only_signoffs() {
 template_untouched() {
 	snap=$(template_snapshot) || return 1
 	[ -n "$snap" ] && [ -f "$snap" ] || return 1
+	# With commit.cleanup=verbatim git never treats a message as the template.
+	if [ "$(git config --get commit.cleanup 2>/dev/null)" = verbatim ]; then
+		rm -f "$snap"
+		return 1
+	fi
 	text=$(message_text "$1")
 	snapshot=$(cat "$snap")
 	rm -f "$snap"

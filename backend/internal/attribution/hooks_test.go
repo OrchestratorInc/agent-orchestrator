@@ -299,6 +299,79 @@ func TestHookKeepsSignoffsWrittenInTheTemplate(t *testing.T) {
 	}
 }
 
+// The hook decides "untouched" the way git does for templates that hold
+// sign-offs and for each commit.cleanup mode. "abort" means git's own
+// unedited-template abort with HEAD unchanged; otherwise the commit goes
+// through with one trailer and keeps the text in want.
+func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
+	const dev = "Signed-off-by: Dev <dev@example.com>"
+	for _, tc := range []struct {
+		name, template, cleanup, editor string
+		args                            []string
+		want                            string // "" means abort
+	}{
+		{"template sign-off replaced by another", "Subject\n\nSigned-off-by: Alice <a@example.com>\n", "",
+			`sed 's/^Signed-off-by: Alice.*/Signed-off-by: Bob <b@example.com>/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Signed-off-by: Bob"},
+		{"template ends with the committer's sign-off, untouched", "Subject\n\n" + dev + "\n", "", "true", nil, ""},
+		{"template ends with the committer's sign-off, untouched with -s", "Subject\n\n" + dev + "\n", "", "true", []string{"-s"}, ""},
+		{"template ends with the committer's sign-off, removed", "Subject\n\n" + dev + "\n", "",
+			`grep -v '^Signed-off-by: ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Subject"},
+		// whitespace keeps git's own status comments, so even an untouched
+		// template differs from it and git commits.
+		{"cleanup=whitespace, untouched", "# Heading\nBody text\n", "whitespace", "true", nil, "# Heading"},
+		{"cleanup=whitespace, only the # heading edited", "# Heading\nBody text\n", "whitespace",
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading"},
+		// scissors puts git's status below the cut line, so an untouched
+		// template still aborts and a heading edit still counts.
+		{"cleanup=scissors, untouched", "# Heading\nBody text\n", "scissors", "true", nil, ""},
+		{"cleanup=scissors, only the # heading edited", "# Heading\nBody text\n", "scissors",
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading"},
+		{"default cleanup, only the # heading edited", "# Heading\nBody text\n", "",
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, ""},
+		{"cleanup=verbatim, untouched", "Subject\n", "verbatim", "true", nil, "Subject"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t, testCoAuthor, func(r repo) {
+				tpl := filepath.Join(r.main, ".gitmessage")
+				if err := os.WriteFile(tpl, []byte(tc.template), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				r.git(r.main, "config", "commit.template", tpl)
+				if tc.cleanup != "" {
+					r.git(r.main, "config", "commit.cleanup", tc.cleanup)
+				}
+			})
+			ed := tc.editor
+			if ed != "true" {
+				ed = filepath.Join(t.TempDir(), "editor.sh")
+				if err := os.WriteFile(ed, []byte("#!/bin/sh\n"+tc.editor+"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := r.git(r.worktree, "rev-parse", "HEAD")
+			cmd := exec.Command("git", append([]string{"-C", r.worktree, "commit", "--allow-empty"}, tc.args...)...)
+			cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_EDITOR="+ed,
+				"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
+			out, err := cmd.CombinedOutput()
+			if tc.want == "" {
+				if err == nil || !strings.Contains(string(out), "did not edit the message") {
+					t.Fatalf("want git's abort, got %v:\n%s\n%s", err, out, r.message("HEAD"))
+				}
+				if after := r.git(r.worktree, "rev-parse", "HEAD"); after != before {
+					t.Fatal("HEAD moved")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("want a commit, got %v:\n%s", err, out)
+			}
+			if msg := r.message("HEAD"); !strings.Contains(msg, tc.want) || countTrailer(msg) != 1 {
+				t.Fatalf("want %q kept and one trailer, got:\n%s", tc.want, msg)
+			}
+		})
+	}
+}
+
 // Git only cuts a message at the scissors line when it carries the comment
 // prefix; an uncommented copy is message text, so the commit keeps it and gets
 // the trailer. A real scissors line still drops the diff below it, whatever the
