@@ -100,3 +100,33 @@ describe("repairStreamingInline", () => {
 		expect(repairStreamingInline("`**` is bold")).toBe("`**` is bold");
 	});
 });
+
+describe("parseBlocks review fixes", () => {
+	it("keeps the tabs inside fenced code, so a copied Makefile still runs", () => {
+		expect(parseBlocks("```make\nbuild:\n\tgo build ./...\n```")).toEqual([{ kind: "code", language: "make", text: "build:\n\tgo build ./..." }]);
+	});
+
+	it("still reads a tab-indented item as nested, and removes only the fence's own indent from its code", () => {
+		expect(parseBlocks("- a\n\t- b")).toMatchObject([{ items: [{ text: "a", depth: 0 }, { text: "b", depth: 1 }] }]);
+		expect(parseBlocks("1. Run:\n   ```make\n   all:\n   \techo hi\n   ```")[1]).toEqual({ kind: "code", language: "make", text: "all:\n\techo hi" });
+	});
+
+	it("keeps a backslash that ends a block, and drops only one that breaks a line", () => {
+		expect(parseBlocks("Path: C:\\")).toEqual([{ kind: "paragraph", text: "Path: C:\\" }]);
+		expect(parseBlocks("- Path: C:\\")).toMatchObject([{ items: [{ text: "Path: C:\\" }] }]);
+		expect(parseBlocks("one\\\ntwo")).toEqual([{ kind: "paragraph", text: "one\ntwo" }]);
+	});
+});
+
+describe("repairStreamingInline review fixes", () => {
+	it("keeps a longer fence open past a shorter run of its character", () => {
+		const text = "````\n```\n**x";
+		expect(repairStreamingInline(text)).toBe(text);
+		expect(repairStreamingInline("~~~\n```\n~~~\n**x")).toBe("~~~\n```\n~~~\n**x**");
+	});
+
+	it("closes an open code span and then the bold around it", () => {
+		expect(repairStreamingInline("**Use `npm")).toBe("**Use `npm`**");
+		expect(repairStreamingInline("run `npm")).toBe("run `npm`");
+	});
+});

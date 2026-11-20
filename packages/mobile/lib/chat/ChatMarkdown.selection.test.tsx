@@ -517,3 +517,12 @@ it("shows a streaming reply's unfinished bold as bold", () => {
 	expect(textOf(renderer.root.find((node) => node.props.selectable === true))).toBe("Working on the fix");
 	act(() => renderer.unmount());
 });
+
+it("closes italics inside bold on the bold's own closing run", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text={"A **bold *italic*** end, and ***both***."} />); });
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true))).toBe("A bold italic end, and both.");
+	const italic = renderer.root.find((node) => (node.type as string) === "UITextView" && node.children.includes("italic"));
+	expect(italic.props.style).toEqual(expect.objectContaining({ fontStyle: "italic" }));
+	act(() => renderer.unmount());
+});
