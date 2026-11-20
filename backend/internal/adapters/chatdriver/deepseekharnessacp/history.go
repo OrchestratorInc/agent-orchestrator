@@ -70,7 +70,7 @@ type nativeReplayNode struct {
 
 type nativeReplay struct {
 	first, last *nativeReplayNode
-	history []*nativeReplayNode
+	history     []*nativeReplayNode
 	nodes       map[int64]*nativeReplayNode
 	calls       map[string]nativeReplayCall
 }
