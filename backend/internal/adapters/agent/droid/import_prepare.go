@@ -59,15 +59,21 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	}
 	target := uuid.NewSHA1(uuid.NameSpaceOID, []byte(config+"\x00"+id+"\x00"+launch+"\x00"+r.SourceFingerprint)).String()
 	receiptPath := droidReceiptPath(r.DataDir, target)
+	var planned *droidImportReceipt
 	if _, err := os.Lstat(receiptPath); err == nil {
 		receipt, err := verifyDroidReceipt(ctx, r.DataDir, config, target, launch)
-		if err != nil {
+		if err != nil && (!errors.Is(err, os.ErrNotExist) || receipt.TargetID != target) {
 			return ports.NativeSessionRef{}, err
 		}
 		if receipt.SourceID != id || receipt.Fingerprint != r.SourceFingerprint {
 			return ports.NativeSessionRef{}, errors.New("droid: prepared copy does not match selected source")
 		}
-		return ports.NativeSessionRef{NativeSessionID: target, ConfigDir: config, TranscriptPath: receipt.Path}, nil
+		if err == nil {
+			return ports.NativeSessionRef{NativeSessionID: target, ConfigDir: config, TranscriptPath: receipt.Path}, nil
+		}
+		// Ownership was durably reserved, but publication never completed. The
+		// original must still provide the exact selected bytes before recovery.
+		planned = &receipt
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ports.NativeSessionRef{}, err
 	}
@@ -126,21 +132,18 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err := root.MkdirAll(filepath.Dir(rel), 0o700); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
-	if err := importcopy.WriteOnce(ctx, root, rel, copyBody); err != nil {
-		return ports.NativeSessionRef{}, fmt.Errorf("droid: publish native copy: %w", err)
-	}
-	// Refuse concurrent source changes before permitting any native launch.
-	after, err := ReadNativeHistory(ctx, config, src)
-	if err != nil {
-		return ports.NativeSessionRef{}, err
-	}
-	if !bytes.Equal(after, body) {
-		return ports.NativeSessionRef{}, errors.New("droid: source changed during preparation")
-	}
 	// Droid can update the header title on a later turn. Bind its identity and
 	// cwd structurally; pin the copied conversation bytes after that header.
 	payload := copyBody[bytes.IndexByte(copyBody, '\n')+1:]
 	receipt := droidImportReceipt{SourceID: id, Fingerprint: r.SourceFingerprint, TargetID: target, ConfigDir: config, CWD: launch, Path: filepath.Join(config, rel), PrefixHash: NativeHistoryFingerprint(payload), PrefixBytes: len(payload)}
+	if planned != nil && *planned != receipt {
+		return ports.NativeSessionRef{}, errors.New("droid: publication reservation does not match selected history")
+	}
+	if _, found, err := p.LocateTranscript(ctx, ports.NativeSessionRef{ConfigDir: config, NativeSessionID: target}); err != nil {
+		return ports.NativeSessionRef{}, err
+	} else if found {
+		return ports.NativeSessionRef{}, errors.New("droid: unproven native target already exists")
+	}
 	encoded, err := json.Marshal(receipt)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
@@ -153,8 +156,23 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, err
 	}
 	defer func() { _ = receipts.Close() }()
-	if err := importcopy.WriteOnce(ctx, receipts, filepath.Base(receiptPath), encoded); err != nil {
+	// Reserve ownership BEFORE publishing any native transcript. Cancellation
+	// or a receipt-write failure can no longer orphan an unprovable native copy.
+	if planned == nil {
+		if err := importcopy.WriteOnce(ctx, receipts, filepath.Base(receiptPath), encoded); err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+	}
+	if err := importcopy.WriteOnce(ctx, root, rel, copyBody); err != nil {
+		return ports.NativeSessionRef{}, fmt.Errorf("droid: publish native copy: %w", err)
+	}
+	// Refuse concurrent source changes before permitting any native launch.
+	after, err := ReadNativeHistory(ctx, config, src)
+	if err != nil {
 		return ports.NativeSessionRef{}, err
+	}
+	if !bytes.Equal(after, body) {
+		return ports.NativeSessionRef{}, errors.New("droid: source changed during preparation")
 	}
 	if _, err := verifyDroidReceipt(ctx, r.DataDir, config, target, launch); err != nil {
 		return ports.NativeSessionRef{}, err

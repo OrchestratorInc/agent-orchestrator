@@ -3,6 +3,7 @@ package droid
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,6 +135,73 @@ func TestDroidPreparationRefusesUnprovenTargetAndSourceLinks(t *testing.T) {
 			t.Fatal("source symlink accepted")
 		}
 	})
+}
+
+func TestDroidRecoversReservedPublicationBeforeNativeCopy(t *testing.T) {
+	p, r, _ := importFixture(t)
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the durable state after the receipt was reserved but before the
+	// native link was published, e.g. cancellation interrupted WriteOnce.
+	if err := os.Remove(ref.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	again, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil || again != ref {
+		t.Fatalf("reserved publication did not recover: %+v %v", again, err)
+	}
+}
+
+func TestDroidCancellationCannotOrphanNativeTranscript(t *testing.T) {
+	p, r, _ := importFixture(t)
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{ref.TranscriptPath, droidReceiptPath(r.DataDir, ref.NativeSessionID)} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interrupted := &cancelAfterDroidPublication{Context: ctx, cancel: cancel, path: ref.TranscriptPath}
+	if _, err := p.PrepareImportedSession(interrupted, r); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation after native publication, got %v", err)
+	}
+	if _, err := os.Stat(droidReceiptPath(r.DataDir, ref.NativeSessionID)); err != nil {
+		t.Fatalf("publication lost ownership proof: %v", err)
+	}
+	if err := os.Remove(r.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	again, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil || again != ref {
+		t.Fatalf("interrupted publication did not recover: %+v %v", again, err)
+	}
+}
+
+// Cancel at the first context check after the native file becomes visible.
+// This exercises the real WriteOnce boundary without a production test hook.
+type cancelAfterDroidPublication struct {
+	context.Context
+	cancel context.CancelFunc
+	path   string
+}
+
+func (c *cancelAfterDroidPublication) Err() error {
+	if _, err := os.Stat(c.path); err == nil {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestDroidRejectsManyBlankRecords(t *testing.T) {
+	if err := validateDroidHistory([]byte(strings.Repeat("\n", 1<<20)), importTestID, ""); err == nil {
+		t.Fatal("blank records accepted as history")
+	}
 }
 
 func TestPrepareImportedSessionRefusesChangedSourceAndUnknownFormats(t *testing.T) {

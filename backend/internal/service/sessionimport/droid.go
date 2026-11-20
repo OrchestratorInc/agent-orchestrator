@@ -87,7 +87,7 @@ func readDroidTranscript(ctx context.Context, root string, paths ...string) (tra
 			}
 		}
 	}
-	for _, line := range bytes.Split(body, []byte("\n")) {
+	for line := range bytes.SplitSeq(body, []byte("\n")) {
 		if err := ctx.Err(); err != nil {
 			return t, err
 		}
