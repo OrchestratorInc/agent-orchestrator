@@ -96,11 +96,9 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 	// The job directory is the working directory too, so files an installer
 	// writes to relative paths stay private and are removed with it.
 	_, _ = fmt.Fprintln(stdout, "[installer] Installing harness.")
-	if err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env, Dir: jobDir, Isolated: command.Isolated}, stdout, stderr); err != nil {
-		_, _ = fmt.Fprintf(stderr, "installer execution: %v\n", err)
-		return result, fmt.Errorf("installer execution failed; it was not automatically retried. See diagnostics for details: %w", err)
-	}
-	return result, nil
+	// Execution is never retried; its error is returned unchanged.
+	err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env, Dir: jobDir, Isolated: command.Isolated}, stdout, stderr)
+	return result, err
 }
 
 // getHTTPS fetches a fixed daemon-owned HTTPS URL, refusing a plain-HTTP URL

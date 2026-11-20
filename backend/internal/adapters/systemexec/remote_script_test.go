@@ -121,16 +121,17 @@ func TestRunInstallScriptNeverRetriesExecution(t *testing.T) {
 		_, _ = io.WriteString(w, "printf x >> \"$MARKER\"\nexit 7")
 	}))
 	t.Cleanup(server.Close)
-	var diagnostics bytes.Buffer
 	_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
 		URL: server.URL, Interpreter: []string{"sh"}, Env: []string{"MARKER=" + marker},
-	}, io.Discard, &diagnostics)
+	}, io.Discard, io.Discard)
 	content, readErr := os.ReadFile(marker)
 	if err == nil || readErr != nil || string(content) != "x" || attempts != 1 {
 		t.Fatalf("executions = %q, attempts = %d, error = %v, read = %v", content, attempts, err, readErr)
 	}
-	if !strings.Contains(err.Error(), "installer execution failed") || !strings.Contains(diagnostics.String(), "exit status 7") {
-		t.Fatalf("error = %v, diagnostics = %q", err, diagnostics.String())
+	// The vendor script's own error is returned unchanged.
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || err.Error() != "exit status 7" {
+		t.Fatalf("error = %v, want the unwrapped exit status 7", err)
 	}
 }
 
