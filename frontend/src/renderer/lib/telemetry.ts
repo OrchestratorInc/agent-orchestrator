@@ -1573,8 +1573,11 @@ export async function initTelemetry(): Promise<boolean> {
 		// crash during that wait never costs ao.app.loaded. A reload has no start,
 		// and an opt-out during the wait discards the measurement.
 		const launchGeneration = optOutGeneration;
+		const sendLaunchOnClose = (launch: Record<string, unknown>) => {
+			if (launchGeneration === optOutGeneration) captureRendererEventOnUnload("ao.launches.timed", launch);
+		};
 		void takeLaunchStart()
-			.then((start) => (start ? launchProperties(start, bootstrap.appVersion) : undefined))
+			.then((start) => (start ? launchProperties(start, bootstrap.appVersion, sendLaunchOnClose) : undefined))
 			.then((launch) => (launch && launchGeneration === optOutGeneration ? captureRendererEvent("ao.launches.timed", launch) : undefined))
 			.catch(() => undefined);
 		return true;
@@ -1604,14 +1607,15 @@ export function clearRendererTelemetryQueues(): void {}
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
 /**
- * Sends an onboarding event from a `pagehide` listener. PostHog flushes its
+ * Sends an onboarding or performance event from a `pagehide` listener. PostHog flushes its
  * queue from its own pagehide handler, registered at init and so before any
  * of ours; an event queued after it dies with the page. This path sanitizes
  * synchronously and sends at once with sendBeacon, which outlives the page.
  */
 export function captureRendererEventOnUnload(event: string, properties?: Record<string, unknown>): boolean {
-	if (analyticsOptedOut || !posthogReady || !ONBOARDING_EVENTS.has(event) || isDeniedEvent(event)) return false;
-	const sanitizedProperties = sanitizeOnboardingProperties(event, properties);
+	const isPerformanceEvent = PERFORMANCE_EVENTS.has(event);
+	if (analyticsOptedOut || !posthogReady || !(ONBOARDING_EVENTS.has(event) || isPerformanceEvent) || isDeniedEvent(event)) return false;
+	const sanitizedProperties = isPerformanceEvent ? sanitizePerformanceProperties(event, properties) : sanitizeOnboardingProperties(event, properties);
 	if (!reserveCapture(onboardingRateLimitKey(event, sanitizedProperties) ?? event)) return false;
 	try {
 		return Boolean(posthog.capture(postHogEventName(event), withTelemetryContext(sanitizedProperties), { send_instantly: true, transport: "sendBeacon" }));

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PerformanceAccumulator, discardPerformanceWindow, percentile } from "./performance-telemetry";
+import { PerformanceAccumulator, discardPerformanceWindow, percentile, renderDuration } from "./performance-telemetry";
 
 type Capture = (event: string, properties: Record<string, unknown>) => Promise<void>;
 
@@ -124,6 +124,43 @@ describe("PerformanceAccumulator", () => {
 		expect(flushed()).toMatchObject({ long_frame_count: 3, long_frame_top_cause: "rendering", measurement_schema_version: 2 });
 	});
 
+	it("puts a frame's uncredited time under other, so a sliver of rendering cannot win", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		accumulator.recordLongFrame(50, [], 2, 100);
+		now += 10_000;
+		await accumulator.flush();
+
+		expect(flushed()).toMatchObject({ long_frame_top_cause: "other" });
+	});
+
+	it("never reports a window shorter than its active time after the clock is set back", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		now += 240_000;
+		accumulator.pause();
+		now = 500;
+		await accumulator.flush();
+
+		expect(flushed()).toMatchObject({ active_seconds: 240, window_seconds: 240 });
+	});
+
+	it("drops a window saved by the version 1 format", async () => {
+		const first = create();
+		first.activity();
+		first.recordOpen({ isSwitch: true, cached: true, chatLoaded: false, visibleMs: 20, usableMs: 100 });
+		now += 60_000;
+		first.pause();
+		const saved = JSON.parse(localStorage.getItem("ao.telemetry.performance.v1") ?? "{}");
+		localStorage.setItem("ao.telemetry.performance.v1", JSON.stringify({ ...saved, version: 1 }));
+
+		now += 61 * 60_000;
+		const second = create();
+		expect(second.isFlushOverdue()).toBe(false);
+		await second.flush();
+		expect(capture).not.toHaveBeenCalled();
+	});
+
 	it("adds memory, CPU, open session and uptime buckets", async () => {
 		resources = { rendererPeakMb: 700, appPeakMb: 2_100, cpuAvgPct: 3.4 };
 		openSessions = 12;
@@ -218,5 +255,17 @@ describe("percentile", () => {
 		expect(percentile([], 0.75)).toBeUndefined();
 		expect(percentile([10], 0.75)).toBe(10);
 		expect(percentile([40, 10, 30, 20], 0.75)).toBe(30);
+	});
+});
+
+describe("renderDuration", () => {
+	it("measures from style and layout to the end of the frame, not from requestAnimationFrame", () => {
+		// A 120 ms frame: rendering starts at 40 with a requestAnimationFrame script, style and layout at 90.
+		expect(renderDuration({ startTime: 0, duration: 120, styleAndLayoutStart: 90 })).toBe(30);
+	});
+
+	it("is 0 for a frame that did not render", () => {
+		expect(renderDuration({ startTime: 0, duration: 80, styleAndLayoutStart: 0 })).toBe(0);
+		expect(renderDuration({ startTime: 0, duration: 80 })).toBe(0);
 	});
 });

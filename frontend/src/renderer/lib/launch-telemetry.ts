@@ -16,6 +16,7 @@ const LAUNCH_VERSION_KEY = "ao.telemetry.launchVersion";
 const USABLE_WAIT_MS = 60_000;
 
 let resolveUsable: ((epochMs: number) => void) | undefined;
+let usableAtMs: number | undefined;
 const usable = new Promise<number>((resolve) => {
 	resolveUsable = resolve;
 });
@@ -38,7 +39,8 @@ if (typeof document !== "undefined") {
 export function markLaunchUsable(): void {
 	if (usableMarked) return;
 	usableMarked = true;
-	resolveUsable?.(performance.timeOrigin + performance.now());
+	usableAtMs = performance.timeOrigin + performance.now();
+	resolveUsable?.(usableAtMs);
 }
 
 function readLaunchKind(kind: "cold" | "warm", appVersion: string): "cold" | "warm" | "update" {
@@ -66,28 +68,45 @@ export async function takeLaunchStart(): Promise<LaunchTimingStart | null> {
 	}
 }
 
-/** The properties of ao.launches.timed. Resolves within USABLE_WAIT_MS. */
-export async function launchProperties(start: LaunchTimingStart, appVersion: string): Promise<Record<string, unknown>> {
+/**
+ * The properties of ao.launches.timed. Resolves within USABLE_WAIT_MS. A window
+ * closed first (a launch the daemon failed, then quit) hands the event to
+ * sendOnClose inside its pagehide, since an event queued after that is lost
+ * with the page, and the promise resolves undefined.
+ */
+export async function launchProperties(
+	start: LaunchTimingStart,
+	appVersion: string,
+	sendOnClose?: (properties: Record<string, unknown>) => void,
+): Promise<Record<string, unknown> | undefined> {
 	const launchKind = readLaunchKind(start.kind, appVersion);
+	const properties = (usableAt: number | undefined): Record<string, unknown> => {
+		if (hiddenDuringLaunch) return { launch_kind: launchKind };
+		const visibleAt = firstContentfulPaintAt();
+		return {
+			launch_kind: launchKind,
+			...(visibleAt === undefined ? {} : { to_visible_ms: visibleAt - start.startedAtMs }),
+			...(usableAt === undefined ? {} : { to_usable_ms: usableAt - start.startedAtMs }),
+		};
+	};
 	let timer = 0;
+	let sentOnClose = false;
 	let onPageHide = () => {};
-	// Closing the window first (a launch the daemon failed, then quit) still
-	// sends the event, without the usable time.
 	const usableAt = await Promise.race([
 		usable,
 		new Promise<undefined>((resolve) => {
 			timer = window.setTimeout(() => resolve(undefined), USABLE_WAIT_MS);
-			onPageHide = () => resolve(undefined);
+			onPageHide = () => {
+				if (sendOnClose) {
+					sentOnClose = true;
+					sendOnClose(properties(usableAtMs));
+				}
+				resolve(undefined);
+			};
 			window.addEventListener("pagehide", onPageHide, { once: true });
 		}),
 	]);
 	window.clearTimeout(timer);
 	window.removeEventListener("pagehide", onPageHide);
-	if (hiddenDuringLaunch) return { launch_kind: launchKind };
-	const visibleAt = firstContentfulPaintAt();
-	return {
-		launch_kind: launchKind,
-		...(visibleAt === undefined ? {} : { to_visible_ms: visibleAt - start.startedAtMs }),
-		...(usableAt === undefined ? {} : { to_usable_ms: usableAt - start.startedAtMs }),
-	};
+	return sentOnClose ? undefined : properties(usableAt);
 }

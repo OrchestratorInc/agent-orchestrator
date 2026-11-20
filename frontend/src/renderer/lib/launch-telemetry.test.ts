@@ -56,4 +56,27 @@ describe("launch timings", () => {
 
 		expect(await launch.launchProperties(start, "1.2.3")).toHaveProperty("to_usable_ms");
 	});
+
+	it("sends a launch whose window closed before it was usable from its pagehide", async () => {
+		const launch = await loadLaunchTelemetry();
+		setVisibility("visible");
+		const sendOnClose = vi.fn();
+		const pending = launch.launchProperties(start, "1.2.3", sendOnClose);
+		window.dispatchEvent(new Event("pagehide"));
+
+		expect(await pending).toBeUndefined();
+		expect(sendOnClose).toHaveBeenCalledTimes(1);
+		expect(sendOnClose.mock.calls[0]![0]).toEqual({ launch_kind: "cold" });
+	});
+
+	it("does not send again on close once the launch was measured", async () => {
+		const launch = await loadLaunchTelemetry();
+		setVisibility("visible");
+		launch.markLaunchUsable();
+		const sendOnClose = vi.fn();
+		expect(await launch.launchProperties(start, "1.2.3", sendOnClose)).toHaveProperty("to_usable_ms");
+		window.dispatchEvent(new Event("pagehide"));
+
+		expect(sendOnClose).not.toHaveBeenCalled();
+	});
 });

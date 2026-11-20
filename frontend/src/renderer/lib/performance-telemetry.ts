@@ -63,7 +63,8 @@ type Summary = {
 };
 
 type PersistedState = {
-	version: 1;
+	/** 2 since causes gained "rendering" and windows gained closedMs; a version 1 window is dropped. */
+	version: 2;
 	windowStartedAt: number;
 	windowFlushAt: number;
 	/** When this state was last saved, so a later launch knows how long the app was closed. */
@@ -105,7 +106,7 @@ const zeroSummary = (): Summary => ({
 });
 
 function freshState(now: number): PersistedState {
-	return { version: 1, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, closedMs: 0, summary: zeroSummary() };
+	return { version: 2, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, closedMs: 0, summary: zeroSummary() };
 }
 
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -117,7 +118,7 @@ function loadState(storage: Storage, now: number): PersistedState {
 		const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null") as Partial<PersistedState> | null;
 		const summary = parsed?.summary as Partial<Summary> | undefined;
 		if (
-			parsed?.version === 1 && isCount(parsed.windowStartedAt) && isCount(parsed.windowFlushAt) && summary &&
+			parsed?.version === 2 && isCount(parsed.windowStartedAt) && isCount(parsed.windowFlushAt) && summary &&
 			isBuckets(summary.switchCached) && isBuckets(summary.switchUncached) &&
 			isCountList(summary.switchVisibleMs, SAMPLES_KEPT) && isCountList(summary.chatOpenMs, SAMPLES_KEPT) &&
 			Array.isArray(summary.longest) && summary.longest.length <= LONGEST_KEPT &&
@@ -236,14 +237,24 @@ export class PerformanceAccumulator {
 	}
 
 	/**
-	 * Each cause sums milliseconds of work inside long frames: a script's run
-	 * time for its invoker type, and the frame's style, layout and paint time
-	 * for "rendering". A frame with neither adds its blocking time to "other".
+	 * Splits a long frame's time among causes: each script's run time under its
+	 * invoker type, style, layout and paint under "rendering", and the rest of
+	 * the frame (scripts under the browser's 5 ms floor, other browser work)
+	 * under "other". Without the frame's duration, a frame with nothing
+	 * credited adds its blocking time to "other".
 	 */
-	recordLongFrame(blockingMs: number, scripts: ReadonlyArray<{ invokerType?: string; duration: number }>, renderMs = 0): void {
+	recordLongFrame(
+		blockingMs: number,
+		scripts: ReadonlyArray<{ invokerType?: string; duration: number }>,
+		renderMs = 0,
+		durationMs?: number,
+	): void {
 		const summary = this.state.summary;
+		let credited = 0;
 		const add = (cause: Cause, ms: number) => {
-			if (ms > 0) summary.causes[cause] = (summary.causes[cause] ?? 0) + ms;
+			if (!(ms > 0)) return;
+			summary.causes[cause] = (summary.causes[cause] ?? 0) + ms;
+			credited += ms;
 		};
 		summary.longFrames += 1;
 		summary.longFrameBlockingMs += Math.max(0, blockingMs);
@@ -252,7 +263,8 @@ export class PerformanceAccumulator {
 			add(cause, script.duration);
 		}
 		add("rendering", renderMs);
-		if (scripts.length === 0 && !(renderMs > 0)) add("other", blockingMs);
+		if (durationMs !== undefined) add("other", durationMs - credited);
+		else if (credited === 0) add("other", blockingMs);
 	}
 
 	recordOpen(timing: OpenTiming): void {
@@ -306,7 +318,8 @@ export class PerformanceAccumulator {
 		const properties: Record<string, unknown> = {
 			measurement_schema_version: 2,
 			flush_reason: reason,
-			window_seconds: Math.round(Math.max(0, now - windowStartedAt - closedMs) / 1000),
+			// Never shorter than the active time, even after the clock was set back.
+			window_seconds: Math.round(Math.max(summary.activeMs, now - windowStartedAt - closedMs) / 1000),
 			active_seconds: Math.round(summary.activeMs / 1000),
 			switch_visible_p75_ms: percentile(summary.switchVisibleMs, 0.75),
 			switch_dropped_count: summary.switchDropped,
@@ -349,16 +362,21 @@ export class PerformanceAccumulator {
 // --- Runtime: observers, input tracking and session open timing ---
 
 type EventTimingEntry = PerformanceEntry & { interactionId?: number };
-type LongFrameEntry = PerformanceEntry & {
+type LongFrameEntry = Pick<PerformanceEntry, "startTime" | "duration"> & {
 	blockingDuration?: number;
-	/** When style, layout and paint began; 0 for a frame that did not render. */
-	renderStart?: number;
+	/** When style and layout began; 0 for a frame that did not render. */
+	styleAndLayoutStart?: number;
 	scripts?: Array<{ invokerType?: string; duration: number }>;
 };
 
-/** Time from the start of rendering to the end of the frame. */
-function renderDuration(entry: LongFrameEntry): number {
-	return entry.renderStart && entry.renderStart > 0 ? Math.max(0, entry.startTime + entry.duration - entry.renderStart) : 0;
+/**
+ * Time from the start of style and layout to the end of the frame: style,
+ * layout and paint. Not renderStart, which also covers requestAnimationFrame
+ * and observer callbacks that are already counted as scripts.
+ */
+export function renderDuration(entry: LongFrameEntry): number {
+	const start = entry.styleAndLayoutStart ?? 0;
+	return start > 0 ? Math.max(0, entry.startTime + entry.duration - start) : 0;
 }
 
 type PendingOpen = {
@@ -591,7 +609,7 @@ function startRuntime(): void {
 	// during the opt-out belong to no window.
 	const frameObserver = observe("long-animation-frame", (entries) => {
 		if (!visible()) return;
-		for (const entry of entries as LongFrameEntry[]) accumulator.recordLongFrame(entry.blockingDuration ?? 0, entry.scripts ?? [], renderDuration(entry));
+		for (const entry of entries as LongFrameEntry[]) accumulator.recordLongFrame(entry.blockingDuration ?? 0, entry.scripts ?? [], renderDuration(entry), entry.duration);
 	}, { buffered: !restarted });
 
 	const checkpoint = window.setInterval(() => {
