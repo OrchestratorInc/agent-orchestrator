@@ -688,12 +688,21 @@ Properties on `ao.launches.timed`:
   shows the sidebar with live sessions, the same frame the desktop log's
   "launch timing" line ends at. A cold launch starts when the app process
   starts; a warm one when the window is requested.
-- A launch during which the window was hidden sends `launch_kind` only.
+- A launch whose window was hidden after it first appeared but before it
+  became usable (the user minimized it or switched away) sends `launch_kind`
+  only. Hiding it after it became usable keeps the timings. The window is
+  created hidden and shown once the page loads; that wait is part of the
+  launch.
+- A window closed before it became usable sends the event as it closes,
+  without `to_usable_ms`.
 
 Properties on `ao.usage.ui_performance`:
 
-- Window: `measurement_schema_version` (1), `flush_reason` (`interval` or
-  `startup`), `window_seconds`, `active_seconds` (time the window was visible
+- Window: `measurement_schema_version` (2), `flush_reason` (`interval` or
+  `startup`), `window_seconds` (elapsed time while the app was running, so a
+  window kept across a quit leaves out the time the app was closed; never less
+  than `active_seconds`),
+  `active_seconds` (time the window was visible
   with input in the last 5 minutes), `open_sessions_bucket` (`0`, `1-3`,
   `4-10`, `11-30`, or `31+` sessions that are not terminated), and
   `uptime_hours_bucket` (how long the window has been open: `lt1`, `lt8`,
@@ -718,10 +727,13 @@ Properties on `ao.usage.ui_performance`:
   fallback, not a measured duration.
 - Frozen frames: `long_frame_count` (frames that took over 50 ms),
   `long_frame_blocking_ms` (their total blocking time), and
-  `long_frame_top_cause`, the kind of work that blocked longest:
-  `event-listener`, `user-callback` (timers and animation frames),
-  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`, or
-  `other`.
+  `long_frame_top_cause`, the kind of work that took longest inside them:
+  `rendering` (style, layout and paint), a script's invoker type
+  (`event-listener`, `user-callback` for timers and animation frames,
+  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`), or
+  `other`, the rest of those frames' time. The browser credits only scripts
+  that ran over 5 ms, so shorter scripts count as `other`. Version 1 summaries
+  put rendering-only frames under `other`.
 - Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
   messages were not in memory, from the click to the frame that shows them.
 - Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and

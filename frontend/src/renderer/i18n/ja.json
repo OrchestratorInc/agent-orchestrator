@@ -3247,6 +3247,7 @@
 	"settings.harness.models.default": "デフォルト",
 	"settings.harness.models.efforts": "Effort: {{levels}}",
 	"settings.harness.models.empty": "このハーネスはモデルを報告していません。",
+	"settings.harness.models.directEntry": "新しいタスクでモデル ID を入力してください。先に {{agent}} でプロバイダーを設定してください。",
 	"settings.harness.models.notInstalled": "モデルを表示するには {{agent}} をインストールしてください。",
 	"settings.harness.models.needsLogin": "モデルを読み込むには {{agent}} にログインしてください。",
 	"settings.harness.models.loadFailed": "モデルを読み込めませんでした。",

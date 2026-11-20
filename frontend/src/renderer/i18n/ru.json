@@ -2241,6 +2241,7 @@
 	"settings.harness.models.default": "По умолчанию",
 	"settings.harness.models.efforts": "Усилие: {{levels}}",
 	"settings.harness.models.empty": "Этот агент не сообщил о моделях.",
+	"settings.harness.models.directEntry": "Введите ID модели в окне новой задачи. Сначала настройте провайдера в {{agent}}.",
 	"settings.harness.models.notInstalled": "Установите {{agent}}, чтобы увидеть его модели.",
 	"settings.harness.models.needsLogin": "Войдите в {{agent}}, чтобы загрузить его модели.",
 	"settings.harness.models.loadFailed": "Не удалось загрузить модели.",

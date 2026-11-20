@@ -3312,6 +3312,7 @@
 	"settings.harness.models.default": "Padrão",
 	"settings.harness.models.efforts": "Esforço: {{levels}}",
 	"settings.harness.models.empty": "Este harness não informou nenhum modelo.",
+	"settings.harness.models.directEntry": "Insira um ID de modelo em Nova tarefa. Configure primeiro o provedor no {{agent}}.",
 	"settings.harness.models.notInstalled": "Instale {{agent}} para ver seus modelos.",
 	"settings.harness.models.needsLogin": "Entre no {{agent}} para carregar seus modelos.",
 	"settings.harness.models.loadFailed": "Não foi possível carregar os modelos.",

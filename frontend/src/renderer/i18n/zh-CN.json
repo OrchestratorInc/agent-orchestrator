@@ -3317,6 +3317,7 @@
 	"settings.harness.models.default": "默认",
 	"settings.harness.models.efforts": "推理强度：{{levels}}",
 	"settings.harness.models.empty": "此 Harness 未报告任何模型。",
+	"settings.harness.models.directEntry": "在新建任务中输入模型 ID。请先在 {{agent}} 中配置其提供商。",
 	"settings.harness.models.notInstalled": "安装 {{agent}} 后即可查看其模型。",
 	"settings.harness.models.needsLogin": "登录 {{agent}} 后即可加载其模型。",
 	"settings.harness.models.loadFailed": "无法加载模型。",

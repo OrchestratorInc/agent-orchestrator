@@ -39,6 +39,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	// Prime first opens through a native Terminal fork with exact-id adoption.
 	domain.HarnessPrimeAgent: {root: primeAgentRoot, discover: discoverPrimeAgent, read: readPrimeAgentTranscript, mode: domain.SessionModeTUI},
 
+	domain.HarnessDroid:      {root: droidRoot, discover: discoverDroid, read: readDroidTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessAider:      {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessClaudeCode: {root: claudeRoot, discover: walkSources(domain.HarnessClaudeCode, "projects", jsonlKey), read: readClaudeTranscript},
 	domain.HarnessCodewhale:  {root: codewhaleRoot, discover: discoverCodewhale, read: readCodewhaleTranscript, mode: domain.SessionModeTUI},

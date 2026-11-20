@@ -741,9 +741,32 @@ export function ArtifactPathCode({ text, children, unlisted = children }: { text
 	}, [children, href, path, unlisted]);
 }
 
+function InlineSessionReference({ id, node, fallback }: { id: string; node?: HastElement; fallback: ReactNode }) {
+	const workspaces = useChatLinkWorkspaces();
+	const target = useMemo(() => {
+		let match: { href: string; title: string } | undefined;
+		for (const workspace of workspaces) {
+			const session = workspace.sessions.find((entry) => entry.id === id);
+			if (!session) continue;
+			if (match) return undefined;
+			match = { href: `ao://sessions/${encodeURIComponent(workspace.id)}/${encodeURIComponent(id)}`, title: session.title || id };
+		}
+		return match;
+	}, [workspaces, id]);
+	const href = target?.href;
+	const title = target?.title;
+	return useMemo(() => {
+		if (!href) return fallback;
+		// A displayed title represents the entire source token when quoted.
+		const mapping = title === id ? { "data-excerpt-kind": "inline-code" } : { "data-excerpt-block": "" };
+		return <SessionLabelLink href={href}><span {...excerptElementProps(node)} {...mapping}>{title}</span></SessionLabelLink>;
+	}, [href, title, id, fallback, node]);
+}
+
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
 	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
+	const safeOrigin = useContext(SafeOriginContent);
 	const insideLink = useContext(InsideMarkdownLink);
 	const insideArtifactLink = useContext(InsideArtifactLink);
 	const text = typeof children === "string" ? children : undefined;
@@ -760,6 +783,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	);
 	if (insideLink) return code;
 	if (!file) {
+		if (!safeOrigin && openSession && text && /^[^\s/\\]+-\d+$/u.test(text)) return <InlineSessionReference id={text} node={node} fallback={code} />;
 		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;

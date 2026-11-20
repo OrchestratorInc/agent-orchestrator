@@ -3247,6 +3247,7 @@
 	"settings.harness.models.default": "기본값",
 	"settings.harness.models.efforts": "Effort: {{levels}}",
 	"settings.harness.models.empty": "이 하네스가 보고한 모델이 없습니다.",
+	"settings.harness.models.directEntry": "새 작업에서 모델 ID를 입력하세요. 먼저 {{agent}}에서 공급자를 설정하세요.",
 	"settings.harness.models.notInstalled": "모델을 보려면 {{agent}}을(를) 설치하세요.",
 	"settings.harness.models.needsLogin": "모델을 불러오려면 {{agent}}에 로그인하세요.",
 	"settings.harness.models.loadFailed": "모델을 불러오지 못했습니다.",
