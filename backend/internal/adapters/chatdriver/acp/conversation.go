@@ -1627,6 +1627,7 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 			c.emit(event)
 		}
 	}
+	c.settleSubagentLaunches(turnID)
 }
 
 func sortedKeys[T any](values map[string]T) []string {

@@ -196,6 +196,28 @@ func (c *conversation) observeSubagentLaunch(turnID string, tool *toolState, emi
 	}
 }
 
+// settleSubagentLaunches stops counting a settled turn's unnamed launches as in
+// flight: nothing will name their child now, so what waits on them goes out
+// unfiled.
+func (c *conversation) settleSubagentLaunches(turnID string) {
+	c.mu.Lock()
+	s := c.subagents
+	if s == nil {
+		c.mu.Unlock()
+		return
+	}
+	for launch := range s.inflight {
+		if s.launchTurn[launch] == turnID {
+			delete(s.inflight, launch)
+		}
+	}
+	released := s.release(false)
+	c.mu.Unlock()
+	for _, update := range released {
+		c.applyChildUpdate(update)
+	}
+}
+
 // release returns held updates whose child a launch has now named, in the order
 // they came. Once no launch is in flight, nothing can name the rest, so they are
 // returned too, to go out unfiled; with all set, everything held is.
@@ -334,7 +356,9 @@ func (c *conversation) childStep(update openCodeChildUpdate, sessionUpdate acpsd
 		if delta == "" {
 			return
 		}
-		messageID := "subagent-message-" + child
+		// A follow-up launch reuses the child's session, so the launch keeps its
+		// messages apart.
+		messageID := "subagent-message-" + launch + "-" + child
 		if chunk.MessageId != nil && *chunk.MessageId != "" {
 			messageID = *chunk.MessageId
 		}

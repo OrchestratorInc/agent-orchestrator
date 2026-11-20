@@ -302,3 +302,61 @@ func TestOpenCodeV1TaskReportsItsResult(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+// A launch whose turn settled before it named a child names nothing later, so
+// what waits on it goes out instead of being held until the cap.
+func TestOpenCodeV2SettledTurnReleasesHeldChildWork(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+	_ = launchSubagent(t, agent, conv, "call_launch")
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update",
+		"update": childToolCall("ses_child:call_read", "Find tests: read", "pending")})
+	// The child update is read off the wire before the turn settles.
+	time.Sleep(50 * time.Millisecond)
+
+	conv.settleOpenItems("turn-1")
+	if launch := nextActivity(t, conv); launch.ProviderItemID != "call_launch" ||
+		launch.ActivityStatus != domain.ActivityStatusFailed {
+		t.Fatalf("settled launch = %#v", launch)
+	}
+	if step := nextActivity(t, conv); step.ProviderItemID != "ses_child:call_read" {
+		t.Fatalf("held child step after the turn settled = %#v", step)
+	}
+}
+
+// A follow-up launch reuses its child's session; what the child says for it
+// is a message of its own, even when OpenCode gives it no id.
+func TestOpenCodeV2FollowUpMessageIsItsOwn(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+	say := func() ports.ChatEvent {
+		sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update", "update": map[string]any{
+			"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Done."},
+		}})
+		started := nextActivity(t, conv)
+		_ = nextActivity(t, conv) // its text
+		sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": "completed"})
+		_ = nextActivity(t, conv) // the message completes
+		_ = nextActivity(t, conv) // the hand-back
+		return started
+	}
+
+	_ = launchSubagent(t, agent, conv, "call_first")
+	_ = completeLaunch(t, agent, conv, "call_first", "ses_child")
+	first := say()
+
+	running := acpsdk.ToolCallStatusInProgress
+	sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+		SessionUpdate: "tool_call", ToolCallId: "call_second", Title: "subagent",
+		Kind: acpsdk.ToolKindThink, Status: running,
+		RawInput: map[string]any{"agent": "explore", "description": "Find tests", "prompt": "Now the e2e tests",
+			"sessionID": "ses_child"},
+	}})
+	_ = nextActivity(t, conv)
+	second := say()
+
+	if first.ProviderItemID == second.ProviderItemID {
+		t.Fatalf("both launches' messages are item %q", first.ProviderItemID)
+	}
+	if parent := detailOf(t, second)["parentProviderItemId"]; parent != "call_second" {
+		t.Fatalf("follow-up message parent = %v", parent)
+	}
+}
