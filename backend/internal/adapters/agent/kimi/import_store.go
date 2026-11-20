@@ -178,6 +178,15 @@ func validateKimiWire(wire []byte, cwd string) (string, error) {
 		if json.Unmarshal(scan.Bytes(), &record) != nil {
 			return "", errors.New("kimi: incomplete native journal")
 		}
+		// Native replay rehydrates blobref URLs from agents/main/blobs. This
+		// snapshot copies no blob storage, so accepting one would lose media.
+		var payload any
+		if err := json.Unmarshal(scan.Bytes(), &payload); err != nil {
+			return "", err
+		}
+		if kimiHasBlobMedia(payload) {
+			return "", errors.New("kimi: blob-backed media is unsupported for native import")
+		}
 		var kind string
 		_ = json.Unmarshal(record["type"], &kind)
 		if !metadata {
@@ -229,6 +238,29 @@ func validateKimiWire(wire []byte, cwd string) (string, error) {
 		return "", errors.New("kimi: native conversation has no prompt history")
 	}
 	return model, nil
+}
+
+func kimiHasBlobMedia(value any) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if key == "url" {
+				if url, ok := child.(string); ok && strings.HasPrefix(url, "blobref:") {
+					return true
+				}
+			}
+			if kimiHasBlobMedia(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if kimiHasBlobMedia(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // remapKimiWire rewrites only the replayable local-runtime workspace identity.

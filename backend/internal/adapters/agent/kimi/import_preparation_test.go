@@ -147,6 +147,35 @@ func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
 	}
 }
 
+func TestKimiPreparationRefusesBlobBackedMedia(t *testing.T) {
+	r := kimiImportFixture(t)
+	wire, err := os.ReadFile(r.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Native 2.4.1 stores image URLs in imageUrl.url, with the payload in
+	// agents/main/blobs/<hash>. The journal alone cannot preserve that media.
+	media := `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"describe this image"},{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + strings.Repeat("a", 64) + `"}}],"origin":{"kind":"user"}}` + "\n"
+	wire = append(wire, []byte(media)...)
+	if err := os.WriteFile(r.TranscriptPath, wire, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID); err == nil || !strings.Contains(err.Error(), "blob-backed media") {
+		t.Fatalf("blob-backed snapshot accepted: %v", err)
+	}
+	if ref, err := prepareKimiImport(t.Context(), r, "2.4.1"); err == nil || ref.NativeSessionID != "" {
+		t.Fatalf("blob-backed copy published: %#v %v", ref, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(r.DataDir, "native-imports", "kimi"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("refused import left a copy or checkpoint: %v %v", entries, err)
+	}
+	after, err := os.ReadFile(r.TranscriptPath)
+	if err != nil || string(after) != string(wire) {
+		t.Fatal("refusing media changed the source journal")
+	}
+}
+
 func TestKimiImportedRuntimeDoesNotPersistKeys(t *testing.T) {
 	r := kimiImportFixture(t)
 	ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
