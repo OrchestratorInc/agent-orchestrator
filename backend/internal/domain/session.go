@@ -558,7 +558,9 @@ type SessionBranchState struct {
 	Branch string `json:"branch,omitempty"`
 	// Commits is how many commits the branch has on top of its base.
 	Commits int `json:"commits"`
-	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
+	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x". For a
+	// branch continuing an open PR whose head lives elsewhere (a fork), it is
+	// "pr-<number>/<PR source branch>" and RemoteHead is the PR's recorded head.
 	// Empty means the branch has never been pushed.
 	RemoteBranch string `json:"remoteBranch,omitempty"`
 	RemoteHead   string `json:"remoteHead,omitempty"`

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -142,7 +143,29 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		}
 	}
 	rec := target.rec
-	fingerprint := target.branch + " " + local + " " + remote + " " + base + " " + baseRef
+	// With no origin branch of the same name, the session may be continuing a
+	// PR whose head lives elsewhere (a contributor's fork, or another branch
+	// name). That PR's recorded head is where this branch was pushed.
+	var prHead domain.PullRequest
+	if remote == "" {
+		pr, ok, err := s.openPRUnder(ctx, rec.Metadata.WorkspacePath, rec.ID, local)
+		if err != nil {
+			// A failed read is not evidence that nothing was pushed: keep the last
+			// state rather than report every commit unpushed, and let the next
+			// pass retry instead of failing every other session's reconcile.
+			if s.logger != nil {
+				s.logger.Warn("read session PRs for branch state", "session", rec.ID, "err", err)
+			}
+			return nil
+		}
+		if ok {
+			prHead = pr
+		}
+	}
+	// The PR's number and source branch name RemoteBranch, so a different PR at
+	// the same head, or a renamed source branch, must also re-read.
+	fingerprint := target.branch + " " + local + " " + remote + " " + base + " " + baseRef + " " +
+		prHead.HeadSHA + " " + strconv.Itoa(prHead.Number) + " " + prHead.SourceBranch
 	if rec.BranchState != nil && s.branchTips[rec.ID] == fingerprint {
 		return nil
 	}
@@ -176,10 +199,20 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		}
 		state.Commits = commits
 	}
-	switch remote {
-	case "":
+	switch {
+	case remote == "" && prHead.HeadSHA != "":
+		state.RemoteBranch = fmt.Sprintf("pr-%d/%s", prHead.Number, prHead.SourceBranch)
+		state.RemoteHead = prHead.HeadSHA
+		if prHead.HeadSHA != local {
+			unpushed, ok := gitRevListCount(ctx, root, prHead.HeadSHA+".."+local)
+			if !ok {
+				return nil
+			}
+			state.Unpushed = unpushed
+		}
+	case remote == "":
 		state.Unpushed = state.Commits
-	case local:
+	case remote == local:
 		state.RemoteBranch = branchStateRemote + "/" + target.branch
 		state.RemoteHead = remote
 	default:
@@ -333,4 +366,31 @@ func gitLeftRightCount(ctx context.Context, root, head, base string) (ahead, beh
 	ahead, aheadErr := strconv.Atoi(fields[0])
 	behind, behindErr := strconv.Atoi(fields[1])
 	return ahead, behind, aheadErr == nil && behindErr == nil
+}
+
+// openPRUnder returns the session's open PR whose recorded head is local or one
+// of its ancestors, so commits already on that PR do not read as unpushed. A
+// PR at some other commit (another branch the session also opened) does not
+// count. It reads the store only for branches with no same-named origin branch.
+func (s *Service) openPRUnder(ctx context.Context, root string, id domain.SessionID, local string) (domain.PullRequest, bool, error) {
+	prs, err := s.store.ListPRsBySession(ctx, id)
+	if err != nil {
+		return domain.PullRequest{}, false, err
+	}
+	var under []domain.PullRequest
+	for _, pr := range prs {
+		if pr.Merged || pr.Closed || pr.HeadSHA == "" || pr.SourceBranch == "" {
+			continue
+		}
+		if pr.HeadSHA == local {
+			return pr, true, nil
+		}
+		under = append(under, pr)
+	}
+	for _, pr := range under {
+		if gitIsAncestor(ctx, root, pr.HeadSHA, local) {
+			return pr, true, nil
+		}
+	}
+	return domain.PullRequest{}, false, nil
 }
