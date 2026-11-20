@@ -919,6 +919,29 @@ describe("BrowserPanel", () => {
 		stop();
 	});
 
+	it("takes the snip overlay back off when the panel leaves before the start is answered", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/" };
+		let answerStart: ((started: boolean) => void) | undefined;
+		const setRegionSelectMode = vi.fn(({ enabled }: { viewId: string; enabled: boolean }) =>
+			enabled && !answerStart
+				? new Promise<boolean>((resolve) => {
+						answerStart = resolve;
+					})
+				: Promise.resolve(false),
+		);
+		window.ao!.browser.setRegionSelectMode = setRegionSelectMode;
+		const stop = subscribeChatComposerImages("sess-1", () => true);
+		const { unmount } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Select an area to add to chat" }));
+		expect(setRegionSelectMode).toHaveBeenCalledWith({ viewId: "42:sess-1", enabled: true });
+		unmount();
+		await act(async () => answerStart?.(true));
+
+		await waitFor(() => expect(setRegionSelectMode).toHaveBeenLastCalledWith({ viewId: "42:sess-1", enabled: false }));
+		stop();
+	});
+
 	it("disables screenshots until the active tab has a page", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 

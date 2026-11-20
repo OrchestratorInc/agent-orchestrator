@@ -84,4 +84,56 @@ describe("region select overlay", () => {
 		expect(pageKey).not.toHaveBeenCalled();
 		document.removeEventListener("keydown", pageKey);
 	});
+
+	it("sits in its own modal dialog above a page's modal dialog, and leaves the page's open", () => {
+		// jsdom has no modal dialogs: fake showModal/close and the :modal match.
+		const proto = HTMLDialogElement.prototype as HTMLDialogElement & { showModal?: () => void; close?: () => void };
+		const originalShowModal = proto.showModal;
+		const originalClose = proto.close;
+		const showModal = vi.fn(function (this: HTMLDialogElement) {
+			this.setAttribute("open", "");
+		});
+		const close = vi.fn(function (this: HTMLDialogElement) {
+			this.removeAttribute("open");
+		});
+		proto.showModal = showModal;
+		proto.close = close;
+		const pageDialog = document.createElement("dialog");
+		pageDialog.setAttribute("open", "");
+		document.body.appendChild(pageDialog);
+		const realQuerySelector = document.querySelector.bind(document);
+		const query = vi
+			.spyOn(document, "querySelector")
+			.mockImplementation(((selector: string) =>
+				selector === "dialog:modal" ? pageDialog : realQuerySelector(selector)) as typeof document.querySelector);
+		try {
+			setMode(true);
+			const ours = overlay()?.parentElement;
+			expect(ours?.tagName).toBe("DIALOG");
+			expect(ours?.hasAttribute("data-ao-region-select-dialog")).toBe(true);
+			expect(showModal).toHaveBeenCalledOnce();
+			expect(showModal.mock.instances[0]).toBe(ours);
+
+			// The dialog's own Escape (cancel) ends the snip instead of closing.
+			const cancelEvent = new Event("cancel", { cancelable: true });
+			ours?.dispatchEvent(cancelEvent);
+			expect(cancelEvent.defaultPrevented).toBe(true);
+			expect(electronMocks.send).toHaveBeenCalledWith("browser:regionSelect:cancel");
+			expect(close.mock.instances).toEqual([ours]);
+			expect(document.querySelector("[data-ao-region-select-dialog]")).toBeNull();
+			expect(pageDialog.isConnected && pageDialog.hasAttribute("open")).toBe(true);
+		} finally {
+			query.mockRestore();
+			pageDialog.remove();
+			if (originalShowModal) proto.showModal = originalShowModal;
+			else Reflect.deleteProperty(proto, "showModal");
+			if (originalClose) proto.close = originalClose;
+			else Reflect.deleteProperty(proto, "close");
+		}
+	});
+
+	it("stays a plain overlay when the page has no modal dialog", () => {
+		setMode(true);
+		expect(overlay()?.parentElement).toBe(document.documentElement);
+	});
 });

@@ -12,8 +12,11 @@ import {
 // rectangle so the capture shows the page, not the overlay.
 
 const HOST_ATTRIBUTE = "data-ao-region-select";
+const DIALOG_ATTRIBUTE = "data-ao-region-select-dialog";
 
 let host: HTMLDivElement | null = null;
+// Set only while the page has a modal dialog open; see mount().
+let modalHost: HTMLDialogElement | null = null;
 let shadow: ShadowRoot | null = null;
 let start: BrowserRegionPoint | null = null;
 let installed = false;
@@ -46,7 +49,44 @@ function enable(): void {
 	host.addEventListener("pointercancel", onPointerCancel);
 	host.addEventListener("contextmenu", preventDefault);
 	window.addEventListener("keydown", onKeyDown, true);
-	(document.documentElement ?? document.body).appendChild(host);
+	mount(host);
+}
+
+function pageHasModalDialog(): boolean {
+	try {
+		return document.querySelector("dialog:modal") !== null;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * A modal dialog the page opened makes everything outside it inert, so an
+ * overlay on <html> could not take the drag. Then the overlay goes in its own
+ * modal dialog, which sits above the page's and leaves it open once closed.
+ * Other pages keep the plain overlay, so opening a snip never moves focus.
+ */
+function mount(overlay: HTMLDivElement): void {
+	const parent = document.documentElement ?? document.body;
+	if (!pageHasModalDialog()) {
+		parent.appendChild(overlay);
+		return;
+	}
+	const dialog = document.createElement("dialog");
+	dialog.setAttribute(DIALOG_ATTRIBUTE, "");
+	dialog.style.cssText =
+		"all:initial;display:block;position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;background:transparent;overflow:visible;";
+	const backdrop = document.createElement("style");
+	backdrop.textContent = `dialog[${DIALOG_ATTRIBUTE}]::backdrop{background:transparent}`;
+	dialog.append(backdrop, overlay);
+	dialog.addEventListener("cancel", onDialogCancel);
+	parent.appendChild(dialog);
+	modalHost = dialog;
+	try {
+		dialog.showModal();
+	} catch {
+		// Still mounted; the page's dialog may keep it from taking the drag.
+	}
 }
 
 /** Removes the overlay without telling main; main or the page already knows. */
@@ -54,6 +94,12 @@ function teardown(): void {
 	window.removeEventListener("keydown", onKeyDown, true);
 	host?.remove();
 	host = null;
+	if (modalHost) {
+		modalHost.removeEventListener("cancel", onDialogCancel);
+		if (modalHost.open) modalHost.close();
+		modalHost.remove();
+		modalHost = null;
+	}
 	shadow = null;
 	start = null;
 }
@@ -72,6 +118,12 @@ function onKeyDown(event: KeyboardEvent): void {
 	if (event.key !== "Escape") return;
 	event.preventDefault();
 	event.stopPropagation();
+	cancel();
+}
+
+// Escape on our modal dialog: treat it as the snip's Esc, not a dialog close.
+function onDialogCancel(event: Event): void {
+	event.preventDefault();
 	cancel();
 }
 

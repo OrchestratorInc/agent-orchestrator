@@ -494,6 +494,14 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// Keyed by view so a session switch never inherits another view's snip.
 	const [regionSelectViewId, setRegionSelectViewId] = useState("");
 	const regionSelecting = Boolean(viewId) && regionSelectViewId === viewId;
+	// The view the panel shows right now, read after an async snip start.
+	const shownViewIdRef = useRef(viewId);
+	useEffect(() => {
+		shownViewIdRef.current = viewId;
+		return () => {
+			shownViewIdRef.current = "";
+		};
+	}, [viewId]);
 	// An agent tab's localhost page is the host's: opened here it would be this
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
@@ -762,6 +770,13 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		}
 		try {
 			const started = await bridge.setRegionSelectMode({ viewId, enabled: true });
+			if (shownViewIdRef.current !== viewId) {
+				// The panel left this view (session switch, unmount) before main
+				// answered, so the leave cleanup never saw the snip. Take its
+				// overlay off here.
+				if (started) await bridge.setRegionSelectMode({ viewId, enabled: false }).catch(() => false);
+				return;
+			}
 			setRegionSelectViewId(started ? viewId : "");
 			if (!started) showGlobalToast(t("browser.selectAreaFailed"), undefined, "top-center");
 		} catch {
