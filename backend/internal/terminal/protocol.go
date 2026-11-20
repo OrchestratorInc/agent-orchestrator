@@ -104,7 +104,9 @@ type serverMsg struct {
 	Command json.RawMessage `json:"command,omitempty"`
 
 	// raw holds a data frame's PTY output until the writer encodes it into
-	// Data, so consecutive queued output for one terminal can be merged.
+	// Data, so consecutive queued output for one terminal can be merged. A
+	// producer must hand over a slice it will not reuse: outQueue takes
+	// ownership of these bytes instead of copying them.
 	raw []byte
 }
 
