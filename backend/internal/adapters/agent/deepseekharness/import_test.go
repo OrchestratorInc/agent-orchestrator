@@ -272,6 +272,11 @@ func TestPrivateImportRemapsOnlyHeaderAndReusesLaterTurns(t *testing.T) {
 	if err := p.PrepareRuntimeLaunch(ctx, ports.WorkspaceHookConfig{ImportConfigDir: ref.ConfigDir, NativeSessionID: ref.NativeSessionID, WorkspacePath: r.LaunchCWD, Env: map[string]string{"DSH_HOME": ref.ConfigDir}}); err != nil {
 		t.Fatal(err)
 	}
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+ if err := os.Symlink(r.LaunchCWD, alias); err != nil { t.Skipf("workspace symlink unavailable: %v", err) }
+ visited := 0
+ if err := VisitPrivateHistory(ctx, ref.ConfigDir, ref.NativeSessionID, alias, func(NativeHistoryEvent) error { visited++; return nil }); err != nil { t.Fatal(err) }
+ if visited != 5 { t.Fatalf("alias replay visited %d events", visited) }
 	if err := os.Remove(ref.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}

@@ -25,7 +25,7 @@ func nativeHistoryReplay(ctx context.Context, cfg acpdriver.LaunchConfig, id str
 		return nil, true, err
 	}
 	var out []acpsdk.SessionNotification
-	for node := h.first; node != nil; node = node.next {
+	for _, node := range h.history {
 		for _, update := range node.updates {
 			if err := ctx.Err(); err != nil {
 				return nil, true, err
@@ -70,6 +70,7 @@ type nativeReplayNode struct {
 
 type nativeReplay struct {
 	first, last *nativeReplayNode
+	history []*nativeReplayNode
 	nodes       map[int64]*nativeReplayNode
 	calls       map[string]nativeReplayCall
 }
@@ -95,6 +96,8 @@ func (h *nativeReplay) observe(e deepseekharness.NativeHistoryEvent) error {
 	}
 	node := &nativeReplayNode{seq: e.Seq, updates: updates}
 	if string(e.SurfaceOp) == `"append"` {
+		// Surface replacements compact model context, not the append-origin human transcript.
+		h.history = append(h.history, node)
 		node.prev = h.last
 		if h.last == nil {
 			h.first = node

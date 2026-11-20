@@ -66,3 +66,20 @@ func TestNativeReplayDoesNotReadOrdinaryHome(t *testing.T) {
 		t.Fatalf("ordinary resume acquired invented history: %v, %v", available, err)
 	}
 }
+
+func TestNativeReplayPreservesAppendHistoryAfterCompaction(t *testing.T) {
+ h := nativeReplay{nodes: make(map[int64]*nativeReplayNode), calls: make(map[string]nativeReplayCall)}
+ for _, e := range []deepseekharness.NativeHistoryEvent{
+  replayEvent(0, "user/message", `{"id":"u0","source":{"kind":"user"},"content":[{"type":"text","text":"remember source marker"}]}`, `"append"`),
+  replayEvent(1, "assistant/message", `{"message":{"id":"a1","content":[{"type":"text","text":"source marker remembered"}]}}`, `"append"`),
+  replayEvent(2, "user/message", `{"id":"checkpoint","source":{"kind":"runtime-context"},"content":[{"type":"text","text":"compacted model context"}]}`, `{"op":"replace","startSeq":0,"endSeq":1}`),
+  replayEvent(3, "user/message", `{"id":"u3","source":{"kind":"user"},"content":[{"type":"text","text":"continued private turn"}]}`, `"append"`),
+ } {
+  if err := h.observe(e); err != nil { t.Fatal(err) }
+ }
+ if len(h.history) != 3 { t.Fatalf("human transcript lost events: %d", len(h.history)) }
+ for i, id := range []string{"u0", "a1", "u3"} {
+  if len(h.history[i].updates) != 1 || h.history[i].updates[0]["messageId"] != id { t.Fatalf("history[%d] = %#v", i, h.history[i].updates) }
+ }
+ if h.nodes[0] != nil || h.nodes[1] != nil || h.first.seq != 2 { t.Fatal("model surface was not independently validated") }
+}

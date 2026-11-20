@@ -443,6 +443,9 @@ type NativeHistoryEvent struct {
 // VisitPrivateHistory streams the proof-bound prepared log without applying
 // source admission limits or retaining request/context and model stream blobs.
 func VisitPrivateHistory(ctx context.Context, root, id, cwd string, visit func(NativeHistoryEvent) error) error {
+	canonical, err := filepath.EvalSymlinks(cwd)
+	if err != nil { return err }
+	cwd = canonical
 	path, err := validatePrivateImport(ctx, root, id, cwd)
 	if err != nil {
 		return err
