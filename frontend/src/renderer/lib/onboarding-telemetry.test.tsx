@@ -27,6 +27,7 @@ import {
 	ensureOnboardingStepViewed,
 	finishOnboardingAction,
 	installJobOutcome,
+	leaveOnboardingActions,
 	onboardingActionAttempt,
 	onboardingInProgress,
 	onboardingProjectSource,
@@ -375,6 +376,43 @@ describe("onboarding action telemetry", () => {
 		expect(finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh", attempt: onboardingActionAttempt("gh_sign_in", "gh") })).toBe(true);
 		expect(lastProps("ao.onboarding.action_finished")).toMatchObject({ attempt: 2, outcome: "succeeded" });
 	});
+
+	it("ends attempts still running as left when onboarding ends without the tour", () => {
+		beginOnboardingRun("first_run", "tools");
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		startOnboardingAction("cloud_sign_in", { step: "sign_in" });
+		completeOnboardingRun("skipped_setup");
+		const finished = capture.mock.calls.filter((call) => call[0] === "ao.onboarding.action_finished").map((call) => call[1]);
+		expect(finished).toEqual([
+			expect.objectContaining({ action: "gh_install", target: "gh", step: "tools", attempt: 1, outcome: "left" }),
+			expect.objectContaining({ action: "cloud_sign_in", step: "sign_in", attempt: 1, outcome: "left" }),
+		]);
+		// Its own end, arriving later, has nothing left to report.
+		expect(finishOnboardingAction("gh_install", "succeeded", { target: "gh" })).toBe(false);
+	});
+
+	it("keeps attempts running into the tour, and ends them as left when the tour ends", () => {
+		const close = beginOnboardingRun("first_run", "tools");
+		startOnboardingAction("agent_install", { target: "codex", step: "tools" });
+		completeOnboardingRun("finished");
+		close();
+		expect(events()).not.toContain("ao.onboarding.action_finished");
+		leaveOnboardingActions();
+		leaveOnboardingActions();
+		expect(events().filter((event) => event === "ao.onboarding.action_finished")).toHaveLength(1);
+		expect(lastProps("ao.onboarding.action_finished")).toMatchObject({ action: "agent_install", target: "codex", outcome: "left" });
+	});
+
+	it("ends attempts as left as the window closes mid-onboarding, and not outside it", () => {
+		startOnboardingAction("agent_sign_in", { target: "codex", step: "tools" });
+		window.dispatchEvent(new Event("pagehide"));
+		expect(unload).not.toHaveBeenCalled();
+		setOnboardingTourStep("tour_project");
+		window.dispatchEvent(new Event("pagehide"));
+		expect(unload.mock.calls).toEqual([
+			["ao.onboarding.action_finished", expect.objectContaining({ action: "agent_sign_in", target: "codex", outcome: "left" })],
+		]);
+	});
 });
 
 describe("onboarding activation telemetry", () => {
@@ -569,6 +607,15 @@ describe("onboarding Sentry reports", () => {
 		startOnboardingAction("dependency_install", { target: "tmux", step: "dependencies" });
 		finishOnboardingAction("dependency_install", "failed", { target: "tmux", reason: "start_failed" });
 		expect(sentry.failure.mock.calls).toEqual([["dependency_install", "start_failed"]]);
+		expect(capture).not.toHaveBeenCalled();
+	});
+
+	it("stops watching an attempt that was left, so its later failure is not an onboarding issue", () => {
+		setAnalyticsOptedOut(true);
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		leaveOnboardingActions();
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed" });
+		expect(sentry.failure).not.toHaveBeenCalled();
 		expect(capture).not.toHaveBeenCalled();
 	});
 

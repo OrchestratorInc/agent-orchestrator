@@ -11,6 +11,7 @@ import type { OnboardingStep } from "../../lib/onboarding-steps";
 import {
 	endOnboardingReplay,
 	ensureOnboardingStepViewed,
+	leaveOnboardingActions,
 	onboardingProjectSource,
 	reportOnboardingStep,
 	setOnboardingTourStep,
@@ -374,6 +375,8 @@ export function GuidedTour() {
 		const current = state?.step;
 		if (current === "done") reportOnboardingStep("finish", "completed");
 		else if (current) skipOnboardingStep(FUNNEL_STEP[current], "dismissed");
+		// An install or sign-in from the onboarding pages still running ends here.
+		leaveOnboardingActions();
 		setState(null);
 		endOnboardingReplay();
 	};

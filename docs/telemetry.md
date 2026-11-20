@@ -859,7 +859,7 @@ and `project_source` on its `step_completed` says which it was.
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
-| `ao.onboarding.action_finished` | That attempt ends, once | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
 
 `attempt` counts from 1 for each action and target in a launch, so a value
 above 1 is a retry. The existing `ao.projects.clone_failed`,
@@ -936,8 +936,12 @@ stop when error sharing is off. They follow the sampling and daily caps above.
   registry, such as `gh`, `tmux` or `claude-code`.
 - `outcome` on `action_finished` is `succeeded`, `failed`, `cancelled` (the
   person closed the login or moved on), `timed_out` (a login left open 15
-  minutes) or `handed_off` (the agent signs in outside AO, so its guide
-  opened).
+  minutes), `handed_off` (the agent signs in outside AO, so its guide
+  opened) or `left` (onboarding ended, or the window closed, while it was
+  still running: Skip setup, onboarding closed for the person, the tour ending
+  or closing, or quitting mid-onboarding). An install or sign-in from the
+  onboarding pages keeps running into the tour, so its `left` comes when the
+  tour ends and its `duration_ms` includes the tour.
 - `reason` on `action_finished` is `start_failed`, `install_failed`,
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.
