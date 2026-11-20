@@ -18,6 +18,8 @@ const TEST_TOOLS = new Set(["vitest", "jest", "pytest", "playwright", "mocha"]);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // A redirection: "> f", ">> f", "2> f", "&> f", "< f", or one that names its target inline ("2>&1", ">/tmp/x").
 const REDIRECT = /^(\d*|&)(>>?|<)(&?\d+|\S+)?$/;
+// Windows sets the environment in a step of its own: cmd's "set PORT=3000", PowerShell's "$env:PORT=3000".
+const WINDOWS_ENV = /^(?:set\s+"?|\$env:)([A-Za-z_][A-Za-z0-9_]*)=["']?([^"'\s]*)/i;
 
 function tokenize(segment: string): string[] {
 	return segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
@@ -28,12 +30,19 @@ const unquote = (token: string) => token.replace(/^(["'])(.*)\1$/, "$2");
 /** The tokens that name the program and its arguments, plus anything the environment says about a port. */
 function commandOf(description: string): { tokens: string[]; port?: string; rewritten: boolean } | null {
 	// Of a chain, the last real step runs the task; of a pipe, the first stage does.
-	const steps = description.split(/&&|\|\||;/).map((step) => step.split(/(?<![|>&])\|(?!\|)/)[0]);
+	// A lone "&" with more after it also ends a step: cmd runs "a & b" as two commands.
+	const steps = description.split(/&&|\|\||;|\s&\s+(?=\S)/).map((step) => step.split(/(?<![|>&])\|(?!\|)/)[0]);
 	let port: string | undefined;
 	// Splitting a chain alone proves nothing: plain prose may hold a semicolon.
 	let rewritten = false;
 	let tokens: string[] = [];
 	for (const step of steps) {
+		const windowsEnv = WINDOWS_ENV.exec(step.trim());
+		if (windowsEnv) {
+			if (windowsEnv[1].toUpperCase() === "PORT" && /^\d+$/.test(windowsEnv[2])) port = windowsEnv[2];
+			rewritten = true;
+			continue;
+		}
 		const words = tokenize(step.trim());
 		const kept: string[] = [];
 		for (let i = 0; i < words.length; i++) {

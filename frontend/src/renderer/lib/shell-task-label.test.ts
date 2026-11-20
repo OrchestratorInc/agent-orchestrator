@@ -15,6 +15,11 @@ describe("shellTaskLabel", () => {
 		["npm run build", { kind: "build" }],
 		["pnpm lint:fix", { kind: "lint" }],
 		["npm ci", { kind: "install" }],
+		// Windows: cmd and PowerShell set the port in a step of their own.
+		["set PORT=3000&& npm run dev", { kind: "devServer", port: "3000" }],
+		['set "PORT=3000" && npm run dev', { kind: "devServer", port: "3000" }],
+		["$env:PORT=3000; npm run dev", { kind: "devServer", port: "3000" }],
+		["set PORT=%PORT%&& npm run dev", { kind: "devServer" }],
 	])("reads %s", (command, label) => {
 		expect(shellTaskLabel(command)).toEqual(label);
 	});
@@ -22,6 +27,11 @@ describe("shellTaskLabel", () => {
 	it("keeps an unknown program's words but drops the environment and log plumbing", () => {
 		expect(shellTaskLabel("DEBUG=1 nohup ./scripts/watch-assets.sh > /tmp/assets.log 2>&1 &"))
 			.toEqual({ kind: "command", text: "./scripts/watch-assets.sh" });
+	});
+
+	it("splits two cmd commands joined by a lone &", () => {
+		expect(shellTaskLabel("ping -n 600 127.0.0.1 > NUL & echo started"))
+			.toEqual({ kind: "command", text: "echo started" });
 	});
 
 	it.each(["Start the renderer dev server", "Watch the composer tests", "sleep 300", "Build and test; then report"])(
