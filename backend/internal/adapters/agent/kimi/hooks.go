@@ -36,6 +36,9 @@ const (
 // capture Kimi's native session id for true resume without mutating the user's
 // global Kimi profile.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if cfg.ImportConfigDir != "" && cfg.NativeSessionID != "" {
+		return errors.New("kimi: imported conversations require Chat mode")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -43,6 +46,13 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return errors.New("kimi.GetAgentHooks: WorkspacePath is required")
 	}
 
+	if IsImportedHome(cfg.Env[kimiCodeHomeEnv], cfg.DataDir) {
+		prompt, err := kimiSystemPromptText(cfg.SystemPrompt, cfg.SystemPromptFile)
+		if err != nil {
+			return err
+		}
+		return PrepareACPInstructions(ctx, cfg.WorkspacePath, prompt)
+	}
 	if err := installKimiConfigHooks(cfg); err != nil {
 		return fmt.Errorf("kimi.GetAgentHooks: %w", err)
 	}

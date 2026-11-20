@@ -41,6 +41,16 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	if err := kimi.PrepareACPInstructions(ctx, cfg.WorkspacePath, cfg.SystemPrompt); err != nil {
 		return nil, nil, err
 	}
+	// Imported bindings already hold a private native snapshot. Never run the
+	// ordinary managed-home credential seeding for this path.
+	if kimi.IsImportedHome(cfg.Env["KIMI_CODE_HOME"], cfg.DataDir) {
+		plugin := kimi.New()
+		if err := plugin.CheckImportVersion(ctx); err != nil {
+			return nil, nil, err
+		}
+		overrides, _, err := kimi.ImportedRuntimeEnv(ctx, cfg.Env["KIMI_CODE_HOME"], cfg.DataDir, cfg.ProviderConversationID, cfg.WorkspacePath, cfg.Model, cfg.Env)
+		return []string{"acp"}, overrides, err
+	}
 	// The chat runs in AO's Kimi home, which signs in with the user's own login.
 	if err := kimi.ShareCredentials(cfg.DataDir); err != nil {
 		return nil, nil, err

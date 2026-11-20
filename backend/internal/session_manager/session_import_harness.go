@@ -22,6 +22,7 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 	domain.HarnessPrimeAgent: {configEnvKey: "PRIME_AGENT_SESSION_DIR"},
 
 	domain.HarnessDroid:      {configEnvKey: "FACTORY_HOME_OVERRIDE", configValue: filepath.Dir},
+	domain.HarnessKimi:       {configEnvKey: "KIMI_CODE_HOME"},
 	domain.HarnessClaudeCode: {configEnvKey: "CLAUDE_CONFIG_DIR"},
 	domain.HarnessCline:      {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
 	domain.HarnessCodewhale:  {configEnvKey: "CODEWHALE_HOME", ownedElsewhere: codewhaleImportOwnedElsewhere, adoptedOwnedElsewhere: codewhaleAdoptedImportOwnedElsewhere},
