@@ -758,6 +758,7 @@ function InlineSessionReference({ id, node, fallback }: { id: string; node?: Has
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
 	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
+	const safeOrigin = useContext(SafeOriginContent);
 	const insideLink = useContext(InsideMarkdownLink);
 	const insideArtifactLink = useContext(InsideArtifactLink);
 	const text = typeof children === "string" ? children : undefined;
@@ -774,7 +775,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	);
 	if (insideLink) return code;
 	if (!file) {
-		if (openSession && text && /^[^\s/\\]+-\d+$/u.test(text)) return <InlineSessionReference id={text} node={node} fallback={code} />;
+		if (!safeOrigin && openSession && text && /^[^\s/\\]+-\d+$/u.test(text)) return <InlineSessionReference id={text} node={node} fallback={code} />;
 		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;

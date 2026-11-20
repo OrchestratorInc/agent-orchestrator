@@ -504,6 +504,16 @@ describe("ChatMarkdown", () => {
 		expect(open).toHaveBeenCalledWith("ao://sessions/project/worker-94");
 	});
 
+	it("requires an explicit session link in safe-origin content", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown safeOrigin text="See `worker-94` or [open worker](ao://sessions/project/worker-94)." />
+		</ChatLinkProvider>);
+		expect(screen.getByText("worker-94").tagName).toBe("CODE");
+		expect(screen.getAllByRole("link")).toHaveLength(1);
+		expect(screen.getByRole("link", { name: "open worker" })).toHaveAttribute("href", "ao://sessions/project/worker-94");
+	});
+
 	it("keeps an inline session ID as code when two projects claim it", () => {
 		linkSource.workspaces = ["first", "second"].map((id) => ({ id, sessions: [{ id: "worker-1", title: id }] }));
 		renderWithSessionLinkHandler("`worker-1`", vi.fn());
