@@ -4051,6 +4051,7 @@
 	"coder.templateOptions.settingsHint": "As alterações valem para novas sessões.",
 	"settings.models.selectModel": "Selecionar modelo",
 	"settings.models.useAgentModel": "Usar modelo do agente",
+	"settings.models.pinnedNotListed": "Definido para este projeto · o {{agent}} não o lista para esta conta",
 	"settings.models.useAgentMode": "Usar modo do agente",
 	"settings.models.agentDefaultMode": "Padrão do agente",
 	"settings.models.clearEffort": "Limpar esforço",

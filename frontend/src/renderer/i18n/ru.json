@@ -4139,6 +4139,7 @@
 	"coder.templateOptions.settingsHint": "Изменения применяются к новым сессиям.",
 	"settings.models.selectModel": "Выбрать модель",
 	"settings.models.useAgentModel": "Использовать модель агента",
+	"settings.models.pinnedNotListed": "Задано для этого проекта · {{agent}} не показывает её для этой учётной записи",
 	"settings.models.useAgentMode": "Использовать режим агента",
 	"settings.models.agentDefaultMode": "По умолчанию агента",
 	"settings.models.clearEffort": "Сбросить усилие",
