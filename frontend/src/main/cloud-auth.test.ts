@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -1049,6 +1049,16 @@ describe("native WorkOS authentication", () => {
 
       await expect(readAuthStore(dataDir)).resolves.toMatchObject({ session: null });
       expect(cleared).toHaveBeenCalledExactlyOnceWith({ reason: "unusable_file" });
+    });
+
+    it("records the cleared sign-in even when the legacy session file cannot be removed", async () => {
+      await signInWithExpiredToken();
+      // A directory in its place makes rm without recursive reject.
+      await mkdir(path.join(dataDir, "cloud-session.json", "child"), { recursive: true });
+
+      await expect(signOutCloud(dataDir)).rejects.toThrow();
+      await expect(readFile(path.join(dataDir, "cloud-auth.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(cleared).toHaveBeenCalledExactlyOnceWith({ reason: "signed_out" });
     });
 
     it("still clears the sign-in when recording the reason fails", async () => {

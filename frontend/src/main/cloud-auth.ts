@@ -519,16 +519,16 @@ export function writeAuthStore(
   });
 }
 
-export function removeAuthStore(dataDir: string): Promise<void> {
+export function removeAuthStore(dataDir: string, cleared?: CloudSignInCleared): Promise<void> {
   return serialize(storeOps, dataDir, async () => {
     memoryStores.delete(dataDir);
     unreadFiles.delete(dataDir);
     undecryptable.delete(dataDir);
     fileSessions.delete(dataDir);
-    await Promise.all([
-      rm(storePath(dataDir), { force: true }),
-      rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
-    ]);
+    await rm(storePath(dataDir), { force: true });
+    // Recorded once the sign-in file is gone, even if the legacy cleanup fails.
+    if (cleared) recordSignInCleared(cleared);
+    await rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true });
   });
 }
 
@@ -757,8 +757,7 @@ async function refreshCloudSession(
       if (
         currentStore.session?.refreshToken === storedSession.refreshToken
       ) {
-        await removeAuthStore(dataDir);
-        recordSignInCleared({ reason: "refresh_rejected", detail: rejection });
+        await removeAuthStore(dataDir, { reason: "refresh_rejected", detail: rejection });
         return true;
       }
       return false;
@@ -971,8 +970,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
 
 export async function signOutCloud(dataDir: string): Promise<void> {
   invalidateAuthOperations(dataDir);
-  await withAuthMutation(dataDir, () => removeAuthStore(dataDir));
-  recordSignInCleared({ reason: "signed_out" });
+  await withAuthMutation(dataDir, () => removeAuthStore(dataDir, { reason: "signed_out" }));
 }
 
 function signInFailureDetail(error: unknown): string {
