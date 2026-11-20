@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -16,6 +17,16 @@ const (
 	// ChatHistoryDeferred is used when later projection is intentionally deferred.
 	ChatHistoryDeferred
 )
+
+// ChatNativeHistorySettleLimit is how long a Chat start waits for the
+// provider's native history to settle once its first load has returned. It
+// starts only after the provider is running and that load is done, so a
+// caller that bounds the whole start must leave room for it on top of the
+// launch: otherwise a slow launch spends the wait and cancels a reload that
+// would have settled (#7697). A full ACP session/load replay on a slow machine
+// (Windows with antivirus scanning the agent process, cold caches) can take
+// minutes, so the wait is generous.
+const ChatNativeHistorySettleLimit = 120 * time.Second
 
 // ChatControllerStart is the resolved launch contract shared by the coordinator and Chat service.
 type ChatControllerStart struct {
