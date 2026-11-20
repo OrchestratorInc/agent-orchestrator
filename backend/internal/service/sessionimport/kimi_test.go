@@ -331,7 +331,11 @@ func TestKimiSelectedSnapshotFingerprintChangesWithStateAndWire(t *testing.T) {
 	if first.fingerprint == "" {
 		t.Fatal("selection has no content fingerprint")
 	}
-	writeFile(t, path, kimiWire+`{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"new reply"}},"time":1700000006000}`+"\n")
+	wire, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, string(wire)+`{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"new reply"}},"time":1700000006000}`+"\n")
 	second, err := readKimiTranscript(t.Context(), root, path)
 	if err != nil {
 		t.Fatal(err)
