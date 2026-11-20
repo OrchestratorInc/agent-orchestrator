@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	acpsdk "github.com/coder/acp-go-sdk"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -225,5 +228,44 @@ func TestPersistentACPRequiresDurableSessionIdentity(t *testing.T) {
 		if _, err := driver.Start(context.Background(), cfg); err == nil {
 			t.Fatal("invalid session identity accepted")
 		}
+	}
+}
+
+func TestPersistentACPInitializeDisconnectReportsProviderExit(t *testing.T) {
+	cfg, start := restartFixture(t, map[string]string{"AO_TEST_PERSISTENT_ACP_CRASH_ON_INITIALIZE": "1"})
+	t.Cleanup(func() { _ = persistenthost.Shutdown(context.Background(), start.DataDir, string(start.SessionID)) })
+
+	_, err := New(cfg, nil).Start(context.Background(), start)
+	if !errors.Is(err, ports.ErrChatDriverIncompatible) {
+		t.Fatalf("Start error = %v, want ErrChatDriverIncompatible", err)
+	}
+	for _, want := range []string{
+		"ACP initialize",
+		"ACP agent process exited (exit status 3)",
+		"stderr: Error: Cannot find module '@anthropic-ai/claude-agent-sdk'",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Start error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+func TestProviderExitDetailCoversWriteFailureBeforeEOF(t *testing.T) {
+	// The SDK reader has not seen EOF yet, so Done is still open.
+	stdout, stdoutWriter := io.Pipe()
+	t.Cleanup(func() { _ = stdoutWriter.Close() })
+	conv := &conversation{conn: acpsdk.NewClientSideConnection(nil, io.Discard, stdout)}
+	proc := &process{providerExit: func(context.Context) (persistenthost.ProviderExit, bool) {
+		return persistenthost.ProviderExit{State: "exit status 3", StderrTail: "cannot start\n"}, true
+	}}
+
+	writeFailed := acpsdk.NewInternalError(map[string]any{"error": "io: read/write on closed pipe"})
+	if got, want := providerExitDetail(context.Background(), conv, proc, writeFailed),
+		"; ACP agent process exited (exit status 3); stderr: cannot start"; got != want {
+		t.Fatalf("detail after write failure = %q, want %q", got, want)
+	}
+	answered := acpsdk.NewInternalError(map[string]any{"error": "provider refused"})
+	if got := providerExitDetail(context.Background(), conv, proc, answered); got != "" {
+		t.Fatalf("detail for an answered request = %q, want none", got)
 	}
 }
