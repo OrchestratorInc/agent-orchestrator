@@ -19,6 +19,7 @@ type importedHarnessHooks struct {
 }
 
 var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
+	domain.HarnessAgy:        {configEnvKey: "GEMINI_HOME"},
 	domain.HarnessClaudeCode: {configEnvKey: "CLAUDE_CONFIG_DIR"},
 	domain.HarnessCline:      {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
 	domain.HarnessCodex:      {configEnvKey: "CODEX_HOME"},
@@ -36,4 +37,4 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok"}
+var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "agy"}
