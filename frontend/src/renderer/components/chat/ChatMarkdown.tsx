@@ -741,6 +741,20 @@ export function ArtifactPathCode({ text, children, unlisted = children }: { text
 	}, [children, href, path, unlisted]);
 }
 
+function InlineSessionReference({ id, node, fallback }: { id: string; node?: HastElement; fallback: ReactNode }) {
+	const workspaces = useChatLinkWorkspaces();
+	let target: { href: string; title: string } | undefined;
+	for (const workspace of workspaces) {
+		const session = workspace.sessions.find((entry) => entry.id === id);
+		if (!session) continue;
+		if (target) return <>{fallback}</>;
+		target = { href: `ao://sessions/${encodeURIComponent(workspace.id)}/${encodeURIComponent(id)}`, title: session.title || id };
+	}
+	return target
+		? <SessionLabelLink href={target.href}><span {...excerptElementProps(node)} data-excerpt-kind="inline-code">{target.title}</span></SessionLabelLink>
+		: <>{fallback}</>;
+}
+
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
 	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
@@ -760,6 +774,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	);
 	if (insideLink) return code;
 	if (!file) {
+		if (openSession && text && /^[^\s/\\]+-\d+$/u.test(text)) return <InlineSessionReference id={text} node={node} fallback={code} />;
 		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;

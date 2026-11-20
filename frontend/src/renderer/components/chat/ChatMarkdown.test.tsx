@@ -21,7 +21,7 @@ vi.mock("../SessionLinkPreviewCard", () => ({
 	},
 }));
 
-const linkSource = vi.hoisted(() => ({ reads: 0, workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
+const linkSource = vi.hoisted(() => ({ reads: 0, workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; title?: string; artifactFiles?: Array<{ path: string }> }> }> }));
 // Like the real source, this reads through the query client, so a render
 // without one fails here as it would in the app.
 vi.mock("../../lib/use-session-link-navigation", async () => {
@@ -489,6 +489,26 @@ describe("ChatMarkdown", () => {
 		expect(link).toHaveAttribute("href", "ao://sessions/project/session");
 		await userEvent.setup().click(link);
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it("shows the worker name and hover card for an inline session ID", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		const open = vi.fn();
+		renderWithSessionLinkHandler("I've asked `worker-94` to start. `worker-999` is unknown.", open);
+		const link = screen.getByRole("link", { name: "Trace session sharing" });
+		expect(link).toHaveAttribute("href", "ao://sessions/project/worker-94");
+		expect(screen.getByText("worker-999").tagName).toBe("CODE");
+		fireEvent.pointerOver(link, { pointerType: "mouse" });
+		await screen.findByTestId("session-link-preview");
+		await userEvent.click(link);
+		expect(open).toHaveBeenCalledWith("ao://sessions/project/worker-94");
+	});
+
+	it("keeps an inline session ID as code when two projects claim it", () => {
+		linkSource.workspaces = ["first", "second"].map((id) => ({ id, sessions: [{ id: "worker-1", title: id }] }));
+		renderWithSessionLinkHandler("`worker-1`", vi.fn());
+		expect(screen.queryByRole("link")).toBeNull();
+		expect(screen.getByText("worker-1").tagName).toBe("CODE");
 	});
 
 	it("does not auto-activate a session link while streaming", () => {
