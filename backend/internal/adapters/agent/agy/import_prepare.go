@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -215,8 +214,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 }
 
 func remapImportDB(ctx context.Context, path, cwd string) error {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
-	db, err := sql.Open("sqlite", u.String()+"?mode=rw")
+	db, err := sql.Open("sqlite", importFileURI(path)+"?mode=rw")
 	if err != nil {
 		return err
 	}

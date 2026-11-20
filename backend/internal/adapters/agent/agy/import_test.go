@@ -49,7 +49,7 @@ func importFixture(t *testing.T) (string, string, string) {
 	if _, err := db.Exec("INSERT INTO trajectory_meta VALUES('trajectory',?,4,17)", importTestID); err != nil {
 		t.Fatal(err)
 	}
-	uri := importWorkspaceURI(cwd)
+	uri := importFileURI(cwd)
 	meta := append(importField(1, importField(1, []byte(uri))), importField(7, []byte(uri))...)
 	if _, err := db.Exec("INSERT INTO trajectory_metadata_blob VALUES('main',?)", meta); err != nil {
 		t.Fatal(err)
@@ -258,10 +258,19 @@ func TestPrivateImportReopenReadsCommittedWAL(t *testing.T) {
 	}
 }
 
-func TestPreparedImportEscapesSQLiteURI(t *testing.T) {
-	if filepath.Separator == '\\' {
-		t.Skip("question marks are not valid Windows path components")
+func TestImportFileURI(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"C:/ao/history.db", "file:///C:/ao/history.db"},
+		{filepath.FromSlash("C:/ao/history.db"), "file:///C:/ao/history.db"},
+		{"/tmp/ao #space/history.db", "file:///tmp/ao%20%23space/history.db"},
+	} {
+		if got := importFileURI(tc.path); got != tc.want {
+			t.Errorf("importFileURI(%q) = %q, want %q", tc.path, got, tc.want)
+		}
 	}
+}
+
+func TestPreparedImportEscapesSQLiteURI(t *testing.T) {
 	ctx := context.Background()
 	root, path, cwd := importFixture(t)
 	fingerprint, err := ImportFingerprint(ctx, root, path)
@@ -270,7 +279,11 @@ func TestPreparedImportEscapesSQLiteURI(t *testing.T) {
 	}
 	p := New()
 	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
-	ref, err := p.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: filepath.Join(t.TempDir(), "ao?work# space"), Chat: true, SourceFingerprint: fingerprint})
+	dirName := "ao?work# space"
+	if filepath.Separator == '\\' {
+		dirName = "ao# space"
+	}
+	ref, err := p.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: filepath.Join(t.TempDir(), dirName), Chat: true, SourceFingerprint: fingerprint})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -165,8 +165,7 @@ func readImportArchive(ctx context.Context, root, path string, immutable bool) (
 		return a, err
 	}
 	a.ID = strings.TrimSuffix(filepath.Base(rel), ".db")
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(filepath.Join(root, rel))}
-	dsn := u.String() + "?mode=ro&_pragma=busy_timeout(2000)"
+	dsn := importFileURI(filepath.Join(root, rel)) + "?mode=ro&_pragma=busy_timeout(2000)"
 	if immutable {
 		provider, err := os.OpenRoot(root)
 		if err != nil {
@@ -377,7 +376,7 @@ func importMetadataCWD(data []byte) (string, error) {
 	return filepath.Clean(cwd), nil
 }
 
-func importWorkspaceURI(cwd string) string {
+func importFileURI(cwd string) string {
 	path := filepath.ToSlash(cwd)
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
@@ -483,7 +482,7 @@ func rewriteImportWorkspace(data []byte, cwd string) ([]byte, error) {
 		return nil, err
 	}
 	var out []byte
-	uri := []byte(importWorkspaceURI(cwd))
+	uri := []byte(importFileURI(cwd))
 	for _, f := range fields {
 		if f.number == 7 {
 			out = append(out, protowire.AppendBytes(protowire.AppendTag(nil, 7, protowire.BytesType), uri)...)
