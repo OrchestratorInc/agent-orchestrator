@@ -39,6 +39,7 @@ import { startRenderHeightStore } from "./renderHeightStore";
 import { FRAME_PAGE_LIMITS } from "../artifactPageInliner";
 import { useInlinedArtifactPage } from "../useInlinedArtifactPage";
 import { daemonArtifactsBackend } from "../artifactsBackend";
+import { ARTIFACT_MEDIA_PLAYBACK } from "../artifactMediaPlayback";
 
 startRenderHeightStore();
 
@@ -104,6 +105,7 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 	if (!source || (!html && !uri)) return null;
 	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
 		<WebView
+			{...ARTIFACT_MEDIA_PLAYBACK}
 			ref={web}
 			source={source}
 			injectedJavaScriptBeforeContentLoaded={fullscreen ? VIEWER_STYLE_SCRIPT : undefined}

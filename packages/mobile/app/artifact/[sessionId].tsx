@@ -44,6 +44,7 @@ import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 import { ViewModeControl, type ViewMode } from "../../lib/view-mode-control";
+import { ARTIFACT_MEDIA_PLAYBACK } from "../../lib/artifactMediaPlayback";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
 // would stall the JS thread.
@@ -662,6 +663,7 @@ function ArtifactWeb({ backend, file, version, page }: {
 	return (
 		<View style={styles.screen}>
 			<WebView
+				{...ARTIFACT_MEDIA_PLAYBACK}
 				// A new version of the file reloads the page, and so does Retry.
 				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}`}
 				ref={web}

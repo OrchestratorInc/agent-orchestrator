@@ -13,6 +13,7 @@ import type { Theme } from "./theme";
 import { useThemedStyles } from "./ThemeProvider";
 import { space } from "./tokens";
 import { useInlinedArtifactPage } from "./useInlinedArtifactPage";
+import { ARTIFACT_MEDIA_PLAYBACK } from "./artifactMediaPlayback";
 
 // A markdown card lays the document out at twice its width and draws it at half.
 const MARKDOWN_SCALE = 0.5;
@@ -81,6 +82,7 @@ function PageThumbnail({ backend, sessionId, artifact, visible, width, height, o
 	if (!visible || !html) return null;
 	return (
 		<WebView
+			{...ARTIFACT_MEDIA_PLAYBACK}
 			ref={web}
 			source={{ html }}
 			style={[styles.page, paper && styles.paper, frame, !loaded && styles.hidden]}
