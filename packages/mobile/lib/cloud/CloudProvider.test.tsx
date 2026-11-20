@@ -184,6 +184,24 @@ describe("CloudProvider", () => {
 		expect(reads()).toBe(before + 4);
 	});
 
+	it("tries the project read again on a later poll when it failed", async () => {
+		await mount();
+		const reads = () => fixtures.client.listProjects.mock.calls.length;
+		const before = reads();
+		fixtures.client.listSessions.mockImplementation(async () => page([{ id: "s1", projectId: "a-agent" }]));
+		fixtures.client.listProjects.mockImplementation(async () => { throw new Error("offline"); });
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 2);
+
+		// Back online: the next poll reads the projects again, and finds the agent.
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		fixtures.client.listProjects.mockImplementation(async (orgId: string, list: { standaloneAgents?: string } = {}) =>
+			list.standaloneAgents === "only" ? page([agent]) : page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 4);
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+	});
+
 	it("comes back to ready when retried from an error, though it kept its organization", async () => {
 		await mount();
 		fixtures.client.getMe.mockImplementation(async () => { throw new Error("offline"); });

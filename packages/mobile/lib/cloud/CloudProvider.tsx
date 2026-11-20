@@ -171,10 +171,12 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		setError(cloudErrorMessage(cause));
 	}, []);
 
-	const refreshProjects = useCallback(async () => {
+	// True once the projects were read (an out-of-date answer counts: a newer
+	// read answered); false when the read failed.
+	const readProjects = useCallback(async (): Promise<boolean> => {
 		const current = orgRef.current;
 		const own = generation.current;
-		if (!current) return;
+		if (!current) return false;
 		const startedAt = upsertClock.current;
 		const readId = ++projectReadClock.current;
 		try {
@@ -184,7 +186,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "exclude" })),
 				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "only" })),
 			]);
-			if (own !== generation.current || readId < appliedProjectRead.current) return;
+			if (own !== generation.current || readId < appliedProjectRead.current) return true;
 			appliedProjectRead.current = readId;
 			let next = mergeCloudProjectLists(listed, agents);
 			for (const [id, upsert] of upsertedProjects.current) {
@@ -195,11 +197,14 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			setProjects(next);
 			setProjectsLoaded(true);
 			setProjectsError(null);
+			return true;
 		} catch (cause) {
 			if (own === generation.current) setProjectsError(cloudErrorMessage(cause));
 			fail(cause, own);
+			return false;
 		}
 	}, [client, fail]);
+	const refreshProjects = useCallback(async () => { await readProjects(); }, [readProjects]);
 
 	const refreshSessions = useCallback(async () => {
 		const current = orgRef.current;
@@ -217,7 +222,10 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 				const unread = items.map((item) => item.projectId).filter((id) => id && !listed.has(id) && !projectsReadFor.current.has(id));
 				if (unread.length > 0) {
 					unread.forEach((id) => projectsReadFor.current.add(id));
-					void refreshProjects();
+					// A failed read is tried again on a later poll.
+					void readProjects().then((read) => {
+						if (!read) unread.forEach((id) => projectsReadFor.current.delete(id));
+					});
 				}
 			}
 			setSessionsLoaded(true);
@@ -227,7 +235,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (own === generation.current) setSessionsError(cloudErrorMessage(cause));
 			fail(cause, own);
 		}
-	}, [client, fail, refreshProjects]);
+	}, [client, fail, readProjects]);
 
 	const refreshConnections = useCallback(async () => {
 		const own = generation.current;
