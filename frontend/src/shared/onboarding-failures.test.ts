@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ONBOARDING_ACTIONS, ONBOARDING_SENTRY_REASONS, onboardingFailureCode, parseOnboardingFailureCode } from "./onboarding-failures";
+import { ONBOARDING_ACTIONS, ONBOARDING_SENTRY_REASONS, onboardingFailureCode, onboardingSentryTarget, parseOnboardingFailureCode } from "./onboarding-failures";
 
 it("round-trips every reported action and reason", () => {
 	for (const action of ONBOARDING_ACTIONS) {
@@ -24,4 +24,13 @@ it("rejects setup states, unknown names and anything else in the code", () => {
 	]) {
 		expect(parseOnboardingFailureCode(code)).toBeUndefined();
 	}
+});
+
+it("tags only listed targets, and anything else as other", () => {
+	expect(onboardingSentryTarget("claude-code")).toBe("claude-code");
+	expect(onboardingSentryTarget("gh")).toBe("gh");
+	expect(onboardingSentryTarget("/Users/someone/private")).toBe("other");
+	expect(onboardingSentryTarget("")).toBeUndefined();
+	expect(onboardingSentryTarget(undefined)).toBeUndefined();
+	expect(onboardingSentryTarget(42)).toBeUndefined();
 });

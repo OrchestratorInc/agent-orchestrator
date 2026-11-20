@@ -66,3 +66,23 @@ export function parseOnboardingFailureCode(code: unknown): { action: OnboardingA
 	if (extra !== undefined || !ACTIONS.has(action) || !ONBOARDING_SENTRY_REASONS.has(reason as OnboardingFailureReason)) return undefined;
 	return { action: action as OnboardingAction, reason: reason as OnboardingFailureReason };
 }
+
+/**
+ * What an onboarding action was for, as Sentry may tag it: the install targets
+ * (InstallDependencyDialog's, the GitHub CLI) and the registry agent ids the
+ * agent installs and sign-ins use. Any other id, such as an agent added to the
+ * registry later, is tagged `other`, so nothing outside this list reaches
+ * Sentry.
+ */
+export const ONBOARDING_SENTRY_TARGETS: ReadonlySet<string> = new Set([
+	"gh", "git", "tmux",
+	"claude", "claude-code", "codex", "cursor", "opencode", "opencode-v2", "copilot",
+	"droid", "kimi", "kimchi", "pi", "omp", "qwen", "deepseek-harness", "unreal-agent",
+	"continue", "devin", "muse", "kilocode", "mimo-code", "prime-agent", "auggie", "agy", "autohand", "vibe",
+]);
+
+/** The Sentry `target` tag for an onboarding failure: a listed target, `other` for any other text, or none. */
+export function onboardingSentryTarget(target: unknown): string | undefined {
+	if (typeof target !== "string" || target === "") return undefined;
+	return ONBOARDING_SENTRY_TARGETS.has(target) ? target : "other";
+}

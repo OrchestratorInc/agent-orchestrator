@@ -4,6 +4,7 @@ import { classifyError, type ClassifyInput, type Triage } from "../../shared/obs
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
 import { onboardingFailureCode, ONBOARDING_SENTRY_REASONS, type OnboardingAction, type OnboardingFailureReason } from "../../shared/onboarding-failures";
 import { aoBridge } from "./bridge";
+import { onboardingSentryFlow } from "./onboarding-flow";
 import type { RendererTelemetryCaptureInput } from "../../shared/telemetry-policy";
 
 function forwardCapture(input: RendererTelemetryCaptureInput): void {
@@ -16,21 +17,13 @@ export type CaptureMeta = ClassifyInput & { operation?: string; surface?: string
 let context: ObservabilityContext = {};
 export async function initSentry(next: ObservabilityContext): Promise<void> { context = next; }
 
-/** A flow every error is tagged with while it shows. Only onboarding today. */
-export type SentryFlow = "onboarding";
-let flowSource: () => SentryFlow | undefined = () => undefined;
-/** Names the flow showing now; read on every capture, so the tag follows the flow without bookkeeping. */
-export function setSentryFlowSource(source: () => SentryFlow | undefined): void { flowSource = source; }
-function currentFlow(): SentryFlow | undefined {
-	try { return flowSource(); } catch { return undefined; }
-}
 function domainOf(operation?: string): string | undefined {
 	if (!operation) return undefined;
 	const parts = (operation.split(" ").pop() ?? operation).split("/").filter(Boolean);
 	const index = parts.indexOf("v1"); return index >= 0 ? parts[index + 1] : parts[0];
 }
 function tagsFor(meta: CaptureMeta, triage: Triage): Record<string, string> {
-	return Object.fromEntries(Object.entries({ platform: context.platform ?? "desktop", surface: meta.surface, domain: meta.domain, operation: meta.operation, category: meta.category, code: meta.code, http_status: meta.httpStatus?.toString(), apierr_kind: meta.kind, severity: triage.severity, owner: triage.owner, flow: currentFlow() }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+	return Object.fromEntries(Object.entries({ platform: context.platform ?? "desktop", surface: meta.surface, domain: meta.domain, operation: meta.operation, category: meta.category, code: meta.code, http_status: meta.httpStatus?.toString(), apierr_kind: meta.kind, severity: triage.severity, owner: triage.owner, flow: onboardingSentryFlow() }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
 type RendererFrame = { function: string; filename?: string; lineno?: number; colno?: number; debug_id?: string };
@@ -94,13 +87,15 @@ export function captureApiErrorToSentry(operation: string, category: string, sta
 
 /**
  * An onboarding install or sign-in that broke, as its own Sentry issue titled
- * and grouped by action and reason. Setup states (a login not finished, no
- * installer for this platform) are not sent. Electron main's consent gate,
- * sampling and daily caps decide whether it leaves the machine.
+ * and grouped by action and reason, tagged with what it was for (`target`,
+ * which main checks against its list). Setup states (a login not finished, no
+ * installer for this platform) are not sent. Electron main's consent gate and
+ * daily caps decide whether it leaves the machine.
  */
-export function captureOnboardingFailureToSentry(action: OnboardingAction, reason: OnboardingFailureReason): void {
+export function captureOnboardingFailureToSentry(action: OnboardingAction, reason: OnboardingFailureReason, target?: string): void {
 	if (!ONBOARDING_SENTRY_REASONS.has(reason)) return;
 	const meta: CaptureMeta = { category: "onboarding", code: onboardingFailureCode(action, reason) };
 	const triage = classifyError(meta);
-	forwardCapture({ kind: "message", message: "Onboarding action failed", level: triage.level, tags: { ...tagsFor(meta, triage), flow: "onboarding" } });
+	const tags = { ...tagsFor(meta, triage), flow: "onboarding", ...(target ? { target } : {}) };
+	forwardCapture({ kind: "message", message: "Onboarding action failed", level: triage.level, tags });
 }

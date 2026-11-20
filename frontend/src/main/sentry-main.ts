@@ -10,7 +10,7 @@ import { DEFAULT_ELECTRON_SENTRY_DSN, isPublishedSentryBuild, SAFE_APP_ASSET, SA
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
-import { parseOnboardingFailureCode } from "../shared/onboarding-failures";
+import { onboardingSentryTarget, parseOnboardingFailureCode } from "../shared/onboarding-failures";
 
 export function electronMainSentryDsn(version: string, isDev: boolean): string {
 	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isPublishedSentryBuild(version, isDev) ? DEFAULT_ELECTRON_SENTRY_DSN : "");
@@ -19,9 +19,16 @@ export function electronMainSentryDsn(version: string, isDev: boolean): string {
 // One install in ten sends non-fatal errors: sha256(install_id) read as a
 // big-endian uint32, modulo 10, equals 0. The daemon uses the same hash
 // (sentryobs.InstallInErrorSample), so an install is in or out everywhere.
-// Main-process crashes and uncaught exceptions send from every install.
+// Main-process crashes and uncaught exceptions send from every install, and
+// so do failed onboarding installs and sign-ins: they are rare and block a
+// new user's first run, and the daily caps below still bound them.
 const ERROR_SAMPLE_RATE = "0.1";
 const ALWAYS_SENT_KINDS = new Set(["uncaught_exception", "process_exit"]);
+
+function alwaysSentEvent(event: Sentry.ErrorEvent): boolean {
+	if (ALWAYS_SENT_KINDS.has(String(event.tags?.kind))) return true;
+	return event.tags?.category === "onboarding" && parseOnboardingFailureCode(event.tags?.code) !== undefined;
+}
 
 export function installInErrorSample(installId: string): boolean {
 	return installId !== "" && createHash("sha256").update(installId).digest().readUInt32BE(0) % 10 === 0;
@@ -66,7 +73,7 @@ export function createErrorBudget(file: string): (fingerprint: readonly string[]
 
 function admitMainSentryEvent(event: Sentry.ErrorEvent | null, sampled: boolean, budget: (fingerprint: readonly string[]) => boolean): Sentry.ErrorEvent | null {
 	if (!event) return null;
-	const alwaysSent = ALWAYS_SENT_KINDS.has(String(event.tags?.kind));
+	const alwaysSent = alwaysSentEvent(event);
 	if (!alwaysSent && !sampled) return null;
 	if (!budget(event.fingerprint ?? [])) return null;
 	return { ...event, tags: { ...event.tags, sample_rate: alwaysSent ? "1" : ERROR_SAMPLE_RATE } };
@@ -85,6 +92,7 @@ const TAG_KEYS = new Set([
 	"platform",
 	"severity",
 	"surface",
+	"target",
 ]);
 const CAPTURE_KINDS = new Set<RendererTelemetryCapture["kind"]>(["exception", "message", "breadcrumb"]);
 const CAPTURE_LEVELS = new Set<NonNullable<RendererTelemetryCapture["level"]>>(["fatal", "error", "warning", "info"]);
@@ -194,6 +202,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	// A failed onboarding install or sign-in: titled and grouped by its action and reason alone.
 	const onboarding = renderer && kind === "message" ? parseOnboardingFailureCode(safeCategory === "onboarding" ? safeCode : undefined) : undefined;
 	if (onboarding) {
+		const target = onboardingSentryTarget(event.tags?.["ao.target"]);
 		return {
 			type: undefined,
 			platform: "javascript",
@@ -202,7 +211,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 			level: event.level === "warning" ? "warning" : "error",
 			message: `Onboarding ${onboarding.action} failed (${onboarding.reason})`,
 			fingerprint: ["electron", "onboarding", onboarding.action, onboarding.reason, "renderer"],
-			tags: { surface: "renderer", kind, category: "onboarding", code: safeCode, action: onboarding.action, reason: onboarding.reason, flow: "onboarding" },
+			tags: { surface: "renderer", kind, category: "onboarding", code: safeCode, action: onboarding.action, reason: onboarding.reason, ...(target ? { target } : {}), flow: "onboarding" },
 			user: { id: installId },
 			release: version,
 			environment,
@@ -353,6 +362,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 					"ao.code": safeRendererCode(category, code),
 					...(safe.tags?.operation && SAFE_OPERATIONS.has(safe.tags.operation) ? { "ao.operation": safe.tags.operation } : {}),
 					...(safe.tags?.flow && SAFE_FLOWS.has(safe.tags.flow) ? { "ao.flow": safe.tags.flow } : {}),
+					...(category === "onboarding" && onboardingSentryTarget(safe.tags?.target) ? { "ao.target": onboardingSentryTarget(safe.tags?.target) as string } : {}),
 				},
 			});
 		},

@@ -49,7 +49,7 @@ import {
 	ensureOnboardingStepViewed,
 	finishOnboardingAction,
 	onboardingActionAttempt,
-	onboardingActionPending,
+	onboardingActionWatched,
 	reportOnboardingBack,
 	reportOnboardingStep,
 	skipOnboardingStep,
@@ -1131,7 +1131,7 @@ function ToolsStep({ onNext, onSkip, login }: {
 	// Once a verify has settled, a sign-in still pending ends as signed in or not.
 	// `attempt`: the one the verify was started for, so a newer one is left alone.
 	const settleSignIn = (agentId: string, notReady: "cancelled" | "failed", attempt?: number) => {
-		if (!onboardingActionPending("agent_sign_in", agentId)) return;
+		if (!onboardingActionWatched("agent_sign_in", agentId)) return;
 		const ready = queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey)?.agents
 			.some((agent) => agent.id === agentId && agent.effectiveReadiness === "ready");
 		if (ready) finishOnboardingAction("agent_sign_in", "succeeded", { target: agentId, attempt });

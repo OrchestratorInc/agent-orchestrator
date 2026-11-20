@@ -9,15 +9,12 @@ const unload = vi.hoisted(() => vi.fn((event: string, props?: unknown) => {
 }));
 vi.mock("./telemetry", () => ({ captureRendererEvent: capture, captureRendererEventOnUnload: unload }));
 const sentry = vi.hoisted(() => ({
-	failure: vi.fn((_action: string, _reason: string) => undefined),
-	flowSource: { current: (() => undefined) as () => string | undefined },
+	failure: vi.fn((_action: string, _reason: string, _target?: string) => undefined),
 }));
-vi.mock("./sentry", () => ({
-	captureOnboardingFailureToSentry: sentry.failure,
-	setSentryFlowSource: (source: () => string | undefined) => { sentry.flowSource.current = source; },
-}));
+vi.mock("./sentry", () => ({ captureOnboardingFailureToSentry: sentry.failure }));
 
 import { setAnalyticsOptedOut } from "./analytics-opt-out";
+import { onboardingSentryFlow } from "./onboarding-flow";
 import { notifyComposerSent } from "./guided-tour-signals";
 import {
 	beginOnboardingRun,
@@ -563,11 +560,11 @@ describe("onboarding Sentry reports", () => {
 		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
 		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed" });
 		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed" });
-		expect(sentry.failure.mock.calls).toEqual([["gh_install", "install_failed"]]);
+		expect(sentry.failure.mock.calls).toEqual([["gh_install", "install_failed", "gh"]]);
 		// A retry that breaks again is its own report.
 		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
 		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "lost_contact" });
-		expect(sentry.failure.mock.calls.at(-1)).toEqual(["gh_install", "lost_contact"]);
+		expect(sentry.failure.mock.calls.at(-1)).toEqual(["gh_install", "lost_contact", "gh"]);
 	});
 
 	it("sends nothing for an attempt that succeeded, was cancelled or timed out", () => {
@@ -582,7 +579,7 @@ describe("onboarding Sentry reports", () => {
 		startOnboardingAction("agent_sign_in", { target: "codex", step: "tools" });
 		finishOnboardingAction("agent_sign_in", "failed", { target: "codex", reason: "not_signed_in" });
 		// The helper owns the reported-reasons list; the attempt is used up either way.
-		expect(sentry.failure.mock.calls).toEqual([["agent_sign_in", "not_signed_in"]]);
+		expect(sentry.failure.mock.calls).toEqual([["agent_sign_in", "not_signed_in", "codex"]]);
 		finishOnboardingAction("agent_sign_in", "failed", { target: "codex", reason: "start_failed" });
 		expect(sentry.failure).toHaveBeenCalledOnce();
 	});
@@ -599,14 +596,27 @@ describe("onboarding Sentry reports", () => {
 		startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
 		expect(finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in", attempt: stale })).toBe(false);
 		finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
-		expect(sentry.failure.mock.calls).toEqual([["gh_sign_in", "start_failed"]]);
+		expect(sentry.failure.mock.calls).toEqual([["gh_sign_in", "start_failed", "gh"]]);
+	});
+
+	it("leaves a newer attempt alone when a stale check answers, with analytics off too", () => {
+		setAnalyticsOptedOut(true);
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		const stale = onboardingActionAttempt("gh_install", "gh");
+		expect(stale).toBeDefined();
+		// Back, then a retry, while attempt 1's poll is still out.
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		expect(finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "interrupted", attempt: stale })).toBe(false);
+		expect(sentry.failure).not.toHaveBeenCalled();
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed", attempt: onboardingActionAttempt("gh_install", "gh") });
+		expect(sentry.failure.mock.calls).toEqual([["gh_install", "install_failed", "gh"]]);
 	});
 
 	it("still reports while analytics is opted out: Share error events governs Sentry", () => {
 		setAnalyticsOptedOut(true);
 		startOnboardingAction("dependency_install", { target: "tmux", step: "dependencies" });
 		finishOnboardingAction("dependency_install", "failed", { target: "tmux", reason: "start_failed" });
-		expect(sentry.failure.mock.calls).toEqual([["dependency_install", "start_failed"]]);
+		expect(sentry.failure.mock.calls).toEqual([["dependency_install", "start_failed", "tmux"]]);
 		expect(capture).not.toHaveBeenCalled();
 	});
 
@@ -619,19 +629,22 @@ describe("onboarding Sentry reports", () => {
 		expect(capture).not.toHaveBeenCalled();
 	});
 
-	it("tags Sentry events with the onboarding flow while the window or a tour step shows", async () => {
-		// The source is whichever module copy registered last (another test
-		// reloads the module), so load a fresh copy and drive that one.
-		vi.resetModules();
-		const telemetry = await import("./onboarding-telemetry");
-		expect(sentry.flowSource.current()).toBeUndefined();
-		const close = telemetry.beginOnboardingRun("first_run", "welcome");
-		expect(sentry.flowSource.current()).toBe("onboarding");
+	it("tags Sentry with the onboarding flow for the window, and for the tour that follows it this launch", () => {
+		const close = beginOnboardingRun("first_run", "welcome");
+		expect(onboardingSentryFlow()).toBe("onboarding");
+		completeOnboardingRun("finished");
 		close();
-		expect(sentry.flowSource.current()).toBeUndefined();
-		telemetry.setOnboardingTourStep("tour_project");
-		expect(sentry.flowSource.current()).toBe("onboarding");
-		telemetry.setOnboardingTourStep(undefined);
-		expect(sentry.flowSource.current()).toBeUndefined();
+		expect(onboardingSentryFlow()).toBeUndefined();
+		setOnboardingTourStep("tour_project");
+		expect(onboardingSentryFlow()).toBe("onboarding");
+		setOnboardingTourStep(undefined);
+		expect(onboardingSentryFlow()).toBeUndefined();
+	});
+
+	it("does not tag Sentry for a tour restored on a later launch", () => {
+		// The tour card stays until dismissed; this launch never showed the pages.
+		setOnboardingTourStep("tour_project");
+		expect(onboardingInProgress()).toBe(true);
+		expect(onboardingSentryFlow()).toBeUndefined();
 	});
 });

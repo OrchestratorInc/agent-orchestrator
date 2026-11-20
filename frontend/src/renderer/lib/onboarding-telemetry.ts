@@ -11,7 +11,10 @@ import type {
 } from "./onboarding-telemetry-schema";
 import { isAnalyticsOptedOut, onAnalyticsOptedOut } from "./analytics-opt-out";
 import { captureRendererEvent, captureRendererEventOnUnload } from "./telemetry";
-import { captureOnboardingFailureToSentry, setSentryFlowSource } from "./sentry";
+import { captureOnboardingFailureToSentry } from "./sentry";
+import { noteOnboardingPagesFinished, onboardingInProgress, onboardingWindowOpen, resetOnboardingFlowForTests, setOnboardingWindowOpen } from "./onboarding-flow";
+
+export { onboardingInProgress, setOnboardingTourStep } from "./onboarding-flow";
 
 // The desktop onboarding funnel (docs/telemetry.md, "Desktop onboarding
 // funnel"). Two layers:
@@ -34,9 +37,11 @@ import { captureOnboardingFailureToSentry, setSentryFlowSource } from "./sentry"
 //
 // Sentry follows the separate Share error events choice, enforced in Electron
 // main: an install or sign-in started during onboarding that then breaks is
-// one Sentry issue per attempt, and every renderer Sentry event while
-// onboarding shows is tagged flow:onboarding. Only the started action names
-// are held for that, in memory, whatever the analytics choice.
+// one Sentry issue per attempt, and every renderer Sentry event while the
+// first-run window shows, or the tour in the launch its pages finished, is
+// tagged flow:onboarding (onboarding-flow.ts). Only the started actions and
+// an id per attempt are held for that, in memory, whatever the analytics
+// choice.
 
 type StepPhase = "viewed" | "completed" | "abandoned";
 export type OnboardingPhase = StepPhase;
@@ -70,8 +75,6 @@ type RunRecord = {
 
 /** A Developer Mode replay: kept in memory, it never outlives its launch. */
 let replay: (RunRecord & { id: string; reported: Set<string> }) | null = null;
-/** Whether the onboarding window is showing a run right now. */
-let flowOpen = false;
 let abandonedThisLaunch = false;
 /** This launch's latest first-run record, for when storage can't be written. */
 let memoryRun: RunRecord | null = null;
@@ -180,7 +183,7 @@ function noteStepShown(step: OnboardingStep) {
 	const run = currentRun();
 	if (!run || run.completedAt) return;
 	run.lastSeenAt = Date.now();
-	if (flowOpen && RUN_PAGES.has(step)) run.step = step;
+	if (onboardingWindowOpen() && RUN_PAGES.has(step)) run.step = step;
 	saveRun(run);
 }
 
@@ -303,7 +306,7 @@ export function useOnboardingStep(
 // ── The run ─────────────────────────────────────────────────────────────────
 
 function abandonRun() {
-	if (!flowOpen || abandonedThisLaunch || !tracking()) return;
+	if (!onboardingWindowOpen() || abandonedThisLaunch || !tracking()) return;
 	const run = currentRun();
 	if (!run || run.completedAt) return;
 	abandonedThisLaunch = true;
@@ -319,11 +322,11 @@ function abandonRun() {
  */
 export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep): () => void {
 	const now = Date.now();
-	flowOpen = true;
+	setOnboardingWindowOpen(true);
 	if (!tracking()) {
 		// Not counted while opted out; a later launch that reopens it starts the run then.
 		return () => {
-			flowOpen = false;
+			setOnboardingWindowOpen(false);
 		};
 	}
 	if (kind === "replay") {
@@ -356,7 +359,7 @@ export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep
 	window.addEventListener("pagehide", abandonRun);
 	return () => {
 		window.removeEventListener("pagehide", abandonRun);
-		flowOpen = false;
+		setOnboardingWindowOpen(false);
 	};
 }
 
@@ -364,8 +367,9 @@ export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep
 export function completeOnboardingRun(outcome: OnboardingOutcome): void {
 	// Only a finished run goes on into the tour, which ends what is still running (GuidedTour).
 	if (outcome !== "finished") leaveOnboardingActions();
+	else noteOnboardingPagesFinished();
 	if (!tracking()) {
-		flowOpen = false;
+		setOnboardingWindowOpen(false);
 		return;
 	}
 	const run = currentRun();
@@ -373,7 +377,7 @@ export function completeOnboardingRun(outcome: OnboardingOutcome): void {
 	const now = Date.now();
 	run.completedAt = now;
 	saveRun(run);
-	flowOpen = false;
+	setOnboardingWindowOpen(false);
 	capture("ao.onboarding.completed", {
 		step: run.step,
 		outcome,
@@ -409,8 +413,13 @@ export function supersedeOnboardingRun(): void {
 
 const attempts = new Map<string, number>();
 const pending = new Map<string, { attempt: number; startedAt: number; step?: OnboardingStep }>();
-/** Actions started during onboarding and not yet ended, for Sentry; kept under either analytics choice. */
-const errorWatch = new Set<string>();
+/**
+ * Attempts started during onboarding and not yet ended, each with an id from
+ * this launch, kept in memory under either analytics choice: they decide what
+ * reaches Sentry, and which check still belongs to the attempt in progress.
+ */
+const errorWatch = new Map<string, number>();
+let watchIds = 0;
 
 function actionKey(action: OnboardingAction, target?: string) {
 	return `${action}:${target ?? ""}`;
@@ -422,7 +431,7 @@ export function startOnboardingAction(
 	options: { target?: string; step?: OnboardingStep; auto?: boolean } = {},
 ): void {
 	const key = actionKey(action, options.target);
-	errorWatch.add(key);
+	errorWatch.set(key, ++watchIds);
 	if (!tracking()) return;
 	const attempt = (attempts.get(key) ?? 0) + 1;
 	attempts.set(key, attempt);
@@ -437,12 +446,13 @@ export function finishOnboardingAction(
 	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number; onUnload?: boolean } = {},
 ): boolean {
 	const key = actionKey(action, options.target);
-	const attempt = pending.get(key);
+	const watched = errorWatch.get(key);
 	// A check that outlived its attempt (a retry started meanwhile) leaves the new one alone.
-	if (attempt && options.attempt !== undefined && options.attempt !== attempt.attempt) return false;
+	if (watched !== undefined && options.attempt !== undefined && options.attempt !== watched) return false;
+	const attempt = pending.get(key);
 	// Once per attempt, and only for one started during onboarding: the same
 	// panels outside onboarding (the clone dialog's GitHub sign-in) send nothing.
-	if (errorWatch.delete(key) && outcome === "failed" && options.reason) captureOnboardingFailureToSentry(action, options.reason);
+	if (errorWatch.delete(key) && outcome === "failed" && options.reason) captureOnboardingFailureToSentry(action, options.reason, options.target);
 	if (!tracking() || !attempt) return false;
 	pending.delete(key);
 	(options.onUnload ? captureOnUnload : capture)("ao.onboarding.action_finished", {
@@ -464,7 +474,7 @@ export function finishOnboardingAction(
  * is left to see how it ends.
  */
 export function leaveOnboardingActions(options: { onUnload?: boolean } = {}): void {
-	for (const key of [...errorWatch]) {
+	for (const key of [...errorWatch.keys()]) {
 		const split = key.indexOf(":");
 		const target = key.slice(split + 1);
 		finishOnboardingAction(key.slice(0, split) as OnboardingAction, "left", { target: target || undefined, onUnload: options.onUnload });
@@ -476,18 +486,18 @@ window.addEventListener("pagehide", () => {
 	if (onboardingInProgress()) leaveOnboardingActions({ onUnload: true });
 });
 
-export function onboardingActionPending(action: OnboardingAction, target?: string): boolean {
-	return pending.has(actionKey(action, target));
-}
-
 /** Whether an action started during onboarding has not ended yet, under either analytics choice. */
 export function onboardingActionWatched(action: OnboardingAction, target?: string): boolean {
 	return errorWatch.has(actionKey(action, target));
 }
 
-/** The attempt in progress for (action, target), to pass back to finishOnboardingAction from an async check. */
+/**
+ * The attempt in progress for (action, target), to pass back to
+ * finishOnboardingAction from an async check; under either analytics choice.
+ * An id for this launch, not the `attempt` count sent with the events.
+ */
 export function onboardingActionAttempt(action: OnboardingAction, target?: string): number | undefined {
-	return pending.get(actionKey(action, target))?.attempt;
+	return errorWatch.get(actionKey(action, target));
 }
 
 /** An install job's end state, as an action outcome. */
@@ -514,24 +524,7 @@ export function apiErrorCode(error: unknown): string | undefined {
 
 // ── The guided tour's project step ──────────────────────────────────────────
 
-let tourStep: OnboardingStep | undefined;
 let projectNote: { source: "clone" | "local_folder"; projectId: string; at: number } | undefined;
-
-/** The tour step showing now, or undefined; set by GuidedTour. */
-export function setOnboardingTourStep(step: OnboardingStep | undefined): void {
-	tourStep = step;
-}
-
-/**
- * Whether onboarding is showing now: the first-run window or a tour step.
- * Setup that can also be reached later (the clone dialog's GitHub panel)
- * reports to the funnel only then.
- */
-export function onboardingInProgress(): boolean {
-	return flowOpen || tourStep !== undefined;
-}
-
-setSentryFlowSource(() => (onboardingInProgress() ? "onboarding" : undefined));
 
 /**
  * A project was cloned or added; the tour's project step reads where it came
@@ -607,12 +600,11 @@ export function resetOnboardingTelemetryForTests(): void {
 	memoryRun = null;
 	storedRunDiscarded = false;
 	replay = null;
-	flowOpen = false;
 	abandonedThisLaunch = false;
 	stepStartedAt.clear();
 	attempts.clear();
 	pending.clear();
 	errorWatch.clear();
-	tourStep = undefined;
 	projectNote = undefined;
+	resetOnboardingFlowForTests();
 }
