@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 // claudeShared are the parts of the computer's own Claude folder every account
@@ -89,8 +90,46 @@ func (c *Claude) Logout(ctx context.Context, home string) error {
 	return err
 }
 
+// errClaudeRenewalPending skips a check of a stored login whose access token
+// expired. The service keeps the last reading it had, so the account does not
+// read as signed out while its next session renews the token.
+var errClaudeRenewalPending = fmt.Errorf("%w; Claude Code renews it the next time it runs", ports.ErrAgentAccountRenewalPending)
+
+// claudeNow is the clock renewal checks read, replaced in tests.
+var claudeNow = time.Now
+
+// renewalPending reports whether home's stored login has an expired access
+// token that Claude Code can still renew. Any Claude Code process that finds it
+// so tries the renewal, and a refused one wipes the login. The refresh token is
+// single-use, so a check that races the account's sessions can sign it out
+// about eight hours after sign-in (#8724). Checks therefore leave such a login
+// to the next session, which renews it once.
+func (c *Claude) renewalPending(ctx context.Context, home string) bool {
+	env := map[string]string{}
+	for _, entry := range os.Environ() {
+		if key, value, ok := strings.Cut(entry, "="); ok {
+			env[key] = value
+		}
+	}
+	for key, value := range c.LaunchEnv(home) {
+		env[key] = value
+	}
+	if home == "" && c.DeviceEnv != nil {
+		for key, value := range c.DeviceEnv(ctx) {
+			env[key] = value
+		}
+	}
+	credential, found := agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, agentcreds.ResolveOptions{
+		ConfigDir: home, AllowKeychain: true, Env: func(key string) string { return env[key] },
+	})
+	return found && credential.ExpiredButRenewable(claudeNow())
+}
+
 // Identity asks `claude auth status --json` who home is signed in to.
 func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	if c.renewalPending(ctx, home) {
+		return domain.AgentAccountIdentityCheck{}, errClaudeRenewalPending
+	}
 	bin, err := c.Binary(ctx)
 	if err != nil {
 		return domain.AgentAccountIdentityCheck{}, err
@@ -128,6 +167,9 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 // Limits sends Claude Code's own `get_usage` control request over stream-json.
 // The CLI reads the limits with its own login; AO only sees the answer.
 func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLimits, error) {
+	if c.renewalPending(ctx, home) {
+		return domain.AgentAccountLimits{}, errClaudeRenewalPending
+	}
 	bin, err := c.Binary(ctx)
 	if err != nil {
 		return domain.AgentAccountLimits{}, err
