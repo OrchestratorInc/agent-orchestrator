@@ -10,6 +10,8 @@ const state = vi.hoisted(() => ({
 	/** When set, the next read of a saved board waits until `releaseBoardRead` is called. */
 	holdNextBoardRead: false,
 	releaseBoardRead: null as null | (() => void),
+	/** The machines paired on this phone, as loadHosts reads them. */
+	paired: [] as Array<{ id: string; name: string; endpoints: never[]; token: string }>,
 }));
 vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ org: null, projects: [], sessions: [], connections: [], chatHarnesses: [], client: {}, upsertSession: () => {}, refreshSessions: async () => {}, refresh: async () => {} }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
@@ -37,7 +39,7 @@ vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} 
 vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({
 	activeHost: async () => ({ id: state.selected, name: state.selected, endpoints: [], token: "secret" }),
-	loadHosts: async () => [], sameHostConnections: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
+	loadHosts: async () => state.paired, sameHostConnections: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
 	setActiveHost: async (id: string) => { state.selected = id; },
 }));
 vi.mock("./account", () => ({ loadAccount: async () => null }));
@@ -72,7 +74,7 @@ const configFor = (id: string) => id === "b" ? null : { ...(id === "c" ? {} : { 
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.items.clear(); state.holdNextBoardRead = false; state.releaseBoardRead = null;
+	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.items.clear(); state.holdNextBoardRead = false; state.releaseBoardRead = null; state.paired = [];
 	state.resolve.mockImplementation(async () => configFor(state.selected));
 	state.sessions.mockResolvedValue(board("Live A", [{ id: "a-app", name: "a-app" }]));
 	state.notifications.mockResolvedValue({ notifications: [], unreadCount: 0 });
@@ -151,4 +153,32 @@ it("keeps no board for a connection that names no machine", async () => {
 	await act(async () => { state.onState!("background"); });
 	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 	expect([...state.items.keys()].filter((key) => key.startsWith("ao.board."))).toEqual([]);
+});
+
+// The phone closed the app in the background, and it is launched again with
+// the machine out of reach: the last board shows, dated, until a poll answers,
+// so the chats on it can still be opened from what is saved.
+it("shows the saved board on a cold launch with the machine unreachable", async () => {
+	state.selected = "b";
+	state.paired = [{ id: "b", name: "b", endpoints: [], token: "secret" }];
+	const savedAt = Date.now() - 10 * 60_000;
+	saveBoard("host.b", board("Saved B", [{ id: "b-app", name: "b-app" }]));
+	state.items.set(boardKey("host.b"), JSON.stringify({ ...JSON.parse(state.items.get(boardKey("host.b"))!), savedAt }));
+	await mount();
+	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+	expect(current.config).toBeNull();
+	expect(current.sessions.map((session) => session.displayName)).toEqual(["Saved B"]);
+	expect(current.allSessions.map((session) => session.displayName)).toEqual(["Saved B"]);
+	expect(current.hostStates.map((host) => [host.hostId, host.sessions.length])).toEqual([["b", 1]]);
+	expect(current.allProjects.map((project) => project.id)).toEqual(["b-app"]);
+	// The freshness line says how old it is, for this machine only.
+	expect(current.hostStates[0].lastSyncAt).toBe(savedAt);
+	expect(current.getPrimaryLastSyncAt("b")).toBe(savedAt);
+	expect(current.getPrimaryLastSyncAt("a")).toBeUndefined();
+	// Still there while the app keeps racing for the machine and gives up on it.
+	await act(async () => { await vi.advanceTimersByTimeAsync(3 * 60_000); });
+	expect(state.resolve.mock.calls.length).toBeGreaterThan(1);
+	expect(current.sessions.map((session) => session.displayName)).toEqual(["Saved B"]);
+	expect(current.getPrimaryLastSyncAt("b")).toBe(savedAt);
+	expect(state.sessions).not.toHaveBeenCalled();
 });

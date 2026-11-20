@@ -1034,8 +1034,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// machine's must not keep this one's from showing.
 			setKnownProjects((current) => current.machine === machine && current.known ? current : { machine, projects: saved.projects ?? [], known: saved.projects !== null });
 			setSessionMachine((current) => current || machine);
-			// The stale banner says how old it is.
-			if (!lastSyncAtRef.current) lastSyncAtRef.current = saved.savedAt;
+			// The freshness line says how old it is: this machine's sync time, read
+			// through getPrimaryLastSyncAt, which answers only for its owner.
+			if (!lastSyncAtRef.current) {
+				lastSyncAtRef.current = saved.savedAt;
+				lastSyncOwnerRef.current = selectedHostId;
+			}
 		});
 		return () => { active = false; };
 	}, [selectedHostId]);

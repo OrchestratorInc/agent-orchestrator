@@ -5,7 +5,7 @@ import type { ArchiveSummary, DashboardSession, DashboardStats, OrchestratorLink
 // the app in the background (cheaper ones often do) used to bring it back to
 // an empty board and a loader until it had reconnected and fetched the list
 // again, which on a slow network takes a while. Now the last board shows at
-// once, under the stale banner's "showing data from …", and the first poll
+// once, under the freshness line's "updated … ago", and the first poll
 // replaces it.
 
 const KEY_PREFIX = "ao.board.v1.";
