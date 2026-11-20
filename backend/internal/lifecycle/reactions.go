@@ -1156,11 +1156,9 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 		}
 		if found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 			// A Chat relay queues a turn rather than pasting into a pane, and
-			// it settles a queued attempt before deciding to send, so it keeps
-			// mu across its whole read-send-record span.
-			m.react.mu.Lock()
-			defer m.react.mu.Unlock()
-			return m.sendChatReviewFeedbackLocked(ctx, chat, id, prURL, key, sig, msg, maxAttempts)
+			// it settles a queued attempt before deciding to send. The key
+			// lock held above serializes that span; mu guards only the maps.
+			return m.sendChatReviewFeedback(ctx, chat, id, prURL, key, sig, msg, maxAttempts)
 		}
 	}
 	if !due {
