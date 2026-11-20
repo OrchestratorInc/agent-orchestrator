@@ -4391,7 +4391,11 @@ ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 // The account this run last told the renderer about, to notice another one signing in.
 let notifiedCloudUserId: string | undefined;
 
+// Whether anything has bound the Cloud artifact previews to an account yet this run.
+let artifactSnapshotsBound = false;
+
 function bindArtifactSnapshotsToCloudAccount(userId: string | null): void {
+	artifactSnapshotsBound = true;
 	artifactSnapshotStore.bindCloudAccount(userId).catch((error) => {
 		// The old files stay on record as another account's, so the next sign-in, or the next launch, tries again.
 		console.warn("AO: could not delete the cached Cloud artifact previews", error);
@@ -4878,14 +4882,25 @@ app.whenReady().then(async () => {
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.
-	// A sign-in hidden by a secure storage outage, or a login file that could not be read, is not a lost
-	// one: leave the previews, and let the session notice that shows it again bind them.
-	void getCloudSessionCached(cloudDataDir()).then(
-		(account) => {
-			if (account || !isSavedSignInHidden(cloudDataDir())) bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
-		},
-		() => undefined,
-	);
+	// A sign-in hidden by a secure storage outage is not a lost one: leave the previews, and let the
+	// session notice that shows it again bind them. Nor is a login file that could not be read: that read
+	// is tried again, backing off, until one answers or something else (a session notice, a sign-in) binds
+	// them first. Until then the previews stay on disk, unbound, and cards render live.
+	const bindArtifactSnapshotsAtStartup = (attempt: number): void => {
+		void getCloudSessionCached(cloudDataDir()).then(
+			(account) => {
+				if (artifactSnapshotsBound) return;
+				if (account || !isSavedSignInHidden(cloudDataDir())) bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
+			},
+			() => {
+				if (artifactSnapshotsBound) return;
+				setTimeout(() => {
+					if (!artifactSnapshotsBound) bindArtifactSnapshotsAtStartup(attempt + 1);
+				}, Math.min(1_000 * 2 ** attempt, 30_000)).unref();
+			},
+		);
+	};
+	bindArtifactSnapshotsAtStartup(0);
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))
