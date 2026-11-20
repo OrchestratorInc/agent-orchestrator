@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
 import { isUnreachableError, UnreachableError } from "./connectionError";
 import type { FilesBackend } from "./files/backend";
@@ -287,6 +287,46 @@ export async function resolveWhenVerified<S>(backend: Verifiable | null | undefi
 	} catch {
 		return undefined;
 	}
+}
+
+/** What `useOpenWhenVerified` is doing: opening the view named `key`, or failed to. */
+export type VerifiedOpenState = { pending?: string; failed?: string };
+
+/**
+ * Opens a view (the full-screen image viewer) from a source resolved afresh
+ * with `resolveWhenVerified`, saying what happens meanwhile: `pending` names
+ * the view opening, while it waits for the connection too, and `failed` the
+ * one that could not open, because the connection stayed away for `timeoutMs`
+ * or the verified connection could not resolve its source. Opening it again
+ * tries again. Another open or unmounting drops one in flight without a word.
+ */
+export function useOpenWhenVerified<S>(backend: Verifiable | null | undefined, timeoutMs = HELD_WAIT_MS): VerifiedOpenState & {
+	open(key: string, resolve: (signal?: AbortSignal) => Promise<S | undefined>, show: (source: S) => void): void;
+} {
+	const [state, setState] = useState<VerifiedOpenState>({});
+	const inFlight = useRef<AbortController | null>(null);
+	useEffect(() => () => inFlight.current?.abort(), []);
+	const open = useCallback((key: string, resolve: (signal?: AbortSignal) => Promise<S | undefined>, show: (source: S) => void) => {
+		inFlight.current?.abort();
+		const controller = new AbortController();
+		inFlight.current = controller;
+		let timedOut = false;
+		const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+		setState({ pending: key });
+		void resolveWhenVerified(backend, resolve, controller.signal).then((source) => {
+			clearTimeout(timer);
+			// Replaced by another open, or unmounted: nothing to say.
+			if (inFlight.current !== controller || (controller.signal.aborted && !timedOut)) return;
+			inFlight.current = null;
+			if (source !== undefined && !timedOut) {
+				setState({});
+				show(source);
+			} else {
+				setState({ failed: key });
+			}
+		});
+	}, [backend, timeoutMs]);
+	return { ...state, open };
 }
 
 /**

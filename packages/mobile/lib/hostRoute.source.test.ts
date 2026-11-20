@@ -105,8 +105,11 @@ describe("retained-stack host routes", () => {
 	it("opens the full-screen image through the verified connection, not the pane's source", () => {
 		const file = source("../app/files/[sessionId]/file.tsx");
 		const compare = between(file, "function ImageCompare(", "const makeStyles = ");
-		expect(compare).toContain("void resolveWhenVerified(backend, (signal) => sources.resolveSide(pane.side, signal), controller.signal).then((source) => {");
-		expect(compare).toContain("if (source && !controller.signal.aborted) setViewing({ label: pane.label, source });");
+		expect(compare).toContain("opener.open(pane.side, (signal) => sources.resolveSide(pane.side, signal), (source) => setViewing({ label: pane.label, source }));");
+		// The pane says it is opening, and a failed open says so (see useOpenWhenVerified).
+		expect(compare).toContain("accessibilityState={{ busy: opener.pending === pane.side }}");
+		expect(compare).toContain("{opener.pending === pane.side ? <View style={styles.imageOpening}><Spinner /></View> : null}");
+		expect(compare).toContain("{opener.failed === pane.side ? <Text accessibilityRole=\"alert\"");
 		expect(compare).toContain("onPress={() => open(pane)}");
 		expect(compare).not.toContain("setViewing(pane))");
 		expect(file).toContain("backend.imageSource(sessionId, path, which, version, read, signal)");

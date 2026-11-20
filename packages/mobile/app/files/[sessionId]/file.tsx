@@ -12,7 +12,7 @@ import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
 import { hostRouteMatches, machineState } from "../../../lib/hostRoute";
 import { MachineRejectedState } from "../../../lib/MachineRejectedState";
-import { resolveWhenVerified, retryWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
+import { retryWhenVerified, useOpenWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
 import { ImageViewer } from "../../../lib/ImageViewer";
 import { usePressFeedback } from "../../../lib/pressFeedback";
 import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
@@ -640,8 +640,10 @@ function ImageCompare({ backend, detail, name, sources }: { backend: FilesBacken
 	// full screen) only once the machine has answered as itself, while what is
 	// already on screen stays through a reconnect (see heldBackend).
 	const verified = useVerifiedOnMount(backend);
-	const opening = useRef<AbortController | null>(null);
-	useEffect(() => () => opening.current?.abort(), []);
+	// The pane being opened shows it is, while it waits for the connection too;
+	// one the connection stays away from (or can't resolve) says so, and a tap
+	// tries again.
+	const opener = useOpenWhenVerified<ImageSide>(backend);
 	if (!verified) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	const panes = [
 		sources.before ? { label: detail.deleted ? "Deleted" : "Before", side: "before" as const, source: sources.before } : null,
@@ -652,16 +654,11 @@ function ImageCompare({ backend, detail, name, sources }: { backend: FilesBacken
 	// switch), so it is resolved again through the verified connection; the
 	// comparison already on screen stays as it is. Cloud's sources are data, read once.
 	const open = (pane: (typeof panes)[number]) => {
-		opening.current?.abort();
 		if (!backend?.whenVerified) {
 			setViewing(pane);
 			return;
 		}
-		const controller = new AbortController();
-		opening.current = controller;
-		void resolveWhenVerified(backend, (signal) => sources.resolveSide(pane.side, signal), controller.signal).then((source) => {
-			if (source && !controller.signal.aborted) setViewing({ label: pane.label, source });
-		});
+		opener.open(pane.side, (signal) => sources.resolveSide(pane.side, signal), (source) => setViewing({ label: pane.label, source }));
 	};
 	return (
 		<ScrollView contentContainerStyle={styles.images}>
@@ -672,12 +669,15 @@ function ImageCompare({ backend, detail, name, sources }: { backend: FilesBacken
 						accessibilityRole="imagebutton"
 						accessibilityLabel={`${pane.label} image`}
 						accessibilityHint="Opens it full screen to zoom"
+						accessibilityState={{ busy: opener.pending === pane.side }}
 						onPress={() => open(pane)}
 						android_ripple={feedback.android_ripple}
 						style={({ pressed }) => [styles.imageFrame, pressed && feedback.pressed]}
 					>
 						<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [pane.source] : pane.source} resizeMode="contain" style={styles.image} />
+						{opener.pending === pane.side ? <View style={styles.imageOpening}><Spinner /></View> : null}
 					</Pressable>
+					{opener.failed === pane.side ? <Text accessibilityRole="alert" style={styles.imageOpenError}>Couldn't open this image full screen. Tap it to try again.</Text> : null}
 				</View>
 			))}
 			{viewing ? <ImageViewer visible name={`${name}, ${viewing.label.toLowerCase()}`} source={viewing.source} onClose={() => setViewing(undefined)} /> : null}
@@ -704,5 +704,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	imagePane: { gap: space.xs },
 	imageLabel: { ...type.footnote, fontFamily: font.semibold, color: t.textSecondary },
 	imageFrame: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },
+	imageOpening: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center" },
+	imageOpenError: { ...type.footnote, color: t.red },
 	image: { width: "100%", aspectRatio: 1 },
 });
