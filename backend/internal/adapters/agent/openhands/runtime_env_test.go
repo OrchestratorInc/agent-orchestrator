@@ -18,6 +18,55 @@ func clearOpenHandsLLMEnv(t *testing.T) {
 	}
 }
 
+func TestOpenHandsImportedRootUsesPhysicalPaths(t *testing.T) {
+	base, other := t.TempDir(), t.TempDir()
+	root := filepath.Join(base, "store")
+	for _, dir := range []string{root, filepath.Join(other, "nested"), filepath.Join(other, "store")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(t.TempDir(), "store")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	wrong := filepath.Join(t.TempDir(), "store")
+	if err := os.Symlink(other, wrong); err != nil {
+		t.Fatal(err)
+	}
+	redirect := filepath.Join(base, "redirect")
+	if err := os.Symlink(filepath.Join(other, "nested"), redirect); err != nil {
+		t.Fatal(err)
+	}
+	masked := redirect + string(filepath.Separator) + ".." + string(filepath.Separator) + "store"
+	if filepath.Clean(masked) != filepath.Clean(root) {
+		t.Fatal("fixture does not hide a different physical store behind lexical cleanup")
+	}
+	for _, tc := range []struct {
+		name     string
+		recorded string
+		override string
+		refuse   bool
+	}{
+		{"override alias", root, alias, false},
+		{"recorded alias", alias, root, false},
+		{"look-alike alias", root, wrong, true},
+		{"symlink plus parent traversal", root, masked, true},
+		{"missing override", root, filepath.Join(other, "missing"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{
+				ports.MetadataKeyImportSourceNativeID: "native",
+				ports.MetadataKeyImportConfigDir:      tc.recorded,
+			}}, Env: map[string]string{"OPENHANDS_CONVERSATIONS_DIR": tc.override}}
+			_, err := importedConversationCommand([]string{"openhands", "--resume", "native"}, cfg)
+			if (err != nil) != tc.refuse {
+				t.Fatalf("root validation error = %v, want refusal %v", err, tc.refuse)
+			}
+		})
+	}
+}
+
 func TestOpenHandsRuntimeEnvironmentPreservesProviderOverrides(t *testing.T) {
 	clearOpenHandsLLMEnv(t)
 	t.Setenv("OPENAI_BASE_URL", "https://unrelated.invalid/v1")
