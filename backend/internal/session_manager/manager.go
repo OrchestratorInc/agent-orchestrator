@@ -4937,14 +4937,19 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	jobs := make(chan domain.SessionRecord)
 	var wg sync.WaitGroup
 	var followUpMu sync.Mutex
-	var retryChats []domain.SessionID
+	var retryChats, preempted []domain.SessionID
 	wg.Add(workers)
 	for range workers {
 		go func() {
 			defer wg.Done()
 			for rec := range jobs {
 				if !m.claimQueuedReconcile(rec.ID) {
-					m.finishStatusRecovery(ctx, rec, nil)
+					// Kill took this session before its check ran. The check is
+					// still owed: a failed archive leaves the session live.
+					m.beginStatusRecovery(rec.ID)
+					followUpMu.Lock()
+					preempted = append(preempted, rec.ID)
+					followUpMu.Unlock()
 					continue
 				}
 				m.beginStatusRecovery(rec.ID)
@@ -4981,6 +4986,9 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	wg.Wait()
 	if len(retryChats) > 0 && ctx.Err() == nil {
 		go m.retryStartupChatChecks(ctx, retryChats)
+	}
+	if len(preempted) > 0 {
+		go m.recheckPreemptedStartupSessions(ctx, preempted)
 	}
 }
 

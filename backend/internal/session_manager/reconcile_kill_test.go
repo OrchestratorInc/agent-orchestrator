@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -110,6 +111,23 @@ func TestKillWaitsForRunningStartupProbe(t *testing.T) {
 	}
 }
 
+// waitForStartupCheckSettled waits for the asynchronous follow-up that owns a
+// preempted session's startup check to release it and record a result.
+func waitForStartupCheckSettled(t *testing.T, m *Manager, id domain.SessionID) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := m.SessionStatusReadiness(domain.SessionRecord{ID: id})
+		if got != "checking" && !m.SessionMutationInProgress(id) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("startup check for %s never settled: readiness=%q", id, got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestStartupReconcileSkipsSessionPreemptedByKill(t *testing.T) {
 	m, _, blocking, done := startBlockedStartupReconcile(t)
 	_, killErr := m.RequestKill(context.Background(), "queued")
@@ -118,16 +136,37 @@ func TestStartupReconcileSkipsSessionPreemptedByKill(t *testing.T) {
 	if killErr != nil {
 		t.Fatalf("kill = %v", killErr)
 	}
+	waitForStartupCheckSettled(t, m, "queued")
 	blocking.mu.Lock()
 	probed := slices.Clone(blocking.probed)
 	blocking.mu.Unlock()
 	if slices.Contains(probed, "h-queued") {
-		t.Fatalf("startup reconcile probed a session it no longer owned: %v", probed)
+		t.Fatalf("startup reconcile probed an archived session: %v", probed)
 	}
-	if m.SessionMutationInProgress("queued") || m.SessionMutationInProgress("slow") {
+	if m.SessionMutationInProgress("slow") {
 		t.Fatal("startup reconcile left an operation fence behind")
 	}
-	if got := m.SessionStatusReadiness(domain.SessionRecord{ID: "queued"}); got == "checking" {
-		t.Fatalf("preempted session readiness = %q, want settled", got)
+}
+
+func TestStartupCheckRunsAfterPreemptingArchiveFails(t *testing.T) {
+	m, st, blocking, done := startBlockedStartupReconcile(t)
+	blocking.fakeRuntime.destroyErr = errors.New("runtime still live")
+	_, killErr := m.RequestKill(context.Background(), "queued")
+	if killErr == nil {
+		t.Fatal("archive succeeded; the test needs it to fail before termination")
+	}
+	if st.sessions["queued"].IsTerminated {
+		t.Fatal("failed archive terminated the session")
+	}
+	close(blocking.release)
+	<-done
+	if got := waitForStartupCheckSettled(t, m, "queued"); got != "ready" {
+		t.Fatalf("readiness after the owed startup check = %q, want ready", got)
+	}
+	blocking.mu.Lock()
+	probed := slices.Clone(blocking.probed)
+	blocking.mu.Unlock()
+	if !slices.Contains(probed, "h-queued") {
+		t.Fatalf("live session never received its startup check after the archive failed: %v", probed)
 	}
 }

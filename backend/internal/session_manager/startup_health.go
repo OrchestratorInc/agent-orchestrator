@@ -169,6 +169,69 @@ func (m *Manager) retryStartupChatCheck(ctx context.Context, id domain.SessionID
 	return retry
 }
 
+// preemptedStartupRecheckPoll is how often a preempted startup check looks
+// again for the Kill that took its session to release it.
+const preemptedStartupRecheckPoll = 50 * time.Millisecond
+
+// recheckPreemptedStartupSessions runs the startup check Kill preempted once
+// Kill releases each session. Kill can fail before it terminates the row (for
+// example while preserving attachments), and the skipped check is what
+// reattaches a live Chat to its host or records a dead runtime as exited.
+func (m *Manager) recheckPreemptedStartupSessions(ctx context.Context, ids []domain.SessionID) {
+	var retryChats []domain.SessionID
+	for _, id := range ids {
+		if m.recheckPreemptedStartupSession(ctx, id) {
+			retryChats = append(retryChats, id)
+		}
+	}
+	if len(retryChats) > 0 && ctx.Err() == nil {
+		m.retryStartupChatChecks(ctx, retryChats)
+	}
+}
+
+// recheckPreemptedStartupSession settles one preempted check and reports
+// whether its Chat still needs a reattach retry.
+func (m *Manager) recheckPreemptedStartupSession(ctx context.Context, id domain.SessionID) bool {
+	for {
+		err := m.beginAgentOperation(ctx, id, agentOperationReconcile)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errAgentOperationInProgress) {
+			m.finishStatusRecovery(ctx, domain.SessionRecord{ID: id}, err)
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			m.finishStatusRecovery(ctx, domain.SessionRecord{ID: id}, ctx.Err())
+			return false
+		case <-time.After(preemptedStartupRecheckPoll):
+		}
+	}
+	rec, found, err := m.store.GetSession(ctx, id)
+	if err != nil || !found || rec.IsTerminated || rec.HibernatedAt != nil {
+		// Archived, gone, or asleep: nothing is left to reattach.
+		m.endAgentOperation(id, agentOperationReconcile)
+		m.finishStatusRecovery(ctx, domain.SessionRecord{ID: id}, err)
+		return false
+	}
+	err = func() error {
+		defer m.endAgentOperation(id, agentOperationReconcile)
+		recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
+		defer cancel()
+		return m.checkSessionHealth(recoveryCtx, rec)
+	}()
+	retry := err != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		retryableStartupChatCheck(err) && len(m.startupChatRetryDelays) > 0
+	if !retry {
+		m.finishStatusRecovery(ctx, rec, err)
+	}
+	if err != nil {
+		m.logger.Warn("reconcile: check after a failed archive failed", "sessionID", id, "retrying", retry, "error", err)
+	}
+	return retry
+}
+
 // legacyInterruptedClientSetup matches a synchronous client start that a build
 // from before background branch naming checkpointed setup for and then lost to
 // a restart. Nothing creates this state any more; such a start was never
