@@ -186,4 +186,59 @@ describe("ReviewerSelect", () => {
 		expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-test" });
 	});
 
+	it("marks a saved reviewer alias absent from the device provider catalog", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+		client.setQueryData(["agent-models", "claude-code", ""], {
+			agentId: "claude-code", selectionMode: "catalog", source: "provider", stale: false,
+			models: [{ id: "glm-5.3-flash", label: "GLM 5.3 Flash" }],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="claude-code" model="opus" defaultHarness="codex" onChange={() => undefined}
+		/></QueryClientProvider>);
+		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveTextContent("opus");
+		expect(screen.getByText("(not in device catalog)")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveAccessibleDescription("opus: not in device catalog");
+	});
+
+	it("does not flag a matching saved reviewer model", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+		client.setQueryData(["agent-models", "claude-code", ""], {
+			agentId: "claude-code", selectionMode: "catalog", source: "provider", stale: false,
+			models: [{ id: "opus", label: "Opus" }],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="claude-code" model="opus" defaultHarness="codex" onChange={() => undefined}
+		/></QueryClientProvider>);
+		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveTextContent("Claude Code · Opus");
+		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveTextContent("not in device catalog");
+	});
+
+	it("does not claim a pin is absent when the provider catalog is stale", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+		client.setQueryData(["agent-models", "claude-code", ""], {
+			agentId: "claude-code", selectionMode: "catalog", source: "provider", stale: true,
+			models: [{ id: "glm-5.3-flash", label: "GLM 5.3 Flash" }],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="claude-code" model="opus" defaultHarness="codex" onChange={() => undefined}
+		/></QueryClientProvider>);
+		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveTextContent("not in device catalog");
+	});
+
+	it.each([
+		{ name: "a native mode is selected", selectionMode: "mode", mode: "plan", refreshRecommended: false },
+		{ name: "the catalog allows text entry", selectionMode: "text", mode: "", refreshRecommended: false },
+		{ name: "catalog revalidation is pending", selectionMode: "catalog", mode: "", refreshRecommended: true },
+	])("does not flag an inactive or unverified model when $name", ({ selectionMode, mode, refreshRecommended }) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+		client.setQueryData(["agent-models", "claude-code", ""], {
+			agentId: "claude-code", selectionMode, source: "provider", stale: false, refreshRecommended,
+			models: [{ id: "glm-5.3-flash", label: "GLM 5.3 Flash" }],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="claude-code" model="opus" mode={mode} defaultHarness="codex" onChange={() => undefined}
+		/></QueryClientProvider>);
+		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveAccessibleDescription("opus: not in device catalog");
+	});
+
 });

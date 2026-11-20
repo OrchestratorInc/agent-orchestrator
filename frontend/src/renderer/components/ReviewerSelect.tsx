@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
@@ -87,6 +87,7 @@ export function ReviewerSelect({
 	const reviewerAriaLabel = ariaLabel ?? t("settings.project.defaultReviewer");
 	const queryClient = useQueryClient();
 	const [menuOpen, setMenuOpen] = useState(false);
+	const catalogNoteId = useId();
 	// Until the daemon's catalog arrives these entries carry the whole menu, so
 	// label them the way the catalog would rather than printing bare ids: without
 	// this the same row reads "claude-code" now and "Claude Code" a moment later.
@@ -129,6 +130,14 @@ export function ReviewerSelect({
 	}, [defaultHarness, hostId, menuOpen, menuProjectID, queryClient, selectableOptions]);
 	// An unidentified model is left off the trigger rather than labelled.
 	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, "");
+	// Catalogs are device-wide and can differ from a project-specific provider.
+	// Their contents do not establish what the reviewer actually runs.
+	const catalog = triggerCatalog.data;
+	const missingFromCatalog = !harnessOnly && isConcreteModelID(model) && !isConcreteModelID(mode) &&
+		catalog?.selectionMode === "catalog" && catalog.source === "provider" &&
+		!catalog.stale && !catalog.warning && !catalog.refreshRecommended && catalog.models.length > 0 &&
+		!catalog.models.some((item) => item.id === model);
+	const catalogNote = t("settings.models.notInDeviceCatalog", { defaultValue: "not in device catalog" });
 	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel]
 		.filter(Boolean)
 		.join(" · ");
@@ -143,14 +152,17 @@ export function ReviewerSelect({
 					triggerClassName,
 				)}
 				aria-label={reviewerAriaLabel}
+				aria-describedby={missingFromCatalog ? catalogNoteId : undefined}
 				disabled={disabled}
 			>
 				<span className="flex min-w-0 items-center gap-2">
 					{effectiveHarness ? <AgentAvatar provider={effectiveHarness} className="size-icon-lg shrink-0" /> : null}
 					<span className={cn("min-w-0 truncate", contentAlign === "end" && "text-right")}>{triggerLabel}</span>
+					{missingFromCatalog && <span aria-hidden="true" title={catalogNote} className="min-w-0 max-w-[60%] truncate text-xs text-muted-foreground">({catalogNote})</span>}
 					{needsSetup && <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span>}
 				</span>
 			</OptionMenuTrigger>
+			{missingFromCatalog && <span id={catalogNoteId} className="sr-only">{`${model}: ${catalogNote}`}</span>}
 			<OptionMenuContent onCloseAutoFocus={management.onCloseAutoFocus} align={contentAlign === "end" ? "end" : "start"} className="reviews-agent-menu-surface w-[18rem]">
 				<ReviewerHarnessOption
 					agent={{ id: "__default__", label: defaultHarnessLabel, disabled: false, status: "", statusTone: "success" }}

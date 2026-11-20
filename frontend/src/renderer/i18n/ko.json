@@ -3953,6 +3953,7 @@
 	"coder.templateOptions.listPlaceholder": "값을 쉼표로 구분하세요",
 	"coder.templateOptions.selectPlaceholder": "옵션 선택",
 	"coder.templateOptions.settingsHint": "변경 사항은 새 세션에 적용됩니다.",
+	"settings.models.notInDeviceCatalog": "기기 카탈로그에 없음",
 	"settings.models.selectModel": "모델 선택",
 	"settings.models.useAgentModel": "에이전트 모델 사용",
 	"settings.models.useAgentMode": "에이전트 모드 사용",

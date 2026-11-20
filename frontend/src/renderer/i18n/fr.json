@@ -4049,6 +4049,7 @@
 	"coder.templateOptions.listPlaceholder": "Séparez les valeurs par des virgules",
 	"coder.templateOptions.selectPlaceholder": "Sélectionnez une option",
 	"coder.templateOptions.settingsHint": "Les modifications s'appliquent aux nouvelles sessions.",
+	"settings.models.notInDeviceCatalog": "absent du catalogue de cet appareil",
 	"settings.models.selectModel": "Sélectionner un modèle",
 	"settings.models.useAgentModel": "Utiliser le modèle de l’agent",
 	"settings.models.useAgentMode": "Utiliser le mode de l’agent",

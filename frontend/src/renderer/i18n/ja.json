@@ -3953,6 +3953,7 @@
 	"coder.templateOptions.listPlaceholder": "値はカンマで区切ります",
 	"coder.templateOptions.selectPlaceholder": "オプションを選択",
 	"coder.templateOptions.settingsHint": "変更は新しいセッションに適用されます。",
+	"settings.models.notInDeviceCatalog": "このデバイスのカタログにありません",
 	"settings.models.selectModel": "モデルを選択",
 	"settings.models.useAgentModel": "エージェントのモデルを使用",
 	"settings.models.useAgentMode": "エージェントのモードを使用",

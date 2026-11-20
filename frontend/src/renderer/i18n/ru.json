@@ -4137,6 +4137,7 @@
 	"coder.templateOptions.listPlaceholder": "Разделяйте значения запятыми",
 	"coder.templateOptions.selectPlaceholder": "Выберите вариант",
 	"coder.templateOptions.settingsHint": "Изменения применяются к новым сессиям.",
+	"settings.models.notInDeviceCatalog": "нет в каталоге устройства",
 	"settings.models.selectModel": "Выбрать модель",
 	"settings.models.useAgentModel": "Использовать модель агента",
 	"settings.models.useAgentMode": "Использовать режим агента",
