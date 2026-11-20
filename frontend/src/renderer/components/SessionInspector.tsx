@@ -6,42 +6,35 @@ import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
-import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
-import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
+import { buildReviewBlocks, type ReviewComment, type ReviewPRBlock } from "../lib/review-comments";
+import { ReviewCommentsSection, type ReviewCommentActions } from "./review/ReviewComments";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import type { TFunction } from "i18next";
 import {
 	InspectorActivityTimelineView,
 	InspectorPullRequestCardView,
-	InspectorReviewsView,
 	InspectorSection as Section,
 	SessionInspectorShellView,
 	SessionInspectorSummaryView,
 	inspectorEmptyClass,
 	type InspectorPullRequest,
-	type InspectorInlineComment,
-	type InspectorGithubReview,
-	type InspectorReviewGroup,
-	type InspectorReviewLabels,
-	type InspectorReviewSummaryAction,
 	type InspectorTimelineEvent,
 	type InspectorView,
 } from "@aoagents/product-ui";
 import {
 	Archive,
 	ArrowUpRight,
+	CircleStop,
 	PanelLeft,
 	GitPullRequest,
 	GitMerge,
 	Info,
-	Play,
 	Loader2,
-	X,
+	MoreVertical,
 } from "@/components/app-icons";
 import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
@@ -114,6 +107,7 @@ import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { Switch } from "./ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { appI18n } from "../i18n";
 import type { MessageKey } from "../i18n";
@@ -122,8 +116,8 @@ import {
 	openReviewStatesFor,
 	reviewIsRunning,
 	reviewPhase,
+	reviewPhaseRun,
 	reviewRunDisabled,
-	reviewSessionRunAction,
 	sessionReviewsQueryOptions,
 	sessionReviewsQueryKey,
 	type PRReviewState,
@@ -394,17 +388,11 @@ function reviewsTabVisible(session: WorkspaceSession | undefined): boolean {
 	// Cloud PR facts are queried directly by CloudReviewsSection instead of
 	// piggybacking on the local daemon workspace projection.
 	if (session.cloud) return true;
-	return sortedPRs(session).some((pr) => pr.state === "open" || pr.state === "draft");
-}
-
-function externalReviewActorMatchesPRAuthor(actor: string | undefined, author: string | undefined): boolean {
-	const normalizedActor = normalizeReviewerId(actor);
-	const normalizedAuthor = normalizeReviewerId(author);
-	return normalizedActor !== "" && normalizedActor === normalizedAuthor;
-}
-
-function normalizeReviewerId(value: string | undefined): string {
-	return value?.trim().replace(/^@+/, "").toLowerCase() ?? "";
+	const prs = sortedPRs(session);
+	// A worker that has not opened a PR yet shows where reviews will start; a
+	// session whose PRs all merged or closed has nothing left to review.
+	if (prs.length === 0) return session.workspaceId !== STANDALONE_WORKSPACE_ID;
+	return prs.some((pr) => pr.state === "open" || pr.state === "draft");
 }
 
 const SummaryView = memo(function SummaryView({
@@ -2083,10 +2071,13 @@ function LocalReviewsSection({
 	const autoReviewEnabled = session.autoReviewEnabled === true;
 	const scmSummary = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud ? session.autoInjectCI === true : false, hostId);
 	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data?.prs);
-	const githubReviews = prSummaries.filter(
-		(pr) =>
-			(pr.state === "open" || pr.state === "draft") && prHasReviewActivity(pr),
-	);
+	const openProviderPRs = prSummaries.filter((pr) => pr.state === "open" || pr.state === "draft");
+	// Review now, from the controls or a PR's reviewer list: a commit already
+	// reviewed asks before it is reviewed again.
+	const reviewNow = () => {
+		if (currentHeadReviewed) setRerunConfirmation({ ownerKey: reviewerOwnerKey, heads: reviewHeads });
+		else triggerReview.mutate({ ownerKey: reviewerOwnerKey });
+	};
 	return (
 		<>
 			{/* Running a review is an action; reading them is a list. The action stays
@@ -2112,10 +2103,7 @@ function LocalReviewsSection({
 				onCancel={() => cancelReview.mutate()}
 				onAutoReviewChange={(enabled) => saveAutoReview.mutate(enabled)}
 				onKill={() => killReview.mutate()}
-				onTrigger={() => {
-					if (currentHeadReviewed) setRerunConfirmation({ ownerKey: reviewerOwnerKey, heads: reviewHeads });
-					else triggerReview.mutate({ ownerKey: reviewerOwnerKey });
-				}}
+				onTrigger={reviewNow}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
 				reviewerSurface={reviewsQuery.data?.reviewerSurface}
 				reviewerActivityState={reviewsQuery.data?.reviewerActivityState}
@@ -2155,8 +2143,8 @@ function LocalReviewsSection({
 
 			<MergedReviewsSection
 				hostId={hostId}
-				githubPRs={githubReviews}
-				isLoading={scmSummary.isLoading}
+				githubPRs={openProviderPRs}
+				isLoading={scmSummary.isLoading || reviewsQuery.isLoading}
 				onOpenReviewFile={onOpenReviewFile}
 				onWorkerMessageSent={onWorkerMessageSent}
 				reviewStates={reviewStates}
@@ -2309,7 +2297,7 @@ function CloudReviewsSection({
 				isCancelling={cancelReview.isPending}
 				isKilling={false}
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
-				isSwitchingReviewer={false}
+				isSwitchingReviewer={updateReviewerHarness.isPending}
 				activeReviewers={[]}
 				onOpenReviewer={() => undefined}
 				isTriggering={triggerReview.isPending}
@@ -2342,6 +2330,7 @@ function CloudReviewsSection({
 				githubPRs={[]}
 				readOnly={guest}
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
+				prsLoaded={pullRequestsQuery.isSuccess}
 				onOpenReviewFile={onOpenReviewFile}
 				onWorkerMessageSent={onWorkerMessageSent}
 				reviewStates={reviewState.reviews}
@@ -2416,11 +2405,11 @@ function cloudReviewsToLocal(
 }
 
 /**
- * AO's own reviewer passes and the reviews humans and bots left on GitHub, in
- * one list keyed by PR. They were two sections, which made the same PR appear
- * twice and left the reader joining them up by number; a review is a review,
- * and what matters is who wrote it. Each group inside a PR names its source —
- * "AO codex" against the agent that ran, "On GitHub" for everyone else.
+ * The Reviews tab's Comments: the Orchestrator reviewer's passes and inline
+ * comments beside the provider's reviews, threads and top-level comments, in
+ * one list per open PR (see buildReviewBlocks). Each row's actions call the
+ * same endpoints as the PR tab's comments: send to the worker, resolve, reply,
+ * ask a reviewer again.
  */
 function MergedReviewsSection({
 	githubPRs,
@@ -2429,10 +2418,15 @@ function MergedReviewsSection({
 	isLoading,
 	onOpenReviewFile,
 	onWorkerMessageSent,
+	prsLoaded = true,
 	reviewStates,
 	runs,
 	session,
 }: {
+	/**
+	 * The provider's PR summaries. Cloud passes none: its provider threads are not
+	 * read here, since Reply, Resolve and the details load go to the local daemon.
+	 */
 	githubPRs: SessionPRSummary[];
 	hostId?: string;
 	/** Reached through a share: the reviews show, but only the owner acts on them. */
@@ -2440,6 +2434,8 @@ function MergedReviewsSection({
 	isLoading: boolean;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onWorkerMessageSent?: () => void;
+	/** Whether the session's PR list is known; Cloud fetches it, so "no PR" waits for it. */
+	prsLoaded?: boolean;
 	reviewStates: PRReviewState[];
 	runs: ReviewRunFacts[];
 	session: WorkspaceSession;
@@ -2449,383 +2445,112 @@ function MergedReviewsSection({
 	const { client: cloudClient } = useCloudCp();
 	const openInAOBrowser = useSessionBrowserLink(session);
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
-	const openReviewStates = openReviewStatesFor(session, reviewStates);
-	const runsByPR = runsByPRFrom(openReviewStates, runs);
-	const aoStates = triggeredReviewStatesFrom(openReviewStates, runs);
-
-	// Union by PR, newest PR first. A PR can appear on either side alone. A
-	// multi-repository session can have the same number in two repositories, so
-	// there a PR is its repository and number; a single-repository session
-	// matches by number alone, as before.
-	const prRepositories = new Set([
-		...aoStates.map((state) => prRepositoryFromUrl(state.prUrl)),
-		...githubPRs.map((pr) => pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url)),
-	].filter((repository): repository is string => Boolean(repository)).map((repository) => repository.toLowerCase()));
-	const keyByRepository = prRepositories.size > 1;
-	const prKey = (url: string | undefined, number: number, repo?: string) =>
-		keyByRepository ? `${(repo || prRepositoryFromUrl(url) || "").toLowerCase()}#${number}` : `#${number}`;
-	const byPR = new Map<string, { number: number; repository?: string; ao?: PRReviewState; github?: SessionPRSummary }>();
-	for (const state of aoStates) {
-		const key = prKey(state.prUrl, state.prNumber);
-		byPR.set(key, { number: state.prNumber, repository: prRepositoryFromUrl(state.prUrl), ...byPR.get(key), ao: state });
-	}
-	for (const pr of githubPRs) {
-		const key = prKey(pr.htmlUrl || pr.url, pr.number, pr.repo);
-		byPR.set(key, { number: pr.number, repository: pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url), ...byPR.get(key), github: pr });
-	}
-	const severalRepositories = keyByRepository;
-	const rows = [...byPR.entries()].sort(([, a], [, b]) => b.number - a.number);
-	const labels = reviewLabels(t);
-	const requestRereview = async (review: InspectorGithubReview) => {
-		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/rerequest", {
-			params: { path: { sessionId: session.id } },
-			body: { pullRequestUrl: review.pullRequestUrl, reviewerId: review.reviewerId },
-		});
-		if (error) throw apiErrorException(error, "Unable to request re-review");
-	};
-	const resolveInlineComment = async (comment: InspectorInlineComment) => {
-		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
-			params: { path: { sessionId: session.id } },
-			body: { pullRequestUrl: comment.pullRequestUrl, commentUrl: comment.url ?? "" },
-		});
-		if (error) throw apiErrorException(error, "Unable to resolve review comment");
-		void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) });
-		void queryClient.invalidateQueries({ queryKey: workspaceKey });
-	};
 	const sendMessageToWorker = useSendToSessionWorker(session, hostId);
-	const sendInlineCommentToWorker = async (comment: InspectorInlineComment & { reviewerId?: string }) => {
-		await sendMessageToWorker(formatInlineReviewCommentMessage(comment), "Unable to send review comment to worker agent");
-		onWorkerMessageSent?.();
-	};
-	const sendReviewSummaryToWorker = async (summary: InspectorReviewSummaryAction) => {
-		if (session.cloud) {
+	const openPRs = sortedPRs(session).filter((pr) => pr.state === "open" || pr.state === "draft");
+	const blocks = buildReviewBlocks({
+		openPRs: openPRs.map((pr) => ({ url: pr.url, number: pr.number })),
+		providerPRs: githubPRs,
+		// Unfiltered: a PR the SCM summary adds before the session lists it still finds its state.
+		reviewStates,
+		runs,
+	});
+	const providerUrl = (block: ReviewPRBlock) => block.provider?.url ?? block.prUrl;
+	const refreshProvider = () => Promise.all([
+		queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) }),
+		queryClient.invalidateQueries({ queryKey: workspaceKey }),
+	]);
+	const sendOne = async (comment: ReviewComment, block: ReviewPRBlock) => {
+		if (session.cloud && comment.runId && comment.source === "orchestrator" && comment.kind === "summary") {
 			// Cloud delivers the stored review through the durable control-plane queue.
-			const matchingRun = [...runs]
-				.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-				.find(
-					(run) =>
-						(aoReviewCommentUrl(run) ?? run.prUrl) === (summary.url || summary.pullRequestUrl) &&
-						run.body.trim() === summary.body.trim(),
-				);
-			if (!matchingRun) throw new Error("Unable to find the stored Cloud review to send to the worker agent");
-			await cloudClient.sendSessionReviewToWorker(session.cloud.orgId, session.id, matchingRun.id);
-			onWorkerMessageSent?.();
+			await cloudClient.sendSessionReviewToWorker(session.cloud.orgId, session.id, comment.runId);
 			return;
 		}
-		await sendMessageToWorker(formatReviewSummaryMessage(summary), "Unable to send review summary to worker agent");
-		onWorkerMessageSent?.();
+		await sendMessageToWorker(reviewCommentWorkerMessage(comment, block), t("inspector.sendToWorkerAgentError"));
 	};
-	const groups: InspectorReviewGroup[] = rows.map(([key, { number, repository, ao, github }]) => {
-		const prLabel = severalRepositories && repository ? `${repository} #${number}` : `#${number}`;
-		const aoRuns = ao ? [...(runsByPR.get(ao.prUrl) ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : [];
-		const entries = (github?.review?.reviews ?? []).filter(
-			(entry) => !externalReviewActorMatchesPRAuthor(entry.reviewerId, github?.author),
-		);
-		// A bot's inline comments (CodeRabbit's) come from the PR's review threads:
-		// the summary's lists leave bots out.
-		const botReviewers = github ? botThreadReviewers(github) : { unresolved: [], resolved: [] };
-		const allUnresolvedReviewers = mergeReviewers(github?.review?.unresolvedBy ?? [], botReviewers.unresolved);
-		const allResolvedReviewers = mergeReviewers(github?.review?.resolvedBy ?? [], botReviewers.resolved);
-		const agentReviewIds = new Set(aoRuns.map((run) => run.githubReviewId).filter(Boolean));
-		const agentComments = new Map<string, { inlineComments: InspectorInlineComment[]; resolvedComments: InspectorInlineComment[] }>();
-		const partitionReviewerComments = (
-			reviewers: typeof allUnresolvedReviewers,
-			resolved: boolean,
-		) => reviewers
-			.map((reviewer) => {
-				const externalLinks = [] as typeof reviewer.links;
-				for (const link of reviewer.links) {
-					const reviewId = link.reviewId?.trim();
-					if (!reviewId || !agentReviewIds.has(reviewId)) {
-						externalLinks.push(link);
-						continue;
-					}
-					const comments = agentComments.get(reviewId) ?? { inlineComments: [], resolvedComments: [] };
-					const comment = {
-						autoInjectReview: link.autoInjectReview,
-						body: link.body,
-						file: link.file,
-						line: link.line,
-						pullRequestUrl: github?.url,
-						resolved,
-						reviewerId: reviewer.reviewerId,
-						url: link.url || reviewer.reviewUrl,
-					};
-					if (resolved) comments.resolvedComments.push(comment);
-					else comments.inlineComments.push(comment);
-					agentComments.set(reviewId, comments);
-				}
-				return { ...reviewer, count: externalLinks.length, links: externalLinks };
-			})
-			.filter((reviewer) => reviewer.links.length > 0);
-		const unresolvedReviewers = partitionReviewerComments(allUnresolvedReviewers, false).filter(
-			(reviewer) => !externalReviewActorMatchesPRAuthor(reviewer.reviewerId, github?.author),
-		);
-		const resolvedReviewers = partitionReviewerComments(allResolvedReviewers, true).filter(
-			(reviewer) => !externalReviewActorMatchesPRAuthor(reviewer.reviewerId, github?.author),
-		);
-		const unresolved = unresolvedReviewers.reduce((count, reviewer) => count + reviewer.count, 0);
-		const reviewRuns = aoRuns.map((run) => {
-			const reviewUrl = aoReviewCommentUrl(run);
-			return {
-				autoInjectReview: run.autoInjectReview,
-				body: run.body,
-				createdAtLabel:
-					run.triggerSource === "agent"
-						? `${formatTimeCompact(run.createdAt)} · ${t("inspector.review.requestedByAgent")}`
-						: formatTimeCompact(run.createdAt),
-				harness: run.harness || "reviewer",
-				id: run.id,
-				inlineComments: agentComments.get(run.githubReviewId)?.inlineComments ?? [],
-				resolvedComments: agentComments.get(run.githubReviewId)?.resolvedComments ?? [],
-				status: run.status,
-				url: reviewUrl ?? (ao?.prUrl || null),
-				verdict: githubVerdict(run.verdict, t),
-			};
-		});
-		const unresolvedByReviewer = new Map(
-			unresolvedReviewers.map((reviewer) => [reviewer.reviewerId, reviewer]),
-		);
-		const resolvedByReviewer = new Map(
-			resolvedReviewers.map((reviewer) => [reviewer.reviewerId, reviewer]),
-		);
-		const externalEntries: InspectorGithubReview[] = entries.map((entry) => {
-			const reviewer = unresolvedByReviewer.get(entry.reviewerId);
-			const resolvedReviewer = resolvedByReviewer.get(entry.reviewerId);
-			unresolvedByReviewer.delete(entry.reviewerId);
-			resolvedByReviewer.delete(entry.reviewerId);
-			return {
-				body: entry.body,
-				canRequestRereview: canRequestPRRereview(entry.verdict, github?.url),
-				id: entry.reviewUrl || `${entry.reviewerId}:${entry.submittedAt}`,
-				pullRequestUrl: github?.url,
-				inlineComments: (reviewer?.links ?? []).map((link) => ({
-					autoInjectReview: link.autoInjectReview,
-					body: link.body,
-					file: link.file,
-					line: link.line,
-					pullRequestUrl: github?.url,
-					url: link.url || reviewer?.reviewUrl,
-				})),
-				resolvedComments: (resolvedReviewer?.links ?? []).map((link) => ({
-					autoInjectReview: link.autoInjectReview,
-					body: link.body,
-					file: link.file,
-					line: link.line,
-					pullRequestUrl: github?.url,
-					resolved: true,
-					url: link.url || resolvedReviewer?.reviewUrl,
-				})),
-				isBot: entry.isBot,
-				reviewerId: entry.reviewerId,
-				reviewUrl: entry.reviewUrl,
-				submittedAt: entry.submittedAt,
-				submittedAtLabel: formatTimeCompact(entry.submittedAt),
-				verdict: githubVerdict(entry.verdict, t),
-			};
-		});
-		for (const reviewer of unresolvedByReviewer.values()) {
-			const resolvedReviewer = resolvedByReviewer.get(reviewer.reviewerId);
-			resolvedByReviewer.delete(reviewer.reviewerId);
-			externalEntries.push({
-				body: undefined,
-				canRequestRereview: canRequestPRRereview("changes_requested", github?.url),
-				id: `unresolved:${reviewer.reviewerId}:${key}`,
-				pullRequestUrl: github?.url,
-				inlineComments: reviewer.links.map((link) => ({
-					autoInjectReview: link.autoInjectReview,
-					body: link.body,
-					file: link.file,
-					line: link.line,
-					pullRequestUrl: github?.url,
-					url: link.url || reviewer.reviewUrl,
-				})),
-				resolvedComments: (resolvedReviewer?.links ?? []).map((link) => ({
-					autoInjectReview: link.autoInjectReview,
-					body: link.body,
-					file: link.file,
-					line: link.line,
-					pullRequestUrl: github?.url,
-					resolved: true,
-					url: link.url || resolvedReviewer?.reviewUrl,
-				})),
-				isBot: reviewer.isBot,
-				reviewerId: reviewer.reviewerId,
-				reviewUrl: reviewer.reviewUrl,
-				submittedAt: "",
-				submittedAtLabel: "",
-				verdict: githubVerdict("none", t),
+	const actions: ReviewCommentActions = {
+		onSend: async (comment, block) => {
+			await sendOne(comment, block);
+			onWorkerMessageSent?.();
+		},
+		onSendAll: async (block, comments) => {
+			if (session.cloud) {
+				for (const comment of comments) await sendOne(comment, block);
+			} else {
+				await sendMessageToWorker(reviewCommentsWorkerMessage(block, comments), t("inspector.sendToWorkerAgentError"));
+			}
+			onWorkerMessageSent?.();
+		},
+		onResolve: session.cloud ? undefined : async (comment, block) => {
+			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
+				params: { path: { sessionId: session.id } },
+				body: { pullRequestUrl: providerUrl(block), commentUrl: comment.url ?? "" },
 			});
-		}
-		// Top-level PR comments read beside the reviews: a bot's walkthrough or a
-		// person's note is feedback too, and the PR page shows it in the same place.
-		for (const comment of github ? prConversationComments(github) : []) {
-			externalEntries.push({
-				body: comment.body,
-				canRequestRereview: false,
-				id: `comment:${comment.url || comment.id}`,
-				kind: "comment" as const,
-				pullRequestUrl: github?.url,
-				inlineComments: [],
-				resolvedComments: [],
-				isBot: comment.isBot,
-				reviewerId: comment.author,
-				reviewUrl: comment.url,
-				submittedAt: comment.createdAt ?? "",
-				submittedAtLabel: comment.createdAt ? formatTimeCompact(comment.createdAt) : "",
-				verdict: githubVerdict("commented", t),
+			if (error) throw apiErrorException(error, t("pr.comments.resolveFailed"));
+			void refreshProvider();
+		},
+		// Replies post as the signed-in GitHub account, as on the PR tab.
+		onReply: session.cloud || usePreviewData ? undefined : async (comment, block, body) => {
+			const { error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/comments", {
+				params: { path: { id: String(block.number) } },
+				body: { prUrl: providerUrl(block), body, ...(comment.threadId ? { threadId: comment.threadId } : {}) },
 			});
-		}
-		for (const reviewer of resolvedByReviewer.values()) {
-			externalEntries.push({
-				body: undefined,
-				canRequestRereview: false,
-				id: `resolved:${reviewer.reviewerId}:${key}`,
-				pullRequestUrl: github?.url,
-				inlineComments: [],
-				resolvedComments: reviewer.links.map((link) => ({
-					autoInjectReview: link.autoInjectReview,
-					body: link.body,
-					file: link.file,
-					line: link.line,
-					pullRequestUrl: github?.url,
-					resolved: true,
-					url: link.url || reviewer.reviewUrl,
-				})),
-				isBot: reviewer.isBot,
-				reviewerId: reviewer.reviewerId,
-				reviewUrl: reviewer.reviewUrl,
-				submittedAt: "",
-				submittedAtLabel: "",
-				verdict: githubVerdict("none", t),
+			if (error) throw apiErrorException(error, t("pr.comments.postFailed"));
+			await refreshProvider();
+		},
+		onRerequest: session.cloud ? undefined : async (reviewerId, block) => {
+			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/rerequest", {
+				params: { path: { sessionId: session.id } },
+				body: { pullRequestUrl: providerUrl(block), reviewerId },
 			});
-		}
-		return {
-			ao: ao
-				? {
-						dimmed: ao.status === "ineligible",
-						historical:
-							ao.status === "needs_review" &&
-							Boolean(ao.previousRun) &&
-							(!ao.latestRun || ao.latestRun.status === "failed" || ao.latestRun.status === "cancelled"),
-						notInjected: aoRuns.some((run) => run.autoInjectReview === false),
-						runs: reviewRuns,
-					}
-				: undefined,
-			github: github
-				? {
-						entries: externalEntries,
-						notInjected:
-							entries.some((review) => review.autoInjectReview === false) ||
-							unresolvedReviewers.some((reviewer) =>
-								reviewer.links.some((link) => link.autoInjectReview === false),
-							),
-						unresolved,
-						unresolvedBy: unresolvedReviewers.map((reviewer) => ({
-							count: reviewer.count,
-							isBot: reviewer.isBot,
-							links: reviewer.links.map((link) => ({
-								autoInjectReview: link.autoInjectReview,
-								body: link.body,
-								file: link.file,
-								line: link.line,
-								pullRequestUrl: github?.url,
-								url: link.url,
-							})),
-							reviewerId: reviewer.reviewerId,
-							reviewUrl: reviewer.reviewUrl,
-						})),
-					}
-				: undefined,
-			meta: [
-				ao ? aoReviewMeta(ao) : prLabel,
-				unresolved > 0 ? t("inspector.unresolvedCount", { count: unresolved }) : null,
-			]
-				.filter(Boolean)
-				.join(" · "),
-			number,
-			key,
-			title: (ao?.title ?? github?.title)?.trim() || `PR ${prLabel}`,
-			verdict: ao ? reviewVerdict(ao) : undefined,
-		};
-	}).filter((group) =>
-		Boolean(group.ao || (group.github && (group.github.entries.length > 0 || group.github.unresolved > 0))),
-	);
+			if (error) throw apiErrorException(error, t("inspector.rereviewRequestFailed"));
+			void refreshProvider();
+		},
+		onViewInFile: onOpenReviewFile ? (comment) => {
+			if (comment.file) onOpenReviewFile({ line: comment.line, path: comment.file });
+		} : undefined,
+		// A Cloud session's link has no Browser to open in here; the forge link stays.
+		onOpenInBrowser: session.cloud ? undefined : openInAOBrowser,
+	};
 	return (
-		<InspectorReviewsView
-			externalLink={ProductExternalLink}
-			groups={groups}
-			isLoading={isLoading}
-			labels={labels}
-			onRequestRereview={readOnly ? undefined : requestRereview}
-			onResolveInlineComment={readOnly ? undefined : resolveInlineComment}
-			onOpenInAOBrowser={openInAOBrowser}
-			onSendInlineComment={readOnly ? undefined : sendInlineCommentToWorker}
-			onSendReviewSummary={readOnly ? undefined : sendReviewSummaryToWorker}
-			onViewInlineCommentInFile={(comment) => {
-				if (comment.file) onOpenReviewFile?.({ line: comment.line, path: comment.file });
-			}}
-			renderAvatar={(harness) => (
-				<AgentAvatar className="size-5 shrink-0" decorative provider={harness} />
-			)}
-			renderMarkdown={renderReviewMarkdown}
+		<ReviewCommentsSection
+			actions={actions}
+			blocks={blocks}
+			hostId={hostId}
+			loading={isLoading}
+			noPR={prsLoaded && blocks.length === 0}
+			readOnly={readOnly}
+			sessionId={session.id}
 		/>
 	);
 }
 
-function canRequestPRRereview(verdict: string | undefined, pullRequestUrl: string | undefined): boolean {
-	if (!pullRequestUrl) return false;
-	return verdict !== "approved";
+/** One comment as the worker reads it: who, where, what, and a link back. */
+function reviewCommentWorkerMessage(comment: ReviewComment, block: ReviewPRBlock): string {
+	const reviewerId = comment.source === "orchestrator" ? comment.harness || "reviewer" : comment.author;
+	if (comment.kind === "inline") {
+		return formatInlineReviewCommentMessage({ body: comment.body, file: comment.file, line: comment.line, reviewerId, url: comment.url });
+	}
+	return formatReviewSummaryMessage({
+		body: comment.body,
+		pullRequestUrl: block.webUrl,
+		reviewerId,
+		source: comment.source === "orchestrator" ? "agent" : "external",
+		url: comment.url,
+	});
 }
 
-function reviewLabels(t: TFunction): InspectorReviewLabels {
-	return {
-		aoSource: t("inspector.reviewBySource.ao"),
-		bot: t("inspector.bot"),
-		earlierPass: t("inspector.earlierPass"),
-		githubSource: t("inspector.reviewBySource.github"),
-		loadingReviews: t("inspector.loadingReviews"),
-		loadMoreReviews: (count) => t("inspector.loadMoreReviews", { count }),
-		noPastReviewSummaries: t("inspector.noPastReviewSummaries"),
-		notInjected: t("inspector.review.notInjected"),
-		openComments: t("inspector.openComments"),
-		openInAOBrowser: t("inspector.openInAOBrowser"),
-		openInSystemBrowser: t("inspector.openInSystemBrowser"),
-		openInlineComments: (count) => t("inspector.openInlineComments", { count }),
-		requestRereviewPR: t("inspector.requestRereviewPR"),
-		reviewActions: t("inspector.reviewActions"),
-		reviews: t("inspector.reviews"),
-		reviewedAt: (time) => t("inspector.reviewedAt", { time }),
-		commentedAt: (time) => t("inspector.commentedAt", { time }),
-		resolvedComments: (count) => t("inspector.resolvedComments", { count }),
-		rereviewRequested: t("inspector.rereviewRequested"),
-		rereviewRequestFailed: t("inspector.rereviewRequestFailed"),
-		resolveComment: t("inspector.resolveComment"),
-		resolvedReview: t("inspector.resolvedReview"),
-		resolveReviewFailed: t("inspector.resolveReviewFailed"),
-		sendToWorkerAgent: t("inspector.sendToWorkerAgent"),
-		sentToWorkerAgent: t("inspector.sentToWorkerAgent"),
-		sendToWorkerAgentError: t("inspector.sendToWorkerAgentError"),
-		workerAgentWorkingOnFeedback: t("inspector.workerAgentWorkingOnFeedback"),
-		showLatestReviewOnly: t("inspector.showLatestReviewOnly"),
-		showLess: t("inspector.showLess"),
-		showMore: t("inspector.showMore"),
-		commentNumber: (number) => t("inspector.commentNumber", { number }),
-		unresolvedCount: (count) => t("inspector.unresolvedCount", { count }),
-		viewInFile: t("inspector.viewInFile"),
-		viewInFileWorkInProgress: t("inspector.viewInFileWorkInProgress"),
-		viewOnPR: t("inspector.viewOnPR"),
-	};
-}
-
-function renderReviewMarkdown(body: string) {
-	// The same renderer as the PR's comments, so a bot's <details> sections and
-	// badges read as GitHub shows them rather than as literal tags.
-	return (
-		<div className={githubHtmlClass}>
-			<GitHubMarkdown body={body} />
-		</div>
-	);
+/** A PR's open comments in one message, so the worker takes them as one round. */
+function reviewCommentsWorkerMessage(block: ReviewPRBlock, comments: ReviewComment[]): string {
+	const lines = [
+		`Pull request #${block.number} has ${comments.length} open review ${comments.length === 1 ? "comment" : "comments"}. Address the actionable ones, run the relevant tests, commit the fixes, and push the branch.`,
+	];
+	comments.forEach((comment, index) => {
+		const reviewer = sanitizeWorkerMessagePart(comment.source === "orchestrator" ? `Orchestrator review (${comment.harness || "reviewer"})` : `@${comment.author}`);
+		const location = comment.file ? sanitizeWorkerMessagePart(`${comment.file}${comment.line ? `:${comment.line}` : ""}`) : comment.kind === "summary" ? "review summary" : "general PR comment";
+		lines.push("", `${index + 1}. ${reviewer} · ${location}`, sanitizeWorkerMessagePart(comment.body.trim() || "No comment body provided."));
+		if (comment.url) lines.push(`URL: ${sanitizeWorkerMessagePart(comment.url)}`);
+	});
+	return lines.join("\n");
 }
 
 function buildReviewerAgentConfig(
@@ -2844,7 +2569,7 @@ function buildReviewerAgentConfig(
 	return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function formatInlineReviewCommentMessage(comment: InspectorInlineComment & { reviewerId?: string }): string {
+function formatInlineReviewCommentMessage(comment: { body?: string; file?: string; line?: number; reviewerId?: string; url?: string }): string {
 	const reviewer = sanitizeWorkerMessagePart(comment.reviewerId?.trim() || "unknown reviewer");
 	const file = sanitizeWorkerMessagePart(comment.file?.trim() || "");
 	const location = file ? `${file}${comment.line ? `:${comment.line}` : ""}` : "general PR comment";
@@ -2866,7 +2591,7 @@ function formatInlineReviewCommentMessage(comment: InspectorInlineComment & { re
 	return lines.join("\n");
 }
 
-function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): string {
+function formatReviewSummaryMessage(summary: { body: string; pullRequestUrl?: string; reviewerId: string; source: "agent" | "external"; url?: string | null }): string {
 	const reviewer = sanitizeWorkerMessagePart(summary.reviewerId.trim() || "reviewer");
 	const body = sanitizeWorkerMessagePart(summary.body.trim());
 	const url = sanitizeWorkerMessagePart((summary.url || summary.pullRequestUrl || "").trim());
@@ -2978,26 +2703,11 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	// The daemon records why a run failed as a code for diagnostics; people see
-	// one generic message with a retry, for manual triggers too.
-	const latestFailure = reviewStates
-		.map((review) => review.latestRun)
-		.filter(
-			(run): run is ReviewRunFacts =>
-				Boolean(run?.status === "failed" && (run.triggerSource !== "auto" || autoReviewEnabled)),
-		)
-		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-	const [dismissedFailureId, setDismissedFailureId] = useState<string | null>(null);
-	useEffect(() => {
-		if (!latestFailure || latestFailure.id === dismissedFailureId) return;
-		const timer = window.setTimeout(() => setDismissedFailureId(latestFailure.id), 10_000);
-		return () => window.clearTimeout(timer);
-	}, [dismissedFailureId, latestFailure]);
-	if (sortedPRs(session).length === 0) {
-		return <Section surface={false} title={t("inspector.review.controls")}><p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p></Section>;
-	}
-	if (isLoading) {
-		return <Section surface={false} title={t("inspector.review.controls")}><p className={inspectorEmptyClass}>{t("inspector.loadingReviews")}</p></Section>;
+	// Cloud learns of a session's PRs from the control plane, so it counts as having one
+	// while that list loads; once loaded, the list says.
+	const hasOpenPR = sortedPRs(session).some((pr) => pr.state === "open" || pr.state === "draft") || (Boolean(cloud) && isLoading);
+	if (hasOpenPR && isLoading) {
+		return <Section surface={false} title={t("settings.models.reviewerRole")}><p className={inspectorEmptyClass}>{t("inspector.loadingReviews")}</p></Section>;
 	}
 
 	const openReviewStates = openReviewStatesFor(session, reviewStates);
@@ -3005,354 +2715,291 @@ function ReviewPanel({
 	// reviewed earlier by claude-code and another running under codex, taking the
 	// first run reported the wrong agent as the one working. Prefer the run
 	// actually in flight, then the newest recorded one.
-	const runningRun = openReviewStates.find((review) => review.status === "running")?.latestRun;
+	const runningStates = openReviewStates.filter((review) => review.status === "running");
+	const phase = reviewPhase(openReviewStates, reviewerActivityState, reviewerActivityHarness);
+	// The phase and the run it describes come together: the run waiting for input, not whichever PR is first.
+	// With no run for the phase, the label shows alone rather than another run's commit and timer.
+	const runningRun = reviewPhaseRun(openReviewStates, phase, reviewerActivityHarness);
+	// A push since the last pass leaves that pass as previousRun, and it still says when the PR was last reviewed.
 	const newestRun = openReviewStates
-		.map((review) => review.latestRun)
+		.flatMap((review) => [review.latestRun, review.previousRun])
 		.filter((run): run is NonNullable<typeof run> => Boolean(run))
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 	const latest = runningRun ?? newestRun;
+	// A failed pass after a completed one still leaves the PR reviewed at that earlier pass.
+	const lastCompletedRun = openReviewStates
+		.flatMap((review) => [review.latestRun, review.previousRun])
+		.filter((run): run is NonNullable<typeof run> => run?.status === "completed")
+		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 	const resolvedDefaultHarness = resolveDefaultReviewerHarness(config, session.provider);
-	const effectiveReviewerHarness = reviewerOverride || resolvedDefaultHarness;
-	const activeReviewerHarness = latest?.harness || effectiveReviewerHarness;
-	const reviewFailure =
-		latestFailure && latestFailure.id !== dismissedFailureId ? latestFailure : null;
+	const selectedHarness = cloud ? cloudReviewerHarness : reviewerOverride || resolvedDefaultHarness;
+	const activeReviewerHarness = latest?.harness || selectedHarness;
+	// The daemon records why a run failed as a code for diagnostics; people see
+	// one generic line with Retry review, for manual triggers too. An automatic
+	// pass's failure only shows while auto-review is on.
+	const reviewFailure = newestRun?.status === "failed" && (newestRun.triggerSource !== "auto" || autoReviewEnabled) ? newestRun : null;
+	const reviewRunning = reviewIsRunning(openReviewStates);
+	// Auto-review does not lock the reviewer or Review now: a manual pass reuses one
+	// already running, and a reviewed head asks before reviewing it again.
+	const reviewerControlsLocked = reviewRunning || isKilling || isSwitchingReviewer || isTriggering || isCancelling;
+	const runDisabled = !hasOpenPR || isKilling || isSwitchingReviewer || isCancelling || (cloud && !cloudReviewerReady) || reviewRunDisabled(openReviewStates, isTriggering);
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
-	const reviewRunning = reviewIsRunning(openReviewStates);
-	const reviewerControlsLocked = reviewRunning || autoReviewEnabled || isKilling || isSwitchingReviewer || isTriggering || isCancelling;
-	const phase = reviewPhase(openReviewStates, reviewerActivityState, reviewerActivityHarness);
-	const reviewHasRun = reviewRunning || Boolean(latest);
-	const runAction = reviewSessionRunAction(openReviewStates, isTriggering);
-	const runDisabled = isKilling || isSwitchingReviewer || (cloud && !cloudReviewerReady) || reviewRunDisabled(openReviewStates, isTriggering);
-	const primaryReviewActionLabel = reviewRunning
-		? isCancelling
-			? t("inspector.review.cancelling")
-			: t("inspector.review.cancel")
-		: runAction;
-	const archiveActionLabel = isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession");
-	const killDisabled = isKilling || isCancelling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
+	// Each live reviewer can be opened; an agent may have asked one other than the selected reviewer.
+	// A Cloud reviewer runs on the control plane and has no local surface to open.
+	const openableReviewers = cloud ? [] : [
+		...activeReviewers,
+		...(reviewerSurface && !activeReviewers.some((surface) => surface.reviewId === reviewerSurface.reviewId) ? [reviewerSurface] : []),
+	];
+	const canEndSession = !cloud && hasReviewerSession;
+	const showMore = !readOnly && (openableReviewers.length > 0 || canEndSession);
+	const killDisabled = isKilling || isCancelling || isTriggering || isSwitchingReviewer;
 
 	return (
-		<Section surface={false} title={t("inspector.review.controls")}>
-				<div className="flex min-w-0 flex-col gap-3">
-					{error ? (
-						<p className="m-0 rounded-md border border-error/28 bg-error/8 px-2.5 py-2 text-xs leading-normal text-error">
-							{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}
+		<Section surface={false} title={t("settings.models.reviewerRole")}>
+			<div className="flex min-w-0 select-none flex-col">
+				{error ? (
+					<p className="m-0 pb-2 text-xs leading-normal text-error" role="alert">
+						{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}
 					</p>
-				) : null}
-				{reviewFailure ? (
-					<p className="m-0 rounded-md border border-error/28 bg-error/8 px-2.5 py-2 text-xs leading-normal text-error" role="status">
-						<span className="font-semibold">
-							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}:
-						</span>{" "}
-						{t("inspector.review.failedRetry")}
-						{readOnly ? null : (
-							<>
-								{" "}
-								<Button
-									className="h-auto p-0 text-xs"
-									disabled={runDisabled || reviewRunning || isCancelling}
-									// The notice clears itself once a new pass replaces the failed
-									// one; dismissing it here would lose Retry if the request fails.
-									onClick={onTrigger}
-									size="xs"
-									variant="link"
-								>
-									{t("inspector.review.retry")}
-								</Button>
-							</>
-						)}
-					</p>
-				) : null}
-				{notice ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Pressable
-								aria-label={notice}
-								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground"
-							>
-								<Info aria-hidden="true" className="mt-px size-icon-2xs shrink-0" />
-								<span className="min-w-0 text-xs">{t("inspector.reviewAlreadyRanShort")}</span>
-							</Pressable>
-						</TooltipTrigger>
-						<TooltipContent className="max-w-56 leading-normal">{notice}</TooltipContent>
-					</Tooltip>
 				) : null}
 				{readOnly ? null : (
-				<div className="review-run-controls-container flex min-w-0 flex-col text-xs">
-					{cloud ? (
-						<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-							<span className="min-w-0 text-sm text-settings-label">{t("inspector.selectReviewerAgent")}</span>
-							<div className="flex min-w-0 items-center justify-end gap-1.5">
-								<Select
-									disabled={reviewRunning || isTriggering || isCancelling || isInstallingCloudHarness}
-									onValueChange={(harness) => onCloudReviewerHarnessChange?.(harness)}
-									value={cloudReviewerHarness}
-								>
-									<SelectTrigger
-										aria-label={t("inspector.selectReviewerAgent")}
-										className="h-control-md max-w-[11rem] text-xs"
-										size="sm"
+					<>
+						{cloud ? (
+							<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
+								<span className="min-w-0 text-sm text-settings-label">{t("inspector.agent")}</span>
+								<div className="flex min-w-0 items-center justify-end gap-1.5">
+									<Select
+										disabled={reviewRunning || isTriggering || isCancelling || isInstallingCloudHarness}
+										onValueChange={(harness) => onCloudReviewerHarnessChange?.(harness)}
+										value={cloudReviewerHarness}
 									>
-										<SelectValue placeholder={t("inspector.selectReviewerAgent")} />
-									</SelectTrigger>
-									<SelectContent align="end">
-										{["claude-code", "codex", "cursor"].map((harness) => (
-											<SelectItem key={harness} value={harness}>
-												{agentLabel(harness)}
-												{cloudReviewerHarnesses.includes(harness) ? "" : " · Connect credential"}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-								{cloudHarnessStatuses.some(
-									(entry) => entry.harness === cloudReviewerHarness && entry.status !== "ready",
-								) ? (
-									<Button
-										disabled={isInstallingCloudHarness || reviewRunning}
-										onClick={onCloudInstallHarness}
-										size="sm"
-										type="button"
-										variant="secondary"
-									>
-										{isInstallingCloudHarness ? "Installing…" : "Install"}
-									</Button>
-								) : null}
-							</div>
-						</div>
-					) : (
-					// Agent, model, and effort in one menu, picked the way the chat box picks them.
-					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-						<span className="shrink-0 text-sm text-settings-label">{t("settings.models.reviewerRole")}</span>
-						<ReviewerPicker
-							ariaLabel={t("inspector.selectReviewerAgent")}
-							agents={agentCatalog?.agents}
-							defaultHarness={resolvedDefaultHarness}
-							value={reviewerOverride}
-							model={reviewerModel}
-							mode={reviewerMode}
-							effort={reviewerEffort}
-							inherited={inheritedReviewerConfig(config, reviewerOverride || resolvedDefaultHarness)}
-							projectId={session.workspaceId}
-							hostId={hostId}
-							disabled={reviewerControlsLocked}
-							onAgentChange={(next) => onReviewerOverrideChange(next as ReviewerHarness | "", {})}
-							onConfigChange={(next) => onReviewerOverrideChange(reviewerOverride, next)}
-						/>
-					</div>
-					)}
-					{/* Several reviewers can work on one worker at once (an agent may
-					    ask a reviewer other than the selected one). The reviewer tab
-					    shows one at a time, so each live reviewer gets a row to open it
-					    whenever any of them is not the selected reviewer. */}
-					{activeReviewers.some((surface) => surface.reviewId !== reviewerSurface?.reviewId)
-						? <>
-							{/* Labelled, so these rows do not read as stray lines under the reviewer box. */}
-							<p className="mt-2 mb-0.5 text-xs text-settings-muted">{t("inspector.review.activeReviewers")}</p>
-							{activeReviewers.map((surface) => (
-								<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1" key={surface.reviewId}>
-									<span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
-										<AgentAvatar className="size-4" decorative provider={surface.harness} />
-										<span className="truncate">{agentLabel(surface.harness)}</span>
-									</span>
-									<Button
-										className="shrink-0 px-1.5"
-										disabled={surface.mode !== "chat" && !surface.handleId}
-										onClick={() => onOpenReviewer(surface)}
-										size="sm"
-										type="button"
-										variant="ghost"
-									>
-										{t("inspector.review.openReviewer")}
-									</Button>
-								</div>
-							))}
-						</>
-						: null}
-					<InspectorPolicyRow
-						checked={autoReviewEnabled}
-						description={t("inspector.autoReviewDescription")}
-						disabled={isAutoReviewSaving}
-						id={`auto-review-${sessionUiKey(session.id, hostId)}`}
-						label={t("inspector.autoReview")}
-						onCheckedChange={onAutoReviewChange}
-						tooltipClassName="max-w-64"
-					/>
-					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-						<span className="text-sm text-settings-label">{t("inspector.review.session")}</span>
-						<div className="flex min-w-0 items-center justify-end gap-1.5">
-							<Button
-								aria-label={primaryReviewActionLabel}
-								className="shrink-0 gap-1 px-1.5 [&_svg]:size-icon-sm"
-								disabled={reviewRunning ? isCancelling || isKilling || isSwitchingReviewer : runDisabled || autoReviewEnabled}
-								onClick={reviewRunning ? onCancel : onTrigger}
-								size="sm"
-								type="button"
-								variant={reviewRunning ? "ghost" : reviewHasRun ? "secondary" : "primary"}
-							>
-								{reviewRunning ? <X aria-hidden="true" /> : <Play aria-hidden="true" />}
-								<span className="review-run-action-label">{primaryReviewActionLabel}</span>
-							</Button>
-							{!cloud ? (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<span className="inline-flex">
-										<Button
-											aria-label={archiveActionLabel}
-											className="shrink-0 [&_svg]:size-icon-sm"
-											disabled={killDisabled}
-											onClick={onKill}
-											size="icon-sm"
-											type="button"
-											variant="ghost"
+										<SelectTrigger
+											aria-label={t("inspector.selectReviewerAgent")}
+											className="h-control-md max-w-[11rem] text-xs"
+											size="sm"
 										>
-											<Archive aria-hidden="true" />
+											<SelectValue placeholder={t("inspector.selectReviewerAgent")} />
+										</SelectTrigger>
+										<SelectContent align="end">
+											{["claude-code", "codex", "cursor"].map((harness) => (
+												<SelectItem key={harness} value={harness}>
+													{agentLabel(harness)}
+													{cloudReviewerHarnesses.includes(harness) ? "" : " · Connect credential"}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+									{cloudHarnessStatuses.some(
+										(entry) => entry.harness === cloudReviewerHarness && entry.status !== "ready",
+									) ? (
+										<Button
+											disabled={isInstallingCloudHarness || reviewRunning}
+											onClick={onCloudInstallHarness}
+											size="sm"
+											type="button"
+											variant="secondary"
+										>
+											{isInstallingCloudHarness ? "Installing…" : "Install"}
 										</Button>
-									</span>
-								</TooltipTrigger>
-								<TooltipContent>{archiveActionLabel}</TooltipContent>
-							</Tooltip>
+									) : null}
+								</div>
+							</div>
+						) : (
+							// Agent, model, and effort in one menu, picked the way the chat box picks them.
+							<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
+								<span className="shrink-0 text-sm text-settings-label">{t("inspector.agent")}</span>
+								<ReviewerPicker
+									ariaLabel={t("inspector.selectReviewerAgent")}
+									agents={agentCatalog?.agents}
+									defaultHarness={resolvedDefaultHarness}
+									value={reviewerOverride}
+									model={reviewerModel}
+									mode={reviewerMode}
+									effort={reviewerEffort}
+									inherited={inheritedReviewerConfig(config, reviewerOverride || resolvedDefaultHarness)}
+									projectId={session.workspaceId}
+									hostId={hostId}
+									disabled={reviewerControlsLocked}
+									onAgentChange={(next) => onReviewerOverrideChange(next as ReviewerHarness | "", {})}
+									onConfigChange={(next) => onReviewerOverrideChange(reviewerOverride, next)}
+								/>
+							</div>
+						)}
+						<InspectorPolicyRow
+							checked={autoReviewEnabled}
+							description={t("inspector.review.autoReviewHint")}
+							disabled={isAutoReviewSaving}
+							id={`auto-review-${sessionUiKey(session.id, hostId)}`}
+							label={t("inspector.review.autoReviewLabel")}
+							onCheckedChange={onAutoReviewChange}
+							tooltipClassName="max-w-64"
+						/>
+						<div className="mt-2 flex min-w-0 items-center gap-1.5">
+							{reviewRunning ? (
+								<Button
+									className="min-w-0 flex-1 [&_svg]:size-icon-sm"
+									disabled={isCancelling || isKilling || isSwitchingReviewer}
+									onClick={onCancel}
+									size="sm"
+									type="button"
+									variant="secondary"
+								>
+									<CircleStop aria-hidden="true" />
+									{isCancelling ? t("inspector.review.cancelling") : t("inspector.review.cancel")}
+								</Button>
+							) : (
+								<Button
+									className="min-w-0 flex-1"
+									disabled={runDisabled}
+									onClick={onTrigger}
+									size="sm"
+									type="button"
+									variant="primary"
+								>
+									{isTriggering
+										? t("inspector.review.starting")
+										: reviewFailure
+											? t("inspector.review.retryReview")
+											: t("inspector.review.reviewNow")}
+								</Button>
+							)}
+							{showMore ? (
+								<DropdownMenu>
+									<DropdownMenuTrigger asChild>
+										<Button aria-label={t("inspector.review.moreActions")} size="icon-sm" title={t("inspector.review.moreActions")} type="button" variant="quiet">
+											<MoreVertical aria-hidden="true" className="size-icon-sm" />
+										</Button>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent align="end" className="min-w-52">
+										{openableReviewers.map((surface) => (
+											<DropdownMenuItem
+												disabled={surface.mode !== "chat" && !surface.handleId}
+												key={surface.reviewId}
+												onSelect={() => onOpenReviewer(surface)}
+											>
+												<AgentAvatar className="size-4" decorative provider={surface.harness} />
+												{t("inspector.review.openReviewerNamed", { agent: agentLabel(surface.harness) })}
+											</DropdownMenuItem>
+										))}
+										{canEndSession ? (
+											<>
+												{openableReviewers.length > 0 ? <DropdownMenuSeparator /> : null}
+												<DropdownMenuItem disabled={killDisabled} onSelect={onKill} variant="destructive">
+													<CircleStop aria-hidden="true" />
+													{isKilling ? t("inspector.review.endingSession") : t("inspector.review.endSession")}
+												</DropdownMenuItem>
+											</>
+										) : null}
+									</DropdownMenuContent>
+								</DropdownMenu>
 							) : null}
 						</div>
-					</div>
-				</div>
+					</>
 				)}
-				{phase ? (
-					<div className="flex items-center gap-2 border-t border-border pt-3">
-						<Loader2 aria-hidden="true" className="size-icon-sm shrink-0 animate-spin text-muted-foreground" />
-						<span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
-							{isCancelling || phase === "stopping"
-								? t("inspector.review.cancelling")
-								: phase === "starting"
-									? t("inspector.review.starting")
-									: phase === "waiting_input"
-										? `${t("inspector.review.waitingForInput")} · ${agentLabel(activeReviewerHarness)}`
-										: `${t("inspector.review.reviewing")} · ${agentLabel(activeReviewerHarness)}`}
-						</span>
-					</div>
-				) : null}
+				<div className="mt-2">
+					<ReviewStatusLine
+						activeHarness={activeReviewerHarness}
+						failed={Boolean(reviewFailure)}
+						hasOpenPR={hasOpenPR}
+						isCancelling={isCancelling}
+						lastCompleted={lastCompletedRun}
+						notice={notice ?? null}
+						phase={phase}
+						phaseRun={runningRun}
+						running={runningStates}
+						selectedHarness={selectedHarness}
+					/>
+				</div>
 			</div>
 		</Section>
 	);
 }
 
-function githubVerdict(verdict: string, t: TFunction): { label: string; tone: "neutral" | "running" | "success" | "danger" } {
-	switch (verdict) {
-		case "approved":
-			return { label: t("inspector.review.approved"), tone: "success" };
-		case "changes_requested":
-			return { label: t("inspector.review.changesRequested"), tone: "danger" };
-		case "review_required":
-			return { label: t("inspector.review.notRun"), tone: "neutral" };
-		default:
-			return { label: t("inspector.review.commented"), tone: "neutral" };
-	}
+/** "0:42" while a review runs; minutes past an hour keep counting ("74:05"). */
+function formatElapsed(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-/* The reviews view is assembled from two queries that live in different
-   components, so the derivations both need are module-level rather than
-   recomputed (and allowed to drift) in each. */
-
-/** Every recorded reviewer pass per PR, so each reviewer keeps its own tab.
- *  Falls back to the state's own runs against a daemon predating the runs field. */
-function runsByPRFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[]): Map<string, ReviewRunFacts[]> {
-	const byPR = new Map<string, ReviewRunFacts[]>();
-	for (const run of runs.filter(
-		(run) => run.status === "completed" && Boolean(run.body?.trim()),
-	)) {
-		byPR.set(run.prUrl, [...(byPR.get(run.prUrl) ?? []), run]);
-	}
-	if (runs.length === 0) {
-		for (const state of openReviewStates) {
-			const fallback = [state.latestRun, state.previousRun].filter(
-				(run): run is ReviewRunFacts =>
-					Boolean(run) &&
-					run!.status === "completed" &&
-					Boolean(run!.body?.trim()),
-			);
-			if (fallback.length > 0) byPR.set(state.prUrl, fallback);
-		}
-	}
-	return byPR;
+function useNowWhile(active: boolean): number {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!active) return;
+		setNow(Date.now());
+		const timer = window.setInterval(() => setNow(Date.now()), 1000);
+		return () => window.clearInterval(timer);
+	}, [active]);
+	return now;
 }
 
-function reviewRunHasOutcome(run: ReviewRunFacts | undefined): boolean {
-	return Boolean(run?.verdict?.trim());
-}
-
-/** The PRs AO has an agent review outcome for. */
-function triggeredReviewStatesFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[]): PRReviewState[] {
-	return openReviewStates.filter(
-		(reviewState) =>
-			reviewRunHasOutcome(reviewState.latestRun) ||
-			reviewRunHasOutcome(reviewState.previousRun) ||
-			runs.some((run) => run.prUrl === reviewState.prUrl && reviewRunHasOutcome(run)) ||
-			reviewState.status === "up_to_date" ||
-			reviewState.status === "changes_requested",
+/**
+ * One line under the Reviewer controls: what the reviewer is doing now (with
+ * the commit and the time it has run), why the last pass failed, or when it
+ * last reviewed. The verdict itself lives on the review in Comments.
+ */
+function ReviewStatusLine({
+	activeHarness,
+	failed,
+	hasOpenPR,
+	isCancelling,
+	lastCompleted,
+	notice,
+	phase,
+	phaseRun: runningRun,
+	running,
+	selectedHarness,
+}: {
+	activeHarness: string;
+	failed: boolean;
+	hasOpenPR: boolean;
+	isCancelling: boolean;
+	/** The newest completed pass, which says when the PR was last reviewed. */
+	lastCompleted?: ReviewRunFacts;
+	notice: string | null;
+	phase: ReturnType<typeof reviewPhase>;
+	/** The run behind the phase, whose commit and start time show. */
+	phaseRun?: PRReviewState["latestRun"];
+	running: PRReviewState[];
+	selectedHarness: string;
+}) {
+	const { t } = useTranslation();
+	const startedAt = runningRun ? runningRun.startedAt || runningRun.launchingAt || runningRun.createdAt : undefined;
+	const now = useNowWhile(Boolean(phase && startedAt));
+	const lineClass = "m-0 flex min-h-5 min-w-0 items-center gap-1.5 text-xs leading-normal";
+	if (!hasOpenPR) return <p className={cn(lineClass, "text-muted-foreground")}>{t("inspector.review.noPRStatus")}</p>;
+	if (phase) {
+		const label = isCancelling || phase === "stopping"
+			? t("inspector.review.cancelling")
+			: phase === "starting"
+				? t("inspector.review.starting")
+				: phase === "waiting_input"
+					? t("inspector.review.waitingForInput")
+					: t("inspector.review.reviewingPR", { prs: running.map((review) => `#${review.prNumber}`).join(", ") });
+		const facts = [
+			// Name the agent when it is not the one picked above (an agent asked for another).
+			phase === "waiting_input" || activeHarness !== selectedHarness ? agentLabel(activeHarness) : "",
+			runningRun?.targetSha ? runningRun.targetSha.slice(0, 7) : "",
+			startedAt ? formatElapsed(now - Date.parse(startedAt)) : "",
+		].filter(Boolean);
+		return (
+			<p className={lineClass} role="status">
+				<Loader2 aria-hidden="true" className="size-icon-xs shrink-0 animate-spin text-working" />
+				<span className="min-w-0 truncate text-foreground">{label}</span>
+				{facts.length > 0 ? <span className="shrink-0 tabular-nums text-passive">{facts.join(" · ")}</span> : null}
+			</p>
+		);
+	}
+	if (notice) return <p className={cn(lineClass, "text-muted-foreground")} role="status">{notice}</p>;
+	if (failed) return <p className={cn(lineClass, "text-error")} role="status">{t("inspector.review.lastFailed")}</p>;
+	const lastReviewed = lastCompleted;
+	if (!lastReviewed) return <p className={cn(lineClass, "text-muted-foreground")}>{t("inspector.review.notReviewedYet")}</p>;
+	return (
+		<p className={cn(lineClass, "text-muted-foreground")}>
+			<span className="min-w-0 truncate">{t("inspector.review.lastReviewed", { time: formatTimeCompact(lastReviewed.createdAt) })}</span>
+			{lastReviewed.targetSha ? <span className="shrink-0 tabular-nums text-passive">· {lastReviewed.targetSha.slice(0, 7)}</span> : null}
+		</p>
 	);
-}
-
-function aoReviewMeta(reviewState: PRReviewState): string {
-	if (
-		reviewState.status === "needs_review" &&
-		(!reviewState.latestRun ||
-			reviewState.latestRun.status === "failed" ||
-			reviewState.latestRun.status === "cancelled" ||
-			reviewState.latestRun.status === "superseded")
-	) {
-		return appI18n.t("inspector.latestCommitNotReviewedMeta", { number: reviewState.prNumber });
-	}
-	const displayRun = reviewState.latestRun ?? reviewState.previousRun;
-	if (displayRun?.createdAt) {
-		return `#${reviewState.prNumber} · ${formatTimeCompact(displayRun.createdAt)}`;
-	}
-	if (!displayRun && (reviewState.status === "needs_review" || reviewState.status === "ineligible")) {
-		return appI18n.t("inspector.notRunMeta", { number: reviewState.prNumber });
-	}
-	return `#${reviewState.prNumber}`;
-}
-
-// GitHub anchors a posted review at #pullrequestreview-<id> on the PR page; we
-// only have that link once the run has been delivered to GitHub.
-function aoReviewCommentUrl(run: PRReviewState["latestRun"]): string | null {
-	if (!run?.prUrl || !run.githubReviewId) return null;
-	return `${run.prUrl}#pullrequestreview-${run.githubReviewId}`;
-}
-
-function reviewVerdict(reviewState: PRReviewState): {
-	label: string;
-	tone: "neutral" | "running" | "success" | "danger";
-} {
-	if (reviewState.status === "needs_review") {
-		return { label: appI18n.t("inspector.review.needed"), tone: "neutral" };
-	}
-	if (reviewState.latestRun?.status === "failed") {
-		return { label: appI18n.t("inspector.review.failed"), tone: "danger" };
-	}
-	if (reviewState.latestRun?.status === "cancelled") {
-		return { label: appI18n.t("inspector.review.cancelled"), tone: "neutral" };
-	}
-	if (reviewState.latestRun?.status === "superseded") {
-		return { label: appI18n.t("inspector.review.superseded"), tone: "neutral" };
-	}
-	switch (reviewState.latestRun?.status) {
-		case "queued":
-		case "launching":
-			return { label: appI18n.t("inspector.review.starting"), tone: "running" };
-		case "cancelling":
-			return { label: appI18n.t("inspector.review.cancelling"), tone: "running" };
-	}
-	switch (reviewState.status) {
-		case "running":
-			return { label: appI18n.t("inspector.review.reviewing"), tone: "running" };
-		case "up_to_date":
-			return { label: appI18n.t("inspector.review.approved"), tone: "success" };
-		case "changes_requested":
-			return { label: appI18n.t("inspector.review.changesRequested"), tone: "danger" };
-		case "ineligible":
-			return { label: appI18n.t("inspector.review.notRun"), tone: "neutral" };
-	}
-	return { label: appI18n.t("inspector.review.notRun"), tone: "neutral" };
 }
 
 function BrowserView({
