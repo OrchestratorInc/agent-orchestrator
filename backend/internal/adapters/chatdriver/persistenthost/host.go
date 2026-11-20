@@ -6,6 +6,7 @@ package persistenthost
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -45,6 +46,11 @@ const (
 // SocketProvider as the provider command, followed by a unix socket path, makes
 // the host connect to a running adapter instead of starting one.
 const SocketProvider = "ao-acp-socket"
+
+// ProcessGroupMethod is a shared adapter's notice that it started a process
+// group for this chat. The host terminates those groups when it stops, as it
+// terminates its own provider's group.
+const ProcessGroupMethod = "_ao/process_group"
 
 // Protocol selects the provider-wire behavior owned by the host.
 type Protocol string
@@ -737,6 +743,7 @@ func Run(ctx context.Context, cfg Config) error {
 		defer func() { _ = h.acp.close(context.WithoutCancel(ctx)) }()
 	}
 	h.cond = sync.NewCond(&h.mu)
+	defer h.terminateProcessGroups()
 	providerDone := make(chan error, 1)
 	go func() { providerDone <- h.forwardProvider(stdout) }()
 	if h.acp != nil {
@@ -823,12 +830,14 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 type host struct {
-	ctx      context.Context
-	listener net.Listener
-	child    *exec.Cmd
-	stdin    io.WriteCloser
-	token    string
-	acp      *acpRelay
+	// processGroups are the shared adapter's process groups for this chat.
+	processGroups []int
+	ctx           context.Context
+	listener      net.Listener
+	child         *exec.Cmd
+	stdin         io.WriteCloser
+	token         string
+	acp           *acpRelay
 
 	mu               sync.Mutex
 	cond             *sync.Cond
@@ -1075,6 +1084,12 @@ func (h *host) forwardProvider(stdout io.Reader) error {
 	reader := bufio.NewReader(stdout)
 	for {
 		frame, err := reader.ReadBytes('\n')
+		if pgid, ok := processGroupNotice(frame); ok {
+			h.mu.Lock()
+			h.processGroups = append(h.processGroups, pgid)
+			h.mu.Unlock()
+			frame = nil
+		}
 		if len(frame) > 0 {
 			h.mu.Lock()
 			retainedByACP := false
@@ -1138,4 +1153,30 @@ func hostArgs(cfg Config) []string {
 		args = append(args, string(cfg.Protocol), cfg.OwnershipFingerprint)
 	}
 	return append(append(args, "--"), cfg.Argv...)
+}
+
+func processGroupNotice(frame []byte) (int, bool) {
+	if !bytes.Contains(frame, []byte(ProcessGroupMethod)) {
+		return 0, false
+	}
+	var notice struct {
+		Method string `json:"method"`
+		Params struct {
+			PID int `json:"pid"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(frame, &notice) != nil || notice.Method != ProcessGroupMethod || notice.Params.PID <= 1 {
+		return 0, false
+	}
+	return notice.Params.PID, true
+}
+
+func (h *host) terminateProcessGroups() {
+	h.mu.Lock()
+	groups := h.processGroups
+	h.processGroups = nil
+	h.mu.Unlock()
+	for _, pgid := range groups {
+		_ = terminateProcessGroup(pgid)
+	}
 }

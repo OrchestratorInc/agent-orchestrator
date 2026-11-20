@@ -13,6 +13,8 @@ import (
 )
 
 func TestSharedAdapterRefusesSocketPathOverLimit(t *testing.T) {
+	sharedAdapterSupported = true
+	t.Cleanup(func() { sharedAdapterSupported = sharedAdapterAvailable })
 	cfg := acpdriver.LaunchConfig{SessionID: "long-1", DataDir: "/" + strings.Repeat("d", maxSocketPath)}
 	_, ok, err := sharedAdapterLaunch(context.Background(), cfg, runtimeLaunch{command: "node", server: "acp-server.mjs"}, nil)
 	if ok || err == nil {

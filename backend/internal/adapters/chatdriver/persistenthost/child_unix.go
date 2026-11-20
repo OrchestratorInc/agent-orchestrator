@@ -53,3 +53,8 @@ func openHostFile(path string) (*os.File, error) {
 
 // hostFileBusy is a Windows sharing conflict, which Unix does not have.
 func hostFileBusy(error) bool { return false }
+
+// terminateProcessGroup asks a process group to exit, then kills what remains.
+func terminateProcessGroup(pgid int) error {
+	return aoprocess.TerminateGroup(pgid, 2*time.Second)
+}

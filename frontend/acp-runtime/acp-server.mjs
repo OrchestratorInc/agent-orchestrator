@@ -5,7 +5,7 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:net";
-import { onUncaughtException, onUnhandledRejection, release, runAsChat, track } from "./connection-owner.mjs";
+import { onUncaughtException, onUnhandledRejection, ownedSpawn, release, runAsChat, track } from "./connection-owner.mjs";
 
 const socketPath = process.argv[2];
 // Exit this long after the last connection closes.
@@ -17,8 +17,7 @@ const releaseMs = 3_000;
 
 // The SDK's spawn and the adapter's fs.watch are recorded for the chat that
 // started them, so they end with that chat as they ended with its own process.
-const { spawn } = childProcess;
-childProcess.spawn = (...args) => track(spawn(...args));
+childProcess.spawn = ownedSpawn(childProcess.spawn);
 const { watch } = fs;
 fs.watch = (...args) => track(watch(...args));
 syncBuiltinESMExports();
@@ -48,9 +47,12 @@ fs.rmSync(socketPath, { force: true });
 const server = createServer((socket) => {
 	open++;
 	clearTimeout(idleTimer);
-	const chat = { sessionId: "", resources: new Set(), close: () => socket.destroy() };
+	const chat = { sessionId: "", resources: new Set(), released: false, close: () => socket.destroy() };
 	runAsChat(chat, () => {
 		const { connection, agent } = runAcp(undefined, nodeToWebWritable(socket), nodeToWebReadable(socket));
+		// The chat host terminates these groups when it stops, including when this
+		// process has died.
+		chat.onSpawn = (child) => agent.client.extNotification("_ao/process_group", { pid: child.pid }).catch(() => {});
 		let closed = false;
 		const dispose = () => agent.dispose().catch((err) => console.error("Error during cleanup:", err));
 		// A session registers only after its query starts, so one still starting at
@@ -68,7 +70,7 @@ const server = createServer((socket) => {
 		socket.on("close", () => {
 			closed = true;
 			dispose();
-			setTimeout(() => release(chat.resources), releaseMs);
+			setTimeout(() => release(chat), releaseMs);
 			if (--open === 0) exitWhenIdle();
 		});
 		connection.closed.then(() => socket.destroy());

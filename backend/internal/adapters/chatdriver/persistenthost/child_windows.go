@@ -118,6 +118,9 @@ func killProviderProcess(ctx context.Context, cmd *exec.Cmd) error {
 // deadline's kill reaps the job.
 func terminateProviderProcess(*exec.Cmd) error { return nil }
 
+// Shared adapters, the only source of process group notices, do not run on Windows.
+func terminateProcessGroup(int) error { return nil }
+
 // openHostFile opens a chat host file for reading without denying deletion.
 // os.Open omits FILE_SHARE_DELETE, so while Shutdown polls host.json the
 // exiting host's DeleteFile fails with a sharing violation (and host.json then
