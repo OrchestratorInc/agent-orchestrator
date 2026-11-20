@@ -28,12 +28,12 @@ The current daemon registers the following capabilities. Availability still depe
 | `cursor` | Yes | Yes | Yes |
 | `qwen` | Yes | Yes | — |
 | `gemini` | Yes | — | — |
-| `copilot` | Yes | — | Yes |
+| `copilot` | Yes | Yes | Yes |
 | `kimi` | Yes | Yes | Yes |
 | `muse` | Yes | — | Yes |
 | `droid` | Yes | Yes | Yes |
 | `amp` | Yes | — | Yes |
-| `agy` | Yes | — | Yes |
+| `agy` | Yes | Yes | Yes |
 | `crush` | Yes | — | Yes |
 | `aider` | Yes | — | Yes |
 | `goose` | Yes | — | — |
@@ -41,12 +41,14 @@ The current daemon registers the following capabilities. Availability still depe
 | `continue` | Yes | — | — |
 | `devin` | Yes | — | Yes |
 | `omp` | Yes | Yes | — |
+| `codewhale` | Yes | — | — |
 | `hermes` | Yes | Yes | — |
 | `cline` | Yes | — | Yes |
 | `kiro` | Yes | — | Yes |
 | `kilocode` | Yes | — | Yes |
 | `vibe` | Yes | — | — |
 | `pi` | Yes | Yes | Yes |
+| `tau` | Yes | — | — |
 | `kimchi` | Yes | Yes | Yes |
 | `prime-agent` | Yes | — | — |
 | `autohand` | Yes | — | Yes |
@@ -54,6 +56,8 @@ The current daemon registers the following capabilities. Availability still depe
 | `unreal-agent` | No | Yes | — |
 | `docker-agent` | No | Yes | — |
 | `mimo-code` | Yes | — | — |
+| `minimax-code` | Yes | — | — |
+| `memcode` | Yes | — | — |
 | `deepseek-harness` | Yes | Yes | — |
 | `openhands` | Yes | — | — |
 | `command-code` | Yes | Yes | — |
@@ -103,6 +107,8 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `docker-agent` | [Docker Agent standalone binary](https://github.com/docker/docker-agent/releases), v1.150.0 or newer; optional native config |
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
 | `command-code` | Native ACP (`cmd acp`) |
+| `copilot` | Native ACP (`copilot --acp`) |
+| `agy` | Native ACP (`agy acp`), agy 1.5.4 or newer |
 
 Every other harness is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the Orchestrator session and worktree.
 

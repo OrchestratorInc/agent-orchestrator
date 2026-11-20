@@ -1,16 +1,36 @@
 ---
 title: はじめに
 description: Orchestrator でできること、使いどころ、最初に読むページを紹介します。
-translatedFrom: bbe596d4eaad
+translatedFrom: 2eb1219b092b
 ---
 
 Orchestrator は、AI コーディングエージェントを監督するためのデスクトップアプリです。ワーカーごとに分離されたワークスペースを用意し、会話やターミナルをいつでも開ける状態に保ち、Git の作業をプルリクエスト、CI、レビュー、マージコンフリクトと結び付けます。
 
 コードを書くのはエージェントです。Orchestrator は、プロジェクトとセッションの管理、作業の追跡、指示の送信、変更のレビュー、ブラウザプレビューの表示を手助けします。
 
-<Callout type="info" title="最短の始め方">
-	デスクトップアプリをダウンロードし、リポジトリを追加して、小さなセッションを 1 つ始めます。[インストール](/installation)、続いて[クイックスタート](/quickstart)を参照してください。
-</Callout>
+![Orchestrator のボード: サイドバーにプロジェクト、状態ごとにグループ化されたセッション、各カードにプルリクエストの状態。](/docs/images/dashboard.png)
+
+<span id="at-a-glance" />
+## ひと目でわかる概要
+
+| | |
+| --- | --- |
+| ライセンス | Apache-2.0 |
+| 料金 | デスクトップアプリは無料。AO Cloud は別途提供のゲート付きサービスです |
+| デスクトップ環境 | macOS、Windows、Linux |
+| モバイル | iOS / Android のコンパニオンアプリ |
+| リポジトリ | [OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator) |
+| コミュニティ | [Discord](https://discord.com/invite/UZv7JjxbwG)、[GitHub Discussions](https://github.com/OrchestratorInc/agent-orchestrator/discussions)、[@useOrchestrator](https://x.com/useOrchestrator) |
+
+<span id="choose-your-path" />
+## 目的に合わせて選ぶ
+
+<Cards>
+	<Card title="最初のタスクを実行する" description="アプリをインストールし、リポジトリを追加して、1 つのワーカーをプロンプトからプルリクエストまで追います。約 15 分です。" href="/quickstart" />
+	<Card title="複数のエージェントを監督する" description="ボード、インスペクター、レビューを使って、複数のワーカーを並行して動かします。" href="/dashboard" />
+	<Card title="スマートフォンから使う" description="モバイルアプリをペアリングして、どこからでもセッションを確認して応答します。" href="/configuration/remote-access" />
+	<Card title="Orchestrator に貢献する" description="リポジトリをローカルにセットアップして issue に取り組みます。" href="https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/development.md" />
+</Cards>
 
 <span id="what-ao-helps-you-do" />
 <span id="what-orchestrator-helps-you-do" />
@@ -57,7 +77,7 @@ Chat に対応しているかどうかは、ハーネスとそのインストー
 
 Connect Mobile は、接続パスワードで保護された、オプトインの別のリスナーです。ローカルでのペアリングと安全なリモートペアリングについては、[Connect Mobile](/configuration/remote-access) を参照してください。
 
-このマニュアルは、最新の安定版リリース [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3)（2026 年 10 月 1 日公開）に合わせて確認しています。`main` にある新しい操作は、このリリースと異なる場合があります。新しい操作を使う前に、[変更履歴](/changelog)とリリースノートを確認してください。
+このマニュアルは、最新の安定版リリース [v0.15.3](https://github.com/OrchestratorInc/agent-orchestrator/releases/tag/v0.15.3)（2026 年 11 月 16 日公開）に合わせて確認しています。`main` にある新しい操作は、このリリースと異なる場合があります。新しい操作を使う前に、[変更履歴](/changelog)とリリースノートを確認してください。
 
 クラウドセッションは、アカウントのアクセス要件がある別のサービスです。設定方法は [Cloud ガイド](/guides/cloud)を参照してください。
 

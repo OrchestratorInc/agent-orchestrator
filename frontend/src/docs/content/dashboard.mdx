@@ -5,6 +5,8 @@ description: Use the AO desktop app to supervise projects, sessions, pull reques
 
 The Orchestrator desktop app is where you manage projects and sessions. Open a worker's Chat or terminal, review its pull request and changed files, and preview its web app.
 
+![The Orchestrator board: projects in the sidebar, sessions grouped by state, and pull-request status on each card.](/docs/images/dashboard.png)
+
 ## The app shell
 
 | Area | What it contains |
@@ -91,7 +93,7 @@ Opening the panel marks loaded unread alerts as read, but leaves them in the fee
 
 ## Connect Mobile
 
-In **Settings → Connect Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. Orchestrator advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
+In **Settings → Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. Orchestrator advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
 
 Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Turn notifications off on the phone, or remove it in Connect Mobile. On supported Macs, **Keep awake** can help keep the computer reachable.
 
@@ -113,4 +115,5 @@ Closing a terminal or switching views does not archive a session. Some detached 
 	<Card title="Quickstart" href="/quickstart" description="Create and follow the first worker session." />
 	<Card title="Architecture" href="/architecture" description="Understand the daemon, storage, events, and controller modes." />
 	<Card title="Examples" href="/examples" description="Try practical desktop and CLI workflows." />
+	<Card title="Troubleshooting" href="/troubleshooting" description="Fix common session, agent, and preview problems." />
 </Cards>

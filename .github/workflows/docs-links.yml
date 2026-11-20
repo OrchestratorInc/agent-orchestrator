@@ -1,0 +1,27 @@
+name: Docs link check
+
+on:
+  pull_request:
+    paths:
+      - "frontend/src/docs/**"
+
+permissions:
+  contents: read
+
+jobs:
+  lychee:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check internal links in the docs site content
+        uses: lycheeverse/lychee-action@v2
+        with:
+          lycheeVersion: v0.24.2
+          args: --offline --no-progress --root-dir ${{ github.workspace }}/frontend/src/docs/content --fallback-extensions mdx --index-files index.mdx --remap '/content/docs/images/(.*) /public/docs/images/$1' "./frontend/src/docs/content/**/*.mdx"
+          fail: true
+      - name: Check external links in the docs site content
+        uses: lycheeverse/lychee-action@v2
+        with:
+          lycheeVersion: v0.24.2
+          args: --no-progress --root-dir ${{ github.workspace }}/frontend/src/docs/content --fallback-extensions mdx --index-files index.mdx --remap '/content/docs/images/(.*) /public/docs/images/$1' --exclude '^file://' --exclude '^https://x\.com/' "./frontend/src/docs/content/**/*.mdx"
+          fail: true

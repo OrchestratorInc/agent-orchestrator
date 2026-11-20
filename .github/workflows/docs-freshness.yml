@@ -1,0 +1,42 @@
+name: Docs freshness
+
+on:
+  schedule:
+    - cron: "30 3 * * 1" # 09:00 IST, Mondays
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit feature PRs merged in the last week
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          since=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          prs=$(gh pr list --state merged --search "merged:>=${since%T*}" --json number,title,files --limit 100)
+          echo "$prs" > /tmp/merged.json
+          gap=$(jq -r '[.[] | select((.files | map(.path) | any(startswith("frontend/src/docs/"))) | not)] | length' /tmp/merged.json)
+          total=$(jq -r 'length' /tmp/merged.json)
+          echo "gap=$gap" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+      - name: Open a docs-gap issue when feature PRs skipped docs
+        if: steps.audit.outputs.gap != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GAP: ${{ steps.audit.outputs.gap }}
+          TOTAL: ${{ steps.audit.outputs.total }}
+        run: |
+          existing=$(gh issue list --state open --search "Weekly docs freshness" --json number --jq 'length')
+          if [ "$existing" = "0" ]; then
+            gh issue create \
+              --title "Weekly docs freshness: $GAP of $TOTAL merged PRs did not touch the docs" \
+              --body "In the last week, $GAP of $TOTAL merged PRs changed code without updating anything under frontend/src/docs/. Review the list below and open a docs PR if a feature changed something users see." \
+              --label documentation
+          fi
