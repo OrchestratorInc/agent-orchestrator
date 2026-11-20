@@ -6,6 +6,8 @@ import { createContext, createElement, useContext, useImperativeHandle, Fragment
 const appContext = createContext({ currentHostId: "host-1", notificationsUnread: 0 });
 const counters = vi.hoisted(() => ({ renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
 const boardStore = vi.hoisted(() => ({
+	// The board reads each machine's freshness; no live sync time belongs to any here.
+	getPrimaryLastSyncAt: () => undefined,
 	projects: [], allProjects: [], connection: "open", hostStates: [] as { hostId: string; connection: string }[],
 	kill: vi.fn(), renameWorker: vi.fn(), setWorkerPinned: vi.fn(), restore: vi.fn(), resumeAgent: vi.fn(),
 	configForHost: (hostId: string) => ({ host: `${hostId}.test`, httpPort: "3011", muxPort: "3011", password: "secret", hostId }),
@@ -221,6 +223,22 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+
+	// The row of a machine that can't be reached shows the last thing heard: it
+	// stays readable, at a lower voice, and says so to a screen reader.
+	it("dims a row whose machine can't be reached and says it is the last known state", () => {
+		let renderer!: ReactTestRenderer;
+		const handlers = {
+			onSwipeOpen: vi.fn(), onSwipeClose: vi.fn(), onRenameStart: vi.fn(), onRenameCancel: vi.fn(),
+			onRename: vi.fn(async () => {}), onSetPinned: vi.fn(async () => {}), onDelete: vi.fn(), onResume: vi.fn(), onRestore: vi.fn(),
+		};
+		act(() => {
+			renderer = create(<WorkerListRow session={session} projectName="Agent Orchestrator" unreachable isRenaming={false} nowBucket={1} {...handlers} />);
+		});
+		const dimmed = renderer.root.findAll((node) => Array.isArray(node.props.style) && node.props.style.some((value: { opacity?: number } | false) => value && value.opacity === 0.5));
+		expect(dimmed.length).toBeGreaterThanOrEqual(2);
+		expect(renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.endsWith("Last known; its machine can't be reached.")).length).toBeGreaterThan(0);
 	});
 
 });

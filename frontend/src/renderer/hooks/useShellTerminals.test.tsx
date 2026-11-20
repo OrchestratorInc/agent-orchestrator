@@ -44,15 +44,19 @@ vi.mock("../stores/terminal-shell-store", () => ({
 
 import {
 	adoptedShellHandle,
+	reloadCloudShellTerminalsForTest,
 	type ShellTerminal,
 	shellTerminalsQueryKey,
 	shellTerminalsQueryKeyForHost,
 	useCloseShellTerminal,
 	useOpenShellTerminal,
+	toShellTerminal,
 	useRenameShellTerminal,
+	useReopenShellTerminal,
 	useShellTerminals,
 } from "./useShellTerminals";
 import { takeCloudShellInput } from "../lib/cloud-shell-input";
+import { useShellAgentStore } from "../stores/shell-agent-store";
 
 const shells: ShellTerminal[] = [
 	{
@@ -84,6 +88,7 @@ function queryClientWithShells() {
 }
 
 beforeEach(() => {
+	useShellAgentStore.setState({ agents: {}, resuming: {} });
 	deleteMock.mockReset();
 	getMock.mockReset();
 	patchMock.mockReset();
@@ -289,6 +294,48 @@ describe("useOpenShellTerminal", () => {
 		await act(async () => close.result.current.mutateAsync(shell.handleId));
 		expect(deleteMock).not.toHaveBeenCalled();
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([]);
+	});
+});
+
+describe("Cloud shell tabs across a restart", () => {
+	it("lists a session's open and renamed Cloud shells again after a restart, and forgets closed ones", async () => {
+		window.localStorage.removeItem("ao.cloudShellTerminals");
+		reloadCloudShellTerminalsForTest();
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const open = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+		const input = { projectId: "cloud-project", sessionId: "cloud-session", cloud: { orgId: "cloud-org" } };
+		const kept = (await act(async () => open.result.current.mutateAsync(input)))!;
+		const closed = (await act(async () => open.result.current.mutateAsync(input)))!;
+		const rename = renderHook(() => useRenameShellTerminal(), { wrapper: wrapper(queryClient) });
+		await act(async () => rename.result.current.mutateAsync({ handleId: kept.handleId, title: "server" }));
+		const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
+		await act(async () => close.result.current.mutateAsync(closed.handleId));
+
+		// A restart: a fresh renderer reads the tabs back from storage.
+		reloadCloudShellTerminalsForTest();
+		const restarted = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const listed = renderHook(() => useShellTerminals(), { wrapper: wrapper(restarted) });
+		await waitFor(() => expect(listed.result.current.data).toEqual([{ ...kept, title: "server" }]));
+
+		await act(async () => close.result.current.mutateAsync(kept.handleId));
+		reloadCloudShellTerminalsForTest();
+		expect(JSON.parse(window.localStorage.getItem("ao.cloudShellTerminals") ?? "null")).toEqual([]);
+	});
+
+	it("ignores stored entries that are not Cloud shells", async () => {
+		window.localStorage.setItem("ao.cloudShellTerminals", JSON.stringify([
+			{ handleId: "ptyhost-v1:shellterm-one", sessionId: "s", title: "t", workingDir: "/", createdAt: "2026-08-27T00:00:00Z", cloud: { orgId: "o" } },
+			{ handleId: "cloud-shell-1", title: "no session", workingDir: "/", createdAt: "2026-08-27T00:00:00Z", cloud: { orgId: "o" } },
+			"garbage",
+		]));
+		reloadCloudShellTerminalsForTest();
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		const listed = renderHook(() => useShellTerminals(), { wrapper: wrapper(new QueryClient({ defaultOptions: { queries: { retry: false } } })) });
+		await waitFor(() => expect(listed.result.current.data).toEqual([]));
+		window.localStorage.removeItem("ao.cloudShellTerminals");
+		reloadCloudShellTerminalsForTest();
 	});
 });
 
@@ -515,5 +562,108 @@ describe("tabs opened while their shell is being created", () => {
 		await waitFor(() => expect(open.result.current.isPending).toBe(false));
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
 		expect(adoptedShellHandle(pending.handleId)).toBeUndefined();
+	});
+});
+
+describe("ended shell terminals", () => {
+	it("keeps the ended fields the daemon reports", () => {
+		expect(
+			toShellTerminal({
+				createdAt: "2026-11-09T09:00:00Z",
+				endedAt: "2026-11-10T20:44:00Z",
+				handleId: "shellterm-ended",
+				resumeHarness: "claude-code",
+				sessionId: "session-1",
+				title: "Build",
+				workingDir: "/worktree",
+			}),
+		).toMatchObject({ endedAt: "2026-11-10T20:44:00Z", resumeHarness: "claude-code", title: "Build" });
+		expect(toShellTerminal({ createdAt: "x", handleId: "live", title: "Terminal 1", workingDir: "/" })).not.toHaveProperty("endedAt");
+	});
+
+	it("reopens only on request and hands the tab to the new shell", async () => {
+		const ended: ShellTerminal = { ...shells[0], endedAt: "2026-11-10T20:44:00Z", resumeHarness: "codex" };
+		const queryClient = queryClientWithShells();
+		queryClient.setQueryData(shellTerminalsQueryKey, [ended, shells[1]]);
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		postMock.mockResolvedValue({
+			data: { shellTerminal: { createdAt: ended.createdAt, handleId: "shellterm-new", title: "one", workingDir: "/tmp" } },
+		});
+		const { result } = renderHook(() => useReopenShellTerminal(), { wrapper: wrapper(queryClient) });
+		expect(postMock).not.toHaveBeenCalled();
+
+		await act(async () => {
+			await result.current.mutateAsync({ handleId: ended.handleId, resumeAgent: true });
+		});
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}/reopen", {
+			params: { path: { handleId: ended.handleId } },
+			body: expect.objectContaining({ resumeAgent: true, shell: "auto" }),
+		});
+		expect(adoptedShellHandle(ended.handleId)).toBe("shellterm-new");
+		expect(useShellAgentStore.getState().agents["shellterm-new"]).toEqual({ harness: "codex", state: "idle" });
+	});
+});
+
+describe("closing an ended tab while it reopens", () => {
+	const ended: ShellTerminal = { ...shells[0], handleId: "ptyhost-v1:shellterm-closed-while-reopening", endedAt: "2026-11-10T20:44:00Z" };
+	const replacement = { createdAt: ended.createdAt, handleId: "ptyhost-v1:shellterm-replacement", title: "one", workingDir: "/tmp" };
+
+	function setup() {
+		let finishPost!: (result: { data: { shellTerminal: typeof replacement } }) => void;
+		postMock.mockReturnValue(new Promise((resolve) => (finishPost = resolve)));
+		const deletes: Array<{ handleId: string; finish: (result: object) => void }> = [];
+		deleteMock.mockImplementation((_path: string, init: { params: { path: { handleId: string } } }) =>
+			new Promise((resolve) => deletes.push({ handleId: init.params.path.handleId, finish: resolve })),
+		);
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		const queryClient = queryClientWithShells();
+		queryClient.setQueryData(shellTerminalsQueryKey, [ended, shells[1]]);
+		const { result } = renderHook(
+			() => ({ reopen: useReopenShellTerminal(), close: useCloseShellTerminal() }),
+			{ wrapper: wrapper(queryClient) },
+		);
+		return { result, queryClient, deletes, finishPost: () => finishPost({ data: { shellTerminal: replacement } }) };
+	}
+
+	async function expectReplacementDestroyed(deletes: Array<{ handleId: string; finish: (result: object) => void }>, queryClient: QueryClient) {
+		await waitFor(() => expect(deletes.map((d) => d.handleId)).toContain(replacement.handleId));
+		deletes.find((d) => d.handleId === replacement.handleId)?.finish({});
+		await waitFor(() => expect(adoptedShellHandle(ended.handleId)).toBeUndefined());
+		const listed = queryClient.getQueryData<ShellTerminal[]>(shellTerminalsQueryKey) ?? [];
+		expect(listed.map((shell) => shell.handleId)).not.toContain(replacement.handleId);
+		expect(listed.map((shell) => shell.handleId)).not.toContain(ended.handleId);
+	}
+
+	it("destroys the replacement when the close answers first", async () => {
+		const { result, queryClient, deletes, finishPost } = setup();
+		act(() => {
+			result.current.reopen.mutate({ handleId: ended.handleId });
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalled());
+		act(() => {
+			result.current.close.mutate(ended.handleId);
+		});
+		await waitFor(() => expect(deletes).toHaveLength(1));
+		deletes[0].finish({ error: { code: "SHELL_TERMINAL_NOT_FOUND" } });
+		await waitFor(() => expect(result.current.close.isSuccess).toBe(true));
+		finishPost();
+		await expectReplacementDestroyed(deletes, queryClient);
+	});
+
+	it("destroys the replacement when the reopen answers first", async () => {
+		const { result, queryClient, deletes, finishPost } = setup();
+		act(() => {
+			result.current.reopen.mutate({ handleId: ended.handleId });
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalled());
+		act(() => {
+			result.current.close.mutate(ended.handleId);
+		});
+		await waitFor(() => expect(deletes).toHaveLength(1));
+		finishPost();
+		await expectReplacementDestroyed(deletes, queryClient);
+		deletes[0].finish({ error: { code: "SHELL_TERMINAL_NOT_FOUND" } });
+		await waitFor(() => expect(result.current.close.isSuccess).toBe(true));
 	});
 });

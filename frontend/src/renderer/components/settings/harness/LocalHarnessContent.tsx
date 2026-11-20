@@ -71,10 +71,12 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // a few times before the panel reports it did not take.
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
+// Harnesses whose auth probe reports stored credentials as "configured", never "authorized".
+const LOCALLY_CONFIRMED_AUTH_AGENTS = new Set(["mimo-code", "minimax-code"]);
 
 function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
 	if (workflow.action === "logout") return status === "unauthorized";
-	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code" || workflow.agentId === "claude-code"));
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || LOCALLY_CONFIRMED_AUTH_AGENTS.has(workflow.agentId) || workflow.agentId === "claude-code"));
 }
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
@@ -122,7 +124,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [uiLoginAgent, setUiLoginAgent] = useState<AgentId | null>(null);
 	const pendingUILogins = useSyncExternalStore(subscribeAgentLogins, pendingAgentLogins);
 	const uiLoginAgentRef = useRef<AgentId | null>(null);
-	const closeUILogin = () => { uiLoginAgentRef.current = null; setUiLoginAgent(null); };
+	// The harness whose verified sign-in just closed its login panel; its
+	// Account tab announces it and takes focus back.
+	const [signedInAgent, setSignedInAgent] = useState<AgentId | null>(null);
+	const closeUILogin = (signedIn = false) => {
+		setSignedInAgent(signedIn ? uiLoginAgentRef.current : null);
+		uiLoginAgentRef.current = null;
+		setUiLoginAgent(null);
+	};
 	const authWorkflowRef = useRef<AuthTerminalWorkflow | null>(null);
 	const authStartPendingRef = useRef(false);
 	const mountedRef = useRef(true);
@@ -152,6 +161,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const modelsRefreshPending = useRef<AgentId | null>(null);
 	const openDetail = (agentId: AgentId, tab: HarnessDetailTab = "account") => {
 		if (uiLoginAgentRef.current && (uiLoginAgentRef.current !== agentId || tab !== "account")) closeUILogin();
+		setSignedInAgent(null);
 		selectedAgentRef.current = agentId;
 		setSelectedAgentId(agentId);
 		setDetailTab(tab);
@@ -588,6 +598,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (authWorkflowRef.current || uiLoginAgentRef.current || isAgentLoginPending(agentId, hostId) || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
 		const authPlan = agentAuthPlans.get(agentId);
+		// Any new login or logout ends the last sign-in's announcement.
+		setSignedInAgent(null);
 		// Any plan with inline methods opens the Account login panel; a plan
 		// without methods falls back to its terminal or documentation flow.
 		if (action === "login" && !terminal && authPlan?.methods?.length) {
@@ -816,6 +828,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		authPlansFailed: authPlans.isError,
 		authState: { error: authStates[agentId]?.error ?? null, pending: Boolean(authStates[agentId]?.pending || uiLoginAgent === agentId || pendingUILogins.has(agentLoginKey(agentId, hostId))) },
 		authWorkflow: authWorkflow?.agentId === agentId ? authWorkflow : null,
+		authCheckFailed: Boolean(authCheckErrors[agentId]),
 		updatedAt: lastUpdatedAt[agentId],
 	});
 	const healthReport = (details: HarnessDetails) => healthText(details, { hostId, authCheckError: authCheckErrors[details.agentId], t });
@@ -871,6 +884,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				onProviderKeysChanged={() => void invalidateProviderKeys()}
 			/> : undefined}
 			authWorkflowActive={Boolean(authWorkflow) || uiLoginAgent !== null}
+			signedIn={signedInAgent === agentId}
 			copied={copiedAgent === agentId}
 			diagnosticsExpanded={expandedDiagnostics[agentId] === true}
 			onToggleDiagnostics={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}

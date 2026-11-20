@@ -70,9 +70,9 @@ func (m *Manager) StageAttachments(
 			}
 			name = "attachment-" + suffix + ext
 			if rec.Metadata.WorkspacePath == "" {
-				err = m.attachments.PutCanonical(ctx, id, name, a.Data)
+				err = m.attachments.PutCanonicalSource(ctx, id, name, attachmentSource(a))
 			} else {
-				err = m.attachments.Put(ctx, id, rec.Metadata.WorkspacePath, name, a.Data)
+				err = m.attachments.PutSource(ctx, id, rec.Metadata.WorkspacePath, name, attachmentSource(a))
 			}
 			if err == nil {
 				break
@@ -107,6 +107,12 @@ func (m *Manager) StageAttachments(
 		}
 	}
 	return refs, nil
+}
+
+// attachmentSource is where an attachment's bytes come from: inline data, or
+// a file streamed in earlier.
+func attachmentSource(a ports.SpawnAttachment) attachmentstore.Source {
+	return attachmentstore.Source{Data: a.Data, Upload: a.Upload}
 }
 
 // randomSuffix is a collision-resistant name part used in user-visible paths.

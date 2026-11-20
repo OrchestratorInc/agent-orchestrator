@@ -197,8 +197,8 @@ func (f *fakeChatService) ReloadMCPServers(
 	return nil, nil
 }
 
-func (f *fakeChatService) SwitchProvider(context.Context, domain.SessionID, domain.ProviderSwitchRequest) error {
-	return nil
+func (f *fakeChatService) SwitchProviderReport(context.Context, domain.SessionID, domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error) {
+	return domain.ProviderSwitchResult{}, nil
 }
 
 func (f *fakeChatService) SwitchProviderAndSend(context.Context, domain.SessionID, domain.ProviderSwitchRequest, ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {

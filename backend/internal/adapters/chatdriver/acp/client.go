@@ -614,7 +614,8 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		if err == nil {
 			err = c.SessionUpdate(context.Background(), update)
 		}
-	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPPromptHandoffMethod,
+		persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
 	case claudeSDKMessageMethod:
 		err = c.handleClaudeSDKMessage(params)
@@ -714,6 +715,11 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
+		if c.steerAcknowledgement(turnID, contentText(update.AgentMessageChunk.Content)) {
+			// The agent's note that it took a steer prompt; the "↳ Steered" mark
+			// already says so.
+			break
+		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
 		segment := c.steerSegment
@@ -806,8 +812,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
 		}
 		if turnID != "" {
-			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
-				emit(event)
+			// A retry or limit notice is live status. The live run already stored
+			// and settled it; replayed into a reconstructed turn it would come back
+			// as a new running row (direct connections give it a fresh id) on a turn
+			// that has long ended, spinning in every client.
+			if !c.historyReplayActive() {
+				if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
+					emit(event)
+				}
 			}
 			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
