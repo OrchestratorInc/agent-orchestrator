@@ -56,15 +56,20 @@ describe("resume record", () => {
 
 describe("restoreAction", () => {
 	it("pushes the page over the board", () => {
-		expect(restoreAction("/", "/session/abc?hostId=h_1")).toBe("push");
+		expect(restoreAction("/", "/", "/session/abc?hostId=h_1")).toBe("push");
 	});
 
 	it("replaces a stale deep-linked page the reload came back on", () => {
-		expect(restoreAction("/session/old", "/session/abc?hostId=h_1")).toBe("replace");
+		expect(restoreAction("/session/old", "/session/old", "/session/abc?hostId=h_1")).toBe("replace");
 	});
 
 	it("does nothing when the reload already landed on the page", () => {
-		expect(restoreAction("/settings/theme", "/settings/theme")).toBe("none");
-		expect(restoreAction("/session/abc", "/session/abc?hostId=h_1")).toBe("none");
+		expect(restoreAction("/settings/theme", "/settings/theme", "/settings/theme")).toBe("none");
+		expect(restoreAction("/session/abc", "/session/abc", "/session/abc?hostId=h_1")).toBe("none");
+	});
+
+	it("never takes the user off a page they moved to after the reload", () => {
+		expect(restoreAction("/settings", "/", "/session/abc?hostId=h_1")).toBe("drop");
+		expect(restoreAction("/session/other", "/session/old", "/session/abc?hostId=h_1")).toBe("drop");
 	});
 });

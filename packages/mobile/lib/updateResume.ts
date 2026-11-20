@@ -60,12 +60,22 @@ export function classifyRoute(
 }
 
 /**
- * How to reopen the saved page from where the reload landed. Usually the board:
- * push, so Back leads home. But expo-router reopens the last deep link after a
- * reload — a notification tapped long before — and that stale page must not
- * win over the page the user was on a second ago, so it is replaced.
+ * How to reopen the saved page from where the reload landed (`landingPath`,
+ * the page showing when navigation first became ready).
+ *
+ * Usually the board: push, so Back leads home. But expo-router reopens the last
+ * deep link after a reload — a notification tapped long before — and that stale
+ * page must not win over the page the user was on a second ago, so it is
+ * replaced. If the user (or anything else) has already moved away from the
+ * landing page, the restore is dropped: replacing a page they chose would be
+ * worse than not restoring at all.
  */
-export function restoreAction(currentPath: string, saved: string): "none" | "push" | "replace" {
+export function restoreAction(
+	currentPath: string,
+	landingPath: string,
+	saved: string,
+): "none" | "drop" | "push" | "replace" {
+	if (currentPath !== landingPath) return "drop";
 	const savedPath = saved.split("?")[0];
 	if (currentPath === savedPath) return "none";
 	return currentPath === "/" || currentPath === "" ? "push" : "replace";
