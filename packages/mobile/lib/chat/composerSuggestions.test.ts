@@ -13,7 +13,10 @@ describe("mobile Chat composer suggestions", () => {
 		expect(findComposerSuggestion("/rev")).toMatchObject({ kind: "skills", query: "rev", start: 0 });
 		expect(findComposerSuggestion("inspect @src/app")).toMatchObject({ kind: "files", query: "src/app" });
 		expect(findComposerSuggestion("https://ao.dev")).toBeUndefined();
-		expect(findComposerSuggestion("please /review")).toBeUndefined();
+		expect(findComposerSuggestion("please /review")).toMatchObject({ kind: "skills", query: "review", start: 7 });
+		expect(findComposerSuggestion("either and/or")).toBeUndefined();
+		expect(findComposerSuggestion("look at /etc/hosts")).toBeUndefined();
+		expect(findComposerSuggestion("/etc/hosts")).toBeUndefined();
 		expect(findComposerSuggestion("email@example.com")).toBeUndefined();
 	});
 
@@ -21,6 +24,10 @@ describe("mobile Chat composer suggestions", () => {
 		const text = "please inspect @src/ap now";
 		const trigger = findComposerSuggestion(text, "please inspect @src/ap".length)!;
 		expect(replaceComposerSuggestion(text, trigger, "src/app.ts")).toBe("please inspect src/app.ts now");
+		const skillText = "please /rev now";
+		const skill = findComposerSuggestion(skillText, "please /rev".length)!;
+		expect(skill).toMatchObject({ kind: "skills", query: "rev", start: 7 });
+		expect(replaceComposerSuggestion(skillText, skill, "review")).toBe("please /review now");
 	});
 
 	it("quotes paths with spaces and keeps the slash for provider skills", () => {
