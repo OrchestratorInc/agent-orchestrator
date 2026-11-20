@@ -17,7 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-const maxPrimeHistoryBytes = 128 << 20
+const (
+	maxPrimeHistoryBytes = 128 << 20
+	maxPrimeSessionFiles = 10000
+)
 
 type primeNativeHistory struct {
 	id       string
@@ -43,14 +46,17 @@ func primeSessionFiles(ctx context.Context, root string) (map[string]bool, error
 			return walkErr
 		}
 		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".jsonl") {
-			if len(files) >= 10000 {
+			if len(files) >= maxPrimeSessionFiles {
 				return errors.New("prime native session inventory exceeds the limit")
 			}
 			files[path] = true
 		}
 		return nil
 	})
-	return files, err
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // readPrimeNativeHistory fingerprints provider records, not display text.

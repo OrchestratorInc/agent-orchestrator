@@ -32,7 +32,7 @@ func TestProviderOverridesSurviveShellStartup(t *testing.T) {
 					if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 						t.Fatal(err)
 					}
-					p := &Plugin{resolvedBinary: binary, extensionFlag: map[string]bool{binary: false}}
+					p := &Plugin{resolvedBinary: binary, extensionFlag: map[string]bool{binary: false}, daemonSocketFlag: map[string]bool{binary: true}}
 					env := map[string]string{}
 					want := "https://shell.example/v1|shell-credential"
 					if mode == "project" {

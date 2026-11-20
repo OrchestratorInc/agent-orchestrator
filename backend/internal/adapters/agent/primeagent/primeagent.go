@@ -28,8 +28,9 @@ type Plugin struct {
 	resolvedBinary string
 	runCommand     primeCommandRunner
 	// extensionFlag remembers, per binary, whether it accepts --extension.
-	extensionMu   sync.Mutex
-	extensionFlag map[string]bool
+	extensionMu      sync.Mutex
+	extensionFlag    map[string]bool
+	daemonSocketFlag map[string]bool
 }
 
 // New returns a ready-to-register Prime Agent adapter.
@@ -255,6 +256,7 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	// A binary replaced in place may have changed its flags too.
 	p.extensionMu.Lock()
 	p.extensionFlag = nil
+	p.daemonSocketFlag = nil
 	p.extensionMu.Unlock()
 }
 

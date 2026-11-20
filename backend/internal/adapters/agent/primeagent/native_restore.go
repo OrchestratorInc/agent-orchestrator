@@ -41,7 +41,12 @@ func (p *Plugin) importedRestoreCommand(ctx context.Context, cfg ports.RestoreCo
 	if err != nil {
 		return nil, false, err
 	}
-	// baseCommand puts the session directory immediately after its first flag.
-	argv[2] = root
+	if err := p.requireDaemonSocket(ctx, argv[0]); err != nil {
+		return nil, false, err
+	}
+	argv, err = primeCommandSessionDir(argv, root)
+	if err != nil {
+		return nil, false, err
+	}
 	return providerenv.Command(append(argv, "--cwd", workspace, "--resume", path), cfg.Env), true, nil
 }
