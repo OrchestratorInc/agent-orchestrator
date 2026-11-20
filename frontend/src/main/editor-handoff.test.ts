@@ -389,6 +389,97 @@ describe("editor handoff", () => {
 		expect((await handoff.getState("ao-1")).targets.every((target) => !target.iconDataUrl)).toBe(true);
 	});
 
+
+	it.each(["iterm2", "ghostty"] as const)("uses the chosen %s for workspace and file launches", async (terminal) => {
+		const workspace = "/work trees/中文's $safe; $(touch nope)";
+		const file = `${workspace}/a file.txt`;
+		const app = terminal === "iterm2" ? "/Applications/iTerm.app" : "/Applications/Ghostty.app";
+		const input = deps({
+			readNeovimTerminal: async () => terminal,
+			resolveWorkspace: async () => workspace,
+			isExecutable: (p) => p === "/bin/nvim",
+			isDirectory: (p) => p === app || p === workspace,
+			realPath: async (p) => p,
+		});
+		const handoff = createEditorHandoff(input);
+		expect((await handoff.getState("ao-1")).targets.find(t => t.id === "neovim")?.name).toContain(terminal === "iterm2" ? "iTerm2" : "Ghostty");
+		await handoff.open({ sessionId: "ao-1", targetId: "neovim" });
+		await handoff.pathAction({ sessionId: "ao-1", path: file, editorId: "neovim", action: "open" });
+		if (terminal === "ghostty") {
+			expect(input.launch).toHaveBeenNthCalledWith(1, "/usr/bin/open", ["-n", "-a", app, "--args", `--working-directory=${workspace}`, "-e", "/bin/nvim", workspace], workspace);
+			expect(input.launch).toHaveBeenNthCalledWith(2, "/usr/bin/open", ["-n", "-a", app, "--args", `--working-directory=${workspace}`, "-e", "/bin/nvim", file], workspace);
+		} else {
+			const calls = (input.launch as ReturnType<typeof vi.fn>).mock.calls;
+			expect(calls[0][0]).toBe("/usr/bin/osascript");
+			expect(calls[0][1][1]).toContain('tell application "/Applications/iTerm.app"');
+			expect(calls[0][1][1]).toContain('create window with default profile');
+			expect(calls[0][1][1]).toContain('write text "cd ');
+			expect(calls[1][1][1]).toContain('a file.txt');
+			expect(calls[1][1][1]).not.toContain('tell application "Terminal"');
+		}
+	});
+
+	it.each(["iterm2", "ghostty"] as const)("discovers registered %s hosts when Settings is opened first", async (terminal) => {
+		const name = terminal === "iterm2" ? "iTerm2" : "Ghostty";
+		const appPath = `/Volumes/Tools/${terminal === "iterm2" ? "iTerm" : "Ghostty"}.app`;
+		const discoverTerminalApps = vi.fn().mockResolvedValue([{ name, appPath, bundleId: `test.${terminal}` }]);
+		const input = deps({ discoverTerminalApps, readNeovimTerminal: async () => terminal,
+			writeNeovimTerminal: vi.fn(), isDirectory: p => p === appPath });
+		const handoff = createEditorHandoff(input);
+
+		expect((await handoff.getEditors()).neovimTerminal).toMatchObject({
+			selected: terminal, targets: expect.arrayContaining([{ id: terminal, name, kind: "terminal" }]),
+		});
+		await expect(handoff.setNeovimTerminal(terminal)).resolves.toBe(terminal);
+		expect(discoverTerminalApps).toHaveBeenCalledTimes(1);
+		expect(input.writeNeovimTerminal).toHaveBeenCalledWith(terminal);
+	});
+
+	it.each(["iterm2", "ghostty"] as const)("resolves saved registered %s hosts on cold workspace and file launches", async (terminal) => {
+		const appPath = `/Volumes/Tools/${terminal === "iterm2" ? "iTerm" : "Ghostty"}.app`;
+		for (const action of ["workspace", "file", "save"] as const) {
+			const discoverTerminalApps = vi.fn().mockResolvedValue([{ name: terminal, appPath, bundleId: `test.${terminal}` }]);
+			const input = deps({ discoverTerminalApps, readNeovimTerminal: async () => terminal,
+				writeNeovimTerminal: vi.fn(), isExecutable: p => p === "/bin/nvim", isDirectory: p => p === appPath });
+			const handoff = createEditorHandoff(input);
+			const run = () => action === "workspace"
+				? handoff.open({ sessionId: "ao-1", targetId: "neovim" })
+				: action === "file"
+					? handoff.pathAction({ sessionId: "ao-1", path: "/worktrees/ao-1/a.txt", editorId: "neovim", action: "open" })
+					: handoff.setNeovimTerminal(terminal);
+
+			await run();
+			if (action !== "save") expect(JSON.stringify(vi.mocked(input.launch).mock.calls[0])).toContain(appPath);
+			await run();
+			expect(discoverTerminalApps).toHaveBeenCalledTimes(1);
+		}
+	});
+
+	it("validates saved terminal choices and never falls back after removal", async () => {
+		let installed = true;
+		let selected = "terminal" as "terminal" | "iterm2" | "ghostty";
+		const write = vi.fn(async (id: typeof selected) => { selected = id; });
+		const input = deps({ readNeovimTerminal: async () => selected, writeNeovimTerminal: write, isExecutable: p => p === "/bin/nvim", isDirectory: p => installed && p === "/Applications/iTerm.app" });
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.setNeovimTerminal("iterm2")).resolves.toBe("iterm2");
+		await expect(handoff.setNeovimTerminal("terminal; rm -rf anything")).rejects.toThrow("not supported");
+		await expect(handoff.setNeovimTerminal("ghostty")).rejects.toThrow("not installed");
+		installed = false;
+		expect((await handoff.getEditors()).neovimTerminal?.selected).toBe("iterm2");
+		await expect(handoff.open({ sessionId: "ao-1", targetId: "neovim" })).rejects.toThrow("iTerm2 is not installed");
+		await expect(handoff.pathAction({ sessionId: "ao-1", path: "/worktrees/ao-1/a.txt", editorId: "neovim", action: "open" })).rejects.toThrow("iTerm2 is not installed");
+		expect(input.launch).not.toHaveBeenCalled();
+		expect(write).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports launch failure without overwriting the terminal preference", async () => {
+		const write = vi.fn();
+		const input = deps({ readNeovimTerminal: async () => "iterm2", writeNeovimTerminal: write, isExecutable: p => p === "/bin/nvim", isDirectory: p => p === "/Applications/iTerm.app", launch: vi.fn().mockRejectedValue(new Error("automation denied")) });
+		await expect(createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "neovim" })).rejects.toThrow("Could not open Neovim (iTerm2)");
+		expect(write).not.toHaveBeenCalled();
+		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
 	it("opens Neovim in macOS Terminal with shell-safe workspace quoting", async () => {
 		const workspacePath = "/work trees/it's & safe";
 		const input = deps({
@@ -404,7 +495,7 @@ describe("editor handoff", () => {
 
 		expect(input.launch).toHaveBeenCalledWith(
 			"/usr/bin/osascript",
-			["-e", `tell application "Terminal"\nactivate\ndo script "exec '/bin/nvim' '/work trees/it'\\\\''s & safe'"\nend tell`],
+			["-e", `tell application "Terminal"\nactivate\ndo script "cd '/work trees/it'\\\\''s & safe' && exec '/bin/nvim' '/work trees/it'\\\\''s & safe'"\nend tell`],
 			workspacePath,
 		);
 	});
@@ -602,8 +693,17 @@ describe("editor handoff", () => {
 				{ id: "vscode", name: "VS Code", kind: "editor" },
 			],
 			preferredEditorId: "zed",
+			neovimTerminal: { selected: "terminal", targets: [{ id: "terminal", name: "Terminal", kind: "terminal" }] },
 		});
 		expect(input.resolveWorkspace).not.toHaveBeenCalled();
+	});
+
+	it.each(["linux", "win32"] as const)("does not expose macOS terminal choices on %s", async (platform) => {
+		const input = deps({ platform, writeNeovimTerminal: vi.fn() });
+		const handoff = createEditorHandoff(input);
+		expect((await handoff.getEditors()).neovimTerminal).toBeUndefined();
+		await expect(handoff.setNeovimTerminal("iterm2")).rejects.toThrow("not available on this platform");
+		expect(input.writeNeovimTerminal).not.toHaveBeenCalled();
 	});
 
 	it("stores an installed editor as the preference without launching it", async () => {
