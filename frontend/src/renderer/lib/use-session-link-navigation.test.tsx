@@ -102,7 +102,8 @@ describe("useSessionLinkNavigation", () => {
 	});
 
 	it.each([
-		["ao://sessions/project/missing", "missing or is not accessible"],
+		["ao://sessions/project/missing", 'No session "missing" in project "project".'],
+		["ao://sessions/nowhere/session", 'No project "nowhere" in this Orchestrator workspace. It is in "project": ao://sessions/project/session'],
 		["ao://sessions/project/session/kill", "malformed or unsupported"],
 	])("rejects %s with actionable feedback", (url, message) => {
 		const { result } = renderHook(() => useSessionLinkNavigation());
@@ -115,6 +116,22 @@ describe("useSessionLinkNavigation", () => {
 			dismissible: true,
 			dedupeKey: "session-link:error",
 		}));
+	});
+
+	it("opens a session-only link in the workspace that holds it, standalone included", () => {
+		mocks.workspace.mockReturnValue({
+			isSuccess: true,
+			data: [
+				{ id: "project", sessions: [{ id: "session", isTerminated: false }] },
+				{ id: "__standalone__", sessions: [{ id: "standalone-40", isTerminated: false }] },
+			],
+		});
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		act(() => expect(result.current("ao://sessions/standalone-40")).toBe(true));
+		expect(mocks.navigate).toHaveBeenLastCalledWith("__standalone__", "standalone-40");
+		act(() => expect(result.current("ao://sessions/__standalone__/standalone-40")).toBe(true));
+		expect(mocks.navigate).toHaveBeenLastCalledWith("__standalone__", "standalone-40");
+		expect(useUiStore.getState().globalToasts).toEqual([]);
 	});
 
 	it("does not navigate when the workspace cannot be verified", () => {

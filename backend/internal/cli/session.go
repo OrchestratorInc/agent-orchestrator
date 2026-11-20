@@ -86,6 +86,9 @@ type sessionDTO struct {
 	// WorkspaceCleanup is the recorded teardown outcome of a terminated
 	// session's workspace, empty when none has been recorded.
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
+	// Link is the session's canonical in-app link. The CLI fills it in from
+	// the IDs; the daemon does not send it.
+	Link string `json:"link,omitempty"`
 }
 
 type sessionArtifactDTO struct {
@@ -212,6 +215,7 @@ type claimPRResponse struct {
 type sessionListEntry struct {
 	ID             string          `json:"id"`
 	ProjectID      string          `json:"projectId"`
+	Link           string          `json:"link"`
 	Role           string          `json:"role"`
 	DisplayName    string          `json:"displayName,omitempty"`
 	Status         string          `json:"status,omitempty"`
@@ -249,6 +253,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionListCommand(ctx))
 	cmd.AddCommand(newSessionTopCommand(ctx))
 	cmd.AddCommand(newSessionGetCommand(ctx))
+	cmd.AddCommand(newSessionLinkCommand(ctx))
 	cmd.AddCommand(newSessionKillCommand(ctx))
 	cmd.AddCommand(newSessionInterruptCommand(ctx))
 	cmd.AddCommand(newSessionRestoreCommand(ctx))
@@ -322,6 +327,41 @@ Unicode characters. The middle is omitted and the head and tail are kept.
 	f.StringVar(&opts.transcript, "transcript", "", "Newest N chat entries to include, from 1 to 500 (messages and activities)")
 	f.StringVar(&opts.before, "before", "", "Exclusive sequence cursor (entries with sequence < SEQ); requires --transcript")
 	f.StringVar(&opts.fieldCap, "cap", "1000", "Max Unicode characters kept per text field (0 = full text, otherwise 80 to 1000000); requires --transcript")
+	return cmd
+}
+
+type sessionLinkOutput struct {
+	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	Link      string `json:"link"`
+}
+
+func newSessionLinkCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionOptions
+	cmd := &cobra.Command{
+		Use:   "link <id>",
+		Short: "Print a session's in-app link",
+		Long: `Print the canonical in-app link to a session, for example
+ao://sessions/agent-orchestrator/agent-orchestrator-12.
+
+Use this link whenever you point the user at a session; do not build it by
+hand. A standalone session has no project, so its link uses the project
+segment ` + domain.StandaloneLinkProjectID + `, for example
+ao://sessions/` + domain.StandaloneLinkProjectID + `/standalone-40.
+
+The link opens the session in the Orchestrator desktop app.`,
+		Args: oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.printSessionLink(cmd.Context(), cmd, id, opts)
+		},
+	}
+	f := cmd.Flags()
+	addSessionProjectFlag(f, &opts.project, "Project id to scope the lookup")
+	f.BoolVar(&opts.json, "json", false, "Output as JSON")
 	return cmd
 }
 
@@ -851,6 +891,7 @@ func (c *commandContext) getSession(ctx context.Context, cmd *cobra.Command, id 
 	if err != nil {
 		return err
 	}
+	sess.Link = sessionLink(sess)
 	if !req.enabled {
 		if opts.json {
 			return writeJSON(cmd.OutOrStdout(), sessionResponse{Session: sess})
@@ -881,6 +922,25 @@ func (c *commandContext) getSession(ctx context.Context, cmd *cobra.Command, id 
 	}
 	_, err = fmt.Fprint(cmd.OutOrStdout(), renderTranscriptHuman(view))
 	return err
+}
+
+func (c *commandContext) printSessionLink(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	sess, err := c.fetchScopedSession(ctx, id, opts.project)
+	if err != nil {
+		return err
+	}
+	link := sessionLink(sess)
+	if opts.json {
+		return writeJSON(cmd.OutOrStdout(), sessionLinkOutput{SessionID: sess.ID, ProjectID: sess.ProjectID, Link: link})
+	}
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), link)
+	return err
+}
+
+// sessionLink is the session's canonical in-app link. The daemon's ID wins
+// over the one the user typed, so the link names the session as stored.
+func sessionLink(sess sessionDTO) string {
+	return domain.SessionLink(domain.ProjectID(sess.ProjectID), domain.SessionID(sess.ID))
 }
 
 func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
@@ -1195,6 +1255,7 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 		entries = append(entries, sessionListEntry{
 			ID:             sess.ID,
 			ProjectID:      sess.ProjectID,
+			Link:           sessionLink(sess),
 			Role:           sessionRole(sess),
 			DisplayName:    sess.DisplayName,
 			Status:         sess.Status,
@@ -1348,6 +1409,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"id", sess.ID},
 		{"project", sess.ProjectID},
 		{"name", sess.DisplayName},
+		{"link", sess.Link},
 		{"role", sessionRole(sess)},
 		{"status", sess.Status},
 		{"activity", sess.Activity.State},

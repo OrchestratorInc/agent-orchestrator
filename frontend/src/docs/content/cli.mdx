@@ -16,7 +16,7 @@ ao
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
-├── session                       ls, get, kill, restore, rename, cleanup, delete,
+├── session                       ls, get, link, kill, restore, rename, cleanup, delete,
 │                                 claim-pr, exit-agent, resume-agent
 ├── automation                    create, list, get, update, delete, runs
 ├── cue                           create, list
@@ -141,6 +141,7 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | --- | --- |
 | `ao session ls` | List active worker sessions. Use `--all` for orchestrators and `--include-terminated` for history. |
 | `ao session get <id>` | Show one session. |
+| `ao session link <id>` | Print the session's in-app link. |
 | `ao session kill <id>` | Terminate a session. Dirty workspaces are preserved. |
 | `ao session restore <id>` | Relaunch a terminated session when recovery is supported. |
 | `ao session exit-agent <id>` | Stop the controller while retaining the session. |

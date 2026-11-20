@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { artifactLinkForPath, artifactLinkForTarget, findPlainReferences, findSessionLinks, hasArtifactDirectorySegment, isAoLink, parseArtifactLink, parseSessionLink, resolveSessionLink, sessionArtifactPath } from "./session-links";
+import { artifactLinkForPath, artifactLinkForTarget, describeUnresolvedSessionLink, findPlainReferences, findSessionLinks, hasArtifactDirectorySegment, isAoLink, parseArtifactLink, parseSessionLink, resolveSessionLink, sessionArtifactPath } from "./session-links";
 
 describe("session links", () => {
 	it.each([
 		["ao://sessions/project/session", { projectId: "project", sessionId: "session" }],
 		["ao://sessions/project%20one/session%2Done", { projectId: "project one", sessionId: "session-one" }],
+		["ao://sessions/__standalone__/standalone-40", { projectId: "__standalone__", sessionId: "standalone-40" }],
+		["ao://sessions/standalone-40", { sessionId: "standalone-40" }],
+		["ao://sessions/session%2Done", { sessionId: "session-one" }],
 	])("parses %s", (url, expected) => expect(parseSessionLink(url)).toEqual(expected));
 
 	it.each([
 		"AO://sessions/project/session", "a0://sessions/project/session", "ao://session/project/session",
-		"ao://sessions/project", "ao://sessions/project/session/extra", "ao://sessions//session",
+		"ao://sessions/", "ao://sessions/%20", "ao://sessions/%2F", "ao://sessions/session?x=1",
+		"ao://sessions/project/session/extra", "ao://sessions//session",
 		"ao://sessions/project/session?kill=true", "ao://sessions/project/session#chat",
 		"ao://user@sessions/project/session", "ao://sessions/project/%ZZ", "ao://sessions/project/%2Faction",
 		"ao://sessions/project/session/kill", "ao://sessions/%20/%20", "ao://sessions/project/%09",
@@ -50,6 +54,45 @@ describe("session links", () => {
 			{ id: "p", sessions: [{ id: "s", status: "working" }] },
 		];
 		expect(resolveSessionLink("ao://sessions/p/s", workspaces)).toEqual({ projectId: "p", sessionId: "s", isTerminated: false });
+	});
+
+	it("resolves a session-only link in whichever workspace holds the session", () => {
+		const workspaces = [
+			{ id: "p", sessions: [{ id: "worker-1" }] },
+			{ id: "__standalone__", sessions: [{ id: "standalone-40", status: "idle" }] },
+		];
+		expect(resolveSessionLink("ao://sessions/standalone-40", workspaces)).toEqual({ projectId: "__standalone__", sessionId: "standalone-40", isTerminated: false });
+		expect(resolveSessionLink("ao://sessions/__standalone__/standalone-40", workspaces)).toEqual({ projectId: "__standalone__", sessionId: "standalone-40", isTerminated: false });
+		expect(resolveSessionLink("ao://sessions/worker-1", workspaces)).toEqual({ projectId: "p", sessionId: "worker-1", isTerminated: false });
+		expect(resolveSessionLink("ao://sessions/missing", workspaces)).toBeUndefined();
+		// A named project still has to match; the session-only form is the cross-workspace lookup.
+		expect(resolveSessionLink("ao://sessions/standalone/standalone-40", workspaces)).toBeUndefined();
+	});
+
+	describe("describeUnresolvedSessionLink", () => {
+		const workspaces = [
+			{ id: "p", sessions: [{ id: "worker-1" }] },
+			{ id: "__standalone__", sessions: [{ id: "standalone-40" }] },
+		];
+		const explain = (url: string) => describeUnresolvedSessionLink(parseSessionLink(url) ?? parseArtifactLink(url)!, workspaces);
+
+		it("names an unknown project and where the session is", () => {
+			expect(explain("ao://sessions/standalone/standalone-40")).toBe(
+				'No project "standalone" in this Orchestrator workspace. It is in "__standalone__": ao://sessions/__standalone__/standalone-40',
+			);
+		});
+		it("points at the standalone workspace when neither part matches", () => {
+			expect(explain("ao://sessions/standalone/missing")).toBe('No project "standalone" in this Orchestrator workspace. Standalone sessions use "__standalone__".');
+		});
+		it("names a session missing from a known project", () => {
+			expect(explain("ao://sessions/p/missing")).toBe('No session "missing" in project "p".');
+			expect(explain("ao://sessions/p/standalone-40/artifacts/plan.md")).toBe(
+				'No session "standalone-40" in project "p". It is in "__standalone__": ao://sessions/__standalone__/standalone-40',
+			);
+		});
+		it("names a session-only link that matches nothing", () => {
+			expect(explain("ao://sessions/missing")).toBe('No session "missing" in this Orchestrator workspace.');
+		});
 	});
 
 	it.each([

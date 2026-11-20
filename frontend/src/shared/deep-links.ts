@@ -1,5 +1,5 @@
 // ao-app:// session deep links: ao-app://sessions/{projectId}/{sessionId},
-// optionally followed by /artifacts/{path}. External tools (e.g. the ao-bridge
+// optionally followed by /artifacts/{path}, or ao-app://sessions/{sessionId}. External tools (e.g. the ao-bridge
 // dashboard) render these so a click opens the desktop app directly on that
 // session.
 //
@@ -24,7 +24,9 @@ export function isSessionDeepLink(raw: string): boolean {
 		return false;
 	}
 	if (url.protocol !== "ao-app:" || url.hostname !== "sessions") return false;
-	return url.pathname.split("/").filter((segment) => segment.length > 0).length >= 2;
+	// A trailing slash is dropped later; an empty segment anywhere else is not a target.
+	const segments = url.pathname.replace(/\/+$/, "").split("/").slice(1);
+	return segments.length > 0 && segments.every((segment) => segment.length > 0);
 }
 
 // Canonical form handed to the shell: lowercase scheme (WHATWG parsing gives

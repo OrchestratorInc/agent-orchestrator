@@ -25,6 +25,7 @@ var routineInternalCLICommands = []string{
 	"ao session ls",
 	"ao session top",
 	"ao session get",
+	"ao session link",
 	"ao session history",
 	"ao project ls",
 	"ao project get",

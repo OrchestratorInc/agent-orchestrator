@@ -11,7 +11,8 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 | Command | What it does | When to use | Details |
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
-| `session` | Manage agent sessions (list, interrupt, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
+| `session` | Manage agent sessions (list, link, interrupt, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, getting a session's in-app link, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
+| `search` | Search past sessions by title, messages, tool output, and touched files | Finding a session by what it was about, or what an earlier session already worked out | [commands/search.md](commands/search.md) |
 | `account` | List Claude Code and Codex subscription accounts, set the default, show or move a session's account | Starting work on a specific account, or moving a session off an account that hit its limit | [commands/account.md](commands/account.md) |
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
 | `pr` | Merge a PR or resolve its review threads | Completing a reviewed change | `ao pr merge` / `ao pr resolve-comments` |
@@ -45,9 +46,11 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
 - To refer to a session in Orchestrator Chat or the Orchestrator terminal, use the canonical in-app
-  link `ao://sessions/{project-id}/{session-id}`. Read
-  [commands/session.md](commands/session.md) for identity, encoding, and safety
-  rules before constructing one.
+  link `ao://sessions/{project-id}/{session-id}`. Get it from
+  `ao session link <session-id>` (or `link` in `ao session get <session-id> --json`) instead
+  of building it: standalone sessions have no project and use `__standalone__`
+  as the project segment. Read [commands/session.md](commands/session.md) for
+  identity, encoding, and safety rules.
 - When the user asks to save a repeatable task as a Cue, use `ao cue list --json` to check existing definitions, then `ao cue create`. An agent Cue stores a reusable instruction; a command Cue stores an exact shell command. This agent-facing command can create and read Cues, but cannot edit or delete them. Direct the user to project settings for changes to existing Cues.
 - When the user asks to bring a repository's Conductor settings (scripts, run actions, environment variables, prompt) into Orchestrator, read [commands/conductor.md](commands/conductor.md) first.
 - `--agent` is an alias for `--harness` on `ao spawn`.

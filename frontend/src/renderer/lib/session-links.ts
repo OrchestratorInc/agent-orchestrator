@@ -1,9 +1,11 @@
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { decodePath } from "./workspace-file-path";
 
-export type SessionLinkTarget = { projectId: string; sessionId: string };
-export type ArtifactLinkTarget = SessionLinkTarget & { path: string };
-export type ResolvedSessionLink = SessionLinkTarget & { isTerminated: boolean };
+/** A session link's target. `projectId` is absent for the session-only form, `ao://sessions/{session}`. */
+export type SessionLinkTarget = { projectId?: string; sessionId: string };
+export type ArtifactLinkTarget = { projectId: string; sessionId: string; path: string };
+export type ResolvedSessionLink = { projectId: string; sessionId: string; isTerminated: boolean };
 export type SessionLinkWorkspace = {
 	id: string;
 	sessions: Array<{ id: string; isTerminated?: boolean; status?: string }>;
@@ -27,9 +29,17 @@ const TRAILING_DELIMITERS = [
 	["‹", "›"],
 ] as const;
 
-/** Strictly parse the in-app session route, `ao://sessions/{project}/{session}`. */
+/**
+ * Strictly parse the in-app session route, `ao://sessions/{project}/{session}`,
+ * or `ao://sessions/{session}`, which names the session in whichever workspace
+ * holds it. Standalone sessions sit in the `__standalone__` workspace.
+ */
 export function parseSessionLink(value: string): SessionLinkTarget | undefined {
 	const segments = linkSegments(value);
+	if (segments?.length === 1) {
+		const sessionId = decodeSegment(segments[0]!);
+		return sessionId?.trim() && !sessionId.includes("/") ? { sessionId } : undefined;
+	}
 	if (segments?.length !== 2) return undefined;
 	return sessionTarget(segments);
 }
@@ -156,7 +166,7 @@ function linkSegments(value: string): string[] | undefined {
 	return segments.some((segment) => segment.length === 0) ? undefined : segments;
 }
 
-function sessionTarget([project, session]: string[]): SessionLinkTarget | undefined {
+function sessionTarget([project, session]: string[]): { projectId: string; sessionId: string } | undefined {
 	const projectId = decodeSegment(project!);
 	const sessionId = decodeSegment(session!);
 	if (!projectId?.trim() || !sessionId?.trim() || projectId.includes("/") || sessionId.includes("/")) return undefined;
@@ -175,18 +185,45 @@ export function isSessionLink(value: string): boolean {
 	return parseSessionLink(value) !== undefined;
 }
 
-export function resolveSessionLink(value: string, workspaces: SessionLinkWorkspace[]): ResolvedSessionLink | undefined {
-	const target = parseSessionLink(value) ?? parseArtifactLink(value);
-	if (!target) return undefined;
+/**
+ * The workspace and session a link target names: the session in the named
+ * project, or, for a session-only link, the first workspace holding it.
+ */
+export function findLinkedSession<W extends SessionLinkWorkspace>(target: SessionLinkTarget, workspaces: W[]): { workspace: W; session: W["sessions"][number] } | undefined {
 	// Remote hosts merge into one list and each contributes its own standalone
 	// entry, so several workspaces can share an id; the first id match is not
 	// necessarily the one holding the session.
 	for (const workspace of workspaces) {
-		if (workspace.id !== target.projectId) continue;
+		if (target.projectId !== undefined && workspace.id !== target.projectId) continue;
 		const session = workspace.sessions.find((candidate) => candidate.id === target.sessionId);
-		if (session) return { projectId: target.projectId, sessionId: target.sessionId, isTerminated: session.isTerminated === true || session.status === "terminated" };
+		if (session) return { workspace, session };
 	}
 	return undefined;
+}
+
+export function resolveSessionLink(value: string, workspaces: SessionLinkWorkspace[]): ResolvedSessionLink | undefined {
+	const target = parseSessionLink(value) ?? parseArtifactLink(value);
+	if (!target) return undefined;
+	const found = findLinkedSession(target, workspaces);
+	if (!found) return undefined;
+	const { workspace, session } = found;
+	return { projectId: workspace.id, sessionId: target.sessionId, isTerminated: session.isTerminated === true || session.status === "terminated" };
+}
+
+/**
+ * Why a well-formed link resolved to nothing: which of its project and session
+ * failed to match, and where the session is when it is in another workspace.
+ */
+export function describeUnresolvedSessionLink(target: SessionLinkTarget, workspaces: SessionLinkWorkspace[]): string {
+	const { projectId, sessionId } = target;
+	const elsewhere = findLinkedSession({ sessionId }, workspaces)?.workspace.id;
+	if (projectId === undefined) return `No session "${sessionId}" in this Orchestrator workspace.`;
+	const where = elsewhere !== undefined ? ` It is in "${elsewhere}": ${SESSION_LINK_PREFIX}${encodeURIComponent(elsewhere)}/${encodeURIComponent(sessionId)}` : "";
+	if (!workspaces.some((workspace) => workspace.id === projectId)) {
+		const hint = elsewhere === undefined ? ` Standalone sessions use "${STANDALONE_WORKSPACE_ID}".` : "";
+		return `No project "${projectId}" in this Orchestrator workspace.${hint}${where}`;
+	}
+	return `No session "${sessionId}" in project "${projectId}".${where}`;
 }
 
 /** Find raw session and artifact links without swallowing prose punctuation adjacent to them. */
