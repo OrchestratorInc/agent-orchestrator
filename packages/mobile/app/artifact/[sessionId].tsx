@@ -29,9 +29,10 @@ import { useFilesBackend } from "../../lib/files/useFilesBackend";
 import { haptics } from "../../lib/haptics";
 import { afterVerified, sourceKey, useVerifiedFor, useVerifiedOnMount } from "../../lib/heldBackend";
 import { findHost } from "../../lib/hosts";
-import { hostRouteMatches, machineOffline } from "../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { imageSourceForPlatform } from "../../lib/imageSource";
+import { MachineRejectedState } from "../../lib/MachineRejectedState";
 import { MermaidDiagram } from "../../lib/MermaidDiagram";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -86,7 +87,8 @@ function ArtifactViewerContent() {
 	const path = String(rawPath ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { currentHostId, unreachable, paired } = useApp();
+	const app = useApp();
+	const { currentHostId } = app;
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
 	const { backend, cloud, unavailable } = useArtifactsBackend(hostMatches ? sessionId : "");
@@ -232,8 +234,11 @@ function ArtifactViewerContent() {
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (unavailable) return <View style={styles.center}><EmptyState icon="cloud" title="Artifact unavailable" message={unavailable} /></View>;
-	// Not for a connection an app switch closed: that one reconnects (see machineOffline).
-	if (!backend && !cloud && machineOffline({ unreachable, paired })) return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const machine = !backend && !cloud ? machineState(app) : "ok";
+	if (machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
+	if (machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
 	if (!backend || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifact || !pages) {
 		// A file the session does not list (a worker report's link): media, a PDF,

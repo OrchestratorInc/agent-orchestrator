@@ -9,6 +9,9 @@ const fixtures = vi.hoisted(() => ({
 	backend: null as object | null,
 	unreachable: false,
 	paired: true as boolean | null,
+	// The board poll's last failure: none after an app switch.
+	error: null as string | null,
+	errorStatus: null as number | null,
 }));
 
 vi.mock("react-native", async () => {
@@ -38,10 +41,13 @@ vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: React.ReactNode }) => children,
 	useApp: () => ({
 		currentHostId: "host-1",
-		// What an app switch leaves behind: never read as offline (see machineOffline).
+		// What an app switch leaves behind: never read as offline (see machineState).
 		connection: "closed",
 		unreachable: fixtures.unreachable,
 		paired: fixtures.paired,
+		error: fixtures.error,
+		errorStatus: fixtures.errorStatus,
+		config: null,
 	}),
 }));
 vi.mock("./ThemeProvider", () => {
@@ -68,6 +74,8 @@ beforeEach(() => {
 	fixtures.backend = null;
 	fixtures.unreachable = false;
 	fixtures.paired = true;
+	fixtures.error = null;
+	fixtures.errorStatus = null;
 });
 
 afterEach(() => {
@@ -97,5 +105,36 @@ describe("session artifacts while the connection is away", () => {
 		fixtures.paired = false;
 		await openArtifacts();
 		expect(titles()).toEqual(["Machine offline"]);
+	});
+
+	// A password change or a removed device: the machine answered 401/403, the
+	// board's poll stopped for good, and the screen used to spin forever.
+	it.each([401, 403])("says the machine rejected this phone after a %s, and offers a new code for it", async (status) => {
+		fixtures.error = "Your machine rejected this phone's password.";
+		fixtures.errorStatus = status;
+		await openArtifacts();
+		expect(nodes("ActivityIndicator")).toHaveLength(0);
+		expect(titles()).toEqual(["Your machine rejected this phone"]);
+		const buttons = [nodes("EmptyState")[0]!.props.action].flat();
+		// The repair only: no Retry, which would spend an attempt toward the lockout.
+		expect(buttons.map((button) => button.props.title)).toEqual(["Scan new code"]);
+		act(() => buttons[0]!.props.onPress());
+		expect(fixtures.router.push).toHaveBeenCalledWith({ pathname: "/pair", params: { repairHostId: "host-1" } });
+	});
+
+	it("says the machine is pausing this phone under the lockout, with nothing to press", async () => {
+		fixtures.error = "Too many attempts.";
+		fixtures.errorStatus = 429;
+		await openArtifacts();
+		expect(titles()).toEqual(["Too many attempts"]);
+		expect(nodes("EmptyState")[0]!.props.action).toBeUndefined();
+	});
+
+	it("keeps waiting for an answered error the poll keeps going through", async () => {
+		fixtures.error = "Something went wrong on your machine.";
+		fixtures.errorStatus = 500;
+		await openArtifacts();
+		expect(titles()).toEqual([]);
+		expect(nodes("ActivityIndicator")).toHaveLength(1);
 	});
 });

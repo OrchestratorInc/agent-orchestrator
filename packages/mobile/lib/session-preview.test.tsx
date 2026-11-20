@@ -13,6 +13,8 @@ const fixtures = vi.hoisted(() => ({
 	// The app in the background or reconnecting: no verified connection.
 	away: false,
 	unreachable: false,
+	// The status the board poll was refused with, if it was.
+	refusedWith: null as number | null,
 }));
 
 vi.mock("react-native", async () => {
@@ -55,7 +57,7 @@ vi.mock("react-native-webview", async () => {
 vi.mock("./api", () => ({ getPreview: fixtures.getPreview }));
 vi.mock("./config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }) }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
-vi.mock("./connectionError", () => ({ userFacingError: String }));
+vi.mock("./connectionError", async (importOriginal) => ({ ...(await importOriginal<typeof import("./connectionError")>()), userFacingError: String }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: React.ReactNode }) => children,
@@ -65,6 +67,8 @@ vi.mock("./store", () => ({
 		connection: fixtures.away ? "closed" : "open",
 		paired: true,
 		unreachable: fixtures.unreachable,
+		error: fixtures.refusedWith ? "Your machine rejected this phone's password." : null,
+		errorStatus: fixtures.refusedWith,
 	}),
 }));
 vi.mock("./ThemeProvider", () => {
@@ -160,6 +164,7 @@ beforeEach(() => {
 	fixtures.web.goBack.mockClear();
 	fixtures.away = false;
 	fixtures.unreachable = false;
+	fixtures.refusedWith = null;
 });
 
 afterEach(() => {
@@ -439,6 +444,16 @@ describe("app preview controls", () => {
 			await openPreview();
 			await appSwitch(true);
 			expect(titles()).toEqual(["Machine offline"]);
+		});
+
+		// Its poll stopped on the refusal, so "Connecting to this machine…" spun for good.
+		it("says the machine rejected this phone instead of connecting forever", async () => {
+			fixtures.getPreview.mockReturnValue(new Promise(() => {}));
+			await openPreview();
+			fixtures.refusedWith = 401;
+			await appSwitch();
+			expect(titles()).toEqual(["Your machine rejected this phone"]);
+			expect([nodes("EmptyState")[0]!.props.action].flat().map((button) => button.props.title)).toEqual(["Scan new code"]);
 		});
 	});
 });

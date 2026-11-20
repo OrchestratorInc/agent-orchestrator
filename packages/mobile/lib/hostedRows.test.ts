@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
 import { hostedProjectKey, hostedProjectSections, hostedSessionKey, sessionMachineIdentity, type HostedSession } from "./hostedRows";
 import { EMPTY_LINK_TRACKER, UNREACHABLE_AFTER_FAILURES, UNREACHABLE_AFTER_MS, type LinkTracker, type PhoneNetwork } from "./linkHealth";
-import { spawnHostOffline } from "./spawnNotices";
+import { spawnHostState } from "./spawnNotices";
 
 describe("hosted rows", () => {
 	it("keeps identical project and session IDs from two machines separate", () => {
@@ -31,16 +31,19 @@ describe("hosted rows", () => {
 		const now = 1_000_000;
 		const online: PhoneNetwork = { connected: true, internet: true };
 		const givenUp: LinkTracker = { recent: ["no-answer", "no-answer", "no-answer"], unansweredStreak: UNREACHABLE_AFTER_FAILURES, unansweredSince: now - UNREACHABLE_AFTER_MS };
-		const machine = (hostId: string, name: string, poll: { error: string | null; linkTracker: LinkTracker }) => ({
+		const machine = (hostId: string, name: string, poll: { error: string | null; errorStatus?: number | null; linkTracker: LinkTracker }) => ({
 			hostId, name, connection: "closed" as const, errorStatus: null, ...poll,
 			projects: [{ id: "app", name: "App" }], sessions: [], orchestrators: [],
 		});
 		const hosts = [
 			machine("a", "Laptop", { error: null, linkTracker: EMPTY_LINK_TRACKER }),
 			machine("b", "Desktop", { error: "Couldn't reach your desktop.", linkTracker: givenUp }),
+			// Refused this phone (a password change): its poll stopped, so its rows
+			// are stale, and no link tracker will ever give up on it.
+			machine("c", "Studio", { error: "Your machine rejected this phone's password.", errorStatus: 401, linkTracker: EMPTY_LINK_TRACKER }),
 		];
-		const rows = hostedProjectSections(hosts.map((host) => ({ ...host, offline: spawnHostOffline(host, online, now) }))).flatMap((section) => section.data);
-		expect(rows.map((row) => row.project.hostName)).toEqual(["Laptop", "Desktop (offline)"]);
+		const rows = hostedProjectSections(hosts.map((host) => ({ ...host, offline: spawnHostState(host, online, now) !== "ok" }))).flatMap((section) => section.data);
+		expect(rows.map((row) => row.project.hostName)).toEqual(["Laptop", "Desktop (offline)", "Studio (offline)"]);
 	});
 
 	it("keeps machine identity separate from project text for worker rows", () => {

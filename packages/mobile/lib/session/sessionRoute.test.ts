@@ -35,7 +35,7 @@ const pending: SessionLookup = { state: "pending" };
 
 type ViewArgs = Parameters<typeof sessionRouteView>[0];
 const view = (over: Partial<ViewArgs> = {}) =>
-	sessionRouteView({ listed: undefined, paired: true, unreachable: false, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
+	sessionRouteView({ listed: undefined, paired: true, unreachable: false, connection: "open", error: null, errorStatus: null, loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
 
 type DueArgs = Parameters<typeof sessionLookupDue>[0];
 const due = (over: Partial<DueArgs> = {}) =>
@@ -161,6 +161,29 @@ describe("sessionRouteView", () => {
 	// them because `classifyConnectionFailure` groups it as "auth".
 	it.each([401, 403, 429])("hands a %s lookup to the board instead of offering a retry", (status) => {
 		expect(view({ lookup: failed(status) })).toEqual({ kind: "offline" });
+	});
+
+	// The board's own poll was refused (a password change, a removed device): it
+	// has stopped, and nothing asks again, so the route used to spin for good.
+	it.each([401, 403, 429])("says the machine refused this phone when the board's poll got a %s", (status) => {
+		const refused = { connection: "closed" as const, error: "Your machine rejected this phone's password.", errorStatus: status };
+		for (const lookup of [pending, failed(undefined), failed(status)]) {
+			expect(view({ ...refused, lookup })).toEqual({ kind: "rejected" });
+		}
+		expect(view({ ...refused, paired: null })).toEqual({ kind: "rejected" });
+		// The lists and settled answers still win.
+		const listed = orchestrator();
+		expect(view({ ...refused, listed })).toEqual({ kind: "screen", session: listed });
+		expect(view({ ...refused, lookup: failed(404) })).toEqual({ kind: "missing" });
+		// Asking again after the app came back is waited for, not a refusal.
+		expect(view({ ...refused, connection: "connecting" })).toEqual({ kind: "loading" });
+	});
+
+	it("keeps waiting through an app switch and saying offline for an outage, apart from a refusal", () => {
+		expect(view({ connection: "closed" })).toEqual({ kind: "loading" });
+		expect(view({ connection: "closed", unreachable: true, error: "Couldn't reach your machine." })).toEqual({ kind: "offline" });
+		// A 5xx answered, and the poll keeps going: waited for, as before.
+		expect(view({ connection: "closed", error: "Something went wrong on your machine.", errorStatus: 500 })).toEqual({ kind: "loading" });
 	});
 });
 

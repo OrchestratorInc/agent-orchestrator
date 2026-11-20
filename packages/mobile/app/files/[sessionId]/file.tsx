@@ -10,7 +10,8 @@ import { ChatMarkdown } from "../../../lib/chat/ChatMarkdown";
 import { userFacingError } from "../../../lib/connectionError";
 import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
-import { hostRouteMatches, machineOffline } from "../../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../../lib/hostRoute";
+import { MachineRejectedState } from "../../../lib/MachineRejectedState";
 import { resolveWhenVerified, retryWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
 import { ImageViewer } from "../../../lib/ImageViewer";
 import { usePressFeedback } from "../../../lib/pressFeedback";
@@ -90,7 +91,8 @@ function SessionFileContent() {
 	const path = String(params.path ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { currentHostId, unreachable: machineUnreachable, paired, loading: appLoading } = useApp();
+	const app = useApp();
+	const { currentHostId, loading: appLoading } = app;
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
 	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
@@ -383,8 +385,11 @@ function SessionFileContent() {
 	if (signedOut) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this file." /></View>;
 	if (unreachable) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
 	if (!backend && (appLoading || cloud)) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	// Not for a connection an app switch closed: that one reconnects (see machineOffline).
-	if (!backend && machineOffline({ unreachable: machineUnreachable, paired })) return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const machine = !backend ? machineState(app) : "ok";
+	if (machine === "rejected") return <View style={styles.center}>{headerItems}<MachineRejectedState /></View>;
+	if (machine === "offline") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
 	// Where the file lives and how much changed, under the title that names it;
 	// then the one control over how it reads. iOS adds the file's place among the

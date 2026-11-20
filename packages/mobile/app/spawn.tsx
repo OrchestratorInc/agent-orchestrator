@@ -22,7 +22,7 @@ import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pa
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
-import { spawnHostOffline, spawnNotices } from "../lib/spawnNotices";
+import { spawnHostState, spawnNotices } from "../lib/spawnNotices";
 import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
@@ -99,9 +99,9 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) void reloadCloudPlan?.();
 	}, [cloudSelected, reloadCloudPlan]);
-	// Offline by the same rule as the other screens: a connection the app closed
-	// on going to the background is not (see spawnHostOffline).
-	const unreachable = spawnHostOffline(selectedHost, phoneNetwork, Date.now());
+	// Offline or rejected by the same rule as the other screens: a connection the
+	// app closed on going to the background is neither (see spawnHostState).
+	const machine = spawnHostState(selectedHost, phoneNetwork, Date.now());
 	const hostOptions = useMemo(() => {
 		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
 		const selected = hostStates.find((host) => host.hostId === selectedHostId);
@@ -407,9 +407,10 @@ export default function SpawnScreen() {
 		...(cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
 	];
 	const notices = [...hostNotices, ...cloudNotices, ...spawnNotices({
-		// Only when a reconnect can fix it: a rejected password stops the poll for
-		// good, and its catalog error already says to re-scan the pairing code.
-		offline: unreachable,
+		// One line for a machine that is gone or refused this phone, in place of
+		// the same failure from every request on this screen.
+		machine,
+		errorStatus: selectedHost?.errorStatus,
 		mode,
 		loading,
 		catalogLoaded: catalog !== null,

@@ -13,6 +13,10 @@ const fixtures = vi.hoisted(() => ({
 	config: { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" } as { host: string; httpPort: string; muxPort: string; password: string } | null,
 	paired: true as boolean | null,
 	unreachable: false,
+	// The board poll: closed with no failure is what an app switch leaves behind.
+	connection: "closed",
+	error: null as string | null,
+	errorStatus: null as number | null,
 	platform: { OS: "android" },
 	clients: [] as Array<{ handlers: Handlers; sent: unknown[]; closed: boolean }>,
 }));
@@ -79,7 +83,7 @@ vi.mock("../browserLive", () => ({
 		close() { this.record.closed = true; }
 	},
 }));
-vi.mock("../store", () => ({ useApp: () => ({ config: fixtures.config, paired: fixtures.paired, unreachable: fixtures.unreachable }) }));
+vi.mock("../store", () => ({ useApp: () => ({ config: fixtures.config, paired: fixtures.paired, unreachable: fixtures.unreachable, connection: fixtures.connection, error: fixtures.error, errorStatus: fixtures.errorStatus }) }));
 vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, name) => `theme.${String(name)}` });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
@@ -177,6 +181,8 @@ beforeEach(() => {
 	fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
 	fixtures.paired = true;
 	fixtures.unreachable = false;
+	fixtures.error = null;
+	fixtures.errorStatus = null;
 	fixtures.clients.length = 0;
 	onTitle.mockClear();
 });
@@ -346,6 +352,24 @@ describe("live browser without a verified connection", () => {
 		await render();
 		expect(alert().findByType("EmptyState" as never).props.message).toBe("This machine is offline. The browser connects once the app reconnects.");
 		expect(fixtures.clients).toHaveLength(0);
+	});
+
+	// A password change or a removed device: the poll stopped on the refusal,
+	// so waiting for the connection spun "Connecting to browser…" forever.
+	it("says the machine rejected this phone in the board's words, without connecting", async () => {
+		await render();
+		await open();
+		fixtures.config = null;
+		fixtures.error = "Your machine rejected this phone's password.";
+		fixtures.errorStatus = 401;
+		await rerender();
+		expect(nodes("EmptyState").map((node) => node.props.title)).not.toContain("Connecting to browser…");
+		expect(alert().findByType("EmptyState" as never).props.message).toBe("Your machine rejected this phone. It was removed from that machine, or the password changed. Scan a new code there.");
+		expect(fixtures.clients).toHaveLength(1);
+		expect(fixtures.clients[0].closed).toBe(true);
+		// Checking again asks nothing of the machine: no attempt toward its lockout.
+		await act(async () => { alert().findByType("Button" as never).props.onPress(); });
+		expect(fixtures.clients).toHaveLength(1);
 	});
 
 	it("still asks to pair a phone with no machine", async () => {

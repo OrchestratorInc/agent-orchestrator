@@ -7,6 +7,7 @@ import {
 	describeUnreachableCode,
 	LOCAL_NETWORK_HINT,
 	isDesktopUnreachable,
+	isPollRejected,
 	isLocalNetworkHost,
 	isUnreachableError,
 	isTailscaleHost,
@@ -404,6 +405,32 @@ describe("isDesktopUnreachable", () => {
 	it("is false while connected and before any poll has failed", () => {
 		expect(isDesktopUnreachable(poll(null, { connection: "open", error: null }))).toBe(false);
 		expect(isDesktopUnreachable(poll(null, { error: null }))).toBe(false);
+	});
+});
+
+describe("isPollRejected", () => {
+	const poll = (errorStatus: number | null, over: Partial<{ connection: string; error: string | null }> = {}) => ({
+		connection: "closed",
+		error: "failed",
+		errorStatus,
+		...over,
+	});
+
+	// The refusals that stop the poll for good (see shouldKeepPolling).
+	it("is true when the last poll was refused and stopped", () => {
+		for (const status of [401, 403, 429, 426]) expect(isPollRejected(poll(status))).toBe(true);
+	});
+
+	it("is false for no answer and for errors the poll keeps going through", () => {
+		for (const status of [null, 500, 503]) expect(isPollRejected(poll(status))).toBe(false);
+	});
+
+	// An app switch closes the connection with no failed poll; a poll asking
+	// again (or through) is not stopped.
+	it("is false for a closed connection with no failure, and while connecting or open", () => {
+		expect(isPollRejected(poll(null, { error: null }))).toBe(false);
+		expect(isPollRejected(poll(401, { connection: "connecting" }))).toBe(false);
+		expect(isPollRejected(poll(401, { connection: "open" }))).toBe(false);
 	});
 });
 

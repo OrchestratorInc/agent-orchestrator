@@ -56,7 +56,7 @@ export function hostedSessionKey(session: DashboardSession): string {
 /**
  * Build each host's project rows separately so matching project IDs never share
  * workers or an orchestrator. `offline` marks the machine's name, decided by the
- * caller with the rule every screen uses (spawnHostOffline): never a bare closed
+ * caller with the rule every screen uses (spawnHostState): never a bare closed
  * connection, which the app drops on every app switch.
  */
 export function hostedProjectSections(hosts: readonly {

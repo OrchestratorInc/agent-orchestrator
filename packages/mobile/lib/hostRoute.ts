@@ -1,4 +1,6 @@
 import type { ServerConfig } from "./config";
+import { classifyConnectionFailure, describeConnectionFailure, isPollRejected, type ConnectionErrorCopy } from "./connectionError";
+import { canRepairWithQr } from "./machineRecovery";
 import { sameServerConfig } from "./sameConfig";
 
 export type SpawnHostOption = { id: string; label: string };
@@ -126,15 +128,53 @@ export function heldPreview<T>(
 	return !config || sameServerConfig(loaded.config, config) ? { value: loaded.value, config: loaded.config } : null;
 }
 
+/** What a screen with nothing to show yet says about its machine (see machineState). */
+export type MachineState = "ok" | "offline" | "rejected";
+
 /**
- * Whether a screen with nothing to show yet says the machine is offline rather
- * than waiting for it: by the same rule as HostScope and New task, the link
- * tracker has given up on it and its last poll failed as unreachable
- * (`unreachable`), or no machine is paired at all. The app drops its verified
- * connection every time it goes to the background, so a closed connection is
- * not offline: read as offline, it flashed an error after every app switch,
- * into the app-switcher snapshot too.
+ * What a screen with nothing to show yet says about its machine, by the same
+ * rule as HostScope and New task:
+ *
+ * - "offline": the link tracker has given up on it and its last poll failed as
+ *   unreachable (`unreachable`), or no machine is paired at all;
+ * - "rejected": its last poll was answered with a refusal that stopped the
+ *   poll (isPollRejected): a rejected pairing, the lockout, or a version
+ *   mismatch. No reconnect is coming, so waiting would spin for good; the
+ *   screen says what the board says instead (rejectedMachineCopy);
+ * - "ok": anything else, which is waited for. The app drops its verified
+ *   connection every time it goes to the background, so a closed connection
+ *   with no failed poll behind it is a reconnect: read as offline, it flashed
+ *   an error after every app switch, into the app-switcher snapshot too.
  */
-export function machineOffline(app: { unreachable: boolean; paired: boolean | null }): boolean {
-	return app.unreachable || app.paired === false;
+export function machineState(app: {
+	unreachable: boolean;
+	paired: boolean | null;
+	connection: string;
+	error: string | null;
+	errorStatus: number | null;
+}): MachineState {
+	if (app.paired === false) return "offline";
+	if (isPollRejected(app)) return "rejected";
+	return app.unreachable ? "offline" : "ok";
+}
+
+/**
+ * The board's own copy for a machine that refused this phone (machineState
+ * "rejected"), so the same refusal reads the same on every screen. `host` is
+ * the address it refused, when there is one: the lockout's copy depends on it.
+ */
+export function rejectedMachineCopy(errorStatus: number | null, host = ""): ConnectionErrorCopy {
+	// The platform only decides the Local Network hint, which no refusal shows.
+	return describeConnectionFailure(classifyConnectionFailure(errorStatus ?? undefined), { host, port: "", platform: "" });
+}
+
+/** The same copy as one line, for a place with room for a sentence only. */
+export function rejectedMachineLine(errorStatus: number | null, host = ""): string {
+	const copy = rejectedMachineCopy(errorStatus, host);
+	return `${copy.title}. ${copy.message}`;
+}
+
+/** Whether a new pairing code fixes this refusal (a rejected pairing), so a screen offers to scan one. */
+export function rejectionRepairsWithQr(errorStatus: number | null): boolean {
+	return canRepairWithQr(classifyConnectionFailure(errorStatus ?? undefined));
 }
