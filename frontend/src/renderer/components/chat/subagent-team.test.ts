@@ -120,6 +120,39 @@ describe("isSubagentLaunch", () => {
 	});
 });
 
+// The shape the ACP driver records for OpenCode 2: ACP carries no tool name, so the
+// driver names the launch `subagent`, and OpenCode calls the agent type `agent`.
+describe("OpenCode 2 subagents", () => {
+	const openCodeLaunch: ConversationActivity = {
+		...launch("oc"),
+		summary: "subagent",
+		detail: {
+			providerToolName: "subagent",
+			background: true,
+			subagentType: "explore",
+			input: { agent: "explore", description: "Find tests", prompt: "Find the Go tests" },
+			output: "The subagent is working in the background (sessionID: ses_child).",
+		} as ConversationActivity["detail"],
+	};
+
+	it("groups the child's steps and hand-back under the launch", () => {
+		const read = step("read", "tool-oc", { activityKind: "mcp_tool", summary: "read" });
+		const report = handback("hb", "tool-oc", "Found 3 tests.");
+		const { items, steps } = partitionSubagentSteps([openCodeLaunch, read, report]);
+
+		expect(isSubagentLaunch(openCodeLaunch)).toBe(true);
+		expect(items).toEqual([openCodeLaunch]);
+		expect(readSubagent(openCodeLaunch, steps.get("oc") ?? [], false)).toMatchObject({
+			title: "Find tests",
+			agentType: "explore",
+			prompt: "Find the Go tests",
+			state: "done",
+			report: "Found 3 tests.",
+			steps: [read],
+		});
+	});
+});
+
 describe("partitionSubagentSteps", () => {
 	it("moves each child's steps under its launch and keeps everything else in order", () => {
 		const a = launch("a", { sequence: 2 });
@@ -272,39 +305,6 @@ describe("readSubagent", () => {
 		expect(finished).toMatchObject({ state: "done", report: "Outer report." });
 		// The inner hand-back stays readable among the outer child's steps.
 		expect(finished.steps.map((item) => item.id)).toEqual(["inner", "hi"]);
-	});
-});
-
-// The shape the ACP driver records for OpenCode 2: ACP carries no tool name, so the
-// driver names the launch `subagent`, and OpenCode calls the agent type `agent`.
-describe("OpenCode 2 subagents", () => {
-	const openCodeLaunch: ConversationActivity = {
-		...launch("oc"),
-		summary: "subagent",
-		detail: {
-			providerToolName: "subagent",
-			background: true,
-			subagentType: "explore",
-			input: { agent: "explore", description: "Find tests", prompt: "Find the Go tests" },
-			output: "The subagent is working in the background (sessionID: ses_child).",
-		} as ConversationActivity["detail"],
-	};
-
-	it("groups the child's steps and hand-back under the launch", () => {
-		const read = step("read", "tool-oc", { activityKind: "mcp_tool", summary: "read" });
-		const report = handback("hb", "tool-oc", "Found 3 tests.");
-		const { items, steps } = partitionSubagentSteps([openCodeLaunch, read, report]);
-
-		expect(isSubagentLaunch(openCodeLaunch)).toBe(true);
-		expect(items).toEqual([openCodeLaunch]);
-		expect(readSubagent(openCodeLaunch, steps.get("oc") ?? [], false)).toMatchObject({
-			title: "Find tests",
-			agentType: "explore",
-			prompt: "Find the Go tests",
-			state: "done",
-			report: "Found 3 tests.",
-			steps: [read],
-		});
 	});
 });
 

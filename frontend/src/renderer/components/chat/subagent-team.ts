@@ -14,14 +14,14 @@
 
 import { fileChangeFiles, type ConversationActivity, type ConversationItem } from "../../types/conversation";
 
-/**
- * Tool names a provider uses for "start a subagent". `Task` is Claude's older name;
- * `subagent` is OpenCode 2's, which its ACP driver names since ACP carries no tool name.
- */
-const LAUNCH_TOOLS = new Set(["Agent", "Task", "subagent"]);
+/** Tool names a provider uses for "start a subagent". `Task` is Claude's older name. */
+const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
 
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";
+
+/** OpenCode 2's launch. ACP carries no tool name, so its driver names the call `subagent`. */
+LAUNCH_TOOLS.add("subagent");
 
 /**
  * What Claude returns from a launch when the report is not in the result. Both are
