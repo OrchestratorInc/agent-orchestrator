@@ -19,6 +19,9 @@ import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./diffs/pierreTheme";
 import { SelectionAskButton } from "./diffs/SelectionAskButton";
 import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
+import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
+import { fileManagerName } from "./ArtifactActionsMenu";
+import { Button } from "./ui/button";
 
 /** How long a revealed line stays marked, matching the chat and settings focus highlights. */
 export const REVEALED_LINE_HIGHLIGHT_MS = 2_000;
@@ -142,7 +145,9 @@ export function ReadOnlyFileView({
 				</div>
 			);
 		}
-		return <PanelMessage>{t("files.binaryUnavailable")}</PanelMessage>;
+		return source.kind === "artifact"
+			? <BinaryArtifactPreview key={`${sessionId}:${detail.path}`} path={detail.path} sessionId={sessionId} local={!hostId && !source.cloud} />
+			: <PanelMessage>{t("files.binaryUnavailable")}</PanelMessage>;
 	}
 	if (detail.contentTruncated) {
 		return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(detail.size) })}</PanelMessage>;
@@ -221,5 +226,24 @@ export function ReadOnlyFileView({
 			: annotationReveal.changed || annotationReveal.unverified ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
 			<SelectionAskButton onAsk={codeSelection.ask} onDismiss={codeSelection.dismiss} source={codeSelection.source} />
 		</div>
+	);
+}
+
+/** An unsupported artifact still has a useful destination on its owning machine. */
+function BinaryArtifactPreview({ path, sessionId, local }: { path: string; sessionId: string; local: boolean }) {
+	const { t } = useTranslation();
+	const open = useOpenSessionArtifacts();
+	const extension = /\.[^.]+$/.exec(path.split("/").pop() ?? "")?.[0];
+	return (
+		<PanelMessage action={local ? (
+			<div className="flex flex-col items-center gap-2">
+				<Button size="sm" variant="secondary" disabled={open.isPending} onClick={() => open.mutate({ sessionId, path, targetId: "file-manager" })}>
+					{t("artifacts.showIn", { name: fileManagerName() })}
+				</Button>
+				{open.error ? <p role="alert">{open.error.message}</p> : null}
+			</div>
+		) : undefined}>
+			{t(extension ? "files.previewUnavailableType" : "files.previewUnavailable", { type: extension })}
+		</PanelMessage>
 	);
 }
