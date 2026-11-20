@@ -21,12 +21,23 @@ export function thumbnailScale(cardWidth: number): number {
 }
 
 /**
- * The page with its scrollbars hidden: a card shows the top of the page and
- * never scrolls. The rule goes inside <head> (or <html>), never before the
- * doctype, which would drop the page into quirks mode.
+ * Keeps a card's video and audio silent. A card plays a page's video (see
+ * artifactMediaPlayback) but takes no touches, so sound from it could not be
+ * stopped. Listening at the document, before the body is parsed, mutes each
+ * element as it starts loading, and again if the page unmutes it.
+ */
+export const THUMBNAIL_MUTE_SCRIPT = "(function(){function m(e){var t=e.target;if(t&&(t.tagName==='VIDEO'||t.tagName==='AUDIO')&&!t.muted)t.muted=true}['loadstart','play','volumechange'].forEach(function(n){document.addEventListener(n,m,true)})})()";
+
+/** What a card writes into the page's head: no scrollbars, no sound. */
+export const THUMBNAIL_PAGE_HEAD = `<style>html{overflow:hidden!important}</style><script>${THUMBNAIL_MUTE_SCRIPT}</script>`;
+
+/**
+ * The page as a card draws it: scrollbars hidden (a card shows the top of the
+ * page and never scrolls) and its media muted. This goes inside <head> (or
+ * <html>), never before the doctype, which would drop the page into quirks mode.
  */
 export function thumbnailPageHtml(html: string): string {
-	const rule = "<style>html{overflow:hidden!important}</style>";
+	const rule = THUMBNAIL_PAGE_HEAD;
 	for (const tag of [/<head\b[^>]*>/i, /<html\b[^>]*>/i]) {
 		const match = tag.exec(html);
 		if (match) return html.slice(0, match.index + match[0].length) + rule + html.slice(match.index + match[0].length);
