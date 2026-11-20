@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -466,6 +467,66 @@ func TestInstallerDownloadBackoff(t *testing.T) {
 			t.Fatalf("attempt times = %v, error = %v", attempts, err)
 		}
 	})
+}
+
+func TestInstallerDownloadHonoursRetryAfter(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		status       int
+		retryAfter   string
+		wantAttempts []time.Duration
+		wantErrHas   string
+	}{
+		{"429 waits for a short Retry-After", http.StatusTooManyRequests, "5", []time.Duration{0, 5 * time.Second, 10 * time.Second}, ""},
+		{"503 keeps the longer backoff", http.StatusServiceUnavailable, "0", []time.Duration{0, time.Second, 3 * time.Second}, ""},
+		{"429 stops when asked to wait past the cap", http.StatusTooManyRequests, "120", []time.Duration{0}, "retry after 2m0s"},
+		{"429 without Retry-After uses backoff", http.StatusTooManyRequests, "", []time.Duration{0, time.Second, 3 * time.Second}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := time.Now()
+				var attempts []time.Duration
+				client := &http.Client{Transport: installerRoundTripper(func(*http.Request) (*http.Response, error) {
+					attempts = append(attempts, time.Since(started))
+					header := http.Header{}
+					if test.retryAfter != "" {
+						header.Set("Retry-After", test.retryAfter)
+					}
+					return &http.Response{StatusCode: test.status, Status: http.StatusText(test.status), Header: header, Body: io.NopCloser(strings.NewReader(""))}, nil
+				})}
+				_, err := newAdapter(t.TempDir(), client).downloadInstallScript(context.Background(), "https://installer.invalid/install.sh", io.Discard, io.Discard)
+				if err == nil || !slices.Equal(attempts, test.wantAttempts) {
+					t.Fatalf("attempt times = %v, want %v, error = %v", attempts, test.wantAttempts, err)
+				}
+				if test.wantErrHas != "" && !strings.Contains(errors.Unwrap(err).Error(), test.wantErrHas) {
+					t.Fatalf("error cause = %v, want %q", errors.Unwrap(err), test.wantErrHas)
+				}
+			})
+		})
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		value  string
+		want   time.Duration
+		wantOK bool
+	}{
+		{"7", 7 * time.Second, true},
+		{" 0 ", 0, true},
+		{now.Add(4 * time.Second).Format(http.TimeFormat), 4 * time.Second, true},
+		{now.Add(-time.Minute).Format(http.TimeFormat), 0, true},
+		{"999999999999", time.Hour, true},
+		{"-1", 0, false},
+		{"soon", 0, false},
+		{"", 0, false},
+	} {
+		got, ok := parseRetryAfter(test.value, now)
+		if got != test.want || ok != test.wantOK {
+			t.Errorf("parseRetryAfter(%q) = %v, %v; want %v, %v", test.value, got, ok, test.want, test.wantOK)
+		}
+	}
 }
 
 func TestInstallerDownloadTimeoutBounds(t *testing.T) {

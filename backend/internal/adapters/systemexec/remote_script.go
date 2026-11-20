@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,10 @@ const (
 	remoteScriptMaxBytes         = 4 << 20
 	remoteScriptMaxRedirects     = 5
 	remoteScriptDownloadAttempts = 3
+	// remoteScriptMaxRetryAfter caps how long a 429/503 Retry-After may delay
+	// the next attempt. A server asking for longer stops the download instead
+	// of spending the remaining attempts while still rate-limited.
+	remoteScriptMaxRetryAfter = 10 * time.Second
 )
 
 // RunInstallScript downloads a fixed HTTPS installer into private AO-owned
@@ -169,7 +174,7 @@ func (a Adapter) downloadInstallScript(ctx context.Context, source string, stdou
 		}
 		_, _ = fmt.Fprintf(stdout, "[installer] Downloading installer (attempt %d/%d).\n", attempt, remoteScriptDownloadAttempts)
 		started := time.Now()
-		body, retry, err := downloadInstallScriptAttempt(ctx, &client, source)
+		body, retry, retryAfter, err := downloadInstallScriptAttempt(ctx, &client, source)
 		if err == nil {
 			return body, nil
 		}
@@ -180,7 +185,7 @@ func (a Adapter) downloadInstallScript(ctx context.Context, source string, stdou
 		if !retry || attempt == remoteScriptDownloadAttempts {
 			return nil, &installerDownloadError{attempts: attempt, cause: err}
 		}
-		delay := time.Second << (attempt - 1)
+		delay := max(time.Second<<(attempt-1), retryAfter)
 		_, _ = fmt.Fprintf(stdout, "[installer] Retrying download in %s (attempt %d/%d).\n", delay, attempt+1, remoteScriptDownloadAttempts)
 		timer := time.NewTimer(delay)
 		select {
@@ -206,35 +211,70 @@ func (e *installerDownloadError) Error() string {
 
 func (e *installerDownloadError) Unwrap() error { return e.cause }
 
-func downloadInstallScriptAttempt(ctx context.Context, client *http.Client, source string) ([]byte, bool, error) {
+// downloadInstallScriptAttempt reports whether a failure may be retried and,
+// for a 429/503 with Retry-After, how long the server asked to wait.
+func downloadInstallScriptAttempt(ctx context.Context, client *http.Client, source string) ([]byte, bool, time.Duration, error) {
 	downloadCtx, cancel := context.WithTimeout(ctx, remoteScriptDownloadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(downloadCtx, http.MethodGet, source, http.NoBody)
 	if err != nil {
-		return nil, false, fmt.Errorf("create installer request: %w", err)
+		return nil, false, 0, fmt.Errorf("create installer request: %w", err)
 	}
 	response, err := client.Do(req)
 	if err != nil {
-		return nil, retryableDownloadError(err), fmt.Errorf("download installer: %w", err)
+		return nil, retryableDownloadError(err), 0, fmt.Errorf("download installer: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		retry := response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests ||
 			response.StatusCode == http.StatusInternalServerError || response.StatusCode == http.StatusBadGateway ||
 			response.StatusCode == http.StatusServiceUnavailable || response.StatusCode == http.StatusGatewayTimeout
-		return nil, retry, errors.Join(fmt.Errorf("download installer: HTTP %s", response.Status), response.Body.Close())
+		statusErr := fmt.Errorf("download installer: HTTP %s", response.Status)
+		var retryAfter time.Duration
+		if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusServiceUnavailable {
+			if wait, ok := parseRetryAfter(response.Header.Get("Retry-After"), time.Now()); ok {
+				retryAfter = wait
+				if wait > remoteScriptMaxRetryAfter {
+					retry = false
+					statusErr = fmt.Errorf("%w; server asked to retry after %s", statusErr, wait.Round(time.Second))
+				}
+			}
+		}
+		return nil, retry, retryAfter, errors.Join(statusErr, response.Body.Close())
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, remoteScriptMaxBytes+1))
 	closeErr := response.Body.Close()
 	if err != nil {
-		return nil, retryableDownloadError(err), errors.Join(fmt.Errorf("read installer: %w", err), closeErr)
+		return nil, retryableDownloadError(err), 0, errors.Join(fmt.Errorf("read installer: %w", err), closeErr)
 	}
 	if closeErr != nil {
-		return nil, retryableDownloadError(closeErr), fmt.Errorf("close installer response: %w", closeErr)
+		return nil, retryableDownloadError(closeErr), 0, fmt.Errorf("close installer response: %w", closeErr)
 	}
 	if len(body) > remoteScriptMaxBytes {
-		return nil, false, fmt.Errorf("installer exceeds %d-byte download limit", remoteScriptMaxBytes)
+		return nil, false, 0, fmt.Errorf("installer exceeds %d-byte download limit", remoteScriptMaxBytes)
 	}
-	return body, false, nil
+	return body, false, 0, nil
+}
+
+// parseRetryAfter reads a Retry-After header as delay seconds or an HTTP date.
+func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds < 0 {
+			return 0, false
+		}
+		if seconds > int64(time.Hour/time.Second) {
+			seconds = int64(time.Hour / time.Second)
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	return max(0, when.Sub(now)), true
 }
 
 func retryableDownloadError(err error) bool {
