@@ -1204,7 +1204,9 @@ func Run(buildVersion string) (retErr error) {
 		// A machine a signed-in device links gets a fixed address from AO
 		// Cloud; it needs the host identity that AO Cloud registered.
 		if cfg.CloudControlPlaneURL != "" && hostIdentity.HostID != "" {
-			deps.Fixed = mobilebridge.NewFixedTunnelSource(cfg.CloudControlPlaneURL, cfg.DataDir)
+			fixed := mobilebridge.NewFixedTunnelSource(cfg.CloudControlPlaneURL, cfg.DataDir)
+			fixed.OnRefused = func(digest string) { bs.NoteAccountListing(digest, false) }
+			deps.Fixed = fixed
 			deps.HostID = hostIdentity.HostID
 		}
 		return mobilebridge.NewManagedTunnel(deps)

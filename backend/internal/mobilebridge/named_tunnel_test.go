@@ -229,6 +229,54 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	}
 }
 
+func TestFixedTunnelReportsOnlyAOCloudsRefusal(t *testing.T) {
+	ctx := context.Background()
+	cloud, src := newFixedSource(t)
+	var refused []string
+	src.OnRefused = func(digest string) { refused = append(refused, digest) }
+	for _, status := range []int{0, http.StatusBadGateway, http.StatusForbidden, http.StatusNotFound} {
+		cloud.set(status)
+		_, _ = src.TunnelFor(ctx, "host-uuid", false)
+	}
+	if len(refused) != 0 {
+		t.Fatalf("refusal reported for an answer that is not AO Cloud's refusal: %v", refused)
+	}
+	cloud.set(http.StatusUnauthorized)
+	if _, err := src.TunnelFor(ctx, "host-uuid", false); !errors.Is(err, errHostRefused) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(refused) != 1 || refused[0] != "account-digest" {
+		t.Fatalf("refused = %v, want [account-digest]", refused)
+	}
+
+	for _, tc := range []struct {
+		status int
+		body   string
+	}{
+		{http.StatusUnauthorized, `{"error":"Unauthorized"}`},
+		{http.StatusNotFound, `{"code":"fixed_addresses_unavailable"}`},
+		{http.StatusConflict, `{"code":"fixed_address_limit_reached"}`},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		dir := t.TempDir()
+		if err := os.MkdirAll(dir+"/mobile", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		other := NewFixedTunnelSource(srv.URL, dir)
+		link(t, other, "account-digest")
+		called := false
+		other.OnRefused = func(string) { called = true }
+		_, _ = other.TunnelFor(ctx, "host-uuid", false)
+		if called {
+			t.Errorf("%d %s: reported as AO Cloud's refusal", tc.status, tc.body)
+		}
+		srv.Close()
+	}
+}
+
 // A machine whose clock runs fast must still wait out a record AO Cloud made
 // just now: since is moved onto the machine's clock.
 func TestFixedTunnelSinceFollowsTheMachinesClock(t *testing.T) {

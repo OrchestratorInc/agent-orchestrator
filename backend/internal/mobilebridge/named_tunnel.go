@@ -29,6 +29,7 @@ type FixedTunnelSource struct {
 	// CachePath keeps the last tunnel (~/.ao/mobile/named-tunnel.json), so the
 	// address survives AO Cloud being unreachable.
 	CachePath string
+	OnRefused func(digest string)
 }
 
 // NewFixedTunnelSource reads and caches under the data dir.
@@ -113,6 +114,9 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 	t, err := s.request(ctx, hostID, state.AccountTokenHash, repair)
 	if errors.Is(err, errHostRefused) || errors.Is(err, errNoFixedAddresses) {
 		_ = os.Remove(s.CachePath)
+		if errors.Is(err, errHostRefused) && s.OnRefused != nil {
+			s.OnRefused(state.AccountTokenHash)
+		}
 		return NamedTunnel{}, err
 	}
 	if err != nil {
