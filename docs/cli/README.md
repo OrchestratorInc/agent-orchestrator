@@ -49,8 +49,10 @@ does not finish, it prints the host ID, address, and a one-time pairing code for
 who deliberately want both. Check `ao remote-host status` when the HTTPS
 address is ready.
 Running `enable` again prints the current details and a new pairing code
-without rotating the password. `ao remote-host pair` prints another code,
-`ao remote-host devices` lists and revokes paired devices, and
+without rotating the password. Enabling a stopped listener makes a new
+password, which unlinks a linked machine from its account; `enable` then says
+so, and `ao remote-host link` links it again. `ao remote-host pair` prints
+another code, `ao remote-host devices` lists and revokes paired devices, and
 `ao remote-host require-device-credentials on` stops accepting the password. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.
 Cloudflare terminates tunnel TLS and can see its traffic. Until the machine is

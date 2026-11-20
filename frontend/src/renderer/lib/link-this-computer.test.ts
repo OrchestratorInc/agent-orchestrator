@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 // them is what is tested: nothing may move the machine's account token to an
 // account that would then refuse to list it.
 const fake = vi.hoisted(() => ({
-	directory: { hosts: [] as Array<{ hostId: string }>, fixedAddresses: true, hostKeys: true },
+	directory: { hosts: [] as Array<{ hostId: string; label?: string }>, fixedAddresses: true, hostKeys: true },
 	calls: [] as string[],
 }));
 vi.mock("./account-remote-hosts", async (original) => ({
@@ -55,4 +55,17 @@ it("links only a listed computer when asked to", async () => {
 	expect(fake.calls).toEqual(["directory"]);
 	fake.directory.hosts = [{ hostId: "h_this" }];
 	expect((await link({ ifListed: true })).hostId).toBe("h_this");
+});
+
+it("links a listed computer again with a new token, under the name the account shows", async () => {
+	// A new connection password took back the token the listing carries. The
+	// listing gets the machine's new one, and a name set on another device stays.
+	fake.directory.hosts = [{ hostId: "h_this", label: "Studio Mac" }];
+	expect(await link()).toEqual({ hostId: "h_this", added: false });
+	expect(fake.calls).toEqual(["directory", "token", "save"]);
+	expect(saveAccountRemoteHost).toHaveBeenLastCalledWith("https://cp.example.test", expect.objectContaining({ label: "Studio Mac", token: "0f".repeat(32) }));
+	// Unlisted, it takes this computer's own name.
+	fake.directory.hosts = [];
+	await link();
+	expect(saveAccountRemoteHost).toHaveBeenLastCalledWith("https://cp.example.test", expect.objectContaining({ label: "Mac" }));
 });
