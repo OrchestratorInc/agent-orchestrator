@@ -12,6 +12,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// A completed launch with no exit code may leave a native process behind.
+// Its next inventory read, rather than this notification, confirms that job.
+func completeCodexBackgroundLaunch(c *conversation, id string) {
+	c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(fmt.Sprintf(`{"item":{"id":%q,"type":"commandExecution","exitCode":null}}`, id))})
+}
+
 func TestBackgroundTasksReadsNativeCodexInventory(t *testing.T) {
 	for _, tc := range []struct {
 		name, response                string
@@ -38,6 +44,7 @@ func TestBackgroundTasksReadsNativeCodexInventory(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = conv.Close() }()
+			completeCodexBackgroundLaunch(conv.(*conversation), "cmd-1")
 			tasks, err := conv.(ports.ChatBackgroundTaskInspector).BackgroundTasks(context.Background())
 			if (err != nil) != tc.wantErr || errors.Is(err, ports.ErrBackgroundTasksUnsupported) != tc.unsupported || errors.Is(err, ports.ErrBackgroundTasksPartial) != tc.partial || len(tasks) != tc.count {
 				t.Fatalf("tasks=%+v err=%v", tasks, err)
@@ -163,6 +170,7 @@ func TestStopBackgroundTaskTerminatesOneCodexTerminal(t *testing.T) {
 			}
 			defer func() { _ = conv.Close() }()
 			c := conv.(*conversation)
+			completeCodexBackgroundLaunch(c, "cmd-1")
 			c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:child", Kind: "agent", State: "running"}, time.Now())
 			tasks, _ := c.BackgroundTasks(context.Background())
 			for _, task := range tasks {
@@ -200,6 +208,8 @@ func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
 	}
 	defer func() { _ = conv.Close() }()
 	c := conv.(*conversation)
+	completeCodexBackgroundLaunch(c, "cmd-1")
+	completeCodexBackgroundLaunch(c, "cmd-2")
 	if _, err := c.BackgroundTasks(context.Background()); !errors.Is(err, ports.ErrBackgroundTasksPartial) {
 		t.Fatal(err)
 	}
@@ -229,29 +239,41 @@ func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
 }
 
 func TestBackgroundTasksCodexUsesCommandStartAndHidesUnknownAge(t *testing.T) {
-	d, srv := newTestDriver(t)
-	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"sleep 30"}]}`)
-	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer opened.Close()
-	c := opened.(*conversation)
-	tasks, _ := c.BackgroundTasks(t.Context())
-	if len(tasks) != 1 || tasks[0].StartedAt != nil {
-		t.Fatalf("late attachment invented start: %+v", tasks)
-	}
-	before := time.Now()
-	c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","command":"sleep 30"}}`)})
-	after := time.Now()
-	tasks, _ = c.BackgroundTasks(t.Context())
-	if len(tasks) != 1 || tasks[0].StartedAt == nil || tasks[0].StartedAt.Before(before) || tasks[0].StartedAt.After(after) {
-		t.Fatalf("lost command start: %+v", tasks)
-	}
-	first := *tasks[0].StartedAt
-	tasks, _ = c.BackgroundTasks(t.Context())
-	if !tasks[0].StartedAt.Equal(first) {
-		t.Fatal("poll moved command start")
+	for _, knownStart := range []bool{false, true} {
+		t.Run(fmt.Sprint(knownStart), func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"sleep 30"}]}`)
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			before := time.Now()
+			if knownStart {
+				c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","command":"sleep 30"}}`)})
+				completeCodexBackgroundLaunch(c, "cmd")
+			} else {
+				tasks, _ := c.BackgroundTasks(t.Context())
+				if len(tasks) != 0 {
+					t.Fatal("unconfirmed attachment promoted", tasks)
+				}
+				srv.reply("thread/read", `{"thread":{"id":"thread-1","turns":[{"id":"previous","status":"completed","items":[{"id":"cmd","type":"commandExecution","processId":"p","exitCode":null,"status":"completed"}]}]}}`)
+				if _, err := c.ReadHistory(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			after := time.Now()
+			for range 2 {
+				tasks, _ := c.BackgroundTasks(t.Context())
+				if len(tasks) != 1 || (tasks[0].StartedAt != nil) != knownStart {
+					t.Fatalf("tasks=%+v", tasks)
+				}
+				if knownStart && (tasks[0].StartedAt.Before(before) || tasks[0].StartedAt.After(after)) {
+					t.Fatal("poll moved command start", tasks)
+				}
+			}
+		})
 	}
 }
 
@@ -271,6 +293,7 @@ func TestBackgroundTasksCodexCompletionSurvivesInventoryOrdering(t *testing.T) {
 				t.Fatal("foreground start became background")
 			}
 			if listed {
+				completeCodexBackgroundLaunch(c, "cmd")
 				if _, err := c.BackgroundTasks(t.Context()); !errors.Is(err, ports.ErrBackgroundTasksPartial) {
 					t.Fatal(err)
 				}
@@ -303,6 +326,7 @@ func TestBackgroundTasksCodexBoundsPendingCommandStarts(t *testing.T) {
 	}
 	defer opened.Close()
 	c := opened.(*conversation)
+	completeCodexBackgroundLaunch(c, "listed")
 	if _, err := c.BackgroundTasks(t.Context()); !errors.Is(err, ports.ErrBackgroundTasksPartial) {
 		t.Fatal(err)
 	}
@@ -322,5 +346,165 @@ func TestBackgroundTasksCodexBoundsPendingCommandStarts(t *testing.T) {
 	tasks := c.backgroundObserved.Snapshot(time.Now())
 	if len(tasks) != 1 || tasks[0].State != "failed" || tasks[0].Description != "server" {
 		t.Fatal(tasks)
+	}
+}
+
+func TestBackgroundTasksCodexLongForegroundNeverPromoted(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"long foreground build"}]}`)
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c := opened.(*conversation)
+	c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"cmd","type":"commandExecution","command":"long foreground build"}}`)})
+	for range 3 {
+		tasks, err := c.BackgroundTasks(t.Context())
+		if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 0 {
+			t.Fatalf("foreground became background: %+v err=%v", tasks, err)
+		}
+		if err := c.StopBackgroundTask(t.Context(), "p"); !errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
+			t.Fatalf("foreground stoppable: %v", err)
+		}
+	}
+	c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"cmd","type":"commandExecution","processId":"p","exitCode":1}}`)})
+	srv.reply("thread/backgroundTerminals/list", `{"data":[]}`)
+	c.observeBackgroundNotification(notification{Method: "turn/completed", Params: []byte(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)})
+	tasks, _ := c.BackgroundTasks(t.Context())
+	if len(tasks) != 0 {
+		t.Fatalf("foreground failure became background outcome: %+v", tasks)
+	}
+	if srv.sentMethod("thread/backgroundTerminals/terminate") {
+		t.Fatal("sent terminate for foreground")
+	}
+}
+
+func TestBackgroundTasksCodexRequiresPostBoundaryInventory(t *testing.T) {
+	for _, boundary := range []string{"call", "turn"} {
+		t.Run(boundary, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"server"}]}`)
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"turnId":"turn-1","item":{"id":"cmd","type":"commandExecution","command":"server"}}`)})
+			tasks, _ := c.BackgroundTasks(t.Context())
+			if len(tasks) != 0 {
+				t.Fatalf("promoted before %s boundary: %+v", boundary, tasks)
+			}
+
+			for _, raw := range []string{
+				`{"threadId":"child-thread","turn":{"id":"turn-1","status":"completed"}}`,
+				`{"threadId":"thread-1","turn":{"id":"another-turn","status":"completed"}}`,
+			} {
+				c.observeBackgroundNotification(notification{Method: "turn/completed", Params: []byte(raw)})
+				tasks, _ = c.BackgroundTasks(t.Context())
+				if len(tasks) != 0 {
+					t.Fatal("unrelated boundary promoted command", tasks)
+				}
+			}
+			if boundary == "call" {
+				c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"turnId":"turn-1","item":{"id":"cmd","type":"commandExecution","processId":"p","exitCode":null}}`)})
+			} else {
+				c.observeBackgroundNotification(notification{Method: "turn/completed", Params: []byte(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)})
+			}
+			if len(c.backgroundObserved.Snapshot(time.Now())) != 0 {
+				t.Fatal("boundary alone created a job")
+			}
+			tasks, _ = c.BackgroundTasks(t.Context())
+			if len(tasks) != 1 || tasks[0].State != "running" || !tasks[0].Stoppable {
+				t.Fatalf("post-boundary job missing: %+v", tasks)
+			}
+		})
+	}
+}
+
+func TestBackgroundTasksCodexCompletionDuringInventoryWaitsForNextRead(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			// No canned response: hold the first list RPC until after completion.
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution"}}`)})
+			result := make(chan []ports.ChatBackgroundTask, 1)
+			go func() { tasks, _ := c.BackgroundTasks(t.Context()); result <- tasks }()
+			request := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/backgroundTerminals/list" })
+			if terminal {
+				c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","processId":"p","exitCode":1}}`)})
+			} else {
+				completeCodexBackgroundLaunch(c, "cmd")
+			}
+			inventory := `{"data":[{"processId":"p","itemId":"cmd","command":"server"}]}`
+			srv.push(`{"id":` + string(*request.ID) + `,"result":` + inventory + `}`)
+			if tasks := <-result; len(tasks) != 0 {
+				t.Fatalf("pre-boundary inventory promoted: %+v", tasks)
+			}
+			srv.reply("thread/backgroundTerminals/list", inventory)
+			tasks, _ := c.BackgroundTasks(t.Context())
+			if terminal {
+				if len(tasks) != 0 {
+					t.Fatal("terminal foreground resurrected", tasks)
+				}
+			} else if len(tasks) != 1 || tasks[0].State != "running" {
+				t.Fatalf("later background inventory missing: %+v", tasks)
+			}
+		})
+	}
+}
+
+func TestBackgroundTasksCodexKeepsConfirmedJobDuringForegroundWork(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"server","itemId":"background","command":"dev server"},{"processId":"build","itemId":"foreground","command":"build"}]}`)
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c := opened.(*conversation)
+	completeCodexBackgroundLaunch(c, "background")
+	c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"turnId":"new-turn","item":{"id":"foreground","type":"commandExecution","command":"build"}}`)})
+	tasks, err := c.BackgroundTasks(t.Context())
+	if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || tasks[0].ID != "server" || !tasks[0].Stoppable {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	if err := c.StopBackgroundTask(t.Context(), "build"); !errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
+		t.Fatal(err)
+	}
+}
+
+func TestBackgroundTasksCodexHistoryRequiresExplicitCompletion(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted", "inProgress", "futureStatus"} {
+		t.Run(status, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"build"}]}`)
+			srv.reply("thread/read", fmt.Sprintf(`{"thread":{"id":"thread-1","turns":[{"id":"turn","status":%q,"items":[{"id":"cmd","type":"commandExecution","exitCode":null}]}]}}`, status))
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			_, err = c.ReadHistory(t.Context())
+			if (status == "inProgress") != errors.Is(err, ports.ErrChatHistoryUnsettled) {
+				t.Fatal(err)
+			}
+			tasks, _ := c.BackgroundTasks(t.Context())
+			expected := 0
+			if status == "completed" || status == "failed" || status == "interrupted" {
+				expected = 1
+			}
+			if len(tasks) != expected {
+				t.Fatalf("status %s tasks=%+v", status, tasks)
+			}
+		})
 	}
 }

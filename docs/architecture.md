@@ -91,7 +91,7 @@ wake a hibernated session. OS processes remain separate, optional Diagnostics.
 | Chat transport | Source | Coverage |
 | --- | --- | --- |
 | Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
-| Codex | Paginated `thread/backgroundTerminals/list`, command completion and collaboration events | Always partial: native shell inventory, but event-derived subagents may predate controller attachment |
+| Codex | Paginated `thread/backgroundTerminals/list`, launch/turn completion, settled history and collaboration events | Always partial: shells need launch-lifecycle evidence, and event-derived subagents may predate attachment |
 | Unreal Agent | No background mode in the pinned harness | Unavailable; Bash operations are foreground tool calls |
 | All other ACP bindings | Explicitly backgrounded tool metadata and provider-reported lifecycle events | Reported jobs; complete native inventory is not available in ACP v1 |
 
@@ -107,12 +107,17 @@ background tool metadata. Session IDs are not task handles; native task handles
 and the launching tool-call identity distinguish executions. An unambiguous
 session reference can settle an already observed agent, but never creates a job.
 
-Codex command-start events establish elapsed time. A terminal discovered only by
-inventory after attachment has no start timestamp, so its elapsed time is hidden.
-Completion events retain outcomes for inventory-confirmed background shells even
-if a later list omits the shell before its completion arrives. A process ID on a
-foreground completion does not establish background work. Unconfirmed command
-starts are bounded to 256 sanitized labels per conversation.
+Codex command-start events establish elapsed time. A terminal whose launch ended
+but whose start event was missed has no start timestamp, so elapsed time is hidden.
+The native terminal list also contains foreground commands. A shell is reported
+and stoppable only when a read begun after its launching call or turn completed
+still lists it. Unconfirmed calls and their failures stay out of the reading.
+An overlapping read cannot use a completion that arrived after it began. Settled
+history can recover missing launch evidence after attachment; otherwise unknown
+shells stay hidden in the partial reading. Short-lived jobs may end before a
+qualifying read. Confirmed shells retain outcomes even if a later list omits them
+before completion arrives. Unconfirmed command metadata is bounded to 256
+sanitized labels per conversation.
 Provider labels are one line, capped at 240 characters, and redact obvious
 credential assignments, credential flags, authorization values, and URL user
 information; this is not general secret detection.
