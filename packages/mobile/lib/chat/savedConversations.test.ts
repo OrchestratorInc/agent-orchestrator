@@ -29,6 +29,7 @@ import {
 } from "./savedConversations";
 import { disk, resetSavedChatFakes, savedFileNames, secrets, undeletable } from "./savedConversations.fakes";
 import type { ConversationPage } from "./snapshot";
+import { streamingCursorMessageId } from "./timelineModel";
 
 const page = (text: string, sessionId = "s") => ({ sessionId, conversationId: "c", latestSequence: 1, items: [{ kind: "message", id: "m", text }], turns: [] } as unknown as ConversationPage);
 const fileOf = (key: string) => `cache/saved-chats/${savedFileName(key)}`;
@@ -180,6 +181,22 @@ describe("a saved page shown before the live read", () => {
 		expect(view.turns.map((turn) => turn.state)).toEqual(["recovered", "completed"]);
 		expect(view.items.map((item) => item.id)).toEqual(["m", "cmd", "old"]);
 		expect(view.items.find((item) => item.id === "cmd")).toMatchObject({ status: "completed" });
+	});
+
+	it("draws a reply saved mid-stream whole, with no streaming cursor", () => {
+		const streamingReply = { kind: "message", id: "reply", role: "assistant", text: "Half a ", streaming: true };
+		const done = { kind: "message", id: "done", role: "assistant", text: "Done.", streaming: false };
+		// Saved while the agent was busy.
+		const busy = savedPageView({ ...midTurn, items: [done, streamingReply] } as unknown as ConversationPage);
+		expect(busy.items).toEqual([done, { ...streamingReply, streaming: false }]);
+		expect(streamingCursorMessageId(busy.items)).toBeUndefined();
+		// Saved after the agent read as ready, with the reply's last update still streaming.
+		const idle = { ...page("x"), controller: { state: "ready" }, items: [done, streamingReply] } as unknown as ConversationPage;
+		const view = savedPageView(idle);
+		expect(view).not.toBe(idle);
+		expect(view.controller).toEqual({ state: "ready" });
+		expect(view.items).toEqual([done, { ...streamingReply, streaming: false }]);
+		expect(streamingCursorMessageId(view.items)).toBeUndefined();
 	});
 
 	it("is the page itself when nothing in it was live", () => {
