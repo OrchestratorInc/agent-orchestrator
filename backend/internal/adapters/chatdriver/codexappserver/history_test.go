@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -133,6 +135,86 @@ func TestReadHistoryMakesMissingItemIDsUniqueAcrossTurns(t *testing.T) {
 	if len(itemIDs) != 2 || itemIDs[0] == "" || itemIDs[0] == itemIDs[1] {
 		t.Fatalf("provider item ids = %#v, want two conversation-wide identities", itemIDs)
 	}
+}
+
+// The source TUI hook reports only the prompt's text block, and that is what the
+// trusted checkpoint stores. Attachment markers beside the text would make every
+// prompt with an image fail the exact checkpoint comparison (#6211).
+func TestHistoricalUserTextRendersAttachmentMarkersOnlyWithoutText(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "text only",
+			content: `[{"type":"text","text":"compare the two charts"}]`,
+			want:    "compare the two charts",
+		},
+		{
+			name: "text with images",
+			content: `[{"type":"image","url":"data:image/png;base64,aGVsbG8="},` +
+				`{"type":"localImage","path":"/tmp/chart.png"},` +
+				`{"type":"text","text":"[Image #1] compare the two charts"}]`,
+			want: "[Image #1] compare the two charts",
+		},
+		{
+			name:    "text with audio",
+			content: `[{"type":"text","text":"transcribe this"},{"type":"localAudio","path":"/tmp/a.wav"}]`,
+			want:    "transcribe this",
+		},
+		{
+			name:    "image only",
+			content: `[{"type":"image","url":"data:image/png;base64,aGVsbG8="},{"type":"localImage","path":"/tmp/chart.png"}]`,
+			want:    "[Image]\n[Image]",
+		},
+		{
+			name:    "audio only",
+			content: `[{"type":"audio","url":"data:audio/wav;base64,aGVsbG8="},{"type":"localAudio","path":"/tmp/a.wav"}]`,
+			want:    "[Audio]\n[Audio]",
+		},
+		{
+			name:    "blank text keeps the attachment marker",
+			content: `[{"type":"text","text":"  "},{"type":"image","url":"data:image/png;base64,aGVsbG8="}]`,
+			want:    "[Image]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := codexproto.ThreadItem{Type: codexproto.ThreadItemTypeUserMessage, Content: json.RawMessage(tt.content)}
+			if got := historicalUserText(item); got != tt.want {
+				t.Fatalf("historicalUserText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadHistoryImagePromptMatchesItsTrustedCheckpoint(t *testing.T) {
+	conv, srv := openConversation(t)
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","turns":[`+
+		`{"id":"turn-a","status":"completed","items":[`+
+		`{"type":"userMessage","id":"user-1","content":[`+
+		`{"type":"localImage","path":"/tmp/a.png"},{"type":"localImage","path":"/tmp/b.png"},`+
+		`{"type":"text","text":"[Image #1] compare the two charts"}]},`+
+		`{"type":"agentMessage","id":"answer-1","text":"They match."}`+
+		`]}]}}`)
+
+	events, err := conv.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	// What the Codex UserPromptSubmit hook reported for this prompt.
+	const checkpoint = "[Image #1] compare the two charts"
+	for _, event := range events {
+		if event.Kind != ports.ChatEventUserMessageCompleted {
+			continue
+		}
+		if !domain.NativeCheckpointTextMatches(checkpoint, event.Text) {
+			t.Fatalf("replayed user text %q does not match checkpoint %q", event.Text, checkpoint)
+		}
+		return
+	}
+	t.Fatalf("no replayed user message in %#v", events)
 }
 
 func TestReadHistoryRejectsAnUnsettledNativeTurnInsteadOfOmittingIt(t *testing.T) {

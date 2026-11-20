@@ -259,17 +259,25 @@ func historyEventID(parts ...string) string {
 }
 
 // historicalUserText renders the provider's structured prompt blocks without
-// leaking Codex DTOs above the adapter. Text is preserved verbatim; non-text
-// blocks get a compact readable marker so an attachment-only prompt is not lost.
+// leaking Codex DTOs above the adapter. Text is preserved verbatim and, when
+// present, is the whole message: it is what the source TUI hook reported and the
+// trusted checkpoint stores, so markers beside it would never match (#6211).
+// Non-text blocks get a compact readable marker only when there is no text, so
+// an attachment-only prompt is not lost.
 func historicalUserText(item codexproto.ThreadItem) string {
 	var inputs []codexproto.UserInput
 	if len(item.Content) > 0 && json.Unmarshal(item.Content, &inputs) == nil {
-		parts := make([]string, 0, len(inputs))
+		texts := make([]string, 0, len(inputs))
 		for _, input := range inputs {
 			if text := strings.TrimSpace(deref(input.Text)); text != "" {
-				parts = append(parts, text)
-				continue
+				texts = append(texts, text)
 			}
+		}
+		if len(texts) > 0 {
+			return strings.Join(texts, "\n")
+		}
+		parts := make([]string, 0, len(inputs))
+		for _, input := range inputs {
 			switch input.Type {
 			case codexproto.UserInputTypeSkill:
 				if name := strings.TrimSpace(deref(input.Name)); name != "" {
