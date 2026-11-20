@@ -513,6 +513,20 @@ describe("ChatMarkdown", () => {
 		expect(screen.getByRole("img", { name: "CI" }).closest("a")).toHaveAttribute("href", "https://ci.example.com");
 		expect(badge.container.querySelector("[data-link-favicon]")).toBeNull();
 		badge.unmount();
+		const linked = (container: HTMLElement) => [...container.querySelectorAll("a")].map((link) => ({
+			href: link.getAttribute("href"),
+			text: link.textContent,
+			images: [...link.querySelectorAll("img")].map((image) => `${image.getAttribute("alt")} ${image.getAttribute("src")}`),
+			favicon: Boolean(link.querySelector("[data-link-favicon]")),
+		}));
+		for (const text of ["[![CI](https://example.com/ci.svg) build **passing**](https://ci.example.com) done", "[*![Docs](https://example.com/d.svg)* the docs](https://docs.example.com)"]) {
+			const streamed = render(<ChatMarkdown streaming text={text} />);
+			const settled = render(<ChatMarkdown text={text} />);
+			expect(linked(streamed.container)).toEqual(linked(settled.container));
+			expect(linked(streamed.container)[0]!.images).toHaveLength(1);
+			streamed.unmount();
+			settled.unmount();
+		}
 		render(<ChatMarkdown streaming text={'before <img src=x onerror="alert(1)"> after'} />);
 		expect(document.querySelector("img")).toBeNull();
 	});

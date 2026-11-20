@@ -10,7 +10,7 @@ describe("stream islands", () => {
 	it("hosts a finished link with its decoded href and label, and leaves an unfinished one", () => {
 		const href = islandHref("ao://sessions/p/s?x=1&y=\"2\"").replaceAll("&", "&amp;");
 		expect(hosts(linkIsland(`<a data-markdown="a" href="${href}">the <strong data-markdown="strong">docs</strong></a>`))).toEqual([
-			[LINK_ISLAND, { id: LINK_ISLAND, href: 'ao://sessions/p/s?x=1&y="2"', label: 'the <strong data-markdown="strong">docs</strong>' }],
+			[LINK_ISLAND, { id: LINK_ISLAND, href: 'ao://sessions/p/s?x=1&y="2"', label: 'the <strong data-markdown="strong">docs</strong>', image: false }],
 		]);
 		const unfinished = '<a data-markdown="incomplete-link">the docs</a>';
 		expect(linkIsland(unfinished)).toBe(unfinished);

@@ -23,13 +23,20 @@ const decodeIslandHref = (escaped: string) => {
 	}
 };
 
-function islandHost(name: string, value: string, data: Record<string, string>, fallback: string): string {
+function islandHost(name: string, value: string, data: Record<string, string | boolean>, fallback: string): string {
 	const key = escapeHtml(JSON.stringify([name, value]));
 	const json = escapeHtml(JSON.stringify({ ...data, id: name }));
 	return `<span data-words-island="${name}" data-words-island-id="${key}" data-words-island-data="${json}"><span data-words-island-content></span><span data-words-island-fallback>${fallback}</span></span>`;
 }
 
-const IMAGE_HOST = new RegExp(`^<span data-words-island="${IMAGE_ISLAND}" data-words-island-id="[^"]*" data-words-island-data="([^"]*)"><span data-words-island-content></span><span data-words-island-fallback>[^<]*</span></span>$`);
+function linksImage(label: string): boolean {
+	let depth = 0;
+	for (const [tag] of label.matchAll(/<[^>]*>/g)) {
+		if (depth === 0 && tag.startsWith(`<span data-words-island="${IMAGE_ISLAND}"`)) return true;
+		depth += tag.startsWith("</") ? -1 : VOID.test(tag) ? 0 : 1;
+	}
+	return false;
+}
 
 export function linkIsland(html: string): string {
 	const open = /^<a data-markdown="a" href="#([^"]*)"[^>]*>/.exec(html);
@@ -37,9 +44,7 @@ export function linkIsland(html: string): string {
 	const href = decodeIslandHref(open[1]!);
 	if (href === undefined) return html;
 	const label = html.slice(open[0].length, -"</a>".length);
-	const image = IMAGE_HOST.exec(label)?.[1];
-	const { src, alt } = image === undefined ? {} : JSON.parse(unescapeHtml(image)) as { src?: string; alt?: string };
-	return islandHost(LINK_ISLAND, href, src === undefined ? { href, label } : { href, label, src, alt: alt ?? "" }, label);
+	return islandHost(LINK_ISLAND, href, { href, label, image: linksImage(label) }, label);
 }
 
 export function imageIsland(html: string): string {

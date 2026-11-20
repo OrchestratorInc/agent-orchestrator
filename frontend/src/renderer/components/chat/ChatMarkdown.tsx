@@ -32,10 +32,12 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
+	useRef,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { QueryClientContext } from "@tanstack/react-query";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -338,10 +340,21 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 
 const LINKED_IMAGE: HastElement = { type: "element", tagName: "a", properties: {}, children: [{ type: "element", tagName: "img", properties: {}, children: [] }] };
 
-const StreamLink = memo(function StreamLink({ href, label, src, alt }: { href: string; label: string; src?: string; alt?: string }) {
-	return src === undefined
-		? <MarkdownLink href={href}><span dangerouslySetInnerHTML={{ __html: label }} /></MarkdownLink>
-		: <MarkdownLink href={href} node={LINKED_IMAGE}><MarkdownImage src={src} alt={alt} /></MarkdownLink>;
+const StreamLink = memo(function StreamLink({ href, label, image }: { href: string; label: string; image: boolean }) {
+	const ref = useRef<HTMLSpanElement>(null);
+	const html = useMemo(() => ({ __html: label }), [label]);
+	const [images, setImages] = useState<{ content: Element; src: string; alt: string }[]>([]);
+	useLayoutEffect(() => setImages([...ref.current?.querySelectorAll(`[data-words-island="${IMAGE_ISLAND}"]`) ?? []].map((host) => {
+		host.querySelector("[data-words-island-fallback]")?.remove();
+		const { src, alt } = JSON.parse(host.getAttribute("data-words-island-data")!) as { src: string; alt: string };
+		return { content: host.querySelector("[data-words-island-content]")!, src, alt };
+	})), [label]);
+	return (
+		<MarkdownLink href={href} node={image ? LINKED_IMAGE : undefined}>
+			<span ref={ref} dangerouslySetInnerHTML={html} />
+			{images.map(({ content, src, alt }, index) => createPortal(<MarkdownImage src={src} alt={alt} />, content, index))}
+		</MarkdownLink>
+	);
 });
 
 const StreamCode = memo(function StreamCode({ text }: { text: string }) {
@@ -350,8 +363,8 @@ const StreamCode = memo(function StreamCode({ text }: { text: string }) {
 
 const STREAM_ISLANDS: ReactiveIslands = {
 	[LINK_ISLAND]: {
-		render: ({ href, label, src, alt }) => typeof href === "string" && typeof label === "string"
-			? <StreamLink href={href} label={label} src={typeof src === "string" ? src : undefined} alt={typeof alt === "string" ? alt : undefined} />
+		render: ({ href, label, image }) => typeof href === "string" && typeof label === "string"
+			? <StreamLink href={href} label={label} image={image === true} />
 			: null,
 	},
 	[CODE_ISLAND]: { render: ({ text }) => typeof text === "string" ? <StreamCode text={text} /> : null },
