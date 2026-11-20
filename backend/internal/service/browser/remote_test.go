@@ -30,6 +30,11 @@ func TestClassifyRemoteArgs(t *testing.T) {
 		{[]string{"frobnicate"}, remoteGate{kind: remoteAsk, action: "frobnicate"}},
 		{[]string{"press", "Control+Enter"}, remoteGate{kind: remoteDescribe, action: "press", key: "Control+Enter"}},
 		{[]string{"press", "Tab"}, remoteGate{}},
+		{[]string{"type", "@e1", "4111\n"}, remoteGate{kind: remoteDescribe, action: "type", key: "Enter", selector: "@e1", typed: true}},
+		{[]string{"type", "@e1", "4111"}, remoteGate{}},
+		{[]string{"keyboard", "type", "hi\r"}, remoteGate{kind: remoteDescribe, action: "press", key: "Enter", typed: true}},
+		{[]string{"find", "label", "Card", "type", "4111\n"}, remoteGate{kind: remoteDescribe, action: "type", key: "Enter", name: "Card", typed: true}},
+		{[]string{"find", "label", "Card", "fill", "4111\n"}, remoteGate{}},
 		{[]string{"snapshot", "--interactive"}, remoteGate{}},
 		{[]string{"fill", "@e3", "hello"}, remoteGate{}},
 		{[]string{"open", "https://example.com"}, remoteGate{}},
@@ -266,5 +271,29 @@ func TestRemoteRefWithoutFormFactsAsks(t *testing.T) {
 	answer(t, gate, approval.DecisionDeny)
 	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRemoteTypedLineBreakAsks(t *testing.T) {
+	refs := `{"success":true,"data":{"refs":{"e1":{"role":"textbox","name":"Card"}}}}`
+	facts := `{"success":true,"data":{"result":{"role":"textbox","name":"Card","tag":"input","inputType":"text","formMethod":"get","formHasPayment":true}}}`
+	for _, args := range [][]string{
+		{"type", "@e1", "4111\n"},
+		{"type", "#card", "4111\r"},
+		{"keyboard", "type", "4111\n"},
+		{"find", "label", "Card", "type", "4111\n"},
+	} {
+		remote := &fakeRemote{refs: refs, focused: facts}
+		svc, gate, token := remoteService(t, remote)
+		answer(t, gate, approval.DecisionDeny)
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+			t.Fatalf("%q: err=%v forwarded=%v", args, err, remote.sent())
+		}
+	}
+	// Without a line break, typing is still not gated.
+	remote := &fakeRemote{refs: refs, focused: facts}
+	svc, gate, token := remoteService(t, remote)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"type", "@e1", "4111"}, nil); err != nil || len(gate.Pending()) != 0 {
+		t.Fatalf("err=%v", err)
 	}
 }

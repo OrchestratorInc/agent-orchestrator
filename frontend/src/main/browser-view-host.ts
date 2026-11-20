@@ -345,7 +345,8 @@ export function shouldHandleAppShortcutInBrowserContext(
 const APPROVAL_DESCRIBE_WORLD_ID = 1013;
 
 // Input actions the approval binding (tab, document, element) is checked for.
-const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press"]);
+// type is bound because a typed line break presses Enter in the field.
+const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press", "type"]);
 
 type ApprovalBinding = { tabId: string; document: number; ref?: string; focus?: string };
 

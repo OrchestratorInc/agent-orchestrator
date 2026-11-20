@@ -242,3 +242,26 @@ func TestActivationKeysActivateFocusedControls(t *testing.T) {
 		t.Fatalf("summary = %q", got.Summary)
 	}
 }
+
+func TestSiteIsTheOrigin(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://shop.example/checkout": "https://shop.example",
+		"https://Shop.Example:443/x":    "https://shop.example",
+		"http://shop.example":           "http://shop.example",
+		"HTTP://shop.example:80/":       "http://shop.example",
+		"http://localhost:4173/pay":     "http://localhost:4173",
+		"http://localhost:5173/pay":     "http://localhost:5173",
+		"https://[::1]:8443/":           "https://[::1]:8443",
+		"about:blank":                   "",
+		"file:///Users/me/page.html":    "",
+		"":                              "",
+	} {
+		if got := Site(raw); got != want {
+			t.Errorf("Site(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	// Prompts still name the host alone.
+	if got := Classify(Target{Action: "click", Role: "button", Name: "Pay now", PageURL: "http://localhost:4173/"}, ModeRisky); got.Summary != `Click "Pay now" on localhost` {
+		t.Fatalf("summary = %q", got.Summary)
+	}
+}

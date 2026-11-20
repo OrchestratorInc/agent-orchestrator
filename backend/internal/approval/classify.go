@@ -423,6 +423,42 @@ func IsActivationKey(key string) bool {
 	return last == "space" || last == "spacebar"
 }
 
+// HasLineBreak reports whether typed text contains a line break. Runtimes
+// that type key by key turn it into a real Enter keypress.
+func HasLineBreak(text string) bool {
+	return strings.ContainsAny(text, "\r\n")
+}
+
+// TypedEnter turns typing a line break into target into the Enter press it
+// is. Enter in a single-line field submits its form; describe reports that
+// only for the focused element, so it is derived here from the form facts.
+func TypedEnter(target Target) Target {
+	target.Action, target.Key = "press", "Enter"
+	if !target.IsSubmit && target.FormMethod != "" && isTextField(target) {
+		target.IsSubmit = true
+	}
+	return target
+}
+
+// isTextField is a single-line field, where Enter submits. An unread tag
+// counts when the role says text entry, so missing facts ask, not pass.
+func isTextField(target Target) bool {
+	switch strings.ToLower(target.Tag) {
+	case "input":
+		switch strings.ToLower(target.InputType) {
+		case "checkbox", "radio", "submit", "button", "reset", "image", "file":
+			return false
+		}
+		return true
+	case "":
+		switch target.Role {
+		case "textbox", "searchbox", "combobox":
+			return true
+		}
+	}
+	return false
+}
+
 // keyLabel names a pressed key for a prompt.
 func keyLabel(key string) string {
 	if IsEnterKey(key) {
@@ -477,17 +513,40 @@ func summarize(action string, target Target) string {
 	default:
 		text = fmt.Sprintf("Click %q", label)
 	}
-	if host := Site(target.PageURL); host != "" {
-		text += " on " + strings.TrimPrefix(host, "www.")
+	if host := Host(target.PageURL); host != "" {
+		text += " on " + host
 	}
 	return text
 }
 
-// Site returns the host a page URL belongs to, the key for per-site rules.
+// Site returns the origin a page URL belongs to (scheme, host, and any
+// non-default port), the key for per-site rules: the scope browsers use for
+// permissions, so an allow on http://localhost:4173 does not cover another
+// dev server, and one on https://shop.example does not cover plain http.
 func Site(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
 		return ""
 	}
-	return strings.ToLower(u.Hostname())
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" && !(scheme == "http" && port == "80") && !(scheme == "https" && port == "443") {
+		host += ":" + port
+	}
+	return scheme + "://" + host
+}
+
+// Host names a page's host for prompts ("shop.example"); rules key on Site.
+func Host(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
 }

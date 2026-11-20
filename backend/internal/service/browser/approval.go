@@ -81,6 +81,9 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	}
 	described := s.describe(ctx, sessionID, rt, action, args)
 	target, image := described.target, described.image
+	if typesLineBreak(action, args) {
+		target = approval.TypedEnter(target)
+	}
 	verdict := approval.Classify(target, mode)
 	if !verdict.NeedsApproval && (!described.identified || described.partial) {
 		// The element (or its form) could not be read: ask rather than guess.
@@ -135,6 +138,9 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 	case "act":
 		instruction, _ := args["instruction"].(string)
 		text = fmt.Sprintf("Act: %q", strings.TrimSpace(instruction))
+	case "type":
+		ref, _ := args["ref"].(string)
+		text = fmt.Sprintf("Type a line break into element %s", strings.TrimSpace(ref))
 	default:
 		ref, _ := args["ref"].(string)
 		verb := "Click"
@@ -143,8 +149,8 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 		}
 		text = fmt.Sprintf("%s element %s", verb, strings.TrimSpace(ref))
 	}
-	if host := approval.Site(pageURL); host != "" {
-		text += " on " + strings.TrimPrefix(host, "www.")
+	if host := approval.Host(pageURL); host != "" {
+		text += " on " + host
 	}
 	return text
 }
@@ -152,6 +158,9 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 // mayActConsequentially filters out actions that can never need approval
 // before paying for a describe round trip.
 func mayActConsequentially(action string, args map[string]interface{}) bool {
+	if typesLineBreak(action, args) {
+		return true
+	}
 	if _, ok := approval.GatedActions[action]; !ok {
 		return false
 	}
@@ -169,6 +178,21 @@ func mayActConsequentially(action string, args map[string]interface{}) bool {
 		return false
 	}
 	return true
+}
+
+// typesLineBreak reports a type (or act's type verb) whose text holds a line
+// break: runtimes that type key by key press Enter for it.
+func typesLineBreak(action string, args map[string]interface{}) bool {
+	switch action {
+	case "type":
+		text, _ := args["text"].(string)
+		return approval.HasLineBreak(text)
+	case "act":
+		verb, _ := args["action"].(string)
+		value, _ := args["value"].(string)
+		return strings.EqualFold(strings.TrimSpace(verb), "type") && approval.HasLineBreak(value)
+	}
+	return false
 }
 
 // describedTarget is what a runtime reported about an action's target.

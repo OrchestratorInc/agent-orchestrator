@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
@@ -68,6 +69,8 @@ type remoteGate struct {
 	key      string
 	role     string
 	name     string
+	// typed: the command types a line break, which presses Enter.
+	typed bool
 }
 
 // Commands that read, navigate by URL, or change a field's value without
@@ -108,6 +111,12 @@ func classifyRemoteArgs(args []string) remoteGate {
 			return remoteGate{}
 		}
 		return remoteGate{kind: remoteDescribe, action: command, selector: rest[0]}
+	case "type":
+		// Typing key by key turns a line break into a real Enter.
+		if len(rest) > 1 && slices.ContainsFunc(rest[1:], approval.HasLineBreak) {
+			return remoteGate{kind: remoteDescribe, action: "type", key: "Enter", selector: rest[0], typed: true}
+		}
+		return remoteGate{}
 	case "press", "key":
 		if len(rest) > 0 && approval.IsActivationKey(rest[0]) {
 			return remoteGate{kind: remoteDescribe, action: "press", key: rest[0]}
@@ -117,6 +126,9 @@ func classifyRemoteArgs(args []string) remoteGate {
 		for _, word := range rest {
 			if approval.IsActivationKey(word) {
 				return remoteGate{kind: remoteDescribe, action: "press", key: word}
+			}
+			if approval.HasLineBreak(word) {
+				return remoteGate{kind: remoteDescribe, action: "press", key: "Enter", typed: true}
 			}
 		}
 		return remoteGate{}
@@ -150,10 +162,14 @@ func classifyFind(rest []string) remoteGate {
 		return remoteGate{}
 	}
 	action := strings.ToLower(positional[2])
-	if action != "click" && action != "dblclick" {
+	gate := remoteGate{kind: remoteDescribe, action: "click"}
+	switch {
+	case action == "click" || action == "dblclick":
+	case action == "type" && slices.ContainsFunc(positional[3:], approval.HasLineBreak):
+		gate.action, gate.key, gate.typed = "type", "Enter", true
+	default:
 		return remoteGate{}
 	}
-	gate := remoteGate{kind: remoteDescribe, action: "click"}
 	if strings.EqualFold(positional[0], "role") {
 		gate.role = strings.ToLower(positional[1])
 		gate.name = name
@@ -222,8 +238,8 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 }
 
 func onSite(text, pageURL string) string {
-	if host := approval.Site(pageURL); host != "" {
-		return text + " on " + strings.TrimPrefix(host, "www.")
+	if host := approval.Host(pageURL); host != "" {
+		return text + " on " + host
 	}
 	return text
 }
@@ -273,19 +289,27 @@ func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target app
 		request = map[string]string{"mode": "selector", "selector": gate.selector}
 	}
 	named := request["mode"] == "named"
-	if named && target.Role == "" {
+	if named && target.Role == "" && gate.action != "type" {
 		target.Role = "button"
 	}
 	described, ok := s.remoteDescribe(ctx, request)
 	if !ok || described.Partial {
 		// A named element without its form facts may still submit one.
-		return target, named, named
+		return typedEnter(gate, target), named, named
 	}
 	described.Action, described.Key = gate.action, gate.key
 	if named && described.Name == "" {
 		described.Role, described.Name = target.Role, target.Name
 	}
-	return described.Target, described.Role != "" || described.Name != "" || described.IsSubmit, false
+	return typedEnter(gate, described.Target), described.Role != "" || described.Name != "" || described.IsSubmit, false
+}
+
+// typedEnter classifies a typed line break as the Enter press it becomes.
+func typedEnter(gate remoteGate, target approval.Target) approval.Target {
+	if !gate.typed {
+		return target
+	}
+	return approval.TypedEnter(target)
 }
 
 type remoteFacts struct {

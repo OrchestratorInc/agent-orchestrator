@@ -126,6 +126,7 @@ export class Executor {
 			case "type":
 				return this.elementAction(ctx, action, stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"), {
 					text: stringArg(args, "text", "INVALID_ARGUMENT", "text is required", true),
+					...(action === "type" && args.approvalBinding !== undefined ? { approvalBinding: args.approvalBinding } : {}),
 				});
 			case "press":
 				return this.press(ctx, stringArg(args, "key", "INVALID_ARGUMENT", "key is required"), args.approvalBinding);
@@ -666,7 +667,9 @@ export class Executor {
 
 	private async elementAction(ctx: Context, action: string, ref: string, args: Record<string, unknown>): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
-			if (action === "click" || action === "dblclick") await this.assertApprovalBinding(ctx, page, args.approvalBinding, ref);
+			// A typed line break is an Enter in the field, so an approved type is
+			// bound like a click.
+			if (action === "click" || action === "dblclick" || action === "type") await this.assertApprovalBinding(ctx, page, args.approvalBinding, ref);
 			const trusted = await this.useTrustedInput(ctx, page);
 			let value: unknown;
 			switch (action) {

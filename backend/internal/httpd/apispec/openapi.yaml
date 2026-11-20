@@ -16988,8 +16988,8 @@ components:
         sessionId:
           type: string
         site:
-          description: Host the action happens on; Always allow is remembered for
-            it.
+          description: Origin (scheme, host, and non-default port) the action happens
+            on; Always allow is remembered for it.
           type: string
         url:
           type: string

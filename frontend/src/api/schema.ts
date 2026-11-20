@@ -5731,7 +5731,7 @@ export interface components {
             /** @description Why it was flagged. */
             reason: string;
             sessionId: string;
-            /** @description Host the action happens on; Always allow is remembered for it. */
+            /** @description Origin (scheme, host, and non-default port) the action happens on; Always allow is remembered for it. */
             site: string;
             url?: string;
         };

@@ -603,6 +603,28 @@ describe("Executor", () => {
 		expect(clicks).toBe(1);
 	});
 
+	it("refuses an approved line-break type once the page, tab, or element is not the one approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const { binding } = (await run("describe", { action: "act", instruction: "the search box" })) as { binding: Record<string, unknown> };
+		expect(binding).toMatchObject({ ref: expect.any(String) });
+		const ref = binding.ref as string;
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, ref: "e999" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, document: "older-document" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, tabId: "t2" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(field.value).toBe("");
+		// Chrome mode inserts text without key events, so the line break
+		// itself never presses Enter here.
+		const keys: string[] = [];
+		field.addEventListener("keydown", (event) => keys.push(event.key));
+		await run("type", { ref, text: "shoes\n", approvalBinding: binding });
+		expect(field.value).toContain("shoes");
+		expect(keys).not.toContain("Enter");
+		expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(false);
+	});
+
 	it("refuses an approved Enter once focus has moved", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);

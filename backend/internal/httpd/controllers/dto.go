@@ -4756,7 +4756,7 @@ type ApprovalPendingResponse struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind" enum:"browser-action,credential-use" description:"What is asking: a browser action, or the first use of a saved login."`
 	SessionID string    `json:"sessionId"`
-	Site      string    `json:"site" description:"Host the action happens on; Always allow is remembered for it."`
+	Site      string    `json:"site" description:"Origin (scheme, host, and non-default port) the action happens on; Always allow is remembered for it."`
 	URL       string    `json:"url,omitempty"`
 	PageTitle string    `json:"pageTitle,omitempty"`
 	Action    string    `json:"action" description:"What will happen, e.g. Click \"Place order\" on shop.example."`
