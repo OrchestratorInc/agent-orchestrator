@@ -53,18 +53,20 @@ import { setEventsConnectionState } from "../lib/events-connection";
 import { useDaemonStatus } from "./useDaemonStatus";
 
 const checked = "2026-11-15T10:00:00Z";
-const focusAgent = (id: string, usageCount: number, installation: string, auth: string, authCheckedAt: string | null) => ({
+const focusAgent = (id: string, usageCount: number, installation: string, auth: string, authCheckedAt: string | null, authReason = "") => ({
 	id, label: id, usageCount, effectiveReadiness: "unknown",
 	installation: { state: installation, freshness: "fresh", checkedAt: checked, reasonCode: "" },
-	authentication: { state: auth, freshness: "fresh", checkedAt: authCheckedAt, reasonCode: "" },
+	authentication: { state: auth, freshness: "fresh", checkedAt: authCheckedAt, reasonCode: authReason },
 });
-// Used; not installed; installed and signed out; installed, unused and signed in; installed, unused, never checked.
+// Used; not installed; installed and signed out; installed, unused and signed in; installed, unused, never checked;
+// signed in before but the last check was inconclusive.
 const focusAgents = [
 	focusAgent("used", 3, "installed", "authorized", checked),
 	focusAgent("missing", 0, "not_installed", "unknown", null),
 	focusAgent("signed-out", 0, "installed", "unauthorized", checked),
 	focusAgent("signed-in", 0, "installed", "authorized", checked),
 	focusAgent("unchecked", 0, "installed", "unknown", null),
+	focusAgent("inconclusive", 0, "installed", "authorized", checked, "auth_check_inconclusive"),
 ];
 
 function fakeQueryClient(): QueryClient {
@@ -180,7 +182,7 @@ describe("useDaemonStatus", () => {
 
 		act(() => window.dispatchEvent(new Event("focus")));
 
-		await waitFor(() => expect(ensureAgentReadinessMock).toHaveBeenCalledWith(["used", "missing", "signed-out"], "display"));
+		await waitFor(() => expect(ensureAgentReadinessMock).toHaveBeenCalledWith(["used", "missing", "signed-out", "inconclusive"], "display"));
 		expect(cacheAgentReadinessMock).toHaveBeenCalledWith(queryClient, { agents: [] });
 	});
 

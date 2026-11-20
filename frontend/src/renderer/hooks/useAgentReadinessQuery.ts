@@ -167,12 +167,19 @@ export function useProjectAgentDefaults(enabled: boolean, hostId?: string): () =
  * off a check of every agent on the machine. The daemon's display TTL decides
  * which of these actually run.
  */
+// A check that did not finish keeps the last known state (authorized, say) but
+// records why, so focus still re-checks it.
+const AUTH_CHECK_FAILURE_CODES = new Set(["auth_check_inconclusive", "auth_check_timeout", "auth_check_failed"]);
+
 export function focusReadinessIds(agents: AgentReadinessSnapshot[]): string[] {
 	return agents
 		.filter((agent) =>
 			agent.usageCount > 0 ||
 			agent.installation.state !== "installed" ||
-			((agent.authentication.checkedAt != null || agent.authentication.attemptedAt != null) && (agent.authentication.state === "unauthorized" || agent.authentication.state === "unknown")),
+			((agent.authentication.checkedAt != null || agent.authentication.attemptedAt != null) &&
+				(agent.authentication.state === "unauthorized" ||
+					agent.authentication.state === "unknown" ||
+					AUTH_CHECK_FAILURE_CODES.has(agent.authentication.reasonCode))),
 		)
 		.map((agent) => agent.id);
 }
