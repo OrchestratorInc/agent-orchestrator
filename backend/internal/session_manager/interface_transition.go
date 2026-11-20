@@ -1130,17 +1130,23 @@ func (m *Manager) preflightTerminalLaunch(
 	}
 	config := restoredAgentConfig(rec, project.Config)
 	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	_, launchPath, err := m.importLaunch(ctx, "preflight terminal", rec, rec.Metadata.WorkspacePath, env, false)
+	if err != nil {
+		return err
+	}
 	var cmd []string
 	if nativeConversationID == "" {
-		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
+		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath,
 			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", env)
 	} else {
 		var resumable bool
+		restoreRec := rec
+		restoreRec.Metadata.AgentSessionID = nativeConversationID
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 			Env: env,
 			Session: ports.SessionRef{
-				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
-				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeConversationID},
+				ID: string(rec.ID), WorkspacePath: launchPath,
+				Metadata: nativeRestoreMetadata(restoreRec),
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
 			Config: config, Permissions: config.Permissions,

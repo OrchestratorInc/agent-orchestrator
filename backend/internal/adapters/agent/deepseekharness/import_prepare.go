@@ -87,7 +87,13 @@ func importProofBytes(p importProof) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	hash := sha256.Sum256(b)
+	identity := p
+	identity.CredentialsPath = ""
+	key, err := json.Marshal(identity)
+	if err != nil {
+		return nil, "", err
+	}
+	hash := sha256.Sum256(key)
 	return b, hex.EncodeToString(hash[:16]), nil
 }
 
@@ -144,12 +150,8 @@ func validatePrivateImport(ctx context.Context, root, id, cwd string) (string, e
 		return "", err
 	}
 	path := privateImportPath(root, launch, id)
-	a, err := ReadImportArchive(ctx, root, path)
-	if err != nil {
+	if err := validatePrivateNativeLog(ctx, root, path, id, launch); err != nil {
 		return "", err
-	}
-	if a.ID != id || a.CWD != launch {
-		return "", ports.ErrNativeHistoryUnavailable
 	}
 	for _, profile := range []string{"acp", headlessProfile} {
 		path := filepath.Join("profiles", profile, "cordis.patch.yml")
@@ -231,9 +233,6 @@ func privateImportPatch(root, credentials string) ([]byte, error) {
 // PRIVATE V4 header cwd is remapped; neither the source nor credentials/config
 // are copied or modified. Shipped profiles use the already installed bundles.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	if err := p.checkImportVersion(ctx); err != nil {
-		return ports.NativeSessionRef{}, err
-	}
 	if !importID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.SourceCWD) || !filepath.IsAbs(r.DataDir) || r.SourceFingerprint == "" {
 		return ports.NativeSessionRef{}, errors.New("deepseek: incomplete native import selection")
 	}
@@ -264,9 +263,19 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	dest := filepath.Join(parent, name)
 	ref := ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: dest, TranscriptPath: privateImportPath(dest, launch, r.NativeSessionID)}
 	if _, err := os.Lstat(dest); err == nil {
-		_, err := validatePrivateImport(ctx, dest, ref.NativeSessionID, launch)
+		existing, err := readImportProof(dest)
+		if err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		if existing.CredentialsPath != credentials {
+			return ports.NativeSessionRef{}, errors.New("deepseek: prepared history uses a different credential store; refusing to rebuild it")
+		}
+		_, err = validatePrivateImport(ctx, dest, ref.NativeSessionID, launch)
 		return ref, err
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return ports.NativeSessionRef{}, err
+	}
+	if err := p.checkImportVersion(ctx); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	a, err := ReadImportArchive(ctx, r.ConfigDir, r.TranscriptPath)
@@ -291,6 +300,9 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	header, err := json.Marshal(a.header)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
+	}
+	if int64(len(header))+1+int64(len(a.body)) > maxImportDecoded {
+		return ports.NativeSessionRef{}, errors.New("deepseek: remapped native history exceeds import budget")
 	}
 	path := privateImportPath(stage, launch, a.ID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -330,6 +342,9 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	}
 	if after.Fingerprint != r.SourceFingerprint {
 		return ports.NativeSessionRef{}, errors.New("deepseek: source changed during preparation")
+	}
+	if err := validatePrivateNativeLog(ctx, stage, path, a.ID, launch); err != nil {
+		return ports.NativeSessionRef{}, err
 	}
 	if err := os.Rename(stage, dest); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -372,9 +387,6 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if cfg.ImportConfigDir == "" {
 		return nil
 	}
-	if err := p.checkImportVersion(ctx); err != nil {
-		return err
-	}
 	if filepath.Clean(cfg.Env["DSH_HOME"]) != filepath.Clean(cfg.ImportConfigDir) {
 		return ports.ErrNativeHistoryUnavailable
 	}
@@ -391,5 +403,5 @@ func ValidateImportedACP(ctx context.Context, root, id, cwd string) error {
 	if _, err := validatePrivateImport(ctx, root, id, cwd); err != nil {
 		return err
 	}
-	return New().checkImportVersion(ctx)
+	return nil
 }

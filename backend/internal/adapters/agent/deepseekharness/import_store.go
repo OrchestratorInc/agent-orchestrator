@@ -1,6 +1,7 @@
 package deepseekharness
 
 import (
+	"bufio"
 	"bytes"
 	"container/list"
 	"context"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -27,7 +29,7 @@ const maxImportDecoded = 256 << 20
 const maxImportVisible = 32 << 20
 
 var importID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-var historicalImportFile = regexp.MustCompile(`^session(?:\.v[1-3])?\.jsonl(?:\.zstd)?$`)
+var historicalImportFile = regexp.MustCompile(`^session(?:\.v[123])?\.jsonl(?:\.zstd)?$`)
 
 // CheckImportSource rechecks canonical generations before a cached preview is
 // reused. Unknown/newer or competing encodings must not be silently ignored.
@@ -48,8 +50,8 @@ type ImportArchive struct {
 
 type importEvent struct {
 	Type      string          `json:"type"`
-	Seq       int64           `json:"seq"`
-	Time      int64           `json:"time"`
+	Seq       *int64          `json:"seq"`
+	Time      *int64          `json:"time"`
 	Data      json.RawMessage `json:"data"`
 	SurfaceOp json.RawMessage `json:"surfaceOp"`
 }
@@ -67,7 +69,11 @@ type importMessage struct {
 }
 
 func importPath(root, path string) (string, string, error) {
-	base, err := filepath.EvalSymlinks(root)
+	callerRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	base, err := filepath.EvalSymlinks(callerRoot)
 	if err != nil {
 		return "", "", err
 	}
@@ -79,7 +85,7 @@ func importPath(root, path string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	rel, err := filepath.Rel(base, path)
+	rel, err := filepath.Rel(callerRoot, path)
 	if err != nil || !filepath.IsLocal(rel) {
 		return "", "", errors.New("deepseek: native history is outside its home")
 	}
@@ -154,6 +160,13 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 	if strings.HasSuffix(rel, ".zstd") {
 		limit = maxImportFile
 	}
+	info, err := f.Stat()
+	if err != nil {
+		return a, err
+	}
+	if info.Size() > limit {
+		return a, errors.New("deepseek: native log exceeds import budget")
+	}
 	stored, err := io.ReadAll(io.LimitReader(importReader{ctx, f}, limit+1))
 	if err != nil {
 		return a, err
@@ -162,7 +175,7 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 		return a, errors.New("deepseek: native log exceeds import budget")
 	}
 	hash := sha256.Sum256(stored)
-	a.Fingerprint = hex.EncodeToString(hash[:])
+	fingerprint := hex.EncodeToString(hash[:])
 	decoded := stored
 	if strings.HasSuffix(rel, ".zstd") {
 		decoder, err := zstd.NewReader(bytes.NewReader(stored), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxImportDecoded))
@@ -182,6 +195,19 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 	if !ok || len(header) > 64<<10 {
 		return a, errors.New("deepseek: invalid native header")
 	}
+	a, err = decodeImportHeader(header, filepath.Base(filepath.Dir(rel)))
+	if err != nil {
+		return a, err
+	}
+	a.Fingerprint, a.body = fingerprint, body
+	if err := a.project(ctx); err != nil {
+		return a, err
+	}
+	return a, nil
+}
+
+func decodeImportHeader(header []byte, expectedID string) (ImportArchive, error) {
+	a := ImportArchive{}
 	if err := json.Unmarshal(header, &a.header); err != nil {
 		return a, err
 	}
@@ -198,7 +224,7 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 		return a, err
 	}
 	for _, key := range []string{"type", "version", "id", "cwd", "createdAt", "isSeeded", "delegationDepth"} {
-		if _, ok := a.header[key]; !ok {
+		if value, ok := a.header[key]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return a, errors.New("deepseek: incomplete native header")
 		}
 	}
@@ -209,13 +235,10 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 			return a, errors.New("deepseek: unsupported native header/linked history")
 		}
 	}
-	if h.Type != "session" || h.Version != 4 || !importID.MatchString(h.ID) || h.ID != filepath.Base(filepath.Dir(rel)) || !filepath.IsAbs(h.CWD) || h.CreatedAt < 0 || h.IsSeeded || h.DelegationDepth != 0 {
+	if h.Type != "session" || h.Version != 4 || !importID.MatchString(h.ID) || h.ID != expectedID || !filepath.IsAbs(h.CWD) || h.CreatedAt < 0 || h.IsSeeded || h.DelegationDepth != 0 {
 		return a, errors.New("deepseek: unsupported native version, identity or workspace")
 	}
-	a.ID, a.CWD, a.body = h.ID, filepath.Clean(h.CWD), body
-	if err := a.project(ctx); err != nil {
-		return a, err
-	}
+	a.ID, a.CWD = h.ID, filepath.Clean(h.CWD)
 	return a, nil
 }
 
@@ -241,7 +264,7 @@ func (a *ImportArchive) project(ctx context.Context) error {
 		if err := json.Unmarshal(line, &e); err != nil {
 			return err
 		}
-		if e.Seq != expected || e.Type == "" || len(e.Data) == 0 || e.Time < 0 {
+		if e.Seq == nil || *e.Seq != expected || e.Type == "" || len(e.Data) == 0 || e.Time == nil || *e.Time < 0 {
 			return errors.New("deepseek: invalid native event sequence")
 		}
 		expected++
@@ -255,20 +278,20 @@ func (a *ImportArchive) project(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		node := importSurfaceNode{e.Seq, m}
+		node := importSurfaceNode{*e.Seq, m}
 		if string(e.SurfaceOp) == `"append"` {
-			bySeq[e.Seq] = nodes.PushBack(node)
+			bySeq[*e.Seq] = nodes.PushBack(node)
 			continue
 		}
 		var op struct {
 			Op       string `json:"op"`
-			StartSeq int64  `json:"startSeq"`
-			EndSeq   int64  `json:"endSeq"`
+			StartSeq *int64 `json:"startSeq"`
+			EndSeq   *int64 `json:"endSeq"`
 		}
-		if err := json.Unmarshal(e.SurfaceOp, &op); err != nil || op.Op != "replace" || op.StartSeq > op.EndSeq {
+		if err := json.Unmarshal(e.SurfaceOp, &op); err != nil || op.Op != "replace" || op.StartSeq == nil || op.EndSeq == nil || *op.StartSeq > *op.EndSeq {
 			return errors.New("deepseek: invalid native surface replacement")
 		}
-		start, end := bySeq[op.StartSeq], bySeq[op.EndSeq]
+		start, end := bySeq[*op.StartSeq], bySeq[*op.EndSeq]
 		if start == nil || end == nil {
 			return errors.New("deepseek: missing native surface replacement target")
 		}
@@ -276,7 +299,11 @@ func (a *ImportArchive) project(ctx context.Context) error {
 		found := false
 		for el := start; el != nil; {
 			next := el.Next()
-			delete(bySeq, el.Value.(importSurfaceNode).seq)
+			old, ok := el.Value.(importSurfaceNode)
+			if !ok {
+				return errors.New("deepseek: invalid surface node")
+			}
+			delete(bySeq, old.seq)
 			nodes.Remove(el)
 			if el == end {
 				found = true
@@ -288,14 +315,17 @@ func (a *ImportArchive) project(ctx context.Context) error {
 			return errors.New("deepseek: reversed native replacement range")
 		}
 		if anchor == nil {
-			bySeq[e.Seq] = nodes.PushFront(node)
+			bySeq[*e.Seq] = nodes.PushFront(node)
 		} else {
-			bySeq[e.Seq] = nodes.InsertAfter(node, anchor)
+			bySeq[*e.Seq] = nodes.InsertAfter(node, anchor)
 		}
 	}
 	user, held := false, 0
 	for el := nodes.Front(); el != nil; el = el.Next() {
-		n := el.Value.(importSurfaceNode)
+		n, ok := el.Value.(importSurfaceNode)
+		if !ok {
+			return errors.New("deepseek: invalid surface node")
+		}
 		if n.m == nil {
 			continue
 		}
@@ -314,7 +344,7 @@ func (a *ImportArchive) project(ctx context.Context) error {
 		a.Shortened = true
 	}
 	if first > 1 {
-		a.Messages = append(a.Messages[:1], a.Messages[first:]...)
+		a.Messages = slices.Delete(a.Messages, 1, first)
 	}
 	if held > maxImportVisible {
 		return errors.New("deepseek: opening message exceeds visible import budget")
@@ -359,7 +389,7 @@ func importVisibleMessage(e importEvent) (*domain.ImportedMessage, error) {
 	if e.Type == "user/message" {
 		role = "user"
 	}
-	return &domain.ImportedMessage{Role: role, Text: text.String(), At: time.UnixMilli(e.Time).UTC()}, nil
+	return &domain.ImportedMessage{Role: role, Text: text.String(), At: time.UnixMilli(*e.Time).UTC()}, nil
 }
 
 // importProjectKey matches the native UTF-16 path escaping and truncation.
@@ -390,4 +420,76 @@ func importProjectKey(cwd string) string {
 		key = key[:251]
 	}
 	return "--" + key + "--"
+}
+
+// validatePrivateNativeLog checks evolved native history in bounded row memory.
+// The one-time source admission budget must not lock out later valid turns.
+func validatePrivateNativeLog(ctx context.Context, root, path, id, cwd string) error {
+	root, rel, err := importPath(root, path)
+	if err != nil {
+		return err
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	f, err := r.Open(rel)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	scan := bufio.NewScanner(importReader{ctx, f})
+	scan.Buffer(make([]byte, 64<<10), (16<<20)+1)
+	if !scan.Scan() || len(scan.Bytes()) > 64<<10 {
+		return errors.New("deepseek: invalid private native header")
+	}
+	a, err := decodeImportHeader(scan.Bytes(), id)
+	if err != nil {
+		return err
+	}
+	if a.CWD != cwd {
+		return errors.New("deepseek: private native workspace mismatch")
+	}
+	var expected int64
+	hasUser := false
+	for scan.Scan() {
+		var e importEvent
+		if err := json.Unmarshal(scan.Bytes(), &e); err != nil {
+			return err
+		}
+		if e.Seq == nil || *e.Seq != expected || e.Type == "" || len(e.Data) == 0 || e.Time == nil || *e.Time < 0 {
+			return errors.New("deepseek: invalid private native event sequence")
+		}
+		expected++
+		if e.Type == "user/message" && !hasUser {
+			var m importMessage
+			if err := json.Unmarshal(e.Data, &m); err != nil {
+				return err
+			}
+			for _, b := range m.Content {
+				if m.Source.Kind == "user" && b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+					hasUser = true
+				}
+			}
+		}
+	}
+	if err := scan.Err(); err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	var last [1]byte
+	if info.Size() == 0 {
+		return errors.New("deepseek: empty private history")
+	}
+	if _, err := f.ReadAt(last[:], info.Size()-1); err != nil {
+		return err
+	}
+	if !hasUser || last[0] != '\n' {
+		return errors.New("deepseek: empty or incomplete private history")
+	}
+	return ctx.Err()
 }

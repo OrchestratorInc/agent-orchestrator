@@ -166,9 +166,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, nil
 	}
 	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
-		if err := p.checkImportVersion(ctx); err != nil {
-			return nil, false, err
-		}
 		if _, err := validatePrivateImport(ctx, cfg.Session.Metadata[ports.MetadataKeyImportConfigDir], agentSessionID, cfg.Session.WorkspacePath); err != nil {
 			return nil, false, err
 		}

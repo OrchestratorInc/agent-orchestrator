@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,14 +197,14 @@ func TestPrivateImportRemapsOnlyHeaderAndReusesLaterTurns(t *testing.T) {
 	}
 	p := New()
 	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
-	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Chat: true}
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}, Chat: true}
 	ref, err := p.PrepareImportedSession(ctx, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	copy, err := ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath)
-	if err != nil || copy.ID != a.ID || copy.CWD == cwd || !bytes.Equal(copy.body, a.body) {
-		t.Fatalf("private native history=%+v,%v", copy, err)
+	preparedArchive, err := ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath)
+	if err != nil || preparedArchive.ID != a.ID || preparedArchive.CWD == cwd || !bytes.Equal(preparedArchive.body, a.body) {
+		t.Fatalf("private native history=%+v,%v", preparedArchive, err)
 	}
 	if _, err := os.Stat(filepath.Join(ref.ConfigDir, ".credentials.yaml")); !os.IsNotExist(err) {
 		t.Fatal("copied native credentials")
@@ -229,9 +230,9 @@ func TestPrivateImportRemapsOnlyHeaderAndReusesLaterTurns(t *testing.T) {
 	if err != nil || retry != ref {
 		t.Fatalf("retry=%+v,%v", retry, err)
 	}
-	copy, err = ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath)
-	if err != nil || len(copy.Messages) != 3 || copy.Messages[2].Text != "later AO turn" {
-		t.Fatalf("lost later turn: %+v,%v", copy, err)
+	preparedArchive, err = ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath)
+	if err != nil || len(preparedArchive.Messages) != 3 || preparedArchive.Messages[2].Text != "later AO turn" {
+		t.Fatalf("lost later turn: %+v,%v", preparedArchive, err)
 	}
 	if err := p.PrepareRuntimeLaunch(ctx, ports.WorkspaceHookConfig{ImportConfigDir: ref.ConfigDir, NativeSessionID: ref.NativeSessionID, WorkspacePath: r.LaunchCWD, Env: map[string]string{"DSH_HOME": ref.ConfigDir}}); err != nil {
 		t.Fatal(err)
@@ -255,7 +256,7 @@ func TestImportRefusesUnknownCLIAndCredentialMigration(t *testing.T) {
 	}
 	p := New()
 	p.importVersion = func(context.Context) (string, error) { return "0.3.0", nil }
-	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint}
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}}
 	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
 		t.Fatal("accepted unknown CLI")
 	}
@@ -276,5 +277,240 @@ func TestImportRefusesUnknownCLIAndCredentialMigration(t *testing.T) {
 	availability, err := p.ProbeNativeSession(context.Background(), ports.NativeSessionRef{NativeSessionID: importTestID})
 	if err != nil || availability != ports.NativeSessionAvailabilityUnknown {
 		t.Fatalf("ordinary session probe=%v,%v", availability, err)
+	}
+}
+
+func TestImportRequiresExplicitHeaderAndEventCoordinates(t *testing.T) {
+	for _, mutation := range []string{"seq missing", "seq null", "createdAt null", "isSeeded null", "delegationDepth null", "isSeeded wrong type", "startSeq missing", "startSeq null", "endSeq missing", "endSeq null"} {
+		t.Run(mutation, func(t *testing.T) {
+			root, path, _ := importFixture(t, false)
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			header, body, _ := bytes.Cut(b, []byte("\n"))
+			if strings.HasPrefix(mutation, "seq ") {
+				first, rest, _ := bytes.Cut(body, []byte("\n"))
+				var row map[string]any
+				if err := json.Unmarshal(first, &row); err != nil {
+					t.Fatal(err)
+				}
+				if mutation == "seq missing" {
+					delete(row, "seq")
+				} else {
+					row["seq"] = nil
+				}
+				first, err = json.Marshal(row)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body = append(append(first, '\n'), rest...)
+			} else if strings.HasPrefix(mutation, "startSeq") || strings.HasPrefix(mutation, "endSeq") {
+				op := map[string]any{"op": "replace", "startSeq": 0, "endSeq": 0}
+				field := strings.Split(mutation, " ")[0]
+				if strings.HasSuffix(mutation, "missing") {
+					delete(op, field)
+				} else {
+					op[field] = nil
+				}
+				body = append(body, importTestEvent(4, "user/message", importTestUser("replacement", "user"), op)...)
+			} else {
+				var h map[string]any
+				if err := json.Unmarshal(header, &h); err != nil {
+					t.Fatal(err)
+				}
+				field := strings.Split(mutation, " ")[0]
+				h[field] = nil
+				if strings.HasSuffix(mutation, "wrong type") {
+					h[field] = "false"
+				}
+				header, err = json.Marshal(h)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(path, append(append(header, '\n'), body...), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadImportArchive(context.Background(), root, path); err == nil {
+				t.Fatal("accepted incomplete native coordinates")
+			}
+		})
+	}
+}
+
+func TestPrivateImportWithSymlinkedDataAncestor(t *testing.T) {
+	root, path, cwd := importFixture(t, false)
+	a, err := ReadImportArchive(context.Background(), root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Skip(err)
+	}
+	p := New()
+	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: filepath.Join(alias, "data"), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}}
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadImportArchive(context.Background(), ref.ConfigDir, ref.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	// Descendant symlinks remain forbidden even when ancestors are aliases.
+	original, err := os.ReadFile(ref.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	if err := os.WriteFile(outside, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ref.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, ref.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadImportArchive(context.Background(), ref.ConfigDir, ref.TranscriptPath); err == nil {
+		t.Fatal("accepted descendant symlink")
+	}
+}
+
+func TestCredentialChangeCannotReplaceEvolvedPrivateHistory(t *testing.T) {
+	ctx := context.Background()
+	root, path, cwd := importFixture(t, false)
+	a, err := ReadImportArchive(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}}
+	ref, err := p.PrepareImportedSession(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(ref.TranscriptPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(importTestEvent(4, "user/message", importTestUser("private later turn", "user"), "append")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(ref.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "credentials.yaml")
+	if err := os.WriteFile(other, []byte("version: 1\nrefs: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.Env[credentialsPathEnv] = other
+	if _, err := p.PrepareImportedSession(ctx, r); err == nil || !strings.Contains(err.Error(), "different credential store") {
+		t.Fatalf("credential conflict=%v", err)
+	}
+	after, err := os.ReadFile(ref.TranscriptPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("private turn lost: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(ref.ConfigDir))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("created another native home: %v,%v", entries, err)
+	}
+}
+
+func TestPrivateHistoryCanGrowBeyondSourceAdmissionBudget(t *testing.T) {
+	ctx := context.Background()
+	root, path, cwd := importFixture(t, false)
+	a, err := ReadImportArchive(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}}
+	ref, err := p.PrepareImportedSession(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(ref.TranscriptPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Valid JSON whitespace pads bounded rows; no giant message allocation is
+	// needed to prove that total private growth no longer applies admission.
+	padding := bytes.Repeat([]byte(" "), 12<<20)
+	for i := 0; i < 22; i++ {
+		row := importTestEvent(4+i, "user/message", importTestUser(fmt.Sprintf("later-%d", i), "user"), "append")
+		if _, err := f.Write(row[:len(row)-1]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(padding); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte("\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath); err == nil {
+		t.Fatal("source admission budget was removed")
+	}
+	if got, err := p.ProbeNativeSession(ctx, ref); err != nil || got != ports.NativeSessionAvailabilityAvailable {
+		t.Fatalf("grown history probe=%v,%v", got, err)
+	}
+	if _, ok, err := p.LocateTranscript(ctx, ref); err != nil || !ok {
+		t.Fatalf("grown history locate=%v,%v", ok, err)
+	}
+	if err := p.PrepareRuntimeLaunch(ctx, ports.WorkspaceHookConfig{ImportConfigDir: ref.ConfigDir, NativeSessionID: ref.NativeSessionID, WorkspacePath: r.LaunchCWD, Env: map[string]string{"DSH_HOME": ref.ConfigDir}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateImportedACP(ctx, ref.ConfigDir, ref.NativeSessionID, r.LaunchCWD); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreparedDeepSeekReopenAndRetrySurviveCLIUpgrade(t *testing.T) {
+	ctx := context.Background()
+	root, path, cwd := importFixture(t, false)
+	a, err := ReadImportArchive(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{resolvedBinary: "fake-dsh", importVersion: func(context.Context) (string, error) { return supportedImportVersion, nil }}
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}}
+	ref, err := p.PrepareImportedSession(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.importVersion = func(context.Context) (string, error) { return "0.3.0", nil }
+	if retry, err := p.PrepareImportedSession(ctx, r); err != nil || retry != ref {
+		t.Fatalf("prepared retry after update=%+v,%v", retry, err)
+	}
+	cfg := ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: r.LaunchCWD, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: ref.NativeSessionID, ports.MetadataKeyImportSourceNativeID: importTestID, ports.MetadataKeyImportConfigDir: ref.ConfigDir}}, Prompt: "continue"}
+	if _, ok, err := p.GetRestoreCommand(ctx, cfg); err != nil || !ok {
+		t.Fatalf("restore after update=%v,%v", ok, err)
+	}
+	if err := p.PrepareRuntimeLaunch(ctx, ports.WorkspaceHookConfig{ImportConfigDir: ref.ConfigDir, NativeSessionID: ref.NativeSessionID, WorkspacePath: r.LaunchCWD, Env: map[string]string{"DSH_HOME": ref.ConfigDir}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateImportedACP(ctx, ref.ConfigDir, ref.NativeSessionID, r.LaunchCWD); err != nil {
+		t.Fatal(err)
+	}
+	r.DataDir = t.TempDir()
+	if _, err := p.PrepareImportedSession(ctx, r); err == nil {
+		t.Fatal("new preparation accepted unknown CLI")
 	}
 }

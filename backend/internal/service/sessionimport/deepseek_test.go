@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -26,6 +27,7 @@ func TestDeepSeekImportsEligibleNativeHistoryAsChat(t *testing.T) {
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: cwd}}}
 	svc := New(st, "", chatSupported)
 	svc.home = canonical(t.TempDir())
+	svc.now = func() time.Time { return time.UnixMilli(1790000001000) }
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessDeepSeek: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
@@ -44,5 +46,14 @@ func TestDeepSeekImportsEligibleNativeHistoryAsChat(t *testing.T) {
 	preview, err = svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 0 {
 		t.Fatalf("offered unknown generation=%+v,%v", preview, err)
+	}
+}
+
+func TestDeepSeekDiscoverySkipsNonDirectorySessions(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "sessions"), "regular file")
+	files, err := discoverDeepSeek(context.Background(), root)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("special sessions entry=%v,%v", files, err)
 	}
 }

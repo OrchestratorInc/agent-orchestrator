@@ -19,6 +19,16 @@ func deepseekRoot(home string) string {
 }
 
 func deepseekEntries(root *os.Root, path string) ([]os.DirEntry, error) {
+	info, err := root.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, nil
+	}
 	f, err := root.Open(path)
 	if err != nil {
 		return nil, err
