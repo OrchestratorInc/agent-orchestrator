@@ -172,6 +172,17 @@ func (l Lifecycle) DestroySession(ctx context.Context, sessionID domain.SessionI
 	return errors.Join(errs...)
 }
 
+// ForgetSession removes durable panel preferences after confirmed termination.
+// Chrome has no profile bindings; its runtime is already closed by DestroySession.
+func (l Lifecycle) ForgetSession(ctx context.Context, sessionID domain.SessionID) error {
+	if panel, ok := l.Panel.(interface {
+		ForgetSession(context.Context, domain.SessionID) error
+	}); ok {
+		return panel.ForgetSession(ctx, sessionID)
+	}
+	return nil
+}
+
 func (s *Service) authorize(ctx context.Context, sessionID domain.SessionID, capability string) error {
 	session, err := s.sessions.Get(ctx, sessionID)
 	if err != nil {

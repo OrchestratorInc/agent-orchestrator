@@ -378,6 +378,8 @@ func TestDeleteSession(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, st, _, _ := newManager()
+			browser := &fakeBrowserLifecycle{}
+			m.browser = browser
 			if tc.rec.ID != "" {
 				st.sessions[tc.rec.ID] = tc.rec
 			}
@@ -389,6 +391,13 @@ func TestDeleteSession(t *testing.T) {
 			err := m.DeleteSession(ctx, "mer-1", false)
 			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
 				t.Fatalf("DeleteSession = %v, want %v", err, tc.want)
+			}
+			wantForgotten := 0
+			if tc.deleted {
+				wantForgotten = 1
+			}
+			if len(browser.forgotten) != wantForgotten {
+				t.Fatalf("forgotten = %v, want %d", browser.forgotten, wantForgotten)
 			}
 			if _, exists := st.sessions["mer-1"]; tc.rec.ID != "" && exists == tc.deleted {
 				t.Fatalf("session exists = %v, want deleted = %v", exists, tc.deleted)
