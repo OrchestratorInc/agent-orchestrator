@@ -26,6 +26,11 @@ type kimiImportProof struct {
 	Home      string `json:"home"`
 	Copied    string `json:"copied"`
 	Model     string `json:"model"`
+	// The imported journal is append-only; mutable state.json is validated
+	// separately. Later native turns and blobs do not share snapshot budgets.
+	WireBytes int64            `json:"wire_bytes"`
+	WireHash  string           `json:"wire_hash"`
+	Blobs     map[string]int64 `json:"blobs,omitempty"`
 }
 
 // CheckImportVersion refuses unverified native contracts for new preparations.
@@ -130,26 +135,7 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	if err := os.MkdirAll(mainDir, 0o700); err != nil {
 		return zero, err
 	}
-	var state kimiImportState
-	if err := json.Unmarshal(original.State, &state); err != nil {
-		return zero, err
-	}
-	// Construct only the documented session state. No config, tokens, provider
-	// headers, locks, caches, hooks, credentials or arbitrary sidecars are copied.
-	state.CWD = cwd
-	state.Agents = map[string]struct {
-		Home string `json:"homedir"`
-		Type string `json:"type"`
-	}{"main": {Home: mainDir, Type: "main"}}
-	custom := map[string]json.RawMessage{}
-	if title, ok := state.Custom["title"]; ok {
-		var value string
-		if json.Unmarshal(title, &value) == nil {
-			custom["title"] = title
-		}
-	}
-	state.Custom = custom
-	b, err := json.Marshal(state)
+	b, err := remapKimiState(original.State, cwd, mainDir)
 	if err != nil {
 		return zero, err
 	}
@@ -189,6 +175,12 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 		return zero, errors.New("kimi: source changed during native preparation")
 	}
 	proof := kimiImportProof{Source: source, ID: r.NativeSessionID, CWD: cwd, Selection: original.Fingerprint, Home: filepath.Base(home), Copied: copied.Fingerprint, Model: original.Model}
+	proof.WireBytes = int64(len(copied.Wire))
+	proof.WireHash = fmt.Sprintf("%x", sha256.Sum256(copied.Wire))
+	proof.Blobs = make(map[string]int64, len(copied.Blobs))
+	for key, data := range copied.Blobs {
+		proof.Blobs[key] = int64(len(data))
+	}
 	proofBytes, _ := json.Marshal(proof)
 	if err := os.WriteFile(filepath.Join(home, ".ao-import.json"), proofBytes, 0o600); err != nil {
 		return zero, err
@@ -201,4 +193,27 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	}
 	published = true
 	return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: home, TranscriptPath: copied.Path}, nil
+}
+
+func remapKimiState(data []byte, cwd, mainDir string) ([]byte, error) {
+	var state kimiImportState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	// Construct only the documented session state. No config, tokens, provider
+	// headers, locks, caches, hooks, credentials or arbitrary sidecars are copied.
+	state.CWD = cwd
+	state.Agents = map[string]struct {
+		Home string `json:"homedir"`
+		Type string `json:"type"`
+	}{"main": {Home: mainDir, Type: "main"}}
+	custom := map[string]json.RawMessage{}
+	if title, ok := state.Custom["title"]; ok {
+		var value string
+		if json.Unmarshal(title, &value) == nil {
+			custom["title"] = title
+		}
+	}
+	state.Custom = custom
+	return json.Marshal(state)
 }
