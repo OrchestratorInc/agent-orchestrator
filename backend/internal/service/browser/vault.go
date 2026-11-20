@@ -85,12 +85,13 @@ func (s *Service) credentialPreflight(
 		summary = fmt.Sprintf("Fill the saved %s for %s (%q) on %s", field, description.Item.Username, description.Item.Label, description.Origin)
 	}
 	// Credentials always need the user's yes for a new origin, whatever the
-	// session's approval mode. The site key is the exact origin, so a
-	// "always allow" on http://localhost:4173 never covers another port.
+	// session's approval mode. The rule key is one saved login on one exact
+	// origin: "always allow" for alice never covers another port, nor another
+	// login saved later for the same site (an admin account, say).
 	outcome, err := s.approvals.Request(ctx, approval.Request{
 		Kind:      approval.KindSavedLogin,
 		SessionID: string(session.ID),
-		Site:      description.Origin,
+		Site:      savedLoginSite(description.Origin, description.Item),
 		URL:       description.PageURL,
 		PageTitle: description.PageTitle,
 		Action:    summary,
@@ -107,4 +108,19 @@ func (s *Service) credentialPreflight(
 	stamped["approvedOrigin"] = description.Origin
 	stamped["itemId"] = description.Item.ID
 	return stamped, nil, nil
+}
+
+// savedLoginSite is the approval rule key for one saved login on one origin.
+// It reads well in the prompt and the always-allowed list, and the short item
+// id keeps two logins with the same name apart.
+func savedLoginSite(origin string, item *vaultItemRef) string {
+	name := item.Username
+	if name == "" {
+		name = item.Label
+	}
+	id := item.ID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return fmt.Sprintf("%s · %s (%s)", origin, name, id)
 }

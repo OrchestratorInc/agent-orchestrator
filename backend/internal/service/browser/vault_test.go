@@ -165,7 +165,7 @@ func TestCredentialFillAsksTheApprovalGateWithoutTheSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := <-asked
-	if prompt.Kind != approval.KindSavedLogin || prompt.Category != approval.CategoryCredential || prompt.Site != "http://localhost:4173" {
+	if prompt.Kind != approval.KindSavedLogin || prompt.Category != approval.CategoryCredential || prompt.Site != "http://localhost:4173 · alice@example.test (i1)" {
 		t.Fatalf("prompt = %+v", prompt.Request)
 	}
 	for _, want := range []string{"alice@example.test", "Demo app", "http://localhost:4173"} {
@@ -281,5 +281,44 @@ func TestCredentialFillRefusedWhenTheApprovalCannotBeAudited(t *testing.T) {
 	}
 	if got := strings.Join(rt.calls, ","); got != "vault-describe" {
 		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestAlwaysAllowCoversOnlyTheApprovedSavedLogin(t *testing.T) {
+	rt := &vaultRuntime{describe: describedDemo()}
+	svc, gate, token := gatedVaultService(t, rt)
+	answerNext(t, gate, approval.DecisionAllowSite)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another login saved for the same origin needs its own first yes.
+	rt.describe = map[string]interface{}{
+		"origin": "http://localhost:4173", "pageUrl": "http://localhost:4173/login",
+		"item": map[string]interface{}{"id": "admin-9f8e7d6c5b", "label": "Admin", "username": "admin@example.test"},
+	}
+	asked := answerNext(t, gate, approval.DecisionDeny)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", map[string]interface{}{"itemId": "admin-9f8e7d6c5b"}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("admin login err = %v", err)
+	}
+	if prompt := <-asked; !strings.Contains(prompt.Site, "admin@example.test") || !strings.Contains(prompt.Site, "admin-9f") {
+		t.Fatalf("admin prompt site = %q", prompt.Site)
+	}
+
+	// The approved login still fills without asking.
+	rt.describe = describedDemo()
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := gate.Audit(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decisions []string
+	for i := len(entries) - 1; i >= 0; i-- {
+		decisions = append(decisions, string(entries[i].Decision))
+	}
+	if got := strings.Join(decisions, ","); got != "allow-site,deny,site-allowed" {
+		t.Fatalf("audit decisions = %s", got)
 	}
 }

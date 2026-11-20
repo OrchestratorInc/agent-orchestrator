@@ -246,8 +246,9 @@ with `--item <id>`. For a field `login` cannot find, use
 `ao browser fill-secret <ref> --item <id> [--field username|--totp]`.
 
 Output only ever shows `••••`. Filled passwords and codes are also masked in
-later `snapshot`, `get value`, console and network output. The first fill per
-site waits for the user to approve it in Orchestrator's approval prompt; if they
+later `snapshot`, `get value`, console and network output. The first fill of each
+saved login on a site waits for the user to approve it in Orchestrator's
+approval prompt; if they
 decline or do not answer, the command fails, so ask them in chat instead of
 retrying. Saved credentials work
 in the Browser panel only, not in Chrome mode yet.
