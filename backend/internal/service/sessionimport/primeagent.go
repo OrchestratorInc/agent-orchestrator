@@ -108,5 +108,8 @@ func discoverPrimeAgent(ctx context.Context, root string) ([]sourceFiles, error)
 		files = append(files, sourceFiles{harness: domain.HarnessPrimeAgent, root: root, key: piFamilyNativeID(path), paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 		return nil
 	})
-	return files, err
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }

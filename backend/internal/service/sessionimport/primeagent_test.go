@@ -114,7 +114,7 @@ func TestPrimeAgentDiscoveryInventoryBoundary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "overflow.jsonl"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := discoverPrimeAgent(context.Background(), root); err == nil || !strings.Contains(err.Error(), "inventory") {
+	if files, err := discoverPrimeAgent(context.Background(), root); err == nil || !strings.Contains(err.Error(), "inventory") || len(files) != 0 {
 		t.Fatalf("oversized inventory was accepted: %v", err)
 	}
 }

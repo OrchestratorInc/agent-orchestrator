@@ -87,7 +87,7 @@ func TestPrimeImportPrelaunchAdoptionAndReopenMakeNoMessengerWrites(t *testing.T
 	// Only the provider subprocess is synthetic. The real Prime preparer,
 	// prober and restore argv run through the actual manager lifecycle.
 	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = --help ]; then printf 'prime-agent fixture\\n'; exit 0; fi\n" +
+		"if [ \"$1\" = --help ]; then printf '  --daemon-socket <PATH>  Select daemon socket\\n'; exit 0; fi\n" +
 		"[ \"$1\" = --mode ] && [ \"$2\" = rpc ] && [ \"$3\" = --offline ] || exit 21\n" +
 		"shift 3; socket=; root=; workspace=; source=\n" +
 		"while [ \"$#\" -gt 0 ]; do case \"$1\" in --daemon-socket) socket=$2;; --session-dir) root=$2;; --cwd) workspace=$2;; --fork) source=$2;; *) exit 21;; esac; shift 2; done\n" +

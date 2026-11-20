@@ -79,6 +79,9 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err != nil {
 		return empty, err
 	}
+	if err := p.requireDaemonSocket(ctx, binary); err != nil {
+		return empty, err
+	}
 	env := maps.Clone(r.Env)
 	if env == nil {
 		env = map[string]string{}

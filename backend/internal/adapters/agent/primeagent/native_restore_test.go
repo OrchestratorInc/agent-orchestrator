@@ -44,7 +44,7 @@ func primeForkFixtureRows() []string {
 }
 
 func primeTestPlugin() *Plugin {
-	return &Plugin{resolvedBinary: "/synthetic/prime-agent", extensionFlag: map[string]bool{"/synthetic/prime-agent": false}}
+	return &Plugin{resolvedBinary: "/synthetic/prime-agent", extensionFlag: map[string]bool{"/synthetic/prime-agent": false}, daemonSocketFlag: map[string]bool{"/synthetic/prime-agent": true}}
 }
 
 func primeTestRestoreConfig(t *testing.T, root, workspace, id string) ports.RestoreConfig {
