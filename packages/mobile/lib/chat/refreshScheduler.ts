@@ -1,7 +1,12 @@
 export type RefreshScheduler = {
 	/** Something changed: read again soon. */
 	request(): void;
-	/** Drop a read that has not started, and any catch-up owed by one that has. */
+	/**
+	 * Forget every read so far: one not started yet, a catch-up one already
+	 * earned, and one still running, whose result no longer holds the next
+	 * read back. A read stuck on a host that stopped answering would otherwise
+	 * hold back the new connection's reads until it times out.
+	 */
 	cancel(): void;
 };
 
@@ -20,6 +25,8 @@ export function createRefreshScheduler(run: () => Promise<void>, windowMs: numbe
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let running = false;
 	let dirty = false;
+	// Bumped by cancel, so a read started before it can no longer change the state.
+	let generation = 0;
 
 	const schedule = () => {
 		if (timer) return;
@@ -29,6 +36,7 @@ export function createRefreshScheduler(run: () => Promise<void>, windowMs: numbe
 		}, windowMs);
 	};
 	const fire = async () => {
+		const started = generation;
 		running = true;
 		dirty = false;
 		try {
@@ -36,10 +44,12 @@ export function createRefreshScheduler(run: () => Promise<void>, windowMs: numbe
 		} catch {
 			// The next event, or the next read the screen makes, tries again.
 		} finally {
-			running = false;
-			if (dirty) {
-				dirty = false;
-				schedule();
+			if (started === generation) {
+				running = false;
+				if (dirty) {
+					dirty = false;
+					schedule();
+				}
 			}
 		}
 	};
@@ -53,6 +63,8 @@ export function createRefreshScheduler(run: () => Promise<void>, windowMs: numbe
 			if (timer) clearTimeout(timer);
 			timer = undefined;
 			dirty = false;
+			running = false;
+			generation++;
 		},
 	};
 }
