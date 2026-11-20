@@ -225,6 +225,8 @@ type Controller struct {
 
 	conv                   ports.ChatConversation
 	backgroundMu           sync.Mutex
+	backgroundInFlight     chan struct{}
+	backgroundVersion      uint64
 	backgroundTasks        []ports.ChatBackgroundTask
 	backgroundSampledAt    time.Time
 	backgroundPartial      bool

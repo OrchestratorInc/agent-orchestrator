@@ -99,6 +99,9 @@ type conversation struct {
 	providerScopeID      string
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
+	// task ID to reference-only native session alias; guarded by mu.
+	backgroundAgentSessions map[string]string
+
 	// handshake is the agent's initialize answer, for steering details that
 	// vary by agent version.
 	handshake       acpsdk.InitializeResponse

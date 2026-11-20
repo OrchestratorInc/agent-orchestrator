@@ -157,6 +157,22 @@ describe("patchClaudeBackgroundTasks", () => {
 		await expect(stop()).rejects.toThrow("invalid session");
 	});
 
+	it("maps a rejection followed by a delayed terminal notification to not-running", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+			h.session.query = { stopTask: async () => {
+				setTimeout(() => h.emit({ subtype: "task_notification", task_id: "server", status: "stopped" }), 50);
+				throw new Error("already ended");
+			} };
+			const result = h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } });
+			const outcome = result.catch(error => error);
+			await vi.advanceTimersByTimeAsync(100);
+			expect(await outcome).toEqual(expect.objectContaining({ message: "invalid session" }));
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("counts only the complete native background set, not foreground starts", () => {
 		const h = harness();
 		expect(h.read).toThrow("unavailable");

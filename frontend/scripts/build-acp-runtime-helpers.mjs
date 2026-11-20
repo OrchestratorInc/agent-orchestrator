@@ -424,6 +424,9 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             try {
                 await session.query.stopTask(taskId);
             } catch (error) {
+                // A rejection may precede the SDK's terminal notification.
+                // Give the projection one bounded settle window; genuine live-task errors still propagate.
+                if (session.aoBackgroundLive?.has(taskId)) await new Promise(resolve => setTimeout(resolve, 100));
                 if (!session.aoBackgroundLive?.has(taskId)) throw RequestError.invalidParams(undefined, "Background task is not running.");
                 throw error;
             }

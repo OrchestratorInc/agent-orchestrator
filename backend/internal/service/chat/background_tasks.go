@@ -39,46 +39,71 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 	}
 	controller, err := s.Controller(id)
 	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != out.Generation {
-		return out, nil
+		return out, nil //nolint:nilerr // An unattached controller is an unavailable reading, not a provider read failure.
 	}
 	inspector, ok := controller.conv.(ports.ChatBackgroundTaskInspector)
 	if !ok {
 		return out, nil
 	}
-	// Shared across board/detail polling and scoped to this exact controller.
-	controller.backgroundMu.Lock()
-	defer controller.backgroundMu.Unlock()
-	cacheFor := time.Second
-	if controller.backgroundErr != nil {
-		cacheFor = 5 * time.Second
-	}
-	if err := ctx.Err(); err != nil {
-		return out, err
-	}
-	if controller.backgroundSampledAt.IsZero() || s.now().Sub(controller.backgroundSampledAt) >= cacheFor {
-		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		tasks, readErr := inspector.BackgroundTasks(readCtx)
-		cancel()
-		if errors.Is(readErr, ports.ErrBackgroundTasksUnsupported) {
-			return out, nil
+	// Readers share one provider call, but neither I/O nor waiting holds the lock.
+	// A waiting reader can cancel without waiting for another caller's timeout.
+	var tasks []ports.ChatBackgroundTask
+	var sampledAt time.Time
+	var partial bool
+	for {
+		if err := ctx.Err(); err != nil {
+			return out, err
 		}
-		if readErr != nil && !errors.Is(readErr, ports.ErrBackgroundTasksPartial) {
-			// Keep a failed sample longer than the read timeout, so concurrent and
-			// repeated readers share this attempt instead of queueing for their
-			// own. A caller's own cancellation is not the provider's failure.
-			if ctx.Err() == nil {
-				controller.backgroundErr = readErr
-				controller.backgroundSampledAt = s.now()
+		controller.backgroundMu.Lock()
+		cacheFor := time.Second
+		if controller.backgroundErr != nil {
+			cacheFor = 5 * time.Second
+		}
+		if !controller.backgroundSampledAt.IsZero() && s.now().Sub(controller.backgroundSampledAt) < cacheFor {
+			readErr := controller.backgroundErr
+			tasks = append([]ports.ChatBackgroundTask(nil), controller.backgroundTasks...)
+			sampledAt, partial = controller.backgroundSampledAt, controller.backgroundPartial
+			controller.backgroundMu.Unlock()
+			if errors.Is(readErr, ports.ErrBackgroundTasksUnsupported) {
+				return out, nil
 			}
-			return out, readErr
+			if readErr != nil {
+				return out, readErr
+			}
+			break
 		}
-		controller.backgroundErr = nil
-		controller.backgroundPartial = errors.Is(readErr, ports.ErrBackgroundTasksPartial)
-		controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), tasks...)
-		controller.backgroundSampledAt = s.now()
-	}
-	if controller.backgroundErr != nil {
-		return out, controller.backgroundErr
+		if flight := controller.backgroundInFlight; flight != nil {
+			controller.backgroundMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return out, ctx.Err()
+			case <-flight:
+				continue
+			}
+		}
+		flight := make(chan struct{})
+		controller.backgroundInFlight = flight
+		version := controller.backgroundVersion
+		controller.backgroundMu.Unlock()
+
+		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		sample, readErr := inspector.BackgroundTasks(readCtx)
+		cancel()
+		controller.backgroundMu.Lock()
+		// A stop invalidates samples already in flight, as well as cached samples.
+		// The canceled leader must not cache its cancellation for other readers.
+		if ctx.Err() == nil && version == controller.backgroundVersion {
+			controller.backgroundPartial = errors.Is(readErr, ports.ErrBackgroundTasksPartial)
+			if controller.backgroundPartial {
+				readErr = nil
+			}
+			controller.backgroundErr = readErr
+			controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), sample...)
+			controller.backgroundSampledAt = s.now()
+		}
+		controller.backgroundInFlight = nil
+		close(flight)
+		controller.backgroundMu.Unlock()
 	}
 	// Provider I/O can cross termination, a handoff, or a provider replacement.
 	fresh, found, err := s.sessions.GetSession(ctx, id)
@@ -91,12 +116,12 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 		return out, nil
 	}
 	out.Availability = "ready"
-	if controller.backgroundPartial {
+	if partial {
 		out.Availability = "partial"
 	}
-	at := controller.backgroundSampledAt
+	at := sampledAt
 	out.ObservedAt = &at
-	for _, task := range controller.backgroundTasks {
+	for _, task := range tasks {
 		if task.State != "running" && task.State != "paused" && (task.EndedAt == nil || s.now().Sub(*task.EndedAt) >= 30*time.Second) {
 			continue
 		}
@@ -141,6 +166,7 @@ func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, t
 	// The next reading must ask the provider again, not reuse the sample
 	// taken before the stop.
 	controller.backgroundMu.Lock()
+	controller.backgroundVersion++
 	controller.backgroundSampledAt = time.Time{}
 	controller.backgroundMu.Unlock()
 	return nil

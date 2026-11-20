@@ -93,7 +93,7 @@ wake a hibernated session. OS processes remain separate, optional Diagnostics.
 | Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
 | Codex | Paginated `thread/backgroundTerminals/list`, command completion and collaboration events | Always partial: native shell inventory, but event-derived subagents may predate controller attachment |
 | Unreal Agent | No background mode in the pinned harness | Unavailable; Bash operations are foreground tool calls |
-| All other ACP bindings | Negotiated `asyncTasks` lifecycle and explicitly backgrounded tool metadata | Reported jobs; complete native inventory is not available in ACP v1 |
+| All other ACP bindings | Explicitly backgrounded tool metadata and provider-reported lifecycle events | Reported jobs; complete native inventory is not available in ACP v1 |
 
 The shared ACP path includes Cursor, OpenCode v1/v2, Droid, Kimi, Kimchi, Pi,
 OMP, Qwen, Copilot, Agy, Command Code, and DeepSeek Harness. An adapter that
@@ -104,13 +104,18 @@ jobs from foreground tool duration, an idle turn, output prose, or process trees
 Advertising the Air `asyncTasks` capability is binding-specific and enabled only
 for the verified Claude binding. Other bindings can still report explicit
 background tool metadata. Session IDs are not task handles; native task handles
-and the launching tool-call identity distinguish executions.
+and the launching tool-call identity distinguish executions. An unambiguous
+session reference can settle an already observed agent, but never creates a job.
 
 Codex command-start events establish elapsed time. A terminal discovered only by
 inventory after attachment has no start timestamp, so its elapsed time is hidden.
-Completion events retain outcomes even if the shell exited between list reads.
+Completion events retain outcomes for inventory-confirmed background shells even
+if a later list omits the shell before its completion arrives. A process ID on a
+foreground completion does not establish background work. Unconfirmed command
+starts are bounded to 256 sanitized labels per conversation.
 Provider labels are one line, capped at 240 characters, and redact obvious
-credential assignments and Bearer values; this is not general secret detection.
+credential assignments, credential flags, authorization values, and URL user
+information; this is not general secret detection.
 
 `GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
 `ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with

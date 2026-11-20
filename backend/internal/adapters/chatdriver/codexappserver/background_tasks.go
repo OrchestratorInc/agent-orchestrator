@@ -16,6 +16,16 @@ var (
 	_ ports.ChatBackgroundTaskStopper   = (*conversation)(nil)
 )
 
+// Unconfirmed foreground starts are bounded; listed jobs keep their metadata
+// until completion so a late outcome survives inventory reconciliation.
+const maxPendingBackgroundCommands = 256
+
+type backgroundCommand struct {
+	StartedAt   *time.Time
+	Description string
+	Listed      bool
+}
+
 // BackgroundTasks reads the app-server's unified-exec registry, never the OS
 // process tree. A page failure leaves the whole reading unavailable.
 func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgroundTask, error) {
@@ -63,7 +73,16 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 			}
 			seenIDs[task.ProcessID] = true
 			c.mu.Lock()
-			started := c.backgroundCommands[task.ItemID].StartedAt
+			observed := c.backgroundCommands[task.ItemID]
+			observed.Listed = true
+			observed.Description = domain.SanitizeTaskDescription(task.Command)
+			if task.ItemID != "" {
+				if c.backgroundCommands == nil {
+					c.backgroundCommands = make(map[string]backgroundCommand)
+				}
+				c.backgroundCommands[task.ItemID] = observed
+			}
+			started := observed.StartedAt
 			c.mu.Unlock()
 			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: domain.SanitizeTaskDescription(task.Command), State: "running", StartedAt: started})
 		}
@@ -168,11 +187,33 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 	if params.Item.Type == "commandExecution" {
 		c.mu.Lock()
 		if n.Method == "item/started" {
-			if c.backgroundCommands == nil {
-				c.backgroundCommands = make(map[string]ports.ChatBackgroundTask)
-			}
-			if _, exists := c.backgroundCommands[params.Item.ID]; !exists {
-				c.backgroundCommands[params.Item.ID] = ports.ChatBackgroundTask{StartedAt: &now, Description: params.Item.Command}
+			if params.Item.ID != "" {
+				if c.backgroundCommands == nil {
+					c.backgroundCommands = make(map[string]backgroundCommand)
+				}
+				observed := c.backgroundCommands[params.Item.ID]
+				if observed.StartedAt == nil {
+					// A missed foreground completion must not retain labels forever.
+					pending, oldestID := 0, ""
+					var oldest time.Time
+					for id, command := range c.backgroundCommands {
+						if command.Listed {
+							continue
+						}
+						pending++
+						if oldestID == "" || command.StartedAt.Before(oldest) {
+							oldestID, oldest = id, *command.StartedAt
+						}
+					}
+					if pending >= maxPendingBackgroundCommands {
+						delete(c.backgroundCommands, oldestID)
+					}
+					observed.StartedAt = &now
+					if observed.Description == "" {
+						observed.Description = domain.SanitizeTaskDescription(params.Item.Command)
+					}
+					c.backgroundCommands[params.Item.ID] = observed
+				}
 			}
 			c.mu.Unlock()
 			return
@@ -180,7 +221,8 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 		observed := c.backgroundCommands[params.Item.ID]
 		delete(c.backgroundCommands, params.Item.ID)
 		c.mu.Unlock()
-		// A foreground completion has no background process handle.
+		// Foreground completions can carry process IDs too. Inventory membership,
+		// rather than a handle alone, is the evidence of background execution.
 		if params.Item.ProcessID == "" {
 			return
 		}
@@ -195,11 +237,12 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			delete(c.backgroundStopping, params.Item.ProcessID)
 		}
 		c.mu.Unlock()
-		description := params.Item.Command
-		if description == "" {
-			description = observed.Description
+		if observed.Listed {
+			// Prefer the native inventory label over the completion's shell wrapper.
+			c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: params.Item.ProcessID, RunID: params.Item.ID, Kind: "shell", Description: observed.Description, State: state, StartedAt: observed.StartedAt}, now)
+		} else {
+			c.backgroundObserved.Finish(params.Item.ProcessID, state, now)
 		}
-		c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: params.Item.ProcessID, RunID: params.Item.ID, Kind: "shell", Description: description, State: state, StartedAt: observed.StartedAt}, now)
 	}
 	if params.Item.Type == "collabAgentToolCall" {
 		// A child thread can execute more than once. Only calls that dispatch

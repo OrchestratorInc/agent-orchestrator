@@ -231,3 +231,137 @@ func TestBackgroundTasksProjectBatchIsolatesSessionLookupFailure(t *testing.T) {
 		t.Fatalf("readings=%+v err=%v", readings, err)
 	}
 }
+
+// Holds the first provider read while another reader cancels or stops a task.
+type blockingBackgroundConversation struct {
+	*fakeConversation
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *blockingBackgroundConversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgroundTask, error) {
+	call := c.calls.Add(1)
+	if call == 1 {
+		close(c.entered)
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	state := "running"
+	if call > 1 {
+		state = "stopped"
+	}
+	now := time.Now()
+	return []ports.ChatBackgroundTask{{ID: "shell", Kind: "shell", State: state, EndedAt: &now}}, nil
+}
+func (c *blockingBackgroundConversation) StopBackgroundTask(context.Context, string) error {
+	return nil
+}
+
+func TestBackgroundTasksSharedReadWaiterCanCancel(t *testing.T) {
+	conv := &blockingBackgroundConversation{fakeConversation: newFakeConversation(), entered: make(chan struct{}), release: make(chan struct{})}
+	h := newHarnessWithConversation(t, conv)
+	done := make(chan error, 1)
+	go func() { _, err := h.svc.BackgroundTasks(t.Context(), testSession); done <- err }()
+	<-conv.entered
+	ctx, cancel := context.WithCancel(t.Context())
+	waiter := make(chan error, 1)
+	go func() { _, err := h.svc.BackgroundTasks(ctx, testSession); waiter <- err }()
+	cancel()
+	select {
+	case err := <-waiter:
+		if !errors.Is(err, context.Canceled) {
+			t.Error(err)
+		}
+	case <-time.After(time.Second):
+		t.Error("canceled reader waited for provider")
+	}
+	if conv.calls.Load() != 1 {
+		t.Error("concurrent readers duplicated the provider read")
+	}
+	close(conv.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBackgroundTasksStopDoesNotWaitOrCachePreStopRead(t *testing.T) {
+	conv := &blockingBackgroundConversation{fakeConversation: newFakeConversation(), entered: make(chan struct{}), release: make(chan struct{})}
+	h := newHarnessWithConversation(t, conv)
+	done := make(chan error, 1)
+	go func() {
+		reading, err := h.svc.BackgroundTasks(t.Context(), testSession)
+		if err == nil && (len(reading.Tasks) != 1 || reading.Tasks[0].State != "stopped") {
+			err = errors.New("published pre-stop read")
+		}
+		done <- err
+	}()
+	<-conv.entered
+	stopped := make(chan error, 1)
+	go func() { stopped <- h.svc.StopBackgroundTask(t.Context(), testSession, "shell") }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(time.Second):
+		t.Error("stop waited for provider read lock")
+	}
+	close(conv.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("read did not finish")
+	}
+	if conv.calls.Load() != 2 {
+		t.Fatalf("reads=%d, want a fresh post-stop sample", conv.calls.Load())
+	}
+}
+
+func TestBackgroundTasksCanceledLeaderDoesNotPoisonNextRead(t *testing.T) {
+	conv := &blockingBackgroundConversation{fakeConversation: newFakeConversation(), entered: make(chan struct{}), release: make(chan struct{})}
+	h := newHarnessWithConversation(t, conv)
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() { _, err := h.svc.BackgroundTasks(ctx, testSession); first <- err }()
+	<-conv.entered
+	cancel()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	reading, err := h.svc.BackgroundTasks(t.Context(), testSession)
+	if err != nil || reading.Availability != "ready" || conv.calls.Load() != 2 {
+		t.Fatalf("reading=%+v err=%v calls=%d", reading, err, conv.calls.Load())
+	}
+}
+
+func TestBackgroundTasksConcurrentReadersShareOneSample(t *testing.T) {
+	conv := &blockingBackgroundConversation{fakeConversation: newFakeConversation(), entered: make(chan struct{}), release: make(chan struct{})}
+	h := newHarnessWithConversation(t, conv)
+	results := make(chan error, 8)
+	for range 8 {
+		go func() {
+			reading, err := h.svc.BackgroundTasks(t.Context(), testSession)
+			if err == nil && (reading.Availability != "ready" || len(reading.Tasks) != 1 || reading.Tasks[0].State != "running") {
+				err = errors.New("shared sample differs")
+			}
+			results <- err
+		}()
+	}
+	<-conv.entered
+	close(conv.release)
+	for range 8 {
+		if err := <-results; err != nil {
+			t.Error(err)
+		}
+	}
+	if conv.calls.Load() != 1 {
+		t.Fatalf("provider reads=%d, want 1", conv.calls.Load())
+	}
+}

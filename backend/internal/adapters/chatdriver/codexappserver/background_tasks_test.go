@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,7 +33,7 @@ func TestBackgroundTasksReadsNativeCodexInventory(t *testing.T) {
 			} else {
 				srv.reply("thread/backgroundTerminals/list", tc.response)
 			}
-			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,7 +122,7 @@ func TestBackgroundTasksCodexSubagentCanRunAgainAfterCompletion(t *testing.T) {
 func TestBackgroundTasksPreservesObservedAgentsWhenShellInventoryUnsupported(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.replyError("thread/backgroundTerminals/list", -32601, "method not found")
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +157,7 @@ func TestStopBackgroundTaskTerminatesOneCodexTerminal(t *testing.T) {
 			} else if tc.reply != "" {
 				srv.reply("thread/backgroundTerminals/terminate", tc.reply)
 			}
-			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +194,7 @@ func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"63962","itemId":"cmd-1","command":"npm run dev"},{"processId":"70001","itemId":"cmd-2","command":"npm run build"}],"nextCursor":null}`)
 	srv.reply("thread/backgroundTerminals/terminate", `{"terminated":true}`)
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +231,7 @@ func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
 func TestBackgroundTasksCodexUsesCommandStartAndHidesUnknownAge(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"sleep 30"}]}`)
-	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,25 +257,70 @@ func TestBackgroundTasksCodexUsesCommandStartAndHidesUnknownAge(t *testing.T) {
 
 func TestBackgroundTasksCodexCompletionSurvivesInventoryOrdering(t *testing.T) {
 	for _, listed := range []bool{false, true} {
-		c := &conversation{threadID: "root"}
-		c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","command":"false"}}`)})
-		if len(c.backgroundObserved.Snapshot(time.Now())) != 0 {
-			t.Fatal("foreground start became background")
-		}
-		if listed {
-			c.backgroundObserved.ReconcileShells([]ports.ChatBackgroundTask{{ID: "p", RunID: "cmd", Kind: "shell", State: "running"}}, time.Now())
-		}
-		c.backgroundObserved.ReconcileShells(nil, time.Now())
-		c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","processId":"p","command":"false","exitCode":1}}`)})
-		c.backgroundObserved.ReconcileShells(nil, time.Now())
-		tasks := c.backgroundObserved.Snapshot(time.Now())
-		if len(tasks) != 1 || tasks[0].State != "failed" || tasks[0].StartedAt == nil || tasks[0].Description != "false" {
-			t.Fatalf("listed=%v tasks=%+v", listed, tasks)
+		t.Run(fmt.Sprint(listed), func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"friendly command"}]}`)
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","command":"shell wrapper"}}`)})
+			if len(c.backgroundObserved.Snapshot(time.Now())) != 0 {
+				t.Fatal("foreground start became background")
+			}
+			if listed {
+				if _, err := c.BackgroundTasks(t.Context()); !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+					t.Fatal(err)
+				}
+			}
+			// The terminal leaves a complete inventory before its completion arrives.
+			c.backgroundObserved.ReconcileShells(nil, time.Now())
+			c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","processId":"p","command":"shell wrapper","exitCode":1}}`)})
+			c.backgroundObserved.ReconcileShells(nil, time.Now())
+			tasks := c.backgroundObserved.Snapshot(time.Now())
+			if !listed {
+				if len(tasks) != 0 {
+					t.Fatalf("foreground completion became background: %+v", tasks)
+				}
+				return
+			}
+			if len(tasks) != 1 || tasks[0].State != "failed" || tasks[0].StartedAt == nil || tasks[0].Description != "friendly command" {
+				t.Fatalf("tasks=%+v", tasks)
+			}
+		})
+	}
+}
+
+func TestBackgroundTasksCodexBoundsPendingCommandStarts(t *testing.T) {
+	// A real listed task must survive pruning of hundreds of missed foreground completions.
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"listed","command":"server"}]}`)
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c := opened.(*conversation)
+	if _, err := c.BackgroundTasks(t.Context()); !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
+	for i := range 600 {
+		raw := fmt.Sprintf(`{"item":{"id":"fg-%d","type":"commandExecution","command":"TOKEN=secret"}}`, i)
+		c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(raw)})
+	}
+	if len(c.backgroundCommands) > 257 {
+		t.Fatalf("unbounded starts: %d", len(c.backgroundCommands))
+	}
+	for _, command := range c.backgroundCommands {
+		if strings.Contains(command.Description, "secret") {
+			t.Fatal("stored raw credential")
 		}
 	}
-	c := &conversation{}
-	c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"fg","type":"commandExecution","exitCode":1}}`)})
-	if len(c.backgroundObserved.Snapshot(time.Now())) != 0 {
-		t.Fatal("foreground completion became background")
+	c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"listed","type":"commandExecution","processId":"p","exitCode":1}}`)})
+	tasks := c.backgroundObserved.Snapshot(time.Now())
+	if len(tasks) != 1 || tasks[0].State != "failed" || tasks[0].Description != "server" {
+		t.Fatal(tasks)
 	}
 }
