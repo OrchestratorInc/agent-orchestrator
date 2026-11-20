@@ -545,6 +545,19 @@ describe("startRemoteProxy", () => {
 		expect(await response.text()).toBe("ok");
 	});
 
+	it("serves its token path on [::1] at the same port until closed", async (context) => {
+		const { port } = await startUpstream(() => ({ status: 200, body: "ok" }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		if (!proxy.ipv6Loopback) context.skip();
+		const base6 = proxy.base.replace("127.0.0.1", "[::1]");
+		const response = await fetch(`${base6}/api/v1/projects`);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe("ok");
+		await proxy.close();
+		proxy = undefined;
+		await expect(fetch(`${base6}/api/v1/projects`)).rejects.toThrow();
+	});
+
 	it("allows only the Forge dev renderer origin when configured", async () => {
 		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		proxy = await startRemoteProxy(

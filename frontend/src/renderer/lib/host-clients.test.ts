@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 const remotes = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn(async () => undefined) }));
 vi.mock("./bridge", () => ({ aoBridge: { remotes } }));
 
-import { clientForHost, connectHost, connectedHosts, disconnectHost, isQuickTunnelHost, subscribeConnectedHosts } from "./host-clients";
+import { chatImageHostUrl, clientForHost, connectHost, connectedHosts, disconnectHost, isQuickTunnelHost, subscribeConnectedHosts } from "./host-clients";
 
 afterEach(async () => {
 	for (const hostId of connectedHosts()) await disconnectHost(hostId);
@@ -45,4 +45,17 @@ it("publishes an endpoint change even when its loopback proxy keeps the same bas
 	expect(changed).toHaveBeenCalledOnce();
 	expect(isQuickTunnelHost("h_box")).toBe(true);
 	stop();
+});
+
+it("moves a remote host's picture URLs to the image host only when its proxy listens on [::1]", async () => {
+	remotes.connect
+		.mockResolvedValueOnce({ hostId: "h_v6", label: "V6", url: "http://v6:3001", base: "http://127.0.0.1:4000/tok", ipv6Loopback: true })
+		.mockResolvedValueOnce({ hostId: "h_v4", label: "V4", url: "http://v4:3001", base: "http://127.0.0.1:4001/tok" });
+	await connectHost("http://v6:3001");
+	await connectHost("http://v4:3001");
+	expect(chatImageHostUrl("http://127.0.0.1:4000/tok/api/v1/a.png")).toBe("http://ao-images.localhost:4000/tok/api/v1/a.png");
+	expect(chatImageHostUrl("http://127.0.0.1:4001/tok/api/v1/a.png")).toBe("http://127.0.0.1:4001/tok/api/v1/a.png");
+	expect(chatImageHostUrl("http://127.0.0.1:4000/tok2/api/v1/a.png")).toBe("http://127.0.0.1:4000/tok2/api/v1/a.png");
+	expect(chatImageHostUrl("data:image/png;base64,AA")).toBe("data:image/png;base64,AA");
+	expect(chatImageHostUrl(undefined)).toBeUndefined();
 });
