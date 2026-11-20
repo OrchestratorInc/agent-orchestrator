@@ -156,7 +156,7 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 	if err != nil {
 		return result, err
 	}
-	model, err := validateKimiWire(wire, metadata.CWD)
+	model, err := validateKimiWire(wire, metadata.CWD, id)
 	if err != nil {
 		return result, err
 	}
@@ -181,7 +181,7 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 	return result, nil
 }
 
-func validateKimiWire(wire []byte, cwd string) (string, error) {
+func validateKimiWire(wire []byte, cwd, id string) (string, error) {
 	scan := bufio.NewScanner(bytes.NewReader(wire))
 	scan.Buffer(make([]byte, 4096), kimiImportBudget)
 	metadata, prompt, binding := false, false, false
@@ -211,7 +211,9 @@ func validateKimiWire(wire []byte, cwd string) (string, error) {
 				Workspace string `json:"workspaceId"`
 				Runtime   string `json:"runtimeId"`
 			}
-			if json.Unmarshal(scan.Bytes(), &b) != nil || b.Agent != "main" || b.Runtime != "local" || b.Workspace != kimiWorkdirKey(cwd) {
+			// Kimi 2.4.1's ACP runtime replaces "local" with acp:<sessionId>
+			// on first load. Only this exact selected session may own that binding.
+			if json.Unmarshal(scan.Bytes(), &b) != nil || b.Agent != "main" || (b.Runtime != "local" && b.Runtime != "acp:"+id) || b.Workspace != kimiWorkdirKey(cwd) {
 				return "", errors.New("kimi: unsupported native runtime binding")
 			}
 			binding = true

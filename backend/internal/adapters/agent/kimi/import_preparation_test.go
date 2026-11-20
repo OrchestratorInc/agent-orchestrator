@@ -340,6 +340,49 @@ func TestKimiImportedRuntimeDoesNotPersistKeys(t *testing.T) {
 	}
 }
 
+func TestKimiImportedRuntimeRecognizesSessionScopedACPBinding(t *testing.T) {
+	for _, mode := range []string{"session ACP", "other ACP session", "remote", "wrong workspace", "subagent"} {
+		t.Run(mode, func(t *testing.T) {
+			r := kimiImportFixture(t)
+			ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding := map[string]string{"type": "runtime.set_binding", "agentId": "main", "runtimeId": "acp:" + r.NativeSessionID, "workspaceId": kimiWorkdirKey(r.LaunchCWD)}
+			switch mode {
+			case "other ACP session":
+				binding["runtimeId"] = "acp:session_00000000-0000-0000-0000-000000000000"
+			case "remote":
+				binding["runtimeId"] = "remote"
+			case "wrong workspace":
+				binding["workspaceId"] = kimiWorkdirKey(filepath.Join(r.LaunchCWD, "other"))
+			case "subagent":
+				binding["agentId"] = "child"
+			}
+			record, err := json.Marshal(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.OpenFile(ref.TranscriptPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.Write(append(record, '\n'))
+			_ = f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			env, imported, err := ImportedRuntimeEnv(t.Context(), ref.ConfigDir, r.DataDir, r.NativeSessionID, r.LaunchCWD, "", nil)
+			if !imported || (err == nil) != (mode == "session ACP") {
+				t.Fatalf("native ACP binding validation: imported=%v error=%v", imported, err)
+			}
+			if err == nil && env["KIMI_CODE_HOME"] != ref.ConfigDir {
+				t.Fatal("reopened ACP binding lost its private home")
+			}
+		})
+	}
+}
+
 func TestKimiPreparedCopyTamperingRefused(t *testing.T) {
 	r := kimiImportFixture(t)
 	ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
