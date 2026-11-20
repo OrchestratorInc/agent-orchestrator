@@ -8,7 +8,7 @@ import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
-import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
+import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import { WorkerUpdateRows } from "./WorkerUpdates";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -491,11 +491,40 @@ describe("ChatMarkdown", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
-	it("does not auto-activate a session link while streaming", () => {
+	it("opens links while streaming, as once settled", async () => {
 		const onSessionLinkOpen = vi.fn();
-		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown streaming text="ao://sessions/project/session" /></ChatLinkProvider>);
-		expect(screen.getByRole("link")).toBeInTheDocument();
-		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+		const onLinkOpen = vi.fn();
+		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onLinkOpen={onLinkOpen}><ChatMarkdown streaming text="[open](ao://sessions/project/session), ao://sessions/project/other and [site](https://example.com)" /></ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "site" })).toHaveAttribute("href", "https://example.com");
+		expect(container.querySelector("[data-link-favicon]")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "ao://sessions/project/other" })).toHaveAttribute("href", "ao://sessions/project/other");
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("link", { name: "open" }));
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+		await user.click(screen.getByRole("link", { name: "site" }));
+		expect(onLinkOpen).toHaveBeenCalledWith("https://example.com");
+	});
+
+	it("shows a finished image while streaming and still escapes raw HTML", () => {
+		const { unmount } = render(<ChatMarkdown streaming text={"Chart:\n\n![the chart](https://example.com/chart.png)\n\nmore"} />);
+		expect(screen.getByRole("img", { name: "the chart" })).toHaveAttribute("src", "https://example.com/chart.png");
+		unmount();
+		const badge = render(<ChatMarkdown streaming text={"[![CI](https://example.com/ci.svg)](https://ci.example.com) done"} />);
+		expect(screen.getByRole("img", { name: "CI" }).closest("a")).toHaveAttribute("href", "https://ci.example.com");
+		expect(badge.container.querySelector("[data-link-favicon]")).toBeNull();
+		badge.unmount();
+		render(<ChatMarkdown streaming text={'before <img src=x onerror="alert(1)"> after'} />);
+		expect(document.querySelector("img")).toBeNull();
+	});
+
+	it("opens inline-code file paths while streaming and keeps code inside a link plain", async () => {
+		const onFileOpen = vi.fn();
+		const text = "Open `backend/service.go:42` or [`backend/service.go`](https://example.com/s) now";
+		const { container } = render(<ChatLinkProvider onLinkOpen={vi.fn()} onFileOpen={onFileOpen} workspacePaths={["backend/service.go"]}><ChatMarkdown streaming text={text} /></ChatLinkProvider>);
+		expect(screen.getAllByRole("button", { name: /in Files$/ })).toHaveLength(1);
+		await userEvent.click(screen.getByRole("button", { name: "Open backend/service.go in Files" }));
+		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go", 42);
+		expect(renderedFindBlocks(container).map((block) => block.text)).toEqual(findBlocks(text, true));
 	});
 
 	it.each([
@@ -921,7 +950,7 @@ describe("ChatMarkdown", () => {
 		render(<ChatMarkdown text={"```mermaid\nflowchart TD\n    A --> B\n```"} streaming />);
 
 		expect(screen.queryByTestId("mermaid-diagram")).not.toBeInTheDocument();
-		expect(screen.getByText(/A --> B/)).toBeInTheDocument();
+		expect(document.querySelector("pre")?.textContent).toContain("A --> B");
 		expect(vi.mocked(renderMermaidDiagram)).not.toHaveBeenCalled();
 	});
 
@@ -1098,9 +1127,8 @@ describe("ChatMarkdown image sources", () => {
 describe("ChatMarkdown code highlighting", () => {
 	const block = (language: string, code: string) => `\`\`\`${language}\n${code}\n\`\`\``;
 
-	/** The tokens land as `hljs-*` classes; `code-theme.css` colours them. */
 	function tokens(): Element[] {
-		return [...document.querySelectorAll("pre [class*='hljs-']")];
+		return [...document.querySelectorAll("pre [class*='hljs-'], pre [style*='--ao-code-']")];
 	}
 
 	it("highlights a known language, leaving the code itself untouched", async () => {
@@ -1118,14 +1146,14 @@ describe("ChatMarkdown code highlighting", () => {
 		expect(screen.getByText("brainfuck")).toBeInTheDocument();
 	});
 
-	it("highlights a fence while it streams, including its unfinished last line", () => {
-		const code = "type Session struct {\n\tID string\n}\nfunc";
-		const { rerender } = render(<ChatMarkdown text={"```go\n" + code} streaming />);
-		expect(tokens().map((token) => token.textContent)).toContain("func");
-		expect(document.querySelector("pre")?.textContent).toBe(code);
+	it("highlights a streaming fence and keeps it highlighted when it settles", async () => {
+		const code = "type Session struct {\n\tID string\n}";
+		const { rerender } = render(<ChatMarkdown text={block("go", code)} streaming />);
+		expect(tokens().length).toBeGreaterThan(0);
+		expect(document.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 
 		rerender(<ChatMarkdown text={block("go", code)} />);
-		expect(tokens().map((token) => token.textContent)).toContain("func");
+		await waitFor(() => expect(tokens().length).toBeGreaterThan(0));
 		expect(document.querySelector("pre")?.textContent).toBe(code);
 	});
 
@@ -1168,7 +1196,7 @@ describe("ChatMarkdown block streaming", () => {
 		["[ref]: https://example.com\n\n    **literal", "**literal"],
 	])("preserves streamed code source: %s", (text, code) => {
 		const { container } = render(<ChatMarkdown text={text} streaming />);
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 	});
 
 	it("repairs incomplete inline formatting for display only and keeps partial links inert", () => {
@@ -1178,18 +1206,18 @@ describe("ChatMarkdown block streaming", () => {
 		expect(container.querySelector("strong")).toBeNull();
 		expect(container.textContent).toBe("Some **unfinished");
 		rerender(<ChatMarkdown text="See [docs](https://exam" streaming />);
-		expect(container.querySelector("a")).toBeNull();
-		expect(container.textContent).toBe("See docs");
+		expect(container.querySelector("a[href]")).toBeNull();
+		expect(container.textContent?.trim()).toBe("See docs");
 	});
 
 	it("leaves open fences literal and highlights a completed fence before the reply ends", async () => {
 		const code = 'const literal = "**unfinished";';
 		const fence = "```js\n" + code;
 		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 		rerender(<ChatMarkdown text={fence + "\n```\n\nMore prose"} streaming />);
-		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toBeInTheDocument());
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		await waitFor(() => expect(container.querySelector("pre [style*='--ao-code-keyword']")).toBeInTheDocument());
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 	});
 
 	it("resolves late reference definitions and keeps footnote IDs document-wide", () => {
@@ -1204,17 +1232,6 @@ describe("ChatMarkdown block streaming", () => {
 		expect(container.textContent).toContain("Beta");
 	});
 
-	it("keeps source-relative fade offsets when a chat opens across several blocks", () => {
-		const text = "First\n\nSecond\n\nAlready visible";
-		const view = (source: string) => <ChatOpeningRef.Provider value={{ current: true }}><ChatMarkdown text={source} streaming /></ChatOpeningRef.Provider>;
-		const { container, rerender } = render(view(text));
-		expect(container.querySelectorAll(".stream-char")).toHaveLength(0);
-		rerender(view(text + " new"));
-		expect(container.querySelectorAll(".stream-char")).toHaveLength(4);
-		const first = container.querySelector("p");
-		rerender(view(text + " new\n\nTail"));
-		expect(container.querySelector("p")).toBe(first);
-	});
 });
 
 
@@ -1234,140 +1251,40 @@ describe("ActivityTitle", () => {
 	});
 });
 
-describe("ChatMarkdown streaming fade", () => {
-	afterEach(() => {
-		vi.useRealTimers();
-		vi.restoreAllMocks();
-	});
-	const fading = (container: HTMLElement) => container.querySelectorAll(".stream-char").length;
-
-	it("never wraps a reply that mounts settled", () => {
-		const { container } = render(<ChatMarkdown text="from history" />);
-		expect(fading(container)).toBe(0);
-	});
-
-	it("fades a grapheme cluster in one span and keeps emoji plain", () => {
-		const { container } = render(<ChatMarkdown text={"é a👨‍👩‍👧b"} streaming />);
-		expect(fading(container)).toBe(4);
-		expect(container.querySelector(".chat-md-emoji")).toHaveTextContent("👨‍👩‍👧");
-		expect(container.querySelector(".stream-char .chat-md-emoji")).toBeNull();
-	});
-
-	it("keeps a fading character's element while earlier text settles", () => {
-		let now = 1_000;
-		vi.spyOn(performance, "now").mockImplementation(() => now);
-		const { container, rerender } = render(<ChatMarkdown text="foo **bar**" streaming />);
-		now += 200;
-		rerender(<ChatMarkdown text="foo **bar** baz" streaming />);
-		const z = [...container.querySelectorAll(".stream-char")].at(-1);
-		expect(z).toHaveTextContent("z");
-		// "foo bar" arrived 350 ms ago and has finished fading; " baz" has not.
-		now += 150;
-		rerender(<ChatMarkdown text="foo **bar** bazz" streaming />);
-		expect(fading(container)).toBe(" bazz".length);
-		expect(container.querySelectorAll(".stream-char")[3]).toBe(z);
-		expect(container.textContent).toBe("foo bar bazz");
-	});
-
-	it("does not fade text already on screen when a chat opens mid-stream", () => {
-		const opening = { current: true };
-		const reply = (text: string) => (
-			<ChatOpeningRef.Provider value={opening}>
-				<ChatMarkdown text={text} streaming />
-			</ChatOpeningRef.Provider>
-		);
-		const { container, rerender } = render(reply("already shown"));
-		opening.current = false;
-		expect(fading(container)).toBe(0);
-		expect(container.textContent).toBe("already shown");
-
-		rerender(reply("already shown and more"));
-		expect(fading(container)).toBe(" and more".length);
-		expect(container.textContent).toBe("already shown and more");
-	});
-
-	it("does not fade text that streamed while the window was hidden", () => {
-		const { container, rerender } = render(<ChatMarkdown text="seen" streaming />);
-		Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
-		try {
-			// Its fade could only play once the reader is back, replaying the whole stretch.
-			rerender(<ChatMarkdown text="seen while away" streaming />);
-		} finally {
-			Reflect.deleteProperty(document, "visibilityState");
-		}
-		const afterReturn = fading(container);
-		expect(container.textContent).toBe("seen while away");
-		// Only what arrives once the reader is back fades in.
-		rerender(<ChatMarkdown text="seen while away, back" streaming />);
-		expect(fading(container)).toBe(afterReturn + ", back".length);
-		expect(afterReturn).toBeLessThanOrEqual("seen".length);
-	});
-
-	it("fades while streaming and sheds the spans shortly after it settles", () => {
-		vi.useFakeTimers();
-		const { container, rerender } = render(<ChatMarkdown text="live text" streaming />);
-		expect(fading(container)).toBeGreaterThan(0);
-		expect(container.textContent).toBe("live text");
-
-		rerender(<ChatMarkdown text="live text" />);
-		expect(fading(container)).toBeGreaterThan(0);
-		act(() => vi.advanceTimersByTime(500));
-		expect(fading(container)).toBe(0);
-		expect(container.textContent).toBe("live text");
-	});
-
-	it("keeps fading across a retry that restarts the stream inside the grace period", () => {
-		vi.useFakeTimers();
-		const { container, rerender } = render(<ChatMarkdown text="one" streaming />);
-		rerender(<ChatMarkdown text="one" />);
-		act(() => vi.advanceTimersByTime(200));
-		rerender(<ChatMarkdown text="one two" streaming />);
-		act(() => vi.advanceTimersByTime(500));
-		expect(fading(container)).toBeGreaterThan(0);
-	});
-
-	it("renders plain text under reduced motion", () => {
-		vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
-			matches: query === "(prefers-reduced-motion: reduce)",
-			media: query,
-			onchange: null,
-			addEventListener: vi.fn(),
-			removeEventListener: vi.fn(),
-			addListener: vi.fn(),
-			removeListener: vi.fn(),
-			dispatchEvent: vi.fn(() => false),
-		}));
-		const { container } = render(<ChatMarkdown text="no motion" streaming />);
-		expect(fading(container)).toBe(0);
-		expect(screen.getByText("no motion")).toBeInTheDocument();
-	});
-
-	it("still compacts emoji while the fade is on", () => {
-		const { container } = render(<ChatMarkdown text="done ✅ now" streaming />);
-		expect(container.querySelector(".chat-md-emoji")).toHaveTextContent("✅");
-		expect(container.textContent).toBe("done ✅ now");
-	});
-
-	it("keeps links working while their text fades", () => {
-		const onLinkOpen = vi.fn();
-		render(
-			<ChatLinkProvider onLinkOpen={onLinkOpen}>
-				<ChatMarkdown text="see [docs](https://example.com/docs)" streaming />
-			</ChatLinkProvider>,
-		);
-		expect(screen.getByRole("link")).toHaveTextContent("docs");
-	});
-});
 
 describe("ChatMarkdown math", () => {
 	afterEach(() => useUiStore.setState({ renderMath: false }));
 
 	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
-		// With math off, `$a~b$` is prose, and streaming repair escapes its `~`.
 		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
 		act(() => useUiStore.setState({ renderMath: true }));
 		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
 		expect(container.querySelector("[data-tex]")).toHaveAttribute("data-tex", "a~b");
+	});
+
+	it("typesets the same formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "Euler $e^{i\\pi}+1=0$, \\(x^2\\), \\[y\\] and $$z$$.\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$\n\n```math\na^2\n```\n\nCode `\\(no\\)` stays.\n\n```ts\nconst s = \"\\\\(no\\\\)\";\n```\n\n    \\(indented\\)\n\n> ~~~\n> \\(quoted\\)\n> ~~~\n\n\\[w\\]";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(streamed)).toHaveLength(8);
+		expect(streamed.querySelector("code")).toHaveTextContent("\\(no\\)");
+		expect([...streamed.querySelectorAll("pre")].map((pre) => pre.textContent)).toEqual(['const s = "\\\\(no\\\\)";\n', "\\(indented\\)\n", "\\(quoted\\)\n"]);
+	});
+
+	it("typesets padded and digit-followed dollar formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "The result is $ x^2 $. Costs $5 and $10, $  w $ or $$ y $$.";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		await waitFor(() => expect(settled.querySelector(".katex")).not.toBeNull());
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(settled)).toHaveLength(4);
 	});
 
 	it("leaves dollar signs as text while the setting is off", () => {

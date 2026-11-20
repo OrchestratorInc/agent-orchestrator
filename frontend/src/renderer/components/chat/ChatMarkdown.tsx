@@ -1,6 +1,5 @@
 import type { Element as HastElement } from "hast";
 import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
-import { pageHidden } from "../../lib/page-hidden";
 /**
  * Markdown for agent prose.
  *
@@ -20,8 +19,8 @@ import { pageHidden } from "../../lib/page-hidden";
  *     highlighting keeps that property — it renders a token tree as elements
  *     rather than injecting the highlighter's HTML string.
  *
- * Streaming reuses completed blocks and repairs incomplete inline formatting
- * for display only. Copy actions continue to use the stored source.
+ * A reply renders through Words while it streams and through react-markdown
+ * once it settles. Copy actions continue to use the stored source.
  */
 
 import {
@@ -33,7 +32,6 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
-	useRef,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
@@ -43,18 +41,18 @@ import Markdown, { defaultUrlTransform, type Components, type Options } from "re
 import remarkGfm from "remark-gfm";
 import type { Root, RootContent } from "mdast";
 import type { Processor } from "unified";
-import remend from "remend";
-import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
+import { Markdown as WordsMarkdown, type ReactiveIslands } from "@pierre/words/react";
 import { WrapText } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
-import { canonicalLanguage } from "../../lib/code-highlight";
+import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
-import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
-import { isInlineMath, remarkMath } from "../../lib/remark-math";
+import { CODE_ISLAND, EMOJI_GRAPHEME, GRAPHEME_SEGMENTER, IMAGE_ISLAND, LINK_ISLAND, codeIsland, headingIslands, imageIsland, islandHref, linkIsland, proseIslands, unescapeHtml } from "../../lib/stream-islands";
+import { pageHidden } from "../../lib/page-hidden";
+import { createDollarDelimiters, isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
 import { artifactLinkForPath, artifactLinkForTarget, findSessionLinks, hasArtifactDirectorySegment, isAoLink, isSessionLink, remarkSessionLinks, sessionArtifactPath } from "../../lib/session-links";
 import { useSessionLinkSource } from "../../lib/use-session-link-navigation";
@@ -81,7 +79,7 @@ import {
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
-import { MathFormula } from "./MathFormula";
+import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
@@ -104,32 +102,11 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
 const MATH_PLUGINS = [...PLUGINS, remarkMath];
-// Reduced motion gets plain text, not a span per character that never animates.
-const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-// How long a settled reply keeps its fade spans, so the last characters (and the final
-// flush of buffered text) finish fading in before they are dropped.
-const FADE_SHED_MS = 450;
-// How long a character's `stream-char` fade lasts (styles.css).
-const CHAR_FADE_MS = 300;
+const STREAM_FADE = { animation: "fadeIn", duration: 300 } as const;
+const MATH_FENCE = /(`{3,}|~{3,})[ \t]*math\b/i;
+const MATH_SYNTAX = /\$|\\[([]/;
+const MATH_SVG = /^<svg[^>]*data-markdown="math(-display)?"[^>]*aria-label="([^"]*)"/;
 
-// The text's length CHAR_FADE_MS ago, from the lengths seen on earlier renders.
-// Characters before it have finished fading, so they render plain.
-function fadedLength(seen: { at: number; length: number }[], length: number): number {
-	const now = performance.now();
-	if (seen.at(-1)?.length !== length) seen.push({ at: now, length });
-	const cutoff = now - CHAR_FADE_MS;
-	while (seen.length > 1 && seen[1].at <= cutoff) seen.shift();
-	return seen[0].at <= cutoff ? seen[0].length : 0;
-}
-
-/**
- * Whether the prose is still arriving, for the fences inside it.
- *
- * A context rather than a prop because `COMPONENTS` has to stay module-level:
- * rebuilding that map per render would defeat react-markdown's own memoization
- * and re-parse every message on every poll.
- */
-const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
 /** Inside a link to an artifact: its name reads in the UI font, as everywhere else artifacts are named. */
 const InsideArtifactLink = createContext(false);
@@ -232,11 +209,13 @@ function chatUrlTransform(url: string, key: string): string | undefined {
 	return defaultUrlTransform(url);
 }
 
-/**
- * True while the surrounding chat is rendering its first commit. A stable ref,
- * not a value, so ending the opening never re-renders every reply.
- */
-export const ChatOpeningRef = createContext<{ readonly current: boolean }>({ current: false });
+const streamUrlTransform = (url: string, key: "href" | "src") => {
+	const safe = chatUrlTransform(url, key);
+	return safe ? islandHref(safe) : safe;
+};
+const inertLinks = (event: ReactMouseEvent<HTMLElement>) => {
+	if ((event.target as Element).closest?.("a[href]")) event.preventDefault();
+};
 
 export const ChatMarkdown = memo(function ChatMarkdown({
 	text,
@@ -261,102 +240,36 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	remarkPlugins?: Options["remarkPlugins"];
 	rehypePlugins?: Options["rehypePlugins"];
 }) {
-	// Replies opened from history mount settled and never wrap; live ones keep the fade a
-	// beat past the end of the stream.
-	const [fading, setFading] = useState(streaming);
-	if (streaming && !fading) setFading(true);
-	// A reply already on screen when its chat opens (switching to a chat
-	// mid-stream) is not new; only characters that arrive afterwards fade in. A
-	// reply that arrives later fades from its first character. Text that arrives
-	// while the window is hidden is not watched either: its fade could only play
-	// once the reader is back, replaying the whole stretch at once.
-	const chatOpening = useContext(ChatOpeningRef);
-	const [openedOffset] = useState(() => (chatOpening.current ? text.length : 0));
-	const hiddenOffset = useRef(0);
-	if (pageHidden()) hiddenOffset.current = text.length;
-	const seenLengths = useRef<{ at: number; length: number }[]>([]);
-	const settledOffset = Math.max(openedOffset, hiddenOffset.current, fadedLength(seenLengths.current, text.length));
 	const renderMath = useUiStore((state) => state.renderMath);
 	const plugins = useMemo(() => {
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;
 		return remarkPlugins ? [...base, ...remarkPlugins] : base;
 	}, [renderMath, remarkPlugins]);
-	// History stays on the single-parser path. Replies that streamed retain
-	// their chunks on completion, preserving code controls and diagram state.
-	const [parsed, setParsed] = useState(() => streaming ? splitStreamingMarkdown(text, undefined, renderMath) : {
-		source: text, math: renderMath, blocks: [{ source: text, start: 0, repairInline: false }], stableCount: 0,
-	});
-	// Chunks are cut, and their prose repair decided, in the math dialect they
-	// render in, so turning math on or off re-cuts them. A settled single block
-	// is exempt: it is a whole document in either dialect, and repair only runs
-	// while streaming.
-	const current = parsed.source === text && (parsed.math === renderMath || (!streaming && parsed.blocks.length === 1));
-	const blocks = current ? parsed : splitStreamingMarkdown(text, parsed, renderMath);
-	if (blocks !== parsed) setParsed(blocks);
-	const animate = fading && !prefersReducedMotion();
-	useEffect(() => {
-		if (streaming) return;
-		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
-		return () => clearTimeout(timer);
-	}, [streaming]);
+	const settledPlugins = useMemo<NonNullable<Options["rehypePlugins"]>>(
+		() => [...(rehypePlugins ?? []), [rehypeExcerptSource, { offset: 0 }]],
+		[rehypePlugins],
+	);
 
 	return (
 		<SafeOriginContent.Provider value={safeOrigin}>
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
+					streaming && "chat-md-stream",
 					muted ? "text-sm text-muted-foreground" : "text-sm text-foreground",
 					className,
 				)}
 			>
-				{blocks.blocks.map((block, index) => (
-					<MarkdownChunk
-						key={index}
-						source={block.source}
-						sourceOffset={block.start}
-						repairInline={block.repairInline}
-						streaming={streaming && index === blocks.blocks.length - 1}
-						fading={animate && index === blocks.blocks.length - 1}
-						// Only the fading chunk reads it; it changes on every render.
-						settledOffset={index === blocks.blocks.length - 1 ? Math.max(0, settledOffset - block.start) : 0}
-						remarkPlugins={plugins}
-						rehypePlugins={rehypePlugins}
-					/>
-				))}
+				{streaming ? (
+					<StreamingMarkdown text={text} math={renderMath} />
+				) : (
+					<Markdown remarkPlugins={plugins} rehypePlugins={settledPlugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
+						{text}
+					</Markdown>
+				)}
 			</div>
 		</SafeOriginContent.Provider>
 	);
-});
-
-// No wrapper DOM: list/table layout, image galleries and prose spacing keep
-// their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins, rehypePlugins }: {
-	source: string;
-	sourceOffset: number;
-	repairInline: boolean;
-	streaming: boolean;
-	fading: boolean;
-	settledOffset: number;
-	remarkPlugins: Options["remarkPlugins"];
-	rehypePlugins: Options["rehypePlugins"];
-}) {
-	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
-		linkMode: "text-only", images: false, htmlTags: false,
-		katex: false, setextHeadings: false, comparisonOperators: false,
-	}) : source, [source, streaming, repairInline]);
-	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
-		// Repaired streaming tails cannot be selected. Settled chunks retain only
-		// source bounds; detailed mappings are built when a selection is captured.
-		const entries: NonNullable<Options["rehypePlugins"]> = [...(rehypePlugins ?? [])];
-		if (!streaming) entries.push([rehypeExcerptSource, { offset: sourceOffset }]);
-		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
-		return entries;
-	}, [rehypePlugins, sourceOffset, streaming, fading, settledOffset]);
-	return <StreamingProse.Provider value={streaming}>
-		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
-			{repaired}
-		</Markdown>
-	</StreamingProse.Provider>;
 });
 
 /**
@@ -380,7 +293,6 @@ let preferredWrap = false;
  */
 function CodeBlock({ code, language, sourceNode }: { code: string; language?: string; sourceNode?: HastElement }) {
 	const positions = excerptElementProps(sourceNode);
-	const streaming = useContext(StreamingProse);
 	const grammar = canonicalLanguage(language);
 	const [wrap, setWrap] = useState(preferredWrap);
 
@@ -417,14 +329,96 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 			</div>
 			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
 				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
-					<HighlightedCode code={code} language={grammar} streaming={streaming} />
+					<HighlightedCode code={code} language={grammar} />
 				</code>
 			</pre>
 		</div>
 	);
 }
 
-const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const LINKED_IMAGE: HastElement = { type: "element", tagName: "a", properties: {}, children: [{ type: "element", tagName: "img", properties: {}, children: [] }] };
+
+const StreamLink = memo(function StreamLink({ href, label, src, alt }: { href: string; label: string; src?: string; alt?: string }) {
+	return src === undefined
+		? <MarkdownLink href={href}><span dangerouslySetInnerHTML={{ __html: label }} /></MarkdownLink>
+		: <MarkdownLink href={href} node={LINKED_IMAGE}><MarkdownImage src={src} alt={alt} /></MarkdownLink>;
+});
+
+const StreamCode = memo(function StreamCode({ text }: { text: string }) {
+	return <InlineCode>{text}</InlineCode>;
+});
+
+const STREAM_ISLANDS: ReactiveIslands = {
+	[LINK_ISLAND]: {
+		render: ({ href, label, src, alt }) => typeof href === "string" && typeof label === "string"
+			? <StreamLink href={href} label={label} src={typeof src === "string" ? src : undefined} alt={typeof alt === "string" ? alt : undefined} />
+			: null,
+	},
+	[CODE_ISLAND]: { render: ({ text }) => typeof text === "string" ? <StreamCode text={text} /> : null },
+	[IMAGE_ISLAND]: { render: ({ src, alt }) => typeof src === "string" && typeof alt === "string" ? <MarkdownImage src={src} alt={alt} /> : null },
+};
+
+function StreamingMarkdown({ text, math }: { text: string; math: boolean }) {
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+	const katex = useKatex(MATH_FENCE.test(text) || (math && MATH_SYNTAX.test(text)));
+	const [dollarDelimiters] = useState(createDollarDelimiters);
+	const { components, plugins } = useMemo(() => {
+		const typeset = new Map<string, string>();
+		const formula = (tex: string, display: boolean) => {
+			const key = `${display ? "$$" : "$"}${tex}`;
+			let html = typeset.get(key);
+			if (html !== undefined) return html;
+			if (typeset.size >= 256) typeset.clear();
+			typeset.set(key, html = formulaHtml(katex, tex, display));
+			return html;
+		};
+		return {
+			components: {
+				svg: (html: string) => {
+					const match = MATH_SVG.exec(html);
+					if (!match) return html;
+					const tex = unescapeHtml(match[2]);
+					return formula(tex, Boolean(match[1]) && tex.endsWith("\n"));
+				},
+				img: imageIsland,
+				a: linkIsland,
+				inlineCode: codeIsland,
+				p: proseIslands,
+				li: proseIslands,
+				td: proseIslands,
+				th: proseIslands,
+				h1: headingIslands,
+				h2: headingIslands,
+				h3: headingIslands,
+				h4: headingIslands,
+				h5: headingIslands,
+				h6: headingIslands,
+			},
+			plugins: {
+				code: streamingCodeHighlighter,
+				renderers: [{ language: ["math", "Math", "MATH"], render: ({ code }: { code: string }) => formula(code, true) }],
+			},
+		};
+	}, [katex]);
+	return (
+		<WordsMarkdown
+			isAnimating
+			animated={mounted && !pageHidden() && STREAM_FADE}
+			math={math}
+			components={components}
+			plugins={plugins}
+			controls={false}
+			lineNumbers={false}
+			urlTransform={streamUrlTransform}
+			islands={STREAM_ISLANDS}
+			onClickCapture={inertLinks}
+			onAuxClickCapture={inertLinks}
+		>
+			{math ? dollarDelimiters(text) : text}
+		</WordsMarkdown>
+	);
+}
 
 function compactEmoji(children: ReactNode): ReactNode {
 	if (typeof children === "string") {
@@ -449,25 +443,6 @@ function compactEmoji(children: ReactNode): ReactNode {
 		return children.map((child, index) => <Fragment key={index}>{compactEmoji(child)}</Fragment>);
 	}
 	return children;
-}
-
-// Renders a `stream-text` wrapper from rehypeStreamFade: its settled text plain,
-// then each later character in a `stream-char` span keyed by its source offset,
-// so a character keeps its element, and fades in only once, as the text grows.
-function StreamText({ node }: { node?: HastElement }) {
-	const child = node?.children[0];
-	const text = child?.type === "text" ? child.value : "";
-	const kept = Number(node?.properties.dataKept ?? 0);
-	let offset = Number(node?.properties.dataStart ?? 0) + kept;
-	const fading: ReactNode[] = [];
-	for (const { segment } of GRAPHEME_SEGMENTER.segment(text.slice(kept))) {
-		// compactEmoji must see emoji as plain strings.
-		fading.push(EMOJI_GRAPHEME.test(segment)
-			? <Fragment key={offset}>{compactEmoji(segment)}</Fragment>
-			: <span key={offset} className="stream-char">{segment}</span>);
-		offset += segment.length;
-	}
-	return <>{compactEmoji(text.slice(0, kept))}{fading}</>;
 }
 
 type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement };
@@ -667,14 +642,13 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
 });
 
 /**
- * A mermaid fence with the streaming state it was rendered under.
+ * A mermaid fence, with host-local links blocked on remote hosts.
  *
  * A separate component rather than a hook call in the `pre` override because
  * overrides are not components: hooks are illegal there, and `COMPONENTS`
  * must stay module-level so react-markdown's memoization survives polling.
  */
 function MermaidFence({ code }: { code: string }) {
-	const streaming = useContext(StreamingProse);
 	const { open: onLinkOpen, remoteHost } = useContext(OpenChatLink);
 	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
 		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
@@ -682,7 +656,7 @@ function MermaidFence({ code }: { code: string }) {
 		event.preventDefault();
 		event.stopPropagation();
 	};
-	const diagram = <MermaidBlock code={code} streaming={streaming} onLinkOpen={onLinkOpen} />;
+	const diagram = <MermaidBlock code={code} onLinkOpen={onLinkOpen} />;
 	return remoteHost
 		? <div onClickCapture={blockHostLocalLink} onAuxClickCapture={blockHostLocalLink} onContextMenuCapture={blockHostLocalLink}>{diagram}</div>
 		: diagram;
@@ -781,9 +755,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 }
 
 const COMPONENTS: Components = {
-	span: ({ children, node, ...props }) => props.className === "stream-text"
-		? <StreamText node={node} />
-		: <span {...props}>{compactEmoji(children)}</span>,
+	span: ({ children, node: _node, ...props }) => <span {...props}>{compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children, node: _node, ...props }) => (

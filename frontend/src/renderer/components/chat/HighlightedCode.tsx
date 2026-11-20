@@ -12,10 +12,9 @@
  * about how it is framed is.
  */
 
-import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import type { ElementContent, RootContent } from "hast";
-import type { LiveTokenizer } from "@pierre/highlights";
-import { createLiveHighlight, highlightSync, liveLine, MAX_CHARS, type CodeLine, type GrammarName } from "../../lib/code-highlight";
+import { highlightSync, type CodeLine, type GrammarName } from "../../lib/code-highlight";
 // The token colours live with the engine rather than with one caller: they are
 // scoped under `.chat-code`/`.markdown-code`, so anything rendering these class
 // names has to be inside one of those containers and has to have loaded this sheet.
@@ -30,59 +29,17 @@ import "./code-theme.css";
 export const HighlightedCode = memo(function HighlightedCode({
 	code,
 	language,
-	streaming,
 }: {
 	code: string;
 	/** Undefined renders plain monospace. */
 	language?: GrammarName;
-	streaming?: boolean;
 }) {
-	const live = useLiveLines(code, streaming ? language : undefined);
-	const settled = useMemo(() => {
-		const tree = !streaming && language ? highlightSync(code, language) : undefined;
+	const lines = useMemo(() => {
+		const tree = language ? highlightSync(code, language) : undefined;
 		return tree ? tokenLines(tree.children).map((tokens) => ({ tokens, signature: JSON.stringify(tokens) })) : undefined;
-	}, [code, language, streaming]);
-	const lines = live ?? settled;
+	}, [code, language]);
 	return lines ? <>{lines.map((line, index) => <HighlightedLine key={index} {...line} />)}</> : <>{code}</>;
 });
-
-type Live = { tokenizer: LiveTokenizer; code: string; language: GrammarName; lines: CodeLine[] };
-
-function useLiveLines(code: string, language: GrammarName | undefined): CodeLine[] | undefined {
-	const live = useRef<Live>(undefined);
-	useEffect(() => () => {
-		live.current?.tokenizer.dispose();
-		live.current = undefined;
-	}, []);
-	const previous = live.current;
-	if (previous?.code === code && previous.language === language) return previous.lines;
-	try {
-		live.current = language ? nextLive(previous, code, language) : undefined;
-	} catch (cause) {
-		console.warn(`chat: could not highlight ${language}`, cause);
-		live.current = undefined;
-	}
-	if (previous && previous.tokenizer !== live.current?.tokenizer) previous.tokenizer.dispose();
-	return live.current?.lines;
-}
-
-function nextLive(previous: Live | undefined, code: string, language: GrammarName): Live | undefined {
-	if (code.length > MAX_CHARS) return undefined;
-	if (previous?.language === language && code.startsWith(previous.code)) {
-		const { tokenizer } = previous;
-		const last = tokenizer.lineCount - 1;
-		const end = { line: last, character: tokenizer.getLineLength(last) };
-		const { lineChanges } = tokenizer.applyEdits([{ range: { start: end, end }, newText: code.slice(previous.code.length) }]);
-		const lines = previous.lines.slice();
-		for (const change of [...lineChanges].reverse()) {
-			const changed = Array.from({ length: change.newEndLine - change.newStartLine }, (_, index) => liveLine(tokenizer, change.newStartLine + index));
-			lines.splice(change.oldStartLine, change.oldEndLine - change.oldStartLine, ...changed);
-		}
-		return { tokenizer, code, language, lines };
-	}
-	const tokenizer = createLiveHighlight(code, language);
-	return tokenizer && { tokenizer, code, language, lines: Array.from({ length: tokenizer.lineCount }, (_, line) => liveLine(tokenizer, line)) };
-}
 
 // Split the tree, preserving nested scopes on each line. Putting ancestor and
 // child classes on the same span changes CSS inheritance and selector matching.

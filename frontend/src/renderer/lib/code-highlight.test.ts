@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Element, Root, RootContent } from "hast";
-import { canonicalLanguage, highlightSync, type GrammarName } from "./code-highlight";
+import { canonicalLanguage, highlightSync, streamingCodeHighlighter, type GrammarName } from "./code-highlight";
 
 function classesIn(tree: Root): string[] {
 	const found: string[] = [];
@@ -70,5 +70,14 @@ describe("highlightSync", () => {
 
 	it("leaves code over a million characters plain", () => {
 		expect(highlightSync("const a = 1;\n".repeat(80_000), "typescript")).toBeUndefined();
+	});
+});
+
+describe("streamingCodeHighlighter", () => {
+	it("highlights a fence, and leaves one past the size cap plain", () => {
+		expect(streamingCodeHighlighter.highlight({ code: "const a = 1;\n", language: "ts", meta: "", isIncomplete: false })).toContain("var(--ao-code-keyword)");
+		const session = streamingCodeHighlighter.createSession!();
+		expect(session.highlightLines!({ code: `const s = "${"x".repeat(1_000_000)}";\n`, language: "ts", meta: "", isIncomplete: true })).toBeNull();
+		session.dispose();
 	});
 });

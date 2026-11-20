@@ -5,7 +5,9 @@
  */
 
 import type { ElementContent, Root } from "hast";
-import { codeToTokens, isSupportedLanguage, LiveTokenizer, type Lang, type Theme, type ThemedToken } from "@pierre/highlights";
+import { codeToTokens, isSupportedLanguage, type Lang, type Theme, type ThemedToken } from "@pierre/highlights";
+import type { CodeHighlighterPlugin, CodeHighlighterSession, CodeOptions } from "@pierre/words/html";
+import { createHighlightsPlugin } from "@pierre/words/highlights";
 
 export type GrammarName = Lang;
 
@@ -70,7 +72,7 @@ function tokenNode(token: ThemedToken): ElementContent {
 	return classes.length ? { type: "element", tagName: "span", properties: { className: classes }, children: [text] } : text;
 }
 
-export const MAX_CHARS = 1_000_000;
+const MAX_CHARS = 1_000_000;
 
 /** The highlighted tree, keeping the source's exact line endings. */
 export function highlightSync(code: string, language: GrammarName): Root | undefined {
@@ -92,17 +94,44 @@ export function highlightSync(code: string, language: GrammarName): Root | undef
 	}
 }
 
-export function createLiveHighlight(code: string, language: GrammarName): LiveTokenizer | undefined {
-	try {
-		return new LiveTokenizer({ code, lang: language, theme: CODE_THEME });
-	} catch (cause) {
-		console.warn(`chat: could not highlight ${language}`, cause);
-		return undefined;
-	}
-}
+const pierrePlugin = createHighlightsPlugin({ theme: CODE_THEME });
 
-export function liveLine(tokenizer: LiveTokenizer, line: number): CodeLine {
-	const tokens = tokenizer.getLineTokens(line).tokens.filter((token) => token.content !== "").map(tokenNode);
-	if (line < tokenizer.lineCount - 1) tokens.push({ type: "text", value: "\n" });
-	return { tokens, signature: JSON.stringify(tokens) };
-}
+const guarded = <T>(highlight: (options: CodeOptions) => T | null) => (options: CodeOptions): T | null => {
+	if (options.code.length > MAX_CHARS) return null;
+	try {
+		return highlight({ ...options, language: canonicalLanguage(options.language) ?? "" });
+	} catch (cause) {
+		console.warn(`chat: could not highlight ${options.language}`, cause);
+		return null;
+	}
+};
+
+export const streamingCodeHighlighter: CodeHighlighterPlugin = {
+	highlight: guarded((options) => pierrePlugin.highlight(options)),
+	createSession() {
+		let session: CodeHighlighterSession | undefined = pierrePlugin.createSession!();
+		const close = () => {
+			session?.dispose();
+			session = undefined;
+		};
+		const live = <T>(call: (open: CodeHighlighterSession, options: CodeOptions) => T | null) => {
+			const run = guarded((options) => {
+				try {
+					return session ? call(session, options) : null;
+				} catch (cause) {
+					close();
+					throw cause;
+				}
+			});
+			return (options: CodeOptions) => {
+				if (options.code.length > MAX_CHARS) close();
+				return run(options);
+			};
+		};
+		return {
+			highlight: live((open, options) => open.highlight(options)),
+			highlightLines: live((open, options) => open.highlightLines!(options)),
+			dispose: close,
+		};
+	},
+};
