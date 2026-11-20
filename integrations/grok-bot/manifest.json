@@ -1,36 +1,84 @@
 {
  "name": "ao-grok-bot",
- "version": "2026.11.07.1",
+ "version": "2026.11.14.1",
  "skills": [
   {
    "id": "ao-actions",
    "path": "skills/ao-actions/SKILL.md",
-   "bytes": 4455,
-   "sha256": "6eb69f705ac7c5ef0be577ce089cf29827baf5bf7589a623ec159303c7d86591"
+   "bytes": 7928,
+   "sha256": "e9a544d6975b2a2e18c9a48ffbeec5092b5e28edfadf55222d395bc47fc92e5d"
   },
   {
    "id": "ao-answer",
    "path": "skills/ao-answer/SKILL.md",
-   "bytes": 5697,
-   "sha256": "b0665ed4f17dcc1bd814eddffa956b986dfe9cee32d6f2468250a0369c12187a"
+   "bytes": 5972,
+   "sha256": "4caccfb531e34f99cd963a5ce553f4a175cc0cbfdbdc5a963fb5a9746ae122f4"
+  },
+  {
+   "id": "ao-checkup",
+   "path": "skills/ao-checkup/SKILL.md",
+   "bytes": 3017,
+   "sha256": "2ac092e9b3f6e97fe8edf0972154b13b4ad582a6f21b609d839cee0c4de8c8e4"
+  },
+  {
+   "id": "ao-cleanup",
+   "path": "skills/ao-cleanup/SKILL.md",
+   "bytes": 2729,
+   "sha256": "ef9acddbb5d07da878653735ae309ff59f6453dd86a08a821f13e3ddd65ca1e3"
+  },
+  {
+   "id": "ao-dev-update",
+   "path": "skills/ao-dev-update/SKILL.md",
+   "bytes": 4268,
+   "sha256": "1a37d619ff1417b63fbbd5f6c9aa66683c336e331dcf0611c80cc644cf82ad16"
+  },
+  {
+   "id": "ao-event",
+   "path": "skills/ao-event/SKILL.md",
+   "bytes": 7961,
+   "sha256": "83401fb7b830185e1baaf46260b090c780878862d5cbe81f5e24fd7daee7e805"
+  },
+  {
+   "id": "ao-handoff",
+   "path": "skills/ao-handoff/SKILL.md",
+   "bytes": 2393,
+   "sha256": "0621a0098fd6d9eab888fe5c8048bef7b342301bd60355af8e0257f65feda46b"
+  },
+  {
+   "id": "ao-learnings",
+   "path": "skills/ao-learnings/SKILL.md",
+   "bytes": 1717,
+   "sha256": "6d9a951f263d7993a0d258bc8d7074199da93a110fc71441554d2d0a25dae8fe"
+  },
+  {
+   "id": "ao-live",
+   "path": "skills/ao-live/SKILL.md",
+   "bytes": 8316,
+   "sha256": "a4be948fdf665ff4c5cd308379e803cb479896df4a89479e12dbf133fac547d5"
   },
   {
    "id": "ao-orchestrator",
    "path": "skills/ao-orchestrator/SKILL.md",
-   "bytes": 6170,
-   "sha256": "1984d10a949e0891c06c77866d85241f18ccd3dee7f82dd273080bfc10440005"
+   "bytes": 6496,
+   "sha256": "6bb83c882527ab15182d0d87ef5791547696732ea5a4dd8d9d7d693b2fa78f9d"
+  },
+  {
+   "id": "ao-report",
+   "path": "skills/ao-report/SKILL.md",
+   "bytes": 4347,
+   "sha256": "d6e87b2094cef824f875f4f1a633143b20150901d085abdd3682306a231d313e"
   },
   {
    "id": "ao-rules",
    "path": "skills/ao-rules/SKILL.md",
-   "bytes": 9075,
-   "sha256": "11d5e275fb62696233009f1e9ec21994343d8a664e7a7701a50364d618e2e7d4"
+   "bytes": 11445,
+   "sha256": "668c5ea91df7e622313d7ce641d2d1fe9c5060b365d81642ef8dbe78e7757dca"
   },
   {
    "id": "ao-setup",
    "path": "skills/ao-setup/SKILL.md",
-   "bytes": 14238,
-   "sha256": "61876e14c8d8723d6b091dbb8ee9f6a2e519978783547d0ddcd2da28fe1a05cd"
+   "bytes": 17036,
+   "sha256": "215c986cf28fc9e63cf977d81a2efe2bc6ac9f237c160dc0ace74cdab28b1a7d"
   },
   {
    "id": "ao-status",
@@ -39,10 +87,40 @@
    "sha256": "46a6b80c5501ebb48edbef5c2c7b4ab1cb1237cab781072c77e41082a8d359af"
   },
   {
+   "id": "ao-sync",
+   "path": "skills/ao-sync/SKILL.md",
+   "bytes": 3350,
+   "sha256": "8c905e4e6b9fc7e72afc79d9eb31ddd226e69db626494ff49416296da7589a25"
+  },
+  {
+   "id": "ao-templates",
+   "path": "skills/ao-templates/SKILL.md",
+   "bytes": 1651,
+   "sha256": "da34fbb0317be541edd74dcd14cf97fdb7b6848922afbef86e72074dccb8e4c6"
+  },
+  {
+   "id": "ao-tracker",
+   "path": "skills/ao-tracker/SKILL.md",
+   "bytes": 1942,
+   "sha256": "4ab0fa3f37bcff201e95cbaabb99aaf0a2c67db756c8a4a1544fea6747c8567b"
+  },
+  {
    "id": "ao-update",
    "path": "skills/ao-update/SKILL.md",
-   "bytes": 5359,
-   "sha256": "581cc06d86db74e5152a1a9b9f9a90c85b4146d43faa1d8fa06c195286fb132a"
+   "bytes": 18596,
+   "sha256": "720becf61f775564ff936b36d4798efa44ff06825e2134d2a55f726dd09c6438"
+  },
+  {
+   "id": "ao-usage",
+   "path": "skills/ao-usage/SKILL.md",
+   "bytes": 2700,
+   "sha256": "d38b7fc440974d17ed0618417ce1694452faec8b7bcb64489b0708ada0bd2586"
+  },
+  {
+   "id": "ao-watch",
+   "path": "skills/ao-watch/SKILL.md",
+   "bytes": 4125,
+   "sha256": "60e66392e0952a3edd8d9d6877bcdfba263ffe2ea3bba995f72ebd9ceeaa727f"
   }
  ]
 }
