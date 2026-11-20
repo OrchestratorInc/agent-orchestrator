@@ -1065,6 +1065,52 @@ describe("native WorkOS authentication", () => {
       expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(null);
     });
 
+    it("saves a refreshed login even when the read before saving it fails", async () => {
+      mocks.authenticateWithCode.mockResolvedValueOnce({
+        accessToken: EXPIRED_ACCESS_TOKEN,
+        refreshToken: "refresh_123",
+        user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+      });
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink(
+        "ao-app://callback?code=code_456&state=state_123",
+        dataDir,
+      );
+      // WorkOS rotates the token, using up the old one; the read that would
+      // merge the new one into the file then fails.
+      mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+        mocks.storeReadFailures = ["EACCES"];
+        return Promise.resolve({
+          accessToken: ACCESS_TOKEN,
+          refreshToken: "refresh_456",
+          user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+        });
+      });
+
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      expect(JSON.parse(await readFile(storeFile(), "utf8"))).toMatchObject({
+        session: { accessToken: ACCESS_TOKEN, refreshToken: "refresh_456" },
+        pkce: null,
+      });
+    });
+
+    it("says why sign-in did not open when the login cannot be read", async () => {
+      const signIn = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:signIn",
+      )?.[1] as () => Promise<void>;
+      mocks.storeReadFailures = ["EIO"];
+
+      await expect(signIn()).resolves.toBeUndefined();
+
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+      expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+        type: "error",
+        detail: expect.stringContaining("could not read its saved sign-in"),
+      }));
+    });
+
     it("still signs out from the app menu when the login cannot be read", async () => {
       const signOut = mocks.ipcHandle.mock.calls.find(
         ([channel]) => channel === "cloud:signOut",

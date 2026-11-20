@@ -656,7 +656,17 @@ async function refreshCloudSession(
     );
     return withAuthMutation(dataDir, async () => {
       if (authGeneration(dataDir) !== generation) return null;
-      const currentStore = await readAuthStore(dataDir);
+      let currentStore: AuthStore;
+      try {
+        currentStore = await readAuthStore(dataDir);
+      } catch (error) {
+        if (!(error instanceof AuthStoreUnreadableError)) throw error;
+        // WorkOS has already used up the old refresh token, so the rotated
+        // one is the only login that still works. Save it without the file's
+        // other contents: at worst a pending sign-in is dropped.
+        await writeAuthStore(dataDir, { session, pkce: null });
+        return publicAccount(session);
+      }
       if (
         currentStore.session?.refreshToken !== storedSession.refreshToken
       ) {
@@ -892,6 +902,9 @@ export async function signOutCloud(dataDir: string): Promise<void> {
 }
 
 function signInFailureDetail(error: unknown): string {
+  if (error instanceof AuthStoreUnreadableError) {
+    return "Orchestrator could not read its saved sign-in just now. Nothing was changed. Try again in a moment.";
+  }
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("cancel") || message.includes("access_denied")) {
     return "The WorkOS sign-in was cancelled. You can try again whenever you are ready.";
@@ -1007,7 +1020,13 @@ export function installCloudIPC(
       });
       return;
     }
-    await beginCloudSignIn(getDataDir());
+    try {
+      await beginCloudSignIn(getDataDir());
+    } catch (error) {
+      // The renderer starts sign-in without waiting on it, so say why it did not open.
+      if (!(error instanceof AuthStoreUnreadableError)) throw error;
+      await showCloudSignInFailure(error);
+    }
   });
   ipcMain.handle("cloud:signOut", async () => {
     const dataDir = getDataDir();

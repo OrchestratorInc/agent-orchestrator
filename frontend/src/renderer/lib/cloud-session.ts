@@ -40,6 +40,8 @@ const SESSION_REUSE_MS = 5_000;
 /** The first read again after a failed one, doubling each time it fails again, up to the max. */
 const FAILED_READ_RETRY_MS = 1_000;
 const FAILED_READ_RETRY_MAX_MS = 30_000;
+/** Failed reads in a row, with nothing known yet, after which signed out shows instead of loading. */
+const FAILED_READS_BEFORE_SIGNED_OUT = 3;
 
 let snapshot: CloudSessionSnapshot = { session: null, status: "loading" };
 let snapshotKey: string | undefined;
@@ -51,6 +53,9 @@ let reading: Promise<void> | undefined;
 let changes = 0;
 let failedReads = 0;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
+// Signed out shows only because reads kept failing, not because main said so,
+// so reads go on until one answers.
+let signedOutByFailedReads = false;
 let unsubscribeBridge: (() => void) | undefined;
 const listeners = new Set<() => void>();
 
@@ -61,6 +66,7 @@ function statusOf(session: CloudAccount | null): CloudSessionStatus {
 /** Publishes a change that supersedes every read still in flight. */
 function publishChange(session: CloudAccount | null): void {
   changes += 1;
+  signedOutByFailedReads = false;
   publish(session);
 }
 
@@ -74,7 +80,7 @@ function publish(session: CloudAccount | null): void {
   for (const listener of listeners) listener();
 }
 
-function readSession(): void {
+function readSession(force = false): void {
   const cloud = aoBridge.cloud;
   // Component tests and browser preview can provide only the local bridge.
   // Treat a missing Cloud preload surface as signed out rather than throwing
@@ -83,23 +89,34 @@ function readSession(): void {
     publish(null);
     return;
   }
-  if (reading || (snapshot.status !== "loading" && Date.now() - readAt < SESSION_REUSE_MS)) return;
+  if (reading || (!force && snapshot.status !== "loading" && Date.now() - readAt < SESSION_REUSE_MS)) return;
   const startedAt = changes;
   reading = cloud.getSession().then((s) => {
     failedReads = 0;
+    signedOutByFailedReads = false;
     if (startedAt !== changes) return;
     noteCloudSession(s, true);
     publish(s);
   }, () => {
     // Main could not read the saved login just then (it answers a missing one
     // with null, not an error). That is not a sign-out: keep what is shown,
-    // and if nothing is known yet, read again shortly.
+    // and if nothing is known yet, read again shortly. After a few failures,
+    // show signed out rather than loading forever, and keep reading.
     failedReads += 1;
-    if (startedAt === changes && snapshot.status === "loading") retryFailedRead();
+    if (startedAt !== changes) return;
+    if (snapshot.status === "loading" && failedReads >= FAILED_READS_BEFORE_SIGNED_OUT) {
+      signedOutByFailedReads = true;
+      publish(null);
+    }
+    if (awaitingRead()) retryFailedRead();
   }).finally(() => {
     readAt = Date.now();
     reading = undefined;
   });
+}
+
+function awaitingRead(): boolean {
+  return snapshot.status === "loading" || signedOutByFailedReads;
 }
 
 function retryFailedRead(): void {
@@ -107,7 +124,7 @@ function retryFailedRead(): void {
   const delay = Math.min(FAILED_READ_RETRY_MS * 2 ** (failedReads - 1), FAILED_READ_RETRY_MAX_MS);
   retryTimer = setTimeout(() => {
     retryTimer = undefined;
-    if (listeners.size > 0 && snapshot.status === "loading") readSession();
+    if (listeners.size > 0 && awaitingRead()) readSession(true);
   }, delay);
 }
 

@@ -147,4 +147,41 @@ describe("useCloudSession", () => {
       vi.doUnmock("./bridge");
     }
   });
+
+  it("shows signed out after reads keep failing, and the account once a read succeeds", async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    try {
+      const account = { authProvider: "workos", user: { id: "user-1" } };
+      const unreadable = new Error("The saved Orchestrator Cloud login could not be read (EACCES).");
+      const getSession = vi.fn()
+        .mockRejectedValueOnce(unreadable)
+        .mockRejectedValueOnce(unreadable)
+        .mockRejectedValueOnce(unreadable)
+        .mockResolvedValueOnce(account);
+      vi.doMock("./bridge", () => ({
+        aoBridge: {
+          cloud: { getSession, onSessionChanged: () => () => undefined, signIn: () => undefined, signOut: () => Promise.resolve() },
+        },
+      }));
+      const { useCloudSession } = await import("./cloud-session");
+      const view = renderHook(() => useCloudSession());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      await act(() => vi.advanceTimersByTimeAsync(1_000));
+      expect(view.result.current.status).toBe("loading");
+
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      expect(getSession).toHaveBeenCalledTimes(3);
+      expect(view.result.current.status).toBe("unauthenticated");
+
+      await act(() => vi.advanceTimersByTimeAsync(4_000));
+      expect(getSession).toHaveBeenCalledTimes(4);
+      expect(view.result.current.status).toBe("authenticated");
+      expect(view.result.current.session).toEqual(account);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+      vi.doUnmock("./bridge");
+    }
+  });
 });
