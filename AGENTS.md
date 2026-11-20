@@ -66,6 +66,10 @@ AO_DATA_DIR=/tmp/ao-lab-data ./node_modules/.bin/electron-forge start
 - **Killing the forge wrapper is not enough.** The Electron main process cmdline is just `Electron .`, so `pkill -f electron-forge` leaves the app running and the next launch exits silently. Kill the `Electron.app/.../MacOS/Electron` main process explicitly before relaunching.
 - A missing-dependency warning for a lazily imported module (for example `mermaid`, which is dynamically imported on first use) does not blank the window; treat it as informational.
 
+### Mobile app on a phone
+
+To run, show, or check the mobile app on an iPhone, use `npm run device` in `packages/mobile` by default (see `.agents/skills/ao-mobile-dev/SKILL.md`). It reuses a cached Debug build when the native fingerprint is unchanged and serves this checkout's JavaScript from Metro, so a JS-only branch is on the phone in seconds. Do not run `npx expo run:ios` or a Release build for this unless the user asks for one or the task is about native release behavior.
+
 ## Where to look first
 
 - `README.md`: Current run/config/test quickstart.
