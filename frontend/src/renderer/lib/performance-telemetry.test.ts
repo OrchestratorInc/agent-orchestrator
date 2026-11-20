@@ -111,6 +111,19 @@ describe("PerformanceAccumulator", () => {
 		expect(flushed()).toMatchObject({ long_frame_count: 3, long_frame_blocking_ms: 80, long_frame_top_cause: "user-callback" });
 	});
 
+	it("names rendering when style, layout and paint outweigh scripts", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		// Frames with no script long enough to be credited: rendering work only.
+		accumulator.recordLongFrame(10, [], 55);
+		accumulator.recordLongFrame(12, [], 58);
+		accumulator.recordLongFrame(30, [{ invokerType: "event-listener", duration: 70 }], 8);
+		now += 10_000;
+		await accumulator.flush();
+
+		expect(flushed()).toMatchObject({ long_frame_count: 3, long_frame_top_cause: "rendering", measurement_schema_version: 2 });
+	});
+
 	it("adds memory, CPU, open session and uptime buckets", async () => {
 		resources = { rendererPeakMb: 700, appPeakMb: 2_100, cpuAvgPct: 3.4 };
 		openSessions = 12;
@@ -173,7 +186,8 @@ describe("PerformanceAccumulator", () => {
 		expect(second.isFlushOverdue()).toBe(true);
 		await second.flush("startup");
 
-		expect(flushed()).toMatchObject({ flush_reason: "startup", switch_cached_lt150_count: 1, active_seconds: 60 });
+		// The 61 minutes the app was closed are not part of the window.
+		expect(flushed()).toMatchObject({ flush_reason: "startup", switch_cached_lt150_count: 1, active_seconds: 60, window_seconds: 60 });
 	});
 
 	it("sends nothing counted before an opt-out once the window is discarded", async () => {

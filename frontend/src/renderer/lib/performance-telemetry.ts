@@ -39,6 +39,8 @@ const SAMPLES_KEPT = 100;
 const SWITCH_BUCKETS_MS = [150, 500, 1000] as const;
 
 type Cause = (typeof LONG_FRAME_CAUSES)[number];
+/** Script invoker types the browser reports, each its own cause. */
+const SCRIPT_CAUSES: readonly string[] = LONG_FRAME_CAUSES.filter((cause) => cause !== "rendering" && cause !== "other");
 type SwitchBuckets = [number, number, number, number];
 
 type Summary = {
@@ -64,6 +66,10 @@ type PersistedState = {
 	version: 1;
 	windowStartedAt: number;
 	windowFlushAt: number;
+	/** When this state was last saved, so a later launch knows how long the app was closed. */
+	savedAt?: number;
+	/** Time inside the window that the app was closed, left out of window_seconds. */
+	closedMs?: number;
 	summary: Summary;
 };
 
@@ -99,7 +105,7 @@ const zeroSummary = (): Summary => ({
 });
 
 function freshState(now: number): PersistedState {
-	return { version: 1, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, summary: zeroSummary() };
+	return { version: 1, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, closedMs: 0, summary: zeroSummary() };
 }
 
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -123,7 +129,13 @@ function loadState(storage: Storage, now: number): PersistedState {
 		) {
 			// Interaction ids restart with each page, so kept ones cannot be matched again.
 			const restored = summary as Summary;
-			return { ...(parsed as PersistedState), summary: { ...restored, longest: restored.longest.map((entry) => ({ id: 0, ms: entry.ms })) } };
+			// The gap since the last save is time the app was closed (or reloading).
+			const closedMs = (isCount(parsed.closedMs) ? parsed.closedMs : 0) + (isCount(parsed.savedAt) ? Math.max(0, now - parsed.savedAt) : 0);
+			return {
+				...(parsed as PersistedState),
+				closedMs,
+				summary: { ...restored, longest: restored.longest.map((entry) => ({ id: 0, ms: entry.ms })) },
+			};
 		}
 	} catch {
 		// Replace malformed local state.
@@ -223,18 +235,24 @@ export class PerformanceAccumulator {
 		}
 	}
 
-	recordLongFrame(blockingMs: number, scripts: ReadonlyArray<{ invokerType?: string; duration: number }>): void {
+	/**
+	 * Each cause sums milliseconds of work inside long frames: a script's run
+	 * time for its invoker type, and the frame's style, layout and paint time
+	 * for "rendering". A frame with neither adds its blocking time to "other".
+	 */
+	recordLongFrame(blockingMs: number, scripts: ReadonlyArray<{ invokerType?: string; duration: number }>, renderMs = 0): void {
 		const summary = this.state.summary;
+		const add = (cause: Cause, ms: number) => {
+			if (ms > 0) summary.causes[cause] = (summary.causes[cause] ?? 0) + ms;
+		};
 		summary.longFrames += 1;
 		summary.longFrameBlockingMs += Math.max(0, blockingMs);
-		if (scripts.length === 0) {
-			summary.causes.other = (summary.causes.other ?? 0) + Math.max(0, blockingMs);
-			return;
-		}
 		for (const script of scripts) {
-			const cause: Cause = (LONG_FRAME_CAUSES as readonly string[]).includes(script.invokerType ?? "") ? (script.invokerType as Cause) : "other";
-			summary.causes[cause] = (summary.causes[cause] ?? 0) + Math.max(0, script.duration);
+			const cause = SCRIPT_CAUSES.includes(script.invokerType ?? "") ? (script.invokerType as Cause) : "other";
+			add(cause, script.duration);
 		}
+		add("rendering", renderMs);
+		if (scripts.length === 0 && !(renderMs > 0)) add("other", blockingMs);
 	}
 
 	recordOpen(timing: OpenTiming): void {
@@ -271,6 +289,7 @@ export class PerformanceAccumulator {
 		const now = this.now();
 		const summary = this.state.summary;
 		const windowStartedAt = this.state.windowStartedAt;
+		const closedMs = this.state.closedMs ?? 0;
 		// The next window starts now, so work recorded while this one sends lands there.
 		this.state = freshState(now);
 		this.recentInteractions.clear();
@@ -285,9 +304,9 @@ export class PerformanceAccumulator {
 		const resources = await this.readResources().catch(() => null);
 		const openSessions = this.countOpenSessions();
 		const properties: Record<string, unknown> = {
-			measurement_schema_version: 1,
+			measurement_schema_version: 2,
 			flush_reason: reason,
-			window_seconds: Math.round((now - windowStartedAt) / 1000),
+			window_seconds: Math.round(Math.max(0, now - windowStartedAt - closedMs) / 1000),
 			active_seconds: Math.round(summary.activeMs / 1000),
 			switch_visible_p75_ms: percentile(summary.switchVisibleMs, 0.75),
 			switch_dropped_count: summary.switchDropped,
@@ -318,6 +337,7 @@ export class PerformanceAccumulator {
 	}
 
 	private persist(): void {
+		this.state.savedAt = this.now();
 		try {
 			this.storage.setItem(STORAGE_KEY, JSON.stringify(this.state));
 		} catch {
@@ -329,7 +349,17 @@ export class PerformanceAccumulator {
 // --- Runtime: observers, input tracking and session open timing ---
 
 type EventTimingEntry = PerformanceEntry & { interactionId?: number };
-type LongFrameEntry = PerformanceEntry & { blockingDuration?: number; scripts?: Array<{ invokerType?: string; duration: number }> };
+type LongFrameEntry = PerformanceEntry & {
+	blockingDuration?: number;
+	/** When style, layout and paint began; 0 for a frame that did not render. */
+	renderStart?: number;
+	scripts?: Array<{ invokerType?: string; duration: number }>;
+};
+
+/** Time from the start of rendering to the end of the frame. */
+function renderDuration(entry: LongFrameEntry): number {
+	return entry.renderStart && entry.renderStart > 0 ? Math.max(0, entry.startTime + entry.duration - entry.renderStart) : 0;
+}
 
 type PendingOpen = {
 	sessionId: string;
@@ -561,7 +591,7 @@ function startRuntime(): void {
 	// during the opt-out belong to no window.
 	const frameObserver = observe("long-animation-frame", (entries) => {
 		if (!visible()) return;
-		for (const entry of entries as LongFrameEntry[]) accumulator.recordLongFrame(entry.blockingDuration ?? 0, entry.scripts ?? []);
+		for (const entry of entries as LongFrameEntry[]) accumulator.recordLongFrame(entry.blockingDuration ?? 0, entry.scripts ?? [], renderDuration(entry));
 	}, { buffered: !restarted });
 
 	const checkpoint = window.setInterval(() => {

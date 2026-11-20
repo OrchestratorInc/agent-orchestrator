@@ -19,9 +19,12 @@ let resolveUsable: ((epochMs: number) => void) | undefined;
 const usable = new Promise<number>((resolve) => {
 	resolveUsable = resolve;
 });
-// A launch spent partly hidden (opened in the background, or the user switched
-// away) measures the wait for the window, not the app, so it reports no timings.
-let hiddenDuringLaunch = typeof document !== "undefined" && document.visibilityState === "hidden";
+// A launch the user hid partway (minimized the window or switched away)
+// measures the wait for the window, not the app, so it reports no timings.
+// Main creates the window hidden and shows it once this page has loaded, so a
+// page that starts hidden is every launch and does not count; only becoming
+// hidden later does.
+let hiddenDuringLaunch = false;
 let usableMarked = false;
 if (typeof document !== "undefined") {
 	const onVisibility = () => {
