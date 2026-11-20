@@ -63,8 +63,11 @@ func TestOpenCodeMajorsAreIndependentlySelectable(t *testing.T) {
 
 // TestGetAgentHooksFootprintIsGitignored enforces a contract every shipped
 // (and future) adapter must hold: any file GetAgentHooks writes into a session
-// worktree must be covered by a sibling AO-managed self-ignoring .gitignore
-// (hookutil.EnsureWorkspaceGitignore). Hook files are untracked, and
+// worktree must be covered by an AO-managed self-ignoring .gitignore
+// (hookutil.EnsureWorkspaceGitignore) in its own folder or, as git allows, in
+// a parent folder inside the workspace, listing the file's path from there.
+// Pi needs the parent form: it skips any extension a .gitignore in the
+// extensions folder lists. Hook files are untracked, and
 // `git worktree remove` (without --force) refuses on any untracked file — an
 // uncovered hook file makes every one of that adapter's session workspaces
 // permanently undeletable (kill/cleanup can never free them).
@@ -92,23 +95,43 @@ func TestGetAgentHooksFootprintIsGitignored(t *testing.T) {
 			}
 			files := workspaceFiles(t, ws)
 			for _, rel := range files {
-				gitignorePath := filepath.Join(ws, filepath.Dir(rel), ".gitignore")
-				data, err := os.ReadFile(gitignorePath) //nolint:gosec // test-owned temp dir
-				if err != nil {
-					t.Errorf("hook file %q has no sibling .gitignore (%v); it will keep the session worktree permanently dirty", rel, err)
-					continue
-				}
-				content := string(data)
-				if !strings.Contains(content, hookutil.GitignoreSentinel) {
-					t.Errorf(".gitignore next to %q is not AO-managed (missing sentinel)", rel)
-					continue
-				}
-				if entry := "/" + filepath.Base(rel); !hasLine(content, entry) {
-					t.Errorf(".gitignore next to %q does not list %q", rel, entry)
+				if why := gitignoreCoverage(ws, rel); why != "" {
+					t.Errorf("hook file %q is not covered by an AO-managed .gitignore (%s); it will keep the session worktree permanently dirty", rel, why)
 				}
 			}
 		})
 	}
+}
+
+// gitignoreCoverage reports why rel (slash-separated, relative to ws) is not
+// covered by an AO-managed .gitignore in its folder or a parent folder up to
+// ws, or "" when one lists it.
+func gitignoreCoverage(ws, rel string) string {
+	var why []string
+	dir := filepath.Dir(filepath.FromSlash(rel))
+	for {
+		gitignorePath := filepath.Join(ws, dir, ".gitignore")
+		data, err := os.ReadFile(gitignorePath) //nolint:gosec // test-owned temp dir
+		entry, _ := filepath.Rel(dir, filepath.FromSlash(rel))
+		entry = "/" + filepath.ToSlash(entry)
+		switch {
+		case err != nil:
+		case !strings.Contains(string(data), hookutil.GitignoreSentinel):
+			why = append(why, filepath.ToSlash(filepath.Join(dir, ".gitignore"))+" is not AO-managed")
+		case hasLine(string(data), entry):
+			return ""
+		default:
+			why = append(why, filepath.ToSlash(filepath.Join(dir, ".gitignore"))+" does not list "+entry)
+		}
+		if dir == "." {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+	if len(why) == 0 {
+		return "no .gitignore in its folder or above"
+	}
+	return strings.Join(why, "; ")
 }
 
 func TestEveryHarnessReportsAuthStatus(t *testing.T) {

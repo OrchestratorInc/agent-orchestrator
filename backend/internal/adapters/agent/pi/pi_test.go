@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -373,12 +374,45 @@ func TestGetAgentHooksInstallsManagedActivityExtension(t *testing.T) {
 		}
 	}
 
-	gitignore, err := os.ReadFile(filepath.Join(workspace, ".pi", "extensions", ".gitignore"))
+	gitignore, err := os.ReadFile(filepath.Join(workspace, ".pi", ".gitignore"))
 	if err != nil {
-		t.Fatalf("read extension .gitignore: %v", err)
+		t.Fatalf("read .pi/.gitignore: %v", err)
 	}
-	if !strings.Contains(string(gitignore), "/ao-activity.ts") {
-		t.Fatalf("extension .gitignore does not ignore AO file:\n%s", gitignore)
+	if !strings.Contains(string(gitignore), "/extensions/ao-activity.ts") {
+		t.Fatalf(".pi/.gitignore does not ignore AO file:\n%s", gitignore)
+	}
+	// Pi skips an extension its folder's .gitignore lists, so none may be there.
+	if _, err := os.Stat(filepath.Join(workspace, ".pi", "extensions", ".gitignore")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("extensions/.gitignore exists (err=%v); it would hide AO's extension from Pi", err)
+	}
+}
+
+func TestGetAgentHooksReplacesTheGitignoreThatHidTheExtension(t *testing.T) {
+	workspace := t.TempDir()
+	extensions := filepath.Join(workspace, ".pi", "extensions")
+	if err := os.MkdirAll(extensions, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := hookutil.EnsureWorkspaceGitignore(extensions, "ao-activity.ts"); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Plugin{resolvedBinary: fakePiBinary(t, "0.80.6")}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatalf("GetAgentHooks: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extensions, ".gitignore")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the old AO .gitignore was kept (err=%v)", err)
+	}
+
+	// A .gitignore the user wrote there is theirs to keep.
+	own := []byte("*.local.ts\n")
+	if err := os.WriteFile(filepath.Join(extensions, ".gitignore"), own, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Plugin{resolvedBinary: fakePiBinary(t, "0.80.6")}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatalf("GetAgentHooks: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(extensions, ".gitignore")); err != nil || string(got) != string(own) {
+		t.Fatalf("user .gitignore = %q, %v; want it untouched", got, err)
 	}
 }
 
