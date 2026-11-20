@@ -246,19 +246,69 @@ function encodeStore(store: AuthStore): Buffer {
   return safeStorage.encryptString(JSON.stringify(store));
 }
 
-// The file's store, or null when the file is there but did not decrypt. A
-// file that decrypts but holds no store is removed: no later read can use it.
-async function readStoreFile(dataDir: string): Promise<AuthStore | null> {
-  try {
-    const value = await readFile(storePath(dataDir));
-    let text: string;
+/**
+ * The saved login exists but could not be read just now (too many open files,
+ * a busy disk, no permission). It is not a sign-out: the file is left as it
+ * is, and the next read can find the login again. Carries only the error code,
+ * never the path or the file's contents.
+ */
+export class AuthStoreUnreadableError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(`The saved Orchestrator Cloud login could not be read (${code}).`);
+    this.name = "AuthStoreUnreadableError";
+    this.code = code;
+  }
+}
+
+// Read errors that usually clear within moments, so the read tries again
+// before giving up: the process is out of file handles (EMFILE, ENFILE), or
+// the file is briefly locked (EAGAIN, EBUSY).
+const TRANSIENT_READ_CODES = new Set(["EMFILE", "ENFILE", "EAGAIN", "EBUSY"]);
+const TRANSIENT_READ_RETRY_MS = [25, 100, 250];
+
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code !== "" ? code : "UNKNOWN";
+}
+
+// The encrypted store file's bytes, or null when there is no file. Any other
+// failure throws AuthStoreUnreadableError and leaves the file in place.
+async function readStoreBytes(file: string): Promise<Buffer | null> {
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      text = safeStorage.decryptString(value);
-    } catch {
-      return null;
+      return await readFile(file);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "ENOENT") return null;
+      const retryMs = TRANSIENT_READ_CODES.has(code) ? TRANSIENT_READ_RETRY_MS[attempt] : undefined;
+      if (retryMs === undefined) throw new AuthStoreUnreadableError(code);
+      await new Promise((resolve) => setTimeout(resolve, retryMs));
     }
-    return JSON.parse(text) as AuthStore;
+  }
+}
+
+// The file's store, or null when the file is there but did not decrypt. No
+// file is the only read that means "no saved login". A read that failed
+// throws AuthStoreUnreadableError instead, so nothing downstream takes it for
+// a sign-out or writes an empty store over the login.
+async function readStoreFile(dataDir: string): Promise<AuthStore | null> {
+  const value = await readStoreBytes(storePath(dataDir));
+  if (value === null) return emptyStore();
+  let text: string;
+  try {
+    text = safeStorage.decryptString(value);
   } catch {
+    return null;
+  }
+  try {
+    const store: unknown = JSON.parse(text);
+    if (!store || typeof store !== "object") throw new Error("Not an auth store.");
+    return store as AuthStore;
+  } catch {
+    // The file decrypts but holds no store this app can use, so no later
+    // read can recover a login from it.
     await rm(storePath(dataDir), { force: true });
     return emptyStore();
   }
@@ -632,7 +682,25 @@ async function refreshCloudSession(
     );
     return withAuthMutation(dataDir, async () => {
       if (authGeneration(dataDir) !== generation) return null;
-      const currentStore = await readAuthStore(dataDir);
+      // WorkOS has already used up the old refresh token, so the rotated one
+      // is the only login that still works. When the store cannot be read, or
+      // reads empty only because the saved sign-in is hidden (secure storage
+      // is out, or the file did not decrypt), save it without the file's other
+      // contents: at worst a pending sign-in is dropped.
+      const keepRotated = async () => {
+        await writeAuthStore(dataDir, { session, pkce: null });
+        return publicAccount(session);
+      };
+      let currentStore: AuthStore;
+      try {
+        currentStore = await readAuthStore(dataDir);
+      } catch (error) {
+        if (!(error instanceof AuthStoreUnreadableError)) throw error;
+        return keepRotated();
+      }
+      if (currentStore.session === null && isSavedSignInHidden(dataDir)) {
+        return keepRotated();
+      }
       if (
         currentStore.session?.refreshToken !== storedSession.refreshToken
       ) {
@@ -868,6 +936,9 @@ export async function signOutCloud(dataDir: string): Promise<void> {
 }
 
 function signInFailureDetail(error: unknown): string {
+  if (error instanceof AuthStoreUnreadableError) {
+    return "Orchestrator could not read its saved sign-in just now. Nothing was changed. Try again in a moment.";
+  }
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("cancel") || message.includes("access_denied")) {
     return "The WorkOS sign-in was cancelled. You can try again whenever you are ready.";
@@ -983,7 +1054,13 @@ export function installCloudIPC(
       });
       return;
     }
-    await beginCloudSignIn(getDataDir());
+    try {
+      await beginCloudSignIn(getDataDir());
+    } catch (error) {
+      // The renderer starts sign-in without waiting on it, so say why it did not open.
+      if (!(error instanceof AuthStoreUnreadableError)) throw error;
+      await showCloudSignInFailure(error);
+    }
   });
   ipcMain.handle("cloud:signOut", async () => {
     const dataDir = getDataDir();
