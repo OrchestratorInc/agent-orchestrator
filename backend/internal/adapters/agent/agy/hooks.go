@@ -40,7 +40,8 @@ type agyNamedHook struct {
 }
 
 // GetAgentHooks installs AO's named hook in the current AGY workspace hook
-// file. All other top-level entries are preserved.
+// file (all other top-level entries are preserved) and, when the session has
+// standing instructions, AO's always-on rule file (see installStandingRule).
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -65,16 +66,23 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(hooksPath), agyHooksFileName); err != nil {
 		return fmt.Errorf("agy.GetAgentHooks: gitignore: %w", err)
 	}
+	if err := installStandingRule(cfg.WorkspacePath, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
+		return fmt.Errorf("agy.GetAgentHooks: standing rule: %w", err)
+	}
 	return nil
 }
 
-// UninstallHooks removes only AO's named AGY hook. A missing file is a no-op.
+// UninstallHooks removes only AO's named AGY hook and AO's marked rule file. A
+// missing file is a no-op.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(workspacePath) == "" {
 		return errors.New("agy.UninstallHooks: workspacePath is required")
+	}
+	if err := removeStandingRule(workspacePath); err != nil {
+		return fmt.Errorf("agy.UninstallHooks: standing rule: %w", err)
 	}
 
 	hooksPath := agyHooksPath(workspacePath)
