@@ -504,6 +504,18 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 		// Resolve while the session still has its account binding.
 		forkNative = m.forkNativeSessionFile(ctx, rec)
 	}
+	if rec.Harness == domain.HarnessKimi && rec.Metadata.ImportSource != nil {
+		if agent, ok := m.agents.Agent(rec.Harness); ok {
+			if cleaner, ok := agent.(workspaceCleaner); ok {
+				ref := importedNativeRef(rec.Metadata.ImportSource)
+				if err := cleaner.CleanupWorkspace(ctx, ports.WorkspaceHookConfig{DataDir: m.dataDir,
+					WorkspacePath: rec.Metadata.WorkspacePath, SessionID: string(rec.ID),
+					NativeSessionID: ref.NativeSessionID, ImportConfigDir: ref.ConfigDir}); err != nil {
+					return fmt.Errorf("delete %s: clean imported Kimi authentication: %w", id, err)
+				}
+			}
+		}
+	}
 	deleted, err := deleter.DeleteTerminatedSession(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", id, err)

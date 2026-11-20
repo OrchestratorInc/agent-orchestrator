@@ -117,6 +117,9 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	if err != nil {
 		return zero, err
 	}
+	if err := CheckImportedOAuth(ctx, source, original.Model); err != nil {
+		return zero, err
+	}
 	if r.SourceFingerprint != "" && r.SourceFingerprint != original.Fingerprint {
 		return zero, errors.New("kimi: source changed since selection; scan again")
 	}

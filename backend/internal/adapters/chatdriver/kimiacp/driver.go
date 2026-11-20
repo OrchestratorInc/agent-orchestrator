@@ -41,8 +41,8 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	if err := kimi.PrepareACPInstructions(ctx, cfg.WorkspacePath, cfg.SystemPrompt); err != nil {
 		return nil, nil, err
 	}
-	// Imported bindings already hold a private native snapshot. Never run the
-	// ordinary managed-home credential seeding for this path.
+	// Imported bindings already hold a private native snapshot. Runtime setup
+	// shares OAuth through the ordinary native-store link, without config seeding.
 	if kimi.IsImportedHome(cfg.Env["KIMI_CODE_HOME"], cfg.DataDir) {
 		overrides, _, err := kimi.ImportedRuntimeEnv(ctx, cfg.Env["KIMI_CODE_HOME"], cfg.DataDir, cfg.ProviderConversationID, cfg.WorkspacePath, cfg.Model, cfg.Env)
 		return []string{"acp"}, overrides, err

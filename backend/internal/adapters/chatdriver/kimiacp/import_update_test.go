@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
@@ -82,6 +83,25 @@ func TestImportedKimiRestoreAfterBinaryUpdate(t *testing.T) {
 	command.Env = []string{"KIMI_CODE_HOME=" + env["KIMI_CODE_HOME"], "AO_KIMI_IMPORT_API_KEY=" + env["AO_KIMI_IMPORT_API_KEY"]}
 	if err := command.Run(); err != nil {
 		t.Fatalf("updated binary could not launch imported ACP command: %v", err)
+	}
+	// The same imported launch must also configure with hosted OAuth and no key.
+	oauthConfig := "default_model = 'test/model'\n[providers.'managed:kimi-code']\ntype = 'kimi'\nbase_url = 'https://api.kimi.com/coding/v1'\n[providers.'managed:kimi-code'.oauth]\nstorage = 'file'\nkey = 'oauth/kimi-code'\n[models.'test/model']\nprovider = 'managed:kimi-code'\nmodel = 'kimi-for-coding'\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(oauthConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "credentials"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token, err := json.Marshal(map[string]any{"access_token": fmt.Sprintf("synthetic-%x", sha256.Sum256([]byte(t.Name()))), "expires_at": time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "credentials", "kimi-code.json"), token, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args, env, err = configure(ctx, cfg)
+	if err != nil || len(args) != 1 || args[0] != "acp" || len(env) != 1 || env["KIMI_CODE_HOME"] != ref.ConfigDir {
+		t.Fatalf("OAuth-only imported ACP did not configure: %v", err)
 	}
 	if err := os.Remove(ref.TranscriptPath); err != nil {
 		t.Fatal(err)
