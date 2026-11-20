@@ -5,6 +5,9 @@ import type { BrowserProfileUsage } from "../../../shared/browser-profiles";
 import type { AoBridge } from "../../../preload";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 
+// The Cloud group has its own tests; these cover the local profiles.
+vi.mock("./CloudBrowserProfileSection", () => ({ CloudBrowserProfileSection: () => null }));
+
 const profile = {
 	id: "11111111-1111-4111-8111-111111111111",
 	name: "Work",

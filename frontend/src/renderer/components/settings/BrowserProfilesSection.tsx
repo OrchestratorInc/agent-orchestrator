@@ -16,6 +16,7 @@ import {
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { BrowserImportDialog } from "./BrowserImportDialog";
+import { CloudBrowserProfileSection } from "./CloudBrowserProfileSection";
 
 type ProfileBridge = AoBridge["browserProfiles"];
 type Profile = Awaited<ReturnType<ProfileBridge["list"]>>["profiles"][number];
@@ -244,6 +245,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 					))
 				)}
 			</SettingsSection>
+			<CloudBrowserProfileSection />
 			<ConfirmDialog
 				open={pendingAction !== null}
 				onOpenChange={(open) => {

@@ -51,6 +51,8 @@ import type {
 	CloudCpOrgMembersResponse,
 	CloudCpBillingLinkResponse,
 	CloudCpBillingSummary,
+	CloudCpBrowserProfileStatus,
+	CloudCpBrowserProfileWiped,
 	CloudCpPutOrgCoderConfigRequest,
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
@@ -361,6 +363,10 @@ export interface CloudCpClient {
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
 	/** The org's plan, its limits, and usage against them. */
 	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** Whether the caller has saved Cloud browser sign-ins in the org (`/me` browserProfiles). */
+	getMyBrowserProfile(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBrowserProfileStatus>;
+	/** Wipes the caller's saved Cloud browser sign-ins in the org: the next session starts signed out. */
+	wipeMyBrowserProfile(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBrowserProfileWiped>;
 	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
 	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
 	/**
@@ -1077,6 +1083,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		getOrgCoderConfig: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
 		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
+		getMyBrowserProfile: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/browser-profile`, { signal: o?.signal }),
+		wipeMyBrowserProfile: (orgId, o) => requestJson("DELETE", `/orgs/${seg(orgId)}/browser-profile`, { signal: o?.signal }),
 		createBillingCheckout: (orgId, plan, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, { body: { plan }, signal: o?.signal }),
 		createBillingPortal: (orgId, flow, o) =>

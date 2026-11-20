@@ -120,6 +120,12 @@ export interface CloudCpMeResponse {
 	 */
 	agentAccounts?: boolean;
 	/**
+	 * True when Cloud sessions' browsers keep the person's sign-ins across
+	 * sessions (getMyBrowserProfile, wipeMyBrowserProfile). Absent on an older
+	 * control plane: every Cloud browser starts signed out.
+	 */
+	browserProfiles?: boolean;
+	/**
 	 * The organization the app works in: the one the sign-in token's WorkOS
 	 * organization maps to, else organizations[0]. Absent on an older control
 	 * plane.
@@ -2238,4 +2244,19 @@ export interface CloudCpCreateShareGrantsRequest {
 	role: CloudCpShareRole;
 	modeCap?: "read-only" | "standard" | "trusted";
 	deniedCommands?: string[];
+}
+
+/** The caller's saved Cloud browser sign-ins in one organization. */
+export interface CloudCpBrowserProfileStatus {
+	saved: boolean;
+	updatedAt?: string;
+	sizeBytes?: number;
+}
+
+/** The answer to wiping the caller's Cloud browser sign-ins. */
+export interface CloudCpBrowserProfileWiped {
+	/** False when there was nothing to wipe. */
+	wiped: boolean;
+	/** Sessions still running with the sign-ins they loaded. */
+	runningSessions: number;
 }
