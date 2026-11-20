@@ -3,6 +3,7 @@ package kilocode
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -10,8 +11,11 @@ import (
 )
 
 func TestKiloCodeNativeImportProbe(t *testing.T) {
-	root := t.TempDir()
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(root, "kilo.db")))
+	root := filepath.Join(t.TempDir(), "team%20archive#data")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "kilo.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

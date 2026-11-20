@@ -154,3 +154,55 @@ func TestKiloExportRemapPreservesArbitraryPayloadIdentities(t *testing.T) {
 		t.Fatal("declared part identity was not rewritten")
 	}
 }
+
+func TestKiloExportRemapsToolAttachmentGraphOnly(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		t.Run(map[bool]string{false: "attachment", true: "foreign ownership"}[foreign], func(t *testing.T) {
+			data, source := kiloSyntheticExport()
+			var value map[string]any
+			if err := json.Unmarshal(data, &value); err != nil {
+				t.Fatal(err)
+			}
+			message := value["messages"].([]any)[0].(map[string]any)
+			info := message["info"].(map[string]any)
+			part := message["parts"].([]any)[0].(map[string]any)
+			attachmentID := "prt_" + strings.Repeat("f", 26)
+			attachment := map[string]any{"id": attachmentID, "sessionID": source, "messageID": info["id"], "type": "file", "mime": "image/png", "url": "data:image/png;base64,c3ludGhldGlj"}
+			if foreign {
+				attachment["sessionID"] = "ses_foreign"
+			}
+			input := map[string]any{"attachments": []any{attachment}, "id": attachmentID}
+			part["type"] = "tool"
+			part["state"] = map[string]any{"status": "completed", "attachments": []any{attachment}, "input": input, "metadata": input, "output": attachmentID}
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gen := kiloImportID{random: bytes.NewReader(make([]byte, 84))}
+			out, nativeID, err := remapKiloExport(data, source, t.TempDir(), gen.next, func(string) (bool, error) { return false, nil })
+			if foreign {
+				if err == nil {
+					t.Fatal("foreign attachment accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatal(err)
+			}
+			message = got["messages"].([]any)[0].(map[string]any)
+			part = message["parts"].([]any)[0].(map[string]any)
+			state := part["state"].(map[string]any)
+			file := state["attachments"].([]any)[0].(map[string]any)
+			if file["id"] == attachmentID || file["sessionID"] != nativeID || file["messageID"] != message["info"].(map[string]any)["id"] {
+				t.Fatalf("attachment graph not remapped: %v", file)
+			}
+			if !reflect.DeepEqual(state["input"], input) || !reflect.DeepEqual(state["metadata"], input) || state["output"] != attachmentID {
+				t.Fatal("opaque tool payload changed")
+			}
+		})
+	}
+}

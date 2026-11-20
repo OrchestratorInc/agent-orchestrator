@@ -49,3 +49,26 @@ func TestKiloImportedRestorePinsStableDatabase(t *testing.T) {
 		t.Fatalf("imported database binding = %v, %v, %v", cmd, ok, err)
 	}
 }
+
+func TestKiloImportedRestoreRejectsEffectiveWorkspaceOverride(t *testing.T) {
+	t.Setenv("KILO_WORKSPACE_ID", "inherited-workspace")
+	t.Setenv("KILO_DB", "")
+	for _, test := range []struct {
+		name   string
+		env    map[string]string
+		refuse bool
+	}{
+		{"inherited workspace", nil, true},
+		{"explicit local", map[string]string{"KILO_WORKSPACE_ID": ""}, false},
+		{"project workspace", map[string]string{"KILO_WORKSPACE_ID": "project-workspace"}, true},
+		{"project database", map[string]string{"KILO_WORKSPACE_ID": "", "KILO_DB": "other.db"}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := &Plugin{resolvedBinary: "kilo"}
+			_, ok, err := p.GetRestoreCommand(t.Context(), ports.RestoreConfig{Env: test.env, Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "ses_imported", ports.MetadataKeyImportConfigDir: "/native/kilo"}}})
+			if (err != nil) != test.refuse || ok == test.refuse {
+				t.Fatalf("restore guard ok=%v err=%v want refusal=%v", ok, err, test.refuse)
+			}
+		})
+	}
+}

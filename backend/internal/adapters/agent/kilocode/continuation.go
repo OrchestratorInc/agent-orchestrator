@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -76,7 +77,8 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 		}
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(2000)")
+	dbURL := url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath)}
+	db, err := sql.Open("sqlite", dbURL.String()+"?mode=ro&_pragma=busy_timeout(2000)")
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}

@@ -137,6 +137,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, nil
 	}
 
+	if err := validateKiloImportedWorkspace(ports.WorkspaceHookConfig{ImportConfigDir: cfg.Session.Metadata[ports.MetadataKeyImportConfigDir], NativeSessionID: agentSessionID, Env: cfg.Env}); err != nil {
+		return nil, false, err
+	}
+
 	binary, err := p.kilocodeBinary(ctx)
 	if err != nil {
 		return nil, false, err

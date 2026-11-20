@@ -83,6 +83,7 @@ func remapKiloExport(data []byte, sourceID, cwd string, next func(string) (strin
 		identities = append(identities, identity{id, prefix})
 		return nil
 	}
+	var attachments []map[string]any
 	for _, value := range messages {
 		message, ok := value.(map[string]any)
 		if !ok {
@@ -106,6 +107,27 @@ func remapKiloExport(data []byte, sourceID, cwd string, next func(string) (strin
 			}
 			if err := add(part["id"], "prt"); err != nil {
 				return nil, "", err
+			}
+			if part["type"] == "tool" {
+				state, _ := part["state"].(map[string]any)
+				if state["status"] == "completed" {
+					if value, present := state["attachments"]; present {
+						files, ok := value.([]any)
+						if !ok {
+							return nil, "", errors.New("invalid kilo tool attachments")
+						}
+						for _, value := range files {
+							file, ok := value.(map[string]any)
+							if !ok || file["type"] != "file" || file["sessionID"] != sourceID || file["messageID"] != messageInfo["id"] {
+								return nil, "", errors.New("kilo attachment belongs to another message")
+							}
+							if err := add(file["id"], "prt"); err != nil {
+								return nil, "", err
+							}
+							attachments = append(attachments, file)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -180,6 +202,11 @@ func remapKiloExport(data []byte, sourceID, cwd string, next func(string) (strin
 					return nil, "", err
 				}
 			}
+		}
+	}
+	for _, file := range attachments {
+		if err := rewriteFields(file, "id", "sessionID", "messageID"); err != nil {
+			return nil, "", err
 		}
 	}
 	info["directory"] = filepath.Clean(cwd)

@@ -3,7 +3,9 @@ package sessionimport
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -16,8 +18,11 @@ func TestKiloCodeAdmissionEnabled(t *testing.T) {
 }
 
 func TestKiloCodeImport(t *testing.T) {
-	root := t.TempDir()
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(root, "kilo.db")))
+	root := filepath.Join(t.TempDir(), "team%20archive#data")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "kilo.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,5 +66,26 @@ func TestKiloCodeRoot(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	if got := kiloCodeRoot("/home/example"); got != filepath.Join("/home/example", ".local", "share", "kilo") {
 		t.Fatal(got)
+	}
+}
+
+func TestKiloOpeningMultipartTextIsBounded(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT,time_created INTEGER,data TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	chunk := strings.Repeat("x", maxVisibleBytes/2)
+	for i := range 3 {
+		if _, err := db.Exec(`INSERT INTO part VALUES (?, 'msg_opening','ses_test',?,json_object('type','text','text',?))`, i, i, chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	texts, shortened, err := kiloCodeMessageText(t.Context(), db, "ses_test")
+	if err != nil || !shortened || len(texts["msg_opening"]) != maxVisibleBytes {
+		t.Fatalf("opening text size=%d shortened=%v err=%v", len(texts["msg_opening"]), shortened, err)
 	}
 }

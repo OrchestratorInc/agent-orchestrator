@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,7 +52,8 @@ func kiloCodeDB(root string) (*sql.DB, error) {
 		return nil, err
 	}
 	// mode=ro never creates or migrates; busy_timeout rides out KiloCode's writes.
-	return sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=busy_timeout(2000)")
+	dbURL := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	return sql.Open("sqlite", dbURL.String()+"?mode=ro&_pragma=busy_timeout(2000)")
 }
 
 // discoverKiloCode lists top-level, non-archived conversations newest first. A
@@ -156,6 +158,17 @@ func kiloCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 			continue
 		}
 		if existing := textByMessage[messageID]; existing != "" {
+			if messageID == order[0] {
+				room := maxVisibleBytes - len(existing) - len("\n\n")
+				if room <= 0 {
+					shortened = true
+					continue
+				}
+				if len(chunk) > room {
+					chunk = chunk[:room]
+					shortened = true
+				}
+			}
 			textByMessage[messageID] = existing + "\n\n" + chunk
 			held += len("\n\n" + chunk)
 		} else {
