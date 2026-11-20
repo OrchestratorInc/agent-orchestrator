@@ -21,6 +21,21 @@ export function atTail({ contentOffset, contentSize, layoutMeasurement }: Scroll
 	return contentSize.height - layoutMeasurement.height + inset - contentOffset.y < slop;
 }
 
+/** Where a person's drag let go, and whether that was at the newest message. */
+export type Release = { offset: number; atEnd: boolean };
+
+/**
+ * Whether a person's scroll that came to rest leaves the list following new
+ * output. Android reports momentum after every touch-up, even a still one, and
+ * ends it a few frames later. Output that arrives in between moves the end, not
+ * the reader, so a list that has not moved since the release keeps the
+ * release's verdict. A list that moved, by a fling or by scroll anchoring for
+ * content above, is measured where it rests.
+ */
+export function followsAfterRest(release: Release | undefined, offset: number, atEndNow: boolean): boolean {
+	return release !== undefined && Math.abs(offset - release.offset) < 1 ? release.atEnd : atEndNow;
+}
+
 /**
  * The row the timeline opens on: the start of the newest `window` rows. The list
  * draws those first and scrolls to them, rather than drawing the oldest rows and
