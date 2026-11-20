@@ -8,23 +8,37 @@ import (
 // MaxOutputLines is the rolling line-buffer cap, matching MAX_OUTPUT_LINES in pty-host.ts.
 const MaxOutputLines = 1000
 
+// MaxOutputBytes caps the bytes a Ring keeps, whatever its line cap.
+const MaxOutputBytes = 1 << 20
+
 // Ring is a bounded rolling buffer of terminal output lines, ANSI codes preserved.
 // It mirrors the appendOutput state machine from pty-host.ts.
 // Concurrent Append and Snapshot/Tail calls are safe.
 type Ring struct {
 	mu          sync.Mutex
 	lines       []string // each entry is "line\n" (or bare text on FlushPartial)
+	size        int
+	maxLines    int
 	partialLine string
 }
 
 // NewRing returns an empty Ring.
 func NewRing() *Ring {
-	return &Ring{}
+	return NewRingOfLines(MaxOutputLines)
+}
+
+// NewRingOfLines returns an empty Ring that keeps up to maxLines lines, or
+// MaxOutputLines when maxLines is not positive.
+func NewRingOfLines(maxLines int) *Ring {
+	if maxLines <= 0 {
+		maxLines = MaxOutputLines
+	}
+	return &Ring{maxLines: maxLines}
 }
 
 // Append mirrors appendOutput from pty-host.ts: prepend the current partialLine,
 // split on newlines, store completed lines with "\n" re-appended, keep the last
-// element as the new partialLine, then trim to MaxOutputLines.
+// element as the new partialLine, then trim to the line cap and MaxOutputBytes.
 func (r *Ring) Append(raw []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -35,11 +49,24 @@ func (r *Ring) Append(raw []byte) {
 	r.partialLine = parts[len(parts)-1]
 	for _, line := range parts[:len(parts)-1] {
 		r.lines = append(r.lines, line+"\n")
+		r.size += len(line) + 1
 	}
-	if len(r.lines) > MaxOutputLines {
+	r.trimLocked()
+}
+
+func (r *Ring) trimLocked() {
+	drop := 0
+	for drop < len(r.lines) && (len(r.lines)-drop > r.maxLines || r.size+len(r.partialLine) > MaxOutputBytes) {
+		r.size -= len(r.lines[drop])
+		drop++
+	}
+	if drop > 0 {
 		// ponytail: slice off the head; ceiling: O(n) copy on every trim cycle.
 		// Upgrade path: circular buffer if trim rate is very high.
-		r.lines = r.lines[len(r.lines)-MaxOutputLines:]
+		r.lines = r.lines[drop:]
+	}
+	if len(r.partialLine) > MaxOutputBytes {
+		r.partialLine = r.partialLine[len(r.partialLine)-MaxOutputBytes:]
 	}
 }
 
@@ -53,7 +80,9 @@ func (r *Ring) FlushPartial() {
 		return
 	}
 	r.lines = append(r.lines, r.partialLine)
+	r.size += len(r.partialLine)
 	r.partialLine = ""
+	r.trimLocked()
 }
 
 // Snapshot returns all stored lines concatenated as raw bytes for scrollback replay.

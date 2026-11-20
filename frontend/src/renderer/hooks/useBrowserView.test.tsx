@@ -152,6 +152,8 @@ function setupBridge() {
 		getRuntimeState: vi.fn(async () => ({ connected: false, connecting: false, rejected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
+		userBrowser: vi.fn(async () => ({ name: "Chrome", chrome: true })),
+		openInUserBrowser: vi.fn(async () => ({ name: "Chrome", chrome: true })),
 		captureScreenshot: vi.fn(async () => undefined),
 		downloads: {
 			list: vi.fn(async () => ({ downloads: [] })),

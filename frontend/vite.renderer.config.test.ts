@@ -36,7 +36,7 @@ describe("packaged renderer CSP", () => {
 			.split("; ")
 			.filter((directive) => directive.startsWith("frame-src"));
 		expect(frameSrc).toEqual([
-			"frame-src 'self' http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev",
+			"frame-src 'self' http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev https://*.orchestratorusercontent-staging.com https://*.orchestratorusercontent.com",
 		]);
 	});
 

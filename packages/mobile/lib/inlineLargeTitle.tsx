@@ -50,13 +50,14 @@ export function inlineTitleCollapsed(offsetY: number, restY: number): boolean {
  * scroll view (on iOS it is the title row), and the scroll view takes
  * `onScroll`, which calls the one passed in too.
  */
-export function useInlineLargeTitle(title: string, { action, onScroll }: { action?: ReactNode; onScroll?: ScrollHandler } = {}): {
+export function useInlineLargeTitle(title: string, { action, onScroll, accessory }: { action?: ReactNode; onScroll?: ScrollHandler; accessory?: ReactNode } = {}): {
 	header: ReactElement | null;
 	edge: ReactElement | null;
 	onScroll: ScrollHandler | undefined;
 	topInset: number;
+	accessory: ReactNode;
 } {
-	const largeTitle = useLargeTitle(title, onScroll);
+	const largeTitle = useLargeTitle(title, onScroll, { accessory });
 	const ios = Platform.OS === "ios";
 	const navigation = useNavigation();
 	const headerHeight = useHeaderHeight();
@@ -83,7 +84,7 @@ export function useInlineLargeTitle(title: string, { action, onScroll }: { actio
 	}, [collapsed, onScroll, restY]);
 	const header = useMemo(() => <TitleRow title={title} action={action} />, [action, title]);
 	if (!ios) return largeTitle;
-	return { header, edge: null, onScroll: handle, topInset: 0 };
+	return { header, edge: null, onScroll: handle, topInset: 0, accessory: accessory ?? null };
 }
 
 /** The page's large title and its action, on one line at the top of the list. */

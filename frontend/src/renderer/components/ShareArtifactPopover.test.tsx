@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudShareFile, CloudShareGrant, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import type { CloudShareFile, CloudShareGrant, CloudShareGrants, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, resetShareCachesForTests, useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
@@ -14,6 +15,19 @@ const mocks = vi.hoisted(() => ({
 	userId: "u-1",
 	baseUrl: "https://cp.test",
 	openSettings: vi.fn(),
+	capture: vi.fn(async () => true),
+	noteSignIn: vi.fn(),
+	clearSignIn: vi.fn(),
+}));
+
+vi.mock("../lib/telemetry", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/telemetry")>(),
+	captureRendererEvent: mocks.capture,
+}));
+vi.mock("../lib/cloud-telemetry", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/cloud-telemetry")>(),
+	noteSignInSource: mocks.noteSignIn,
+	clearSignInSource: mocks.clearSignIn,
 }));
 
 vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: mocks.baseUrl } }) }));
@@ -44,7 +58,7 @@ function stub(inspect: CloudShareInspection, list: CloudShareLinks, publish?: Cl
 	const inspectSpy = vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue(inspect);
 	const listSpy = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue(list);
 	const publishSpy = vi.spyOn(aoBridge.cloudShare, "publish").mockResolvedValue(publish ?? { status: "cancelled" });
-	const grantsSpy = vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue([]);
+	const grantsSpy = vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue({ people: [], teams: [], workspaces: [] });
 	return { inspectSpy, listSpy, publishSpy, grantsSpy };
 }
 
@@ -76,6 +90,9 @@ beforeEach(() => {
 	mocks.userId = "u-1";
 	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
+	mocks.capture.mockClear();
+	mocks.noteSignIn.mockReset();
+	mocks.clearSignIn.mockReset();
 	vi.restoreAllMocks();
 	resetShareCachesForTests();
 });
@@ -108,6 +125,28 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
 	});
 
+	it("says what a published page left out of the files it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 3, videos: 1, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("3 files this page uses weren't included, so the shared page won't show them. Videos can't be shared with a page yet.");
+	});
+
+	it("says a page's images were not included when Orchestrator Cloud cannot share them yet", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 0, skipped: 0, videos: 0, unsupported: true } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("This page's images weren't included: Orchestrator Cloud can't share them with a page yet.");
+	});
+
+	it("says nothing more when a page included every file it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 0, videos: 0, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).not.toContain("weren't included");
+		expect(popover.textContent).not.toContain("wasn't included");
+	});
+
 	it("names the file without its extension", async () => {
 		stub(inspection, links, { status: "published", replaced: false, share });
 		const popover = await openPopover(cloudFile);
@@ -134,13 +173,14 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("invites people on the live link at once, and removes them", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya]);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [maya], teams: [], workspaces: [] });
 		const remove = vi.spyOn(aoBridge.cloudShare, "removeGrant").mockResolvedValue();
 		await openPopover(cloudFile, "report.html", "Published");
-		const field = await screen.findByRole("textbox", { name: "Add people by email" });
-		await userEvent.type(field, "Maya@acme.co,");
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
-		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, ["Maya@acme.co"]);
+		const field = await screen.findByRole("combobox", { name: "Add people by email" });
+		// Enter shares at once: there is no Add button.
+		await userEvent.type(field, "Maya@acme.co{Enter}");
+		expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { emails: ["maya@acme.co"] });
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(screen.getByText("Can view")).toBeTruthy();
 		// With someone invited, Only you reads Only people invited.
@@ -151,22 +191,18 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByText("Only you")).toBeTruthy();
 	});
 
-	it("keeps Add disabled while a chip is not an email address, and says which", async () => {
+	it("shares nothing while what is typed is not an email address", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([]);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [], teams: [], workspaces: [] });
 		await openPopover(cloudFile, "report.html", "Published");
-		const field = await screen.findByRole("textbox", { name: "Add people by email" });
-		await userEvent.type(field, "maya@acme.co ravi@acme ");
-		expect(screen.getByRole("alert").textContent).toBe("“ravi@acme” isn't an email address.");
-		expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
-		await userEvent.click(screen.getByRole("button", { name: "Remove ravi@acme" }));
-		expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
+		const field = await screen.findByRole("combobox", { name: "Add people by email" });
+		await userEvent.type(field, "ravi@acme{Enter}");
 		expect(invite).not.toHaveBeenCalled();
 	});
 
 	it("lists who the link is shared with when it opens", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 1 }] });
-		grantsSpy.mockResolvedValue([maya]);
+		grantsSpy.mockResolvedValue({ people: [maya], teams: [], workspaces: [] });
 		await openPopover(cloudFile, "report.html", "Published");
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(grantsSpy).toHaveBeenCalledWith("https://cp.test", SHARE_ID);
@@ -190,7 +226,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("unpublishes after an inline confirmation naming who it was shared with, then offers to publish again", async () => {
 		const { inspectSpy, listSpy, publishSpy, grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 2 }] });
-		grantsSpy.mockResolvedValue([maya, { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" }]);
+		grantsSpy.mockResolvedValue({ people: [maya, { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" }], teams: [], workspaces: [] });
 		let finish: () => void = () => undefined;
 		const unpublish = vi.spyOn(aoBridge.cloudShare, "unpublish").mockImplementation(() => new Promise((resolve) => {
 			finish = () => {
@@ -354,15 +390,16 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID });
 	});
 
-	it("says who can view it under the email field, without promising anyone is told", async () => {
+	it("offers the session share field, with no line under it about who can view", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
-		expect(await within(popover).findByText("People signed in with these emails can view it.")).toBeTruthy();
+		expect(await within(popover).findByRole("combobox", { name: "Add people by email" })).toBeTruthy();
+		expect(within(popover).queryByText("People signed in with these emails can view it.")).toBeNull();
 	});
 
 	it("says when who it is shared with can't be read, and reads it again on Try again", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 1 }] });
-		grantsSpy.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([maya]);
+		grantsSpy.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ people: [maya], teams: [], workspaces: [] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
 		expect(await within(popover).findByText("Couldn't load who this link is shared with.")).toBeTruthy();
 		await userEvent.click(within(popover).getByRole("button", { name: "Try again" }));
@@ -372,16 +409,15 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("never lets an older list of who it is shared with replace an invite's answer", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		let answerRead: (grants: CloudShareGrant[]) => void = () => undefined;
+		let answerRead: (grants: CloudShareGrants) => void = () => undefined;
 		grantsSpy.mockImplementation(() => new Promise((resolve) => { answerRead = resolve; }));
 		const dev = { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" };
-		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya, dev]);
+		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [maya, dev], teams: [], workspaces: [] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
-		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
+		await userEvent.type(await within(popover).findByRole("combobox", { name: "Add people by email" }), "dev@acme.co{Enter}");
 		expect(await within(popover).findByText("dev@acme.co")).toBeTruthy();
 		// The read started on opening lands last, without dev.
-		act(() => answerRead([maya]));
+		act(() => answerRead({ people: [maya], teams: [], workspaces: [] }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(within(popover).getByText("dev@acme.co")).toBeTruthy();
 	});
@@ -400,9 +436,8 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		await openPopover(localFile);
 		expect(await screen.findByText("2 of 3 free links left")).toBeTruthy();
 		expect(publishSpy).not.toHaveBeenCalled();
-		// The button beside the field says Add; people added get access when it is published.
-		await userEvent.type(screen.getByRole("textbox", { name: "Add people by email" }), "dev@acme.co");
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
+		// Enter adds them; people added get access when it is published.
+		await userEvent.type(screen.getByRole("combobox", { name: "Add people by email" }), "dev@acme.co{Enter}");
 		expect(await screen.findByText("dev@acme.co")).toBeTruthy();
 		expect(screen.getByText("Gets access when you publish")).toBeTruthy();
 		expect(screen.getByText("Only people invited")).toBeTruthy();
@@ -510,15 +545,15 @@ describe("ShareArtifactButton on a file on this computer", () => {
 	it("refuses more people than one publish can share it with, before uploading", async () => {
 		const { publishSpy } = stub(inspection, links);
 		const popover = await openPopover(localFile);
-		const field = await within(popover).findByRole("textbox", { name: "Add people by email" });
-		const emails = Array.from({ length: 50 }, (_, index) => `p${index}@acme.co`).join(", ");
-		await userEvent.click(field);
-		await userEvent.paste(emails);
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
+		const field = await within(popover).findByRole("combobox", { name: "Add people by email" });
+		for (let index = 0; index < 50; index += 1) await userEvent.type(field, `p${index}@acme.co{Enter}`);
+		expect(await within(popover).findByText("p49@acme.co")).toBeTruthy();
 		await userEvent.type(field, "one-more@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("Add up to 50 people before publishing. You can add more once it's published.")).toBeTruthy();
-		expect(within(popover).queryByText("one-more@acme.co")).toBeTruthy();
+		// Refused, it stays in the field for another try, and is not added.
+		const held = within(popover).getAllByText("one-more@acme.co");
+		expect(held).toHaveLength(1);
+		expect(held[0].closest("[data-artifact-recipient-field]")).not.toBeNull();
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
@@ -624,7 +659,7 @@ describe("ShareArtifactButton where links are public only", () => {
 		expect(await within(screen.getByRole("dialog")).findByText("Published")).toBeTruthy();
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1" });
 		expect(screen.getByText("Anyone with the link")).toBeTruthy();
-		expect(screen.queryByRole("textbox", { name: "Add people by email" })).toBeNull();
+		expect(screen.queryByRole("combobox", { name: "Add people by email" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Anyone with the link" })).toBeNull();
 	});
 
@@ -810,6 +845,42 @@ describe("useArtifactShareFile", () => {
 		const untracked = renderHook(() => useArtifactShareFile({ sessionId: "sess-1", path: "notes.md", projectId: "proj-1" }), { wrapper });
 		expect(untracked.result.current).not.toHaveProperty("artifactId");
 	});
+
+	it("names a remote host's file by its host, so it is downloaded from there", () => {
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useArtifactShareFile({ id: "art-1", hostId: "https://h-vm.useao.dev", sessionId: "sess-1", path: "deck.html", projectId: "proj-1" }), { wrapper });
+		expect(result.current).toEqual({ source: "host", hostId: "https://h-vm.useao.dev", sessionId: "sess-1", path: "deck.html", projectId: "proj-1", artifactId: "art-1" });
+	});
+});
+
+describe("ShareArtifactButton on a kept artifact", () => {
+	it("reads the kept list again on publish, so a mounted page shows the link", async () => {
+		const { inspectSpy, listSpy, publishSpy } = stub(inspection, links);
+		let keptShareUrl = "";
+		publishSpy.mockImplementation(async () => {
+			inspectSpy.mockResolvedValue({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" });
+			listSpy.mockResolvedValue({ ...links, used: 2, shares: [share] });
+			keptShareUrl = share.viewerUrl ?? "";
+			return { status: "published", replaced: false, share };
+		});
+		// Stands in for the Artifacts page's kept rows, which take shareUrl from this list.
+		function KeptShareUrl() {
+			const { data } = useQuery({ queryKey: keptArtifactsQueryKey, queryFn: async () => keptShareUrl });
+			return <output aria-label="kept link">{data || "none"}</output>;
+		}
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<KeptShareUrl />
+				<ShareArtifactButton file={localFile} name="report.html" />
+			</TooltipProvider></QueryClientProvider>,
+		);
+		expect(await screen.findByText("none")).toBeTruthy();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish: report.html" }));
+		const popover = await screen.findByRole("dialog");
+		const publish = within(popover).queryByRole("button", { name: "Publish" });
+		if (publish) await userEvent.click(publish);
+		await waitFor(() => expect(screen.getByLabelText("kept link").textContent).toBe(share.viewerUrl ?? ""));
+	});
 });
 
 describe("useReconciledShareLinks", () => {
@@ -827,6 +898,8 @@ describe("useReconciledShareLinks", () => {
 		const list = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
 		const invalidate = renderReconcile();
 		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeyForHost() }));
+		// Kept artifacts' links come from their own list.
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: keptArtifactsQueryKey });
 		expect(list).toHaveBeenCalledExactlyOnceWith("https://reconcile.test");
 	});
 
@@ -856,7 +929,9 @@ describe("useReconciledShareLinks", () => {
 		await waitFor(() => expect(first.result.current.size).toBe(1));
 		expect(second.result.current.get("https://viewer.test/artifact/abc")).toBe("restricted");
 		expect(list).toHaveBeenCalledTimes(1);
-		expect(invalidate).toHaveBeenCalledTimes(1);
+		// Once each for the artifact lists, kept artifacts, and the links of remote hosts' files.
+		expect(invalidate).toHaveBeenCalledTimes(3);
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["host-share-links"] });
 	});
 
 	it("asks for nothing while signed out", async () => {
@@ -869,5 +944,82 @@ describe("useReconciledShareLinks", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(list).not.toHaveBeenCalled();
 		expect(invalidate).not.toHaveBeenCalled();
+	});
+});
+
+describe("publish telemetry", () => {
+	/** Every capture of event, by its properties. */
+	const sent = (event: string) => mocks.capture.mock.calls.filter((call) => (call as unknown[])[0] === event).map((call) => (call as unknown[])[1]);
+
+	it("counts the Publish click once and the link it made, then a copy, with no file details", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share });
+		vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue();
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
+		await screen.findByRole("button", { name: "Copied" });
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([{ already_published: false, signed_in: true }]);
+		expect(sent("ao.artifacts.published")).toEqual([{ is_republish: false }]);
+		expect(sent("ao.artifacts.link_copied")).toEqual([{ surface: "panel" }]);
+		expect(JSON.stringify(mocks.capture.mock.calls)).not.toMatch(/report|abc|viewer\.test|sess-|cloud-1/);
+	});
+
+	it("counts the sign-in prompt and the Sign in click, and forgets Publish's sign-in when the popover closes", async () => {
+		mocks.status = "unauthenticated";
+		vi.spyOn(aoBridge.cloud, "signIn").mockResolvedValue();
+		const user = userEvent.setup();
+		renderButton(cloudFile);
+		const trigger = await screen.findByRole("button", { name: "Publish: report.html" });
+		await user.click(trigger);
+		await user.click(await screen.findByRole("button", { name: "Sign in" }));
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([{ already_published: false, signed_in: false }]);
+		expect(sent("ao.artifacts.sign_in_prompt_shown")).toEqual([{ reason: "signed_out" }]);
+		expect(sent("ao.artifacts.sign_in_clicked")).toHaveLength(1);
+		expect(mocks.noteSignIn).toHaveBeenCalledExactlyOnceWith("artifact_publish");
+		expect(mocks.clearSignIn).not.toHaveBeenCalled();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(mocks.clearSignIn).toHaveBeenCalledWith("artifact_publish");
+	});
+
+	it("counts a publish that came back signed out as a failure and an expired session", async () => {
+		stub(inspection, links, { status: "signed_out" });
+		await openPopover(cloudFile);
+		await screen.findByRole("button", { name: "Sign in" });
+		expect(sent("ao.artifacts.publish_failed")).toEqual([{ is_republish: false, reason: "signed_out" }]);
+		expect(sent("ao.artifacts.sign_in_prompt_shown")).toEqual([{ reason: "session_expired" }]);
+	});
+
+	it("counts a refusal the panel opens on once, as blocked rather than failed", async () => {
+		const { publishSpy } = stub(inspection, { ...links, used: 3 });
+		await openPopover(cloudFile);
+		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "limit", is_republish: false }]));
+		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("counts an unsupported file that already has a live link as a blocked republish", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, unsupported: true }, { ...links, shares: [share] });
+		await openPopover(cloudFile, "report.html", "Published");
+		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "unsupported", is_republish: true }]));
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("counts a cancelled upload as cancelled, not failed", async () => {
+		stub(inspection, links, { status: "cancelled" });
+		await openPopover(cloudFile);
+		await waitFor(() => expect(sent("ao.artifacts.publish_cancelled")).toEqual([{ is_republish: false }]));
+		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
+	});
+
+	it("counts an unpublish, and does not count its confirmation as a Publish click", async () => {
+		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "unpublish").mockResolvedValue();
+		const onOpenChange = vi.fn();
+		await openMenuPanel(cloudFile, "unpublish", onOpenChange);
+		await userEvent.click(await screen.findByRole("button", { name: "Unpublish" }));
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sent("ao.artifacts.unpublished")).toEqual([undefined]);
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([]);
 	});
 });

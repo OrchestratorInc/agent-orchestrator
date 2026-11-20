@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -239,7 +240,7 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 	if len(plan.logoutCommand) == 0 {
 		return StartResult{}, apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "This harness does not have a supported native logout command.", nil)
 	}
-	plan.command = plan.logoutCommand
+	plan.command = nativeLogoutCommand(agentID, plan.logoutCommand)
 	plan.Action = ActionLogout
 	plan.title = strings.Replace(plan.title, "Log in to", "Log out of", 1)
 	plan.Guidance = "Complete the harness's native logout flow, then close the terminal to check authentication again."
@@ -358,6 +359,16 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 		// The launcher runs in a private auth workspace. Preserve the daemon's
 		// resolved data root instead of re-resolving a relative inherited value.
 		env["AO_DATA_DIR"] = s.dataDir
+	}
+	if plan.AgentID == "mastra-code" {
+		profile := mastracode.ProfileDir(s.dataDir)
+		if !filepath.IsAbs(profile) {
+			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", "Mastra requires an absolute native profile.")
+		}
+		env["MASTRA_APP_DATA_DIR"] = profile
+		if env["MASTRA_TELEMETRY_DISABLED"] == "" {
+			env["MASTRA_TELEMETRY_DISABLED"] = "1"
+		}
 	}
 	if plan.AgentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)

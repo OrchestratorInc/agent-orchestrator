@@ -31,6 +31,7 @@ import {
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
+import { sessionReadKey, useSessionReadStore } from "../stores/session-read-store";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
@@ -541,6 +542,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
+	useSessionReadStore.setState({ baseline: Date.now(), readAt: {} });
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
 	useSessionImportStore.setState({ importedCounts: {} });
 	dragEnds.clear();
@@ -775,7 +777,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Sign in")).toHaveLength(2);
 	});
 
-	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
+	it("shows the Artifacts row under Automations with a count of every listed artifact, archived sessions' included", async () => {
 		const user = userEvent.setup();
 		const withArtifacts: WorkspaceSummary = {
 			...workspace,
@@ -802,7 +804,7 @@ describe("Sidebar", () => {
 		const automations = screen.getByRole("button", { name: "Automations" });
 		const artifacts = screen.getByRole("button", { name: "Artifacts" });
 		expect(automations.compareDocumentPosition(artifacts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(artifacts).toHaveTextContent("2");
+		expect(artifacts).toHaveTextContent("3");
 		expect(artifacts).not.toHaveAttribute("aria-current");
 
 		await user.click(artifacts);
@@ -1223,12 +1225,14 @@ describe("Sidebar", () => {
 		expect(section).toContainElement(screen.getByText("baby"));
 		const agentRow = screen.getByText("Fix the flake").closest("[data-session-row]")!;
 		expect(section).toContainElement(agentRow as HTMLElement);
-		// Only the Cloud agent carries the badge that tells it from a local one.
-		expect(within(agentRow as HTMLElement).getByText("Cloud")).toBeInTheDocument();
-		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByText("Cloud")).toBeNull();
+		// Only the Cloud agent carries the cloud mark that tells it from a local one.
+		expect(within(agentRow as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
+		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByRole("img", { name: "Cloud" })).toBeNull();
 		// It is no project of its own; a standalone agent shared with the person stays with the shared projects.
 		expect(document.querySelector('li[data-project-id="agent-1"]')).toBeNull();
 		expect(document.querySelector('li[data-project-id="agent-shared"]')).not.toBeNull();
+		// A Cloud project row carries the same cloud mark, not a text pill.
+		expect(within(document.querySelector('li[data-project-id="agent-shared"]') as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
 		expect(section).not.toContainElement(screen.queryByText("Their work"));
 
 		await user.click(screen.getByText("Fix the flake"));
@@ -1575,7 +1579,7 @@ describe("Sidebar", () => {
 		expect(openSession).toHaveClass("pr-[36px]");
 		expect(openSession).toHaveClass(
 			"group-hover/session-row:pr-sidebar-project-actions",
-			"group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
+			"focus-visible-in-session-row:pr-sidebar-project-actions",
 		);
 		expect(label).toHaveClass("min-w-0", "flex-1", "truncate");
 		expect(actions).toHaveAttribute("data-session-actions");
@@ -1585,18 +1589,19 @@ describe("Sidebar", () => {
 			"gap-0.5",
 			"opacity-0",
 			"scale-[0.8]",
-			"duration-normal",
-			"group-has-[:focus-visible]/session-row:pointer-events-auto",
-			"group-has-[:focus-visible]/session-row:scale-100",
-			"group-has-[:focus-visible]/session-row:opacity-100",
+			"focus-visible-in-session-row:pointer-events-auto",
+			"focus-visible-in-session-row:scale-100",
+			"focus-visible-in-session-row:opacity-100",
 		);
+		// Hover shows them at once, with no transition.
+		expect(actionButtons?.className).not.toMatch(/\btransition/);
 		expect(actionButtons).toHaveAttribute("data-session-action-buttons", "");
 		expect(time).toHaveAttribute("datetime", lastUserMessageAt);
 		expect(time).toHaveClass(
 			"absolute",
 			"right-2",
 			"opacity-100",
-			"group-has-[:focus-visible]/session-row:opacity-0",
+			"focus-visible-in-session-row:opacity-0",
 		);
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
@@ -3334,7 +3339,7 @@ describe("Sidebar", () => {
 
 		const workingDot = sessionDot("working task");
 		expect(workingDot).toHaveAttribute("data-session-spinner");
-		expect(workingDot).toHaveClass("animate-spin");
+		expect(workingDot).toHaveClass("animate-spin", "text-status-working");
 
 		// A working agent spins even when its PR has a state to flag.
 		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
@@ -3433,6 +3438,81 @@ describe("Sidebar", () => {
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
+	it("fills the dot for a session the user has not opened since it changed, and leaves a hollow ring once read", () => {
+		useSessionReadStore.setState({ baseline: 0, readAt: { [sessionReadKey({ id: "proj-1-read" })]: Date.parse("2026-07-01T00:00:00Z") } });
+		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
+		renderSidebar({
+			workspaces: [{
+				...workspace,
+				sessions: [
+					{ ...session, id: "proj-1-unread", title: "unread task", status: "idle", activity: idle },
+					{ ...session, id: "proj-1-read", title: "read task", status: "idle", activity: idle },
+				],
+			}],
+		});
+		const dot = (title: string) => screen.getByLabelText(`Open ${title}`).querySelector("[data-session-idle] > span");
+
+		expect(dot("unread task")).toHaveAttribute("data-session-unread");
+		expect(dot("unread task")).toHaveClass("bg-muted-foreground/60");
+		expect(dot("read task")).not.toHaveAttribute("data-session-unread");
+		expect(dot("read task")).toHaveClass("border");
+		expect(dot("read task")).not.toHaveClass("bg-muted-foreground/60");
+	});
+
+	it("badges a collapsed project's icon like the orchestrator button: attention, then working, then an unread finished turn", () => {
+		useUiStore.setState({ projectAvatars: false });
+		useSessionReadStore.setState({ baseline: 0, readAt: {} });
+		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
+		const unread = { ...session, id: "proj-1-unread", status: "idle", activity: idle } as const;
+		const working = { ...session, id: "proj-1-working", activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" } } as const;
+		const input = { ...session, id: "proj-1-input", status: "needs_input" } as const;
+		const projectMarker = () => document.querySelector<HTMLElement>("[data-project-folder-icon] [data-project-marker]");
+
+		// The folder stays; the state is a corner dot on it.
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread] }] });
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "unread");
+		expect(projectMarker()).toHaveClass("bg-primary", "ring-sidebar");
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
+
+		cleanup();
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working] }] });
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "working");
+		expect(projectMarker()).toHaveClass("bg-muted-foreground", "animate-status-pulse");
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
+
+		cleanup();
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working, input] }] });
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "attention");
+		expect(projectMarker()).toHaveClass("icon-circle-alert", "text-destructive");
+	});
+
+	it("keeps the open session read while its project is collapsed", () => {
+		useUiStore.setState({ projectAvatars: false });
+		useSessionReadStore.setState({ baseline: 0, readAt: {} });
+		window.localStorage.setItem("ao.sidebar.expanded-projects", "[]");
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-open";
+		const open = { ...session, id: "proj-1-open", title: "open task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } } as const;
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const noop = vi.fn().mockResolvedValue(undefined);
+		const tree = (sessions: WorkspaceSession[]) => (
+			<QueryClientProvider client={client}><TooltipProvider><SidebarProvider>
+				<Sidebar workspaces={[{ ...workspace, sessions }]} onCloneProject={noop} onCreateProject={noop} onInitializeProject={noop} onRemoveProject={noop} onCreateRemoteProject={noop} onInitializeRemoteProject={noop} />
+			</SidebarProvider></TooltipProvider></QueryClientProvider>
+		);
+		// The open session's project starts expanded; the user collapses it.
+		const view = render(tree([open]));
+		fireEvent.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Open open task")).not.toBeInTheDocument();
+
+		// It updates while collapsed: still read, so no corner dot.
+		const updated = { ...open, updatedAt: "2026-07-02T00:00:00Z" };
+		view.rerender(tree([updated]));
+		expect(useSessionReadStore.getState().readAt[sessionReadKey(updated)]).toBe(Date.parse(updated.updatedAt));
+		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
+	});
+
 	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
 		useUiStore.setState({ projectAvatars: false });
 		renderSidebar({
@@ -3475,10 +3555,8 @@ describe("Sidebar", () => {
 		resetSessionPreviewWarmth();
 		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
 		await user.hover(screen.getByLabelText("Open preview task"));
-		// The first preview waits out a short hover before it opens.
-		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
-
-		const card = await screen.findByTestId("board-session-card");
+		// The preview opens on hover, with no wait.
+		const card = screen.getByTestId("board-session-card");
 		expect(card).toHaveTextContent("preview task");
 		expect(within(card).getByTestId("session-status")).toHaveTextContent("Blocked");
 		// Static: attention styling without the pulse, and no card-level click target.
@@ -3515,7 +3593,6 @@ describe("Sidebar", () => {
 		await user.hover(screen.getByLabelText("Open first task"));
 		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("first task");
 
-		// Well inside the first-open delay: only a warm preview can appear this fast.
 		await user.hover(screen.getByLabelText("Open second task"));
 		await waitFor(
 			() => {
@@ -3569,21 +3646,21 @@ describe("Sidebar", () => {
 		});
 
 		resetSessionPreviewWarmth();
-		// All three hovers land inside the first-open delay, so none has opened yet.
+		// Each hover replaces the previous row's preview.
 		await user.hover(screen.getByLabelText("Open sweep a"));
 		await user.hover(screen.getByLabelText("Open sweep b"));
 		await user.hover(screen.getByLabelText("Open sweep c"));
 
 		const card = await screen.findByTestId("board-session-card");
 		expect(card).toHaveTextContent("sweep c");
-		// Past every row's delay: nothing from the rows swept over may open late.
+		// Nothing from the rows swept over may open late.
 		await new Promise((resolve) => setTimeout(resolve, 600));
 		const cards = screen.getAllByTestId("board-session-card");
 		expect(cards).toHaveLength(1);
 		expect(cards[0]).toHaveTextContent("sweep c");
 	});
 
-	it("goes back to a delayed first preview after the pointer has left every row", async () => {
+	it("opens the preview instantly again after the pointer has left every row", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [
@@ -3600,8 +3677,7 @@ describe("Sidebar", () => {
 
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		await user.hover(row);
-		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
-		const card = await screen.findByTestId("board-session-card");
+		const card = screen.getByTestId("board-session-card");
 		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/animate-in/);
 	});
 

@@ -28,6 +28,9 @@ type Plugin struct {
 // New returns a Gemini CLI adapter.
 func New() *Plugin { return &Plugin{} }
 
+// InterruptKey uses Ctrl+C to cancel work without closing Gemini.
+func (*Plugin) InterruptKey() string { return "\x03" }
+
 var _ ports.Agent = (*Plugin)(nil)
 var _ adapters.Adapter = (*Plugin)(nil)
 

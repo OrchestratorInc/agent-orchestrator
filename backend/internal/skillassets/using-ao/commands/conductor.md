@@ -42,7 +42,8 @@ In `<root>`, write each `'` as `''`. The useful columns are `setup_script`, `arc
 | `[scripts.run.<name>]` actions | a command Cue named `<name>` for each action; see below |
 | `environment_variables.<KEY>` and `environment_variables.local.<KEY>` | project environment: `--env KEY=VALUE` |
 | `prompts.general`, `custom_prompt_general` | agent rules: `--agent-rules` |
-| `.worktreeinclude`, else `file_include_globs`, else `.env*` | a Setup step that copies those ignored files; see below |
+| `.worktreeinclude` | nothing; Orchestrator copies the files it names into each new worktree itself |
+| `file_include_globs`, else `.env*`, when the repository has no `.worktreeinclude` | a Setup step that copies those ignored files; see below |
 | `environment_variables.cloud`, `git.*`, `run_mode`, `run_script_mode`, other `prompts.*` and `custom_prompt_*` | nothing; list them as skipped |
 
 A run action is a table with `command`, optional `args`, `options.cwd`, `hide`, and `available_in`. Append each of `args` to the command, shell-quoted. When `options.cwd` is set and is not `.`, put `cd -- <cwd> &&` before the command, with `<cwd>` shell-quoted. Skip an action with `hide = true`, and one whose `available_in` does not include `"local"`.

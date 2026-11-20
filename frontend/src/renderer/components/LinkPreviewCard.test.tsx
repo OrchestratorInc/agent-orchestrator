@@ -35,11 +35,15 @@ describe("AppLink link preview", () => {
 		const open = vi.fn();
 		getMock.mockResolvedValue({ data: { url: "https://redirect.example.com/", title: "Clickable title" } });
 		render(<AppBrowserLinkContext.Provider value={open}><AppLink href={originalUrl}>docs</AppLink></AppBrowserLinkContext.Provider>);
-		fireEvent.pointerOver(screen.getByRole("link", { name: "docs" }), { pointerType: "mouse" });
+		const link = screen.getByRole("link", { name: "docs" });
+		fireEvent.pointerOver(link, { pointerType: "mouse" });
 		const title = await screen.findByRole("link", { name: "Clickable title" });
 		expect(title).toHaveAttribute("href", originalUrl);
 		fireEvent.click(title);
-		fireEvent.click(screen.getByRole("link", { name: "redirect.example.com" }));
+		// Following a link on the card closes it; hovering the link again brings it back.
+		await waitFor(() => expect(screen.queryByRole("link", { name: "Clickable title" })).not.toBeInTheDocument());
+		fireEvent.pointerOver(link, { pointerType: "mouse" });
+		fireEvent.click(await screen.findByRole("link", { name: "redirect.example.com" }));
 		expect(open.mock.calls).toEqual([[originalUrl], [originalUrl]]);
 	});
 

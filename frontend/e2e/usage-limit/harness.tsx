@@ -39,13 +39,18 @@ if (params.has("paginated")) {
 
 function RecoveryFixture() {
 	const [snapshot, setSnapshot] = useState(initial);
+	// A paginated chat too short to scroll asks for its older page on its own;
+	// `olderPending` keeps that page loading, as on a slow connection.
+	const [loadingOlder, setLoadingOlder] = useState(false);
 	return <div className="flex h-full flex-col">
 		<p role="note" className="border-b border-border bg-sidebar px-3 py-2 text-xs text-muted-foreground">
 			UI-only simulation. No daemon runs here; auto-resume does not execute.
 		</p>
 		<div className="min-h-0 flex-1">
-			<ChatWorkspace snapshot={snapshot} sessionTitle="Usage-limit recovery" hasOlder={snapshot.hasMoreBefore}
-				onLoadOlder={() => setSnapshot((current) => ({ ...current, items: [prompt, ...current.items], oldestSequence: 1, hasMoreBefore: false }))}
+			<ChatWorkspace snapshot={snapshot} sessionTitle="Usage-limit recovery" hasOlder={snapshot.hasMoreBefore} loadingOlder={loadingOlder}
+				onLoadOlder={() => params.has("olderPending")
+					? setLoadingOlder(true)
+					: setSnapshot((current) => ({ ...current, items: [prompt, ...current.items], oldestSequence: 1, hasMoreBefore: false }))}
 				retryControl={{
 				retry: (turnId) => setSnapshot((current) => ({
 					...current, controller: { state: "busy" },

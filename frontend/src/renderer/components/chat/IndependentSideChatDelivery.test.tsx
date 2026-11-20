@@ -5,6 +5,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
+import { aoBridge } from "../../lib/bridge";
 import type { SideCloseRequest } from "../../../shared/side-close";
 
 const { get, post, put, remove, patch, closeProtocol } = vi.hoisted(() => ({
@@ -312,6 +313,61 @@ describe("side delivery draft ownership", () => {
 		expect(hook.result.current.sides).toEqual([]);
 		expect(put.mock.calls.length).toBe(savedCount);
 	});
+
+	/** Holds each side list GET until the test answers it; refresh() starts another one the way a close-state change does. */
+	function holdSideLists() {
+		let notifyCloseState!: Parameters<typeof aoBridge.sideChats.onCloseStateChanged>[0];
+		const listen = vi.spyOn(aoBridge.sideChats, "onCloseStateChanged").mockImplementation((listener) => {
+			notifyCloseState = listener;
+			return () => {};
+		});
+		onTestFinished(() => listen.mockRestore());
+		const lists: ((sides: object[]) => void)[] = [];
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation((path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return new Promise((resolve) => lists.push((sides) => resolve({ data: { sides } })));
+			return originalGet(path, ...args);
+		});
+		const refresh = () => notifyCloseState({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId: "session", sides: [] });
+		return { lists, refresh };
+	}
+
+	it("ignores an older empty side list that lands after a newer one", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[1]([{ id: "side", sessionId: "session", state: "ready" }]));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await act(async () => lists[0]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+		expect(hook.result.current.activeId).toBe("side");
+	});
+
+	it("applies a slow side list even after the next poll has started", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[0]([{ id: "side", sessionId: "session", state: "ready" }]));
+		expect(hook.result.current.loaded).toBe(true);
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+	});
+
+	it("keeps a side created while an empty list from before it is in flight", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		await act(async () => lists[0]([]));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		post.mockResolvedValue({ data: { side: { id: "new-side", sessionId: "session", state: "ready" } } });
+		await act(async () => { await hook.result.current.create(undefined, true); });
+		await act(async () => lists[1]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["new-side"]);
+	});
 });
 
 const panelSides = ["side", "other"].map((id, index) => ({
@@ -435,13 +491,19 @@ describe("side panel navigation and recovery", () => {
 	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
 		// The side transcript renders through the main chat's virtualized Timeline.
 		// A viewport taller than every row keeps the whole history mounted, so the
-		// assertions below can read it all.
+		// assertions below can read it all. The content is taller still: a history
+		// that fits the view loads older pages on its own, and this one waits for
+		// the reader's click.
 		const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+		const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
 		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
 		const tall = [
 			vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : clientHeight.call(this);
+			}),
+			vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+				return this.getAttribute("role") === "log" ? 2_000_000 : scrollHeight.call(this);
 			}),
 			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : offsetHeight.call(this);
