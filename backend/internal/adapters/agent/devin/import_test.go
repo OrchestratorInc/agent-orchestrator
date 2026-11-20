@@ -232,6 +232,11 @@ func TestImportPreparationPreservesNativeStateRetriesAndUpgradeReopen(t *testing
 	if state, err := p.ProbeNativeSession(ctx, ref); err != nil || state != ports.NativeSessionAvailabilityAvailable {
 		t.Fatalf("upgraded probe=%v,%v", state, err)
 	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if state, err := p.ProbeNativeSession(cancelled, ref); state != ports.NativeSessionAvailabilityUnknown || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled probe falsely marked history unavailable: %v,%v", state, err)
+	}
 	r.LaunchCWD = t.TempDir()
 	if _, err := p.PrepareImportedSession(ctx, r); err == nil {
 		t.Fatal("new preparation accepted unverified CLI")

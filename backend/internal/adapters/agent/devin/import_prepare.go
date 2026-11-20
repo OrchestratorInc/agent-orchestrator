@@ -431,6 +431,7 @@ func validatePrivateAncestry(ctx context.Context, db *sql.DB, s importSession) e
 	return ctx.Err()
 }
 
+// PrepareRuntimeLaunch checks private native state before a terminal opens.
 func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if cfg.ImportConfigDir == "" {
 		return nil
@@ -441,6 +442,7 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	return validatePrivateImport(ctx, cfg.ImportConfigDir, cfg.NativeSessionID, cfg.WorkspacePath)
 }
 
+// AugmentRuntimeLaunchEnv keeps an imported terminal on its private SQLite store and config.
 func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, _ string, _ domain.SessionID, _ string) {
 	if root := env[importStoreEnv]; preparedImportNamespace(root) {
 		env["DEVIN_SESSION_STORE"] = "sqlite"
@@ -448,20 +450,29 @@ func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, _ string, _ doma
 	}
 }
 
+// ProbeNativeSession reports authoritative private state, preserving unknown I/O failures.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.NativeSessionAvailabilityUnknown, err
+	}
 	if !preparedImportNamespace(ref.ConfigDir) {
 		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	proof, err := readImportProof(ref.ConfigDir)
-	if err != nil {
-		return ports.NativeSessionAvailabilityUnavailable, nil
+	if err == nil {
+		err = validatePrivateImport(ctx, ref.ConfigDir, ref.NativeSessionID, proof.CWD)
 	}
-	if err := validatePrivateImport(ctx, ref.ConfigDir, ref.NativeSessionID, proof.CWD); err != nil {
+	switch {
+	case err == nil:
+		return ports.NativeSessionAvailabilityAvailable, nil
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, sql.ErrNoRows), errors.Is(err, ports.ErrNativeHistoryUnavailable):
 		return ports.NativeSessionAvailabilityUnavailable, nil
+	default:
+		return ports.NativeSessionAvailabilityUnknown, err
 	}
-	return ports.NativeSessionAvailabilityAvailable, nil
 }
 
+// LocateTranscript returns the validated prepared native database.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	state, err := p.ProbeNativeSession(ctx, ref)
 	if err != nil || state != ports.NativeSessionAvailabilityAvailable {

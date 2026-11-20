@@ -58,12 +58,17 @@ func copySelectedImport(ctx context.Context, source *sql.DB, root string, s impo
 func quoteImportColumn(name string) string { return `"` + strings.ReplaceAll(name, `"`, `""`) + `"` }
 
 func copyImportTable(ctx context.Context, source *sql.DB, target *sql.Tx, table string, s importSession, cwd string, held *int64) error {
+	switch table {
+	case "sessions", "message_nodes", "tool_call_state", "prompt_history", "rendered_commits", "live_row_times":
+	default:
+		return errors.New("devin: invalid native copy table")
+	}
 	key := "session_id"
 	if table == "sessions" {
 		key = "id"
 	}
 	// table/key are exclusively the static names in copySelectedImport.
-	rows, err := source.QueryContext(ctx, "SELECT * FROM "+table+" WHERE "+key+"=?", s.id)
+	rows, err := source.QueryContext(ctx, "SELECT * FROM "+table+" WHERE "+key+"=?", s.id) //nolint:gosec // Table is allowlisted above; key is one of two fixed identifiers.
 	if err != nil {
 		return err
 	}
@@ -72,10 +77,11 @@ func copyImportTable(ctx context.Context, source *sql.DB, target *sql.Tx, table 
 	if err != nil {
 		return err
 	}
-	shape, err := target.QueryContext(ctx, "SELECT * FROM "+table+" LIMIT 0")
+	shape, err := target.QueryContext(ctx, "SELECT * FROM "+table+" LIMIT 0") //nolint:gosec // Table is allowlisted above.
 	if err != nil {
 		return err
 	}
+	defer func() { _ = shape.Close() }()
 	expected, err := shape.Columns()
 	_ = shape.Close()
 	if err != nil {
@@ -90,7 +96,7 @@ func copyImportTable(ctx context.Context, source *sql.DB, target *sql.Tx, table 
 		quoted[i] = quoteImportColumn(col)
 		marks[i] = "?"
 	}
-	statement, err := target.PrepareContext(ctx, "INSERT INTO "+table+" ("+strings.Join(quoted, ",")+") VALUES ("+strings.Join(marks, ",")+")")
+	statement, err := target.PrepareContext(ctx, "INSERT INTO "+table+" ("+strings.Join(quoted, ",")+") VALUES ("+strings.Join(marks, ",")+")") //nolint:gosec // Table is allowlisted; column identifiers are quoted and match the installed native schema.
 	if err != nil {
 		return err
 	}

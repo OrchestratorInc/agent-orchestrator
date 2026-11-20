@@ -62,8 +62,12 @@ func sourceStoreFile(ctx context.Context, root *os.Root, name string, optional b
 		return nil, errors.New("devin: native store changed while opening")
 	}
 	_, _ = digest.Write([]byte("present:" + name))
+	length := opened.Size()
+	if length < 0 || length > *remaining {
+		return nil, errors.New("devin: native file size changed")
+	}
 	var size [8]byte
-	binary.BigEndian.PutUint64(size[:], uint64(opened.Size()))
+	binary.BigEndian.PutUint64(size[:], uint64(length))
 	_, _ = digest.Write(size[:])
 	r := io.TeeReader(io.LimitReader(importContextReader{ctx, f}, *remaining+1), digest)
 	var data []byte
@@ -206,6 +210,10 @@ func committedImportPages(ctx context.Context, main, wal []byte) ([]byte, error)
 			}
 			page := uint64(binary.BigEndian.Uint32(frame[:4]))
 			count := uint64(binary.BigEndian.Uint32(frame[4:8]))
+			// Explicit constant bound also makes the int conversion safe on 32-bit hosts.
+			if count > maxImportStoreBytes {
+				return nil, errors.New("devin: native WAL exceeds import budget")
+			}
 			if page < 1 || page > uint64(maxImportStoreBytes/pageSize) || count > uint64(maxImportStoreBytes/pageSize) {
 				return nil, errors.New("devin: native WAL exceeds import budget")
 			}
