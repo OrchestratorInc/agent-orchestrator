@@ -893,6 +893,59 @@ describe("ProjectSettingsForm", () => {
 		expect(request?.body.config.autoReview).toBe(false);
 	});
 
+	it("loads and saves whether sessions always use a temporary browser profile", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "codex" },
+				orchestrator: { agent: "claude-code" },
+			},
+		});
+
+		renderSettings("proj-1", undefined, "general");
+
+		const toggle = await screen.findByRole("switch", { name: "Always use a temporary browser" });
+		expect(toggle).not.toBeChecked();
+		await userEvent.click(toggle);
+		submitSettings();
+
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0]?.[1]?.body.config.browserTemporary).toBe(true);
+	});
+
+	it("autosaves the temporary-browser switch through PUT /api/v1/projects/{id} without a submit, even while the window is hidden", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "codex" },
+				orchestrator: { agent: "claude-code" },
+			},
+		});
+		const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		try {
+			renderSettings("proj-1", undefined, "general");
+			await userEvent.click(await screen.findByRole("switch", { name: "Always use a temporary browser" }));
+
+			await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+			expect(putMock.mock.calls[0]?.[0]).toBe("/api/v1/projects/{id}");
+			expect(putMock.mock.calls[0]?.[1]?.body.config.browserTemporary).toBe(true);
+		} finally {
+			visibility.mockRestore();
+			focus.mockRestore();
+		}
+	});
+
 	it("loads and saves whether workers request an AO review", async () => {
 		mockProject({
 			id: "proj-1",

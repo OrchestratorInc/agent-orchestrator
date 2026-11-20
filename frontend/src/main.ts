@@ -224,6 +224,7 @@ import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics"
 import { repairBrowserProfileCookies } from "./main/browser-cookie-repair";
 import { browserProfilePartition } from "./shared/browser-profiles";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
+import { createProjectBrowserTemporaryLookup } from "./main/browser-project-policy";
 import { defaultBrowserProfileName } from "./main/browser-default-profile-name";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
@@ -1350,6 +1351,9 @@ async function createWindowInternal(): Promise<void> {
 		agentBrowserRuntime,
 		isCloseShellTerminalShortcutEnabled: () => closeShellTerminalShortcutEnabled,
 		browserProfileStore,
+		isProjectBrowserTemporary: createProjectBrowserTemporaryLookup({
+			daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
+		}),
 		browserHistoryStore,
 		browserDownloadManager: createBrowserDownloadManager({
 			downloadsDirectory: app.getPath("downloads"),

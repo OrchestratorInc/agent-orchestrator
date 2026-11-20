@@ -22758,6 +22758,8 @@ components:
           type: string
         autoReview:
           type: boolean
+        browserTemporary:
+          type: boolean
         canonicalRepoURL:
           type: string
         containerReap:

@@ -531,6 +531,9 @@ export type BrowserViewHostOptions = {
   // Test hook: how long a tab's initial about:blank load may take before
   // awaiting callers get a typed failure instead of hanging forever.
   entryReadyTimeoutMs?: number;
+  // True when the session's project opts every session into Temporary. Asked
+  // once before a session's browser is created; a failure counts as false.
+  isProjectBrowserTemporary?: (sessionId: string) => Promise<boolean>;
 };
 
 export type BrowserViewHost = {
@@ -988,6 +991,14 @@ export function createBrowserViewHost(
   const pendingTemporaryPartitionClears = new Set<Promise<void>>();
   // Workers whose human explicitly picked the temporary profile this run.
   const explicitTemporarySessionIds = new Set<string>();
+  // Workers whose project is always Temporary and that made no choice of their own.
+  const projectTemporarySessionIds = new Set<string>();
+  // Bumped when a session's browser is torn down, so a creation that was waiting
+  // on the project lookup does not bring back a browser that just ended.
+  const sessionTeardowns = new Map<string, number>();
+  // Bumped when every live link disconnects; a stream start that was waiting
+  // must not attach its sink to a link that is gone.
+  let liveDisconnects = 0;
 
   // Prefer the worker's choice, then the global default, then Temporary. The
   // store makes the first profile the default; an explicit Temporary choice
@@ -1001,6 +1012,7 @@ export function createBrowserViewHost(
     if (sessionProfileId === null) return null;
     if (sessionProfileId && store.getProfile(sessionProfileId))
       return sessionProfileId;
+    if (projectTemporarySessionIds.has(sessionId)) return null;
     const defaultProfileId = store.getDefaultProfileId();
     if (defaultProfileId && store.getProfile(defaultProfileId))
       return defaultProfileId;
@@ -1620,12 +1632,31 @@ export function createBrowserViewHost(
     return session;
   };
 
+  // Refreshes the project's Temporary policy for a session with no live browser
+  // and no choice of its own; a live browser keeps the profile it opened with.
+  const resolveProjectTemporary = async (sessionId: string): Promise<void> => {
+    const lookup = options.isProjectBrowserTemporary;
+    if (!lookup || viewIdsBySessionId.has(sessionId)) return;
+    if (options.browserProfileStore?.getSessionProfileId(sessionId) !== undefined) return;
+    const temporary = await lookup(sessionId).catch(() => false);
+    if (viewIdsBySessionId.has(sessionId)) return;
+    if (temporary) projectTemporarySessionIds.add(sessionId);
+    else projectTemporarySessionIds.delete(sessionId);
+  };
+
   const ensureSessionReady = async (
     sessionId: string,
     rendererId?: number,
     isUnavailable?: () => boolean,
     createInitialTab = true,
+    signal?: AbortSignal,
   ): Promise<BrowserSessionEntry> => {
+    const teardown = sessionTeardowns.get(sessionId) ?? 0;
+    await resolveProjectTemporary(sessionId);
+    throwIfAborted(signal);
+    if (disposePromise || (sessionTeardowns.get(sessionId) ?? 0) !== teardown) {
+      throw browserError("BROWSER_SESSION_ENDED", "Browser session ended while it was opening");
+    }
     const store = options.browserProfileStore;
     if (store) {
       for (;;) {
@@ -4261,7 +4292,11 @@ export function createBrowserViewHost(
 
 	async function startLiveStream(sessionId: string, streamId: number, sink: BrowserLiveSink): Promise<BrowserLiveState> {
 		if (!Number.isSafeInteger(streamId) || streamId <= 0) throw browserError("INVALID_ARGUMENT", "streamId is invalid");
+		const disconnects = liveDisconnects;
 		const session = await ensureSessionReady(sessionId);
+		if (liveDisconnects !== disconnects) {
+			throw browserError("BROWSER_STREAM_DISCONNECTED", "The live link disconnected before the stream started");
+		}
 		if (session.live) await stopLiveCapture(session);
 		session.live = { streamId, sink };
 		syncBackgroundThrottling(session);
@@ -4299,6 +4334,7 @@ export function createBrowserViewHost(
 	}
 
 	function stopAllLiveStreams(): Promise<void> {
+		liveDisconnects += 1;
 		// Detach every sink synchronously before awaiting CDP. A replacement link
 		// can connect immediately, but it must never observe stale ownership from
 		// the link that just disappeared.
@@ -4448,13 +4484,17 @@ export function createBrowserViewHost(
       if (!sessionId.trim())
         throw browserError("INVALID_ARGUMENT", "sessionId is required");
       if (action === "__destroy-session") {
+        sessionTeardowns.set(sessionId, (sessionTeardowns.get(sessionId) ?? 0) + 1);
         const viewId = viewIdsBySessionId.get(sessionId);
         await options.agentBrowserRuntime?.closeSession(sessionId);
         if (viewId) destroy(viewId);
         return { destroyed: Boolean(viewId) };
       }
-      if (action === "profile") return agentProfileResult(sessionId);
-      const session = await ensureSessionReady(sessionId);
+      if (action === "profile") {
+        await resolveProjectTemporary(sessionId);
+        return agentProfileResult(sessionId);
+      }
+      const session = await ensureSessionReady(sessionId, undefined, undefined, true, signal);
       if (session.profileSwitching) {
         throw browserError(
           "BROWSER_PROFILE_SWITCHING",

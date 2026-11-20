@@ -1226,6 +1226,7 @@ function setupTabHost(
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
 	overrides?: {
 		entryReadyTimeoutMs?: number;
+		isProjectBrowserTemporary?: (sessionId: string) => Promise<boolean>;
 		openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }>;
 		/** Flip `destroyed` to model the BaseWindow closing under the host. */
 		window?: { destroyed: boolean };
@@ -1471,6 +1472,7 @@ function setupTabHost(
 		clearBrowserProfileData,
 		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
+		isProjectBrowserTemporary: overrides?.isProjectBrowserTemporary,
 		openInUserBrowser: overrides?.openInUserBrowser,
 		onNativeViewAdded,
 		onTabCloseFailure,
@@ -2795,6 +2797,88 @@ describe("browser profile partitions and replacement", () => {
 			persistent: false,
 		});
 		expect(constructorOptions).toHaveLength(0);
+	});
+
+	it("opens Temporary for a session whose project is always Temporary, unless the session chose a profile", async () => {
+		const bindings: Record<string, string | null> = { "worker-chose": profile.id };
+		const isProjectBrowserTemporary = vi.fn(async () => true);
+		const { host, invoke, constructorOptions } = setupTabHost(
+			fakeBrowserProfileStore(profile, bindings, profile.id),
+			false, undefined, undefined, undefined,
+			{ isProjectBrowserTemporary },
+		);
+
+		expect(await host.execute("worker-1", "profile")).toEqual({ profileId: null, profileName: "Temporary", persistent: false });
+		const isolated = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(host.getProfileState(isolated.viewId)).toMatchObject({ profileId: null, temporary: true });
+		expect(constructorOptions[0]!.webPreferences.partition).toMatch(/^persist:ao-browser-temporary-/);
+
+		const chose = (await invoke("browser:ensure", "worker-chose")) as BrowserNavState;
+		expect(host.getProfileState(chose.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
+		expect(bindings["worker-1"]).toBeUndefined();
+	});
+
+	describe("while the project lookup is pending", () => {
+		const heldLookup = () => {
+			let release!: (temporary: boolean) => void;
+			const lookup = vi.fn(() => new Promise<boolean>((resolve) => { release = resolve; }));
+			return { lookup, release: (temporary = false) => release(temporary) };
+		};
+		const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+		it("does not create a browser for a session that ended meanwhile", async () => {
+			const held = heldLookup();
+			const { host, constructorOptions } = setupTabHost(fakeBrowserProfileStore(profile, {}, profile.id), false, undefined, undefined, undefined, { isProjectBrowserTemporary: held.lookup });
+			const pending = host.execute("worker-1", "tabs");
+			await flush();
+			await host.execute("worker-1", "__destroy-session");
+			held.release(true);
+
+			await expect(pending).rejects.toMatchObject({ code: "BROWSER_SESSION_ENDED" });
+			expect(constructorOptions).toHaveLength(0);
+			// A fresh request for the same session still opens normally.
+			const reopened = host.execute("worker-1", "tabs");
+			await flush();
+			held.release(false);
+			await reopened;
+			expect(host.getProfileUsage(profile.id).map((usage) => usage.sessionId)).toEqual(["worker-1"]);
+		});
+
+		it("does not create a browser for a command cancelled meanwhile", async () => {
+			const held = heldLookup();
+			const { host, constructorOptions } = setupTabHost(fakeBrowserProfileStore(profile, {}, profile.id), false, undefined, undefined, undefined, { isProjectBrowserTemporary: held.lookup });
+			const controller = new AbortController();
+			const pending = host.execute("worker-1", "tabs", {}, controller.signal);
+			await flush();
+			controller.abort();
+			held.release();
+
+			await expect(pending).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
+			expect(constructorOptions).toHaveLength(0);
+		});
+
+		it("does not install a live stream whose link disconnected meanwhile", async () => {
+			const held = heldLookup();
+			const { host } = setupTabHost(fakeBrowserProfileStore(profile, {}, profile.id), false, undefined, undefined, undefined, { isProjectBrowserTemporary: held.lookup });
+			const sink = { frame: vi.fn(), state: vi.fn(), error: vi.fn() };
+			const pending = host.startLiveStream("worker-1", 7, sink);
+			await flush();
+			await host.stopAllLiveStreams();
+			held.release();
+
+			await expect(pending).rejects.toMatchObject({ code: "BROWSER_STREAM_DISCONNECTED" });
+			expect(sink.state).not.toHaveBeenCalled();
+		});
+	});
+
+	it("falls back to the default profile when the project lookup fails", async () => {
+		const { host, invoke } = setupTabHost(
+			fakeBrowserProfileStore(profile, {}, profile.id),
+			false, undefined, undefined, undefined,
+			{ isProjectBrowserTemporary: async () => { throw new Error("daemon down"); } },
+		);
+		const ensured = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(host.getProfileState(ensured.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
 	});
 
 	it("keeps a session explicitly switched to Temporary out of the default profile, even across reconstruction", async () => {
