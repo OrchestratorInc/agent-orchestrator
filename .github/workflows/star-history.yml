@@ -1,0 +1,79 @@
+name: Star history
+
+# Redraws the README's star history chart from the GitHub stargazers API and
+# commits it to the `star-history` branch, never to main. The README loads the
+# SVGs from raw.githubusercontent.com, which caches for 5 minutes and is not
+# proxied through camo, so the chart stays within a day of the live count.
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/star-history.mjs"
+      - ".github/workflows/star-history.yml"
+  pull_request:
+    paths:
+      - ".github/scripts/star-history.mjs"
+      - ".github/scripts/star-history.test.mjs"
+      - ".github/workflows/star-history.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test chart rendering
+        run: node --test .github/scripts/star-history.test.mjs
+
+  publish:
+    # Forks inherit the schedule but their charts are never shown.
+    if: github.event_name != 'pull_request' && !github.event.repository.fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: star-history-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Test chart rendering
+        run: node --test .github/scripts/star-history.test.mjs
+
+      - name: Draw chart
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/star-history.mjs "$RUNNER_TEMP/star-history"
+
+      - name: Commit to the star-history branch
+        working-directory: ${{ runner.temp }}/star-history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b star-history
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth=1 origin star-history; then
+            git reset -q --soft FETCH_HEAD
+          fi
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Chart unchanged."
+            exit 0
+          fi
+          git commit -q -m "chore: update star history chart"
+          git push -q origin HEAD:star-history
