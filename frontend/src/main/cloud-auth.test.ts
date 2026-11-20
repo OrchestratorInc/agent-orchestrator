@@ -675,6 +675,28 @@ describe("native WorkOS authentication", () => {
       await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
     });
 
+    it("keeps the saved sign-in when saving it fails as storage comes back, and storage drops again before a sign-in is started on it", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      let auth = await restart();
+      await auth.beginCloudSignIn(dataDir);
+
+      storageBack();
+      mocks.encryptString.mockImplementationOnce(() => {
+        throw new Error("keychain locked again");
+      });
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+
+      mocks.encryptionAvailable = false;
+      await auth.beginCloudSignIn(dataDir);
+      await expect(readFile(storeFile())).resolves.toBeInstanceOf(Buffer);
+      expect(warn).not.toHaveBeenCalled();
+
+      auth = await restart();
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+    });
+
     it("removes the saved sign-in for good when signing out during the outage", async () => {
       await signIn(await restart());
       mocks.encryptionAvailable = false;
