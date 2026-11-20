@@ -115,6 +115,21 @@ describe("PRDescriptionBody", () => {
     expect(screen.getByTestId("pr-image-gallery")).toBeInTheDocument();
   });
 
+  it("sets a short sign-off under the closing rule apart as a footnote", () => {
+    renderDescription(loaded({ description: "Adds the box.\n\n---\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://example.com/session/1" }));
+    expect(screen.getByText(/Generated with/).closest("p")).toHaveClass("pr-description-footer");
+    expect(screen.getByText("https://example.com/session/1").closest("p")).toHaveClass("pr-description-footer");
+    expect(screen.getByText("Adds the box.")).not.toHaveClass("pr-description-footer");
+  });
+
+  it("leaves a section after a rule, or a long note, as body text", () => {
+    const { unmount } = renderDescription(loaded({ description: "Intro.\n\n---\n\n## Notes\n\nMore detail." }));
+    expect(screen.getByText("More detail.")).not.toHaveClass("pr-description-footer");
+    unmount();
+    renderDescription(loaded({ description: `Intro.\n\n---\n\n${"A long closing paragraph. ".repeat(14)}` }));
+    expect(screen.getByText(/A long closing paragraph/)).not.toHaveClass("pr-description-footer");
+  });
+
   it("keeps a body that is only a heading", () => {
     renderDescription(loaded({ description: "## Work in progress" }));
     expect(screen.getByRole("heading", { name: "Work in progress" })).toBeInTheDocument();

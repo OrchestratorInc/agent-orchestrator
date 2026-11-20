@@ -8,7 +8,7 @@ import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
 import { isWebImageUrl, linksOnlyImages, PRDescriptionImage } from "./PRDescriptionImage";
 import { PRImageGallery } from "./PRImageGallery";
-import { descriptionMarkdown, descriptionMedia } from "../lib/pr-description";
+import { descriptionMarkdown, descriptionMedia, remarkQuietFooter } from "../lib/pr-description";
 
 // Reading width and type for the whole body.
 const readingClass = cn(
@@ -23,6 +23,9 @@ const readingClass = cn(
 	"[&_strong]:text-foreground [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse",
 	"[&_td]:border [&_td]:border-border [&_td]:p-2 [&_td]:align-top [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-foreground",
 	"[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+	// A sign-off under the closing rule (see remarkQuietFooter) reads as a footnote, not body text.
+	"[&_.pr-description-footer]:my-1.5 [&_.pr-description-footer]:text-xs [&_.pr-description-footer]:text-passive",
+	"[&_.pr-description-footer_a]:font-normal [&_.pr-description-footer_a]:text-muted-foreground",
 );
 
 /**
@@ -78,7 +81,7 @@ export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
 			{empty ? <p className="m-0 text-sm text-passive">{empty}</p> : (
 				<div className={readingClass}>
 					{/* Provider content: react-markdown never renders raw HTML. */}
-					<ReactMarkdown components={components} remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+					<ReactMarkdown components={components} remarkPlugins={[remarkGfm, remarkQuietFooter]}>{markdown}</ReactMarkdown>
 				</div>
 			)}
 			{pr.descriptionTruncated ? <p className="mt-4 text-xs text-passive">{t("pr.description.truncated")}</p> : null}
