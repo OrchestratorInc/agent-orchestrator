@@ -77,6 +77,10 @@ var (
 	downloadingLine = regexp.MustCompile(`(?i)^(?:\[[a-z]+\]\s*)?(?:==> (?:Fetching|Downloading)|✔︎ (?:Bottle|Formula|Resource|Cask)|Downloading\b|Fetching\b|Resolved \d+ packages?)`)
 )
 
+// installerBootstrapPrefix marks lines the shared script runner writes around
+// a vendor installer (systemexec's remote-script download and launch).
+const installerBootstrapPrefix = "[installer] "
+
 // progressTracker is an io.Writer that forwards installer output and keeps
 // the phase and percentage that output reports.
 type progressTracker struct {
@@ -148,6 +152,12 @@ func (t *progressTracker) observe(raw string) {
 		return
 	}
 	t.detail = truncateRunes(line, maxProgressDetailRunes)
+	// Shared bootstrap lines (script download attempts, retries, the execution
+	// boundary) describe AO's own staging, not the vendor's. They update the
+	// detail only, so the vendor script's output still drives the phase.
+	if strings.HasPrefix(line, installerBootstrapPrefix) {
+		return
+	}
 
 	if match := uvDownloading.FindStringSubmatch(line); match != nil {
 		if t.uvSizes == nil {

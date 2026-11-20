@@ -111,6 +111,25 @@ func TestProgressTrackerMovesToInstallingWhenAScriptReportsSuccess(t *testing.T)
 	}
 }
 
+func TestProgressTrackerLetsVendorOutputDriveThePhaseAfterBootstrapLines(t *testing.T) {
+	bootstrap := "[installer] Downloading installer (attempt 1/3).\n" +
+		"[installer] Retrying download in 1s (attempt 2/3).\n" +
+		"[installer] Downloading installer (attempt 2/3).\n" +
+		"[installer] Installing harness.\n"
+	if progress := trackOutput(bootstrap); progress.Phase != "" || progress.Detail != "[installer] Installing harness." {
+		t.Fatalf("after bootstrap lines = %+v, want no phase with the latest detail", progress)
+	}
+	// Captured from https://install.openhands.dev/install.sh without a TTY.
+	if progress := trackOutput(bootstrap, "[INFO] Downloading OpenHands CLI v1.14.0...\n"); progress.Phase != ProgressDownloading {
+		t.Fatalf("after the vendor download line phase = %q, want downloading", progress.Phase)
+	}
+	progress := trackOutput(bootstrap, "[INFO] Downloading OpenHands CLI v1.14.0...\n",
+		"[SUCCESS] OpenHands CLI v1.14.0 installed successfully!\n")
+	if progress.Phase != ProgressInstalling {
+		t.Fatalf("after the vendor success line phase = %q, want installing", progress.Phase)
+	}
+}
+
 func TestProgressTrackerReportsNoPhaseUntilALineNamesOne(t *testing.T) {
 	if progress := trackOutput(); progress != nil {
 		t.Fatalf("silent installer = %+v, want no progress", progress)
