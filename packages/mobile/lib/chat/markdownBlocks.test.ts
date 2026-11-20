@@ -174,3 +174,8 @@ describe("third review fixes", () => {
 		expect(repairStreamingInline("Run `x **")).toBe("Run `x **`");
 	});
 });
+
+it("keeps the asterisks around an escaped backtick apart", () => {
+	expect(repairStreamingInline("*\\`* text")).toBe("*\\`* text");
+	expect(repairStreamingInline("Use \\` and **bold")).toBe("Use \\` and **bold**");
+});

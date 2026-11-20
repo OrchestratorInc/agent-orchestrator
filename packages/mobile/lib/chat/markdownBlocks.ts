@@ -246,7 +246,8 @@ function unmatched(text: string, marker: string): boolean {
 
 /** `text` without its code spans, including one still open at the end; `\`` is a literal backtick, not a span. */
 function outsideCode(text: string): string {
-	const closed = text.replace(/\\`/g, "").replace(/`[^`]*`/g, "");
+	// A placeholder, not nothing: deleting `\`` would join `*\`*` into a `**` that is not there.
+	const closed = text.replace(/\\`/g, "\u0000").replace(/`[^`]*`/g, "");
 	const open = closed.indexOf("`");
 	return open === -1 ? closed : closed.slice(0, open);
 }
