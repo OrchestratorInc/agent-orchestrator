@@ -41,6 +41,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	/**
 	 * Controls between the search and the list, such as the agent rail. Up and Shift+Tab
 	 * leave them for the search, Down and Tab for the list, and typing goes to the search.
+	 * Hidden while a search is typed; a capped list gets a row more in its place.
 	 */
 	header?: (controls: { clearSearch: () => void }) => ReactNode;
 	/** Rows under the list, kept in view while it scrolls, and hidden while searching. */
@@ -104,7 +105,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	// The pane starts at that height whatever it lists: a search with no matches drops to a single
 	// line, and the menu must not shrink under the pointer while it is typed in. It only grows into
 	// room the held height below leaves it.
-	const rowsHeight = rows === undefined ? undefined : `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`;
+	// A search hides the header, and the list takes its room as one more row.
+	const showHeader = Boolean(header) && !normalizedQuery;
+	const listRows = rows === undefined ? undefined : rows + (header && normalizedQuery ? 1 : 0);
+	const rowsHeight = listRows === undefined ? undefined : `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${listRows} + 1px * ${listRows})`;
 	// A 0px basis rather than flex-1's 0%: a percentage of the menu's undetermined height counts as
 	// the list's full content, which would stretch the menu to every model.
 	const rowCap = rowsHeight === undefined ? undefined : { flexGrow: 1, flexShrink: 1, flexBasis: "0px", minHeight: rowsHeight };
@@ -182,7 +186,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
 					// since their highlight spans the same content box.
-					className={cn("relative shrink-0 pb-1", searchable && !header ? "mb-1 border-b border-border" : undefined)}
+					className={cn("relative shrink-0 pb-1", searchable && !showHeader ? "mb-1 border-b border-border" : undefined)}
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
 						if (event.nativeEvent.isComposing) {
@@ -240,7 +244,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					) : null}
 				</div>
 			)}
-			{header ? (
+			{showHeader && header ? (
 				<div
 					ref={headerRef}
 					className="shrink-0 border-b border-border pb-1 mb-1"

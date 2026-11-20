@@ -4,7 +4,7 @@
  * until the next message (or Switch, in a terminal), so browsing never restarts anything.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, Settings2, Star, TriangleAlert, Zap } from "@/components/app-icons";
 import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -323,13 +323,21 @@ export function AgentModelPicker({
 	const currentSource: PickerSource = disabled || starting
 		? { ...(starting ?? live), onPickModel: undefined, onPickSetup: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
 		: live;
-	// A pending agent's models are read once, for the agent that is shown.
-	const pendingCatalog = useQuery({ ...catalogOptions(pending?.harness ?? ""), enabled: open && Boolean(pending) });
+	// The other agents' model lists load once the menu is open, so search reaches every model.
+	const others = agents.filter((agent) => agent.id !== currentHarness);
+	const queryClient = useQueryClient();
+	// Warmed on hover or focus, so the first keystrokes already search every agent.
+	const warmCatalogs = () => {
+		for (const agent of others) void queryClient.prefetchQuery(catalogOptions(agent.id));
+	};
+	const catalogs = useQueries({
+		queries: others.map((agent) => ({ ...catalogOptions(agent.id), enabled: open })),
+	});
 	// A pending agent offers the models its own session will, so the catalog is narrowed to match.
 	const otherSource = (harness: string, held?: PendingAgentSwitch) => otherAgentSource(
 		harness,
 		offeredCatalogModels(
-			pendingCatalog.data,
+			catalogs[others.findIndex((agent) => agent.id === harness)]?.data,
 			hostSettings?.harnessDefaults?.[harness]?.disabledModels,
 			[held?.model],
 		),
@@ -397,7 +405,15 @@ export function AgentModelPicker({
 	// The list shows the chosen agent's favourites and models only; agents are picked on the rail.
 	const setups = settable ? favorites.filter((entry) => entry.harness === shownHarness) : [];
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
-	// Search narrows within the agent shown: the rail above is where an agent is chosen.
+	// Search reaches every agent on the rail, the chosen one first.
+	const searchRows = (open ? [...agents].sort((a, b) => Number(b.id === shownHarness) - Number(a.id === shownHarness)) : []).flatMap((agent) => {
+		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
+		const chosen = agent.id === currentHarness ? currentSource.modelId : pending?.harness === agent.id ? pending.model : undefined;
+		const models = agent.id === "claude-code" ? claudeOrder(mergeSameNamedModels(listed, chosen)) : listed;
+		return models.filter((model) => model.id).map((model) => ({
+			id: `${agent.id} ${model.id}`, label: `${model.label} ${agentLabel(agent.id)}`, harness: agent.id, model,
+		}));
+	});
 	const shownModels = shownHarness === "claude-code" ? claudeOrder(mergeSameNamedModels(source.models, source.modelId)) : source.models;
 	const browseRows = open && settable
 		? shownModels.map((model) => ({ id: `${shownHarness} ${model.id}`, label: model.label, harness: shownHarness, model }))
@@ -486,6 +502,8 @@ export function AgentModelPicker({
 			<OptionMenuTrigger variant="ghost"
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
+				onPointerEnter={warmCatalogs}
+				onFocus={warmCatalogs}
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
 				title={title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
@@ -523,7 +541,8 @@ export function AgentModelPicker({
 				}}
 			>
 				<ModelMenuChoices
-					models={browseRows}
+					models={searchRows}
+					browse={browseRows}
 					browseKey={shownHarness}
 					selectedId={source.modelId === undefined ? undefined : `${shownHarness} ${source.modelId}`}
 					searchable
@@ -541,17 +560,25 @@ export function AgentModelPicker({
 					)}
 					footer={settingsFooter}
 				>
-					{(matches, searchActiveID, optionID, query) => query ? matches.map((row) => (
-						// Every match belongs to the agent shown, so a pick never changes the agent.
-						<SearchRow
-							key={row.id}
-							row={row}
-							optionId={optionID?.(row.id)}
-							active={row.model.id === source.modelId}
-							searchActive={row.id === searchActiveID}
-							disabled={!pickable(row.harness) || Boolean(row.model.unavailableReason)}
-							onPick={pickFromSearch}
-						/>
+					{(matches, searchActiveID, optionID, query) => query ? matches.map((row, index) => (
+						// Matches are grouped under their agent, the chosen one first. Typing never
+						// changes the agent; picking a match picks its agent with it.
+						<Fragment key={row.id}>
+							{row.harness !== matches[index - 1]?.harness ? (
+								<OptionMenuLabel className="flex items-center gap-1.5 text-muted-foreground">
+									<ProviderMark provider={row.harness} className="size-3" />
+									{agentLabel(row.harness)}
+								</OptionMenuLabel>
+							) : null}
+							<SearchRow
+								row={row}
+								optionId={optionID?.(row.id)}
+								active={row.harness === shownHarness && row.model.id === source.modelId}
+								searchActive={row.id === searchActiveID}
+								disabled={!pickable(row.harness) || Boolean(row.model.unavailableReason)}
+								onPick={pickFromSearch}
+							/>
+						</Fragment>
 					)) : (
 						<>
 							{setups.map((favorite) => (

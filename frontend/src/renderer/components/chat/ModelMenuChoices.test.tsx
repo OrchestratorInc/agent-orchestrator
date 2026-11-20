@@ -198,6 +198,25 @@ describe("ModelMenuChoices", () => {
 		expect(screen.getByTestId("footer")).toBeInTheDocument();
 	});
 
+	it("hides the header while searching and gives the list a row more in its place", async () => {
+		const user = userEvent.setup();
+		render(
+			<ModelMenuChoices models={generateModels(30)} searchable rows={4} header={() => <div data-testid="rail" />}>
+				{(matches) => matches.map((model) => (
+					<button key={model.id} type="button" role="menuitemradio">{model.label}</button>
+				))}
+			</ModelMenuChoices>,
+		);
+		const pane = () => document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
+		expect(screen.getByTestId("rail")).toBeInTheDocument();
+		expect(pane().style.minHeight).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 4 + 1px * 4)");
+		await user.type(screen.getByRole("searchbox"), "Model 1");
+		expect(screen.queryByTestId("rail")).not.toBeInTheDocument();
+		expect(pane().style.minHeight).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 5 + 1px * 5)");
+		await user.clear(screen.getByRole("searchbox"));
+		expect(screen.getByTestId("rail")).toBeInTheDocument();
+	});
+
 	it("hides the footer while searching a list that grows with its results", async () => {
 		const user = userEvent.setup();
 		render(

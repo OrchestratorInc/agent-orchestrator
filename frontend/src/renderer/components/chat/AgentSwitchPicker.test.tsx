@@ -348,30 +348,30 @@ describe("AgentModelPicker", () => {
 		expect(trigger.querySelector("img")).not.toHaveAttribute("src", claudeCodeLogo);
 	});
 
-	it("searches only the chosen agent's models", async () => {
+	it("groups search matches under each agent's logo and name, the chosen agent first", async () => {
 		const user = userEvent.setup();
-		open();
+		const { onPendingChange } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const search = screen.getByPlaceholderText("Search agents and models");
-		await user.type(search, "gpt");
-		// Codex's models are not searched while Claude Code is the agent shown.
-		expect(screen.queryByRole("menuitemradio", { name: /GPT X/ })).not.toBeInTheDocument();
-		expect(screen.getByText("No matching models.")).toBeInTheDocument();
-		await user.clear(search);
-		await user.type(search, "opus");
-		expect(await screen.findByRole("menuitemradio", { name: /^Opus/ })).toBeInTheDocument();
-		// A match names its model only; the agent is the rail's.
-		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "o");
+		await screen.findByRole("menuitemradio", { name: /^GPT X.*Codex/ });
+		const row = screen.getByRole("menuitemradio", { name: /^Opus.*Claude Code/ });
+		expect(row.querySelector("img")).not.toBeInTheDocument();
+		const headings = screen.getAllByText(/^(Claude Code|Codex)$/);
+		expect(headings.map((heading) => heading.textContent)).toEqual(["Claude Code", "Codex"]);
+		expect(headings[1].querySelector("img")).toHaveAttribute("src", codexLogo);
+		// Typing never changes the agent.
+		expect(onPendingChange).not.toHaveBeenCalled();
 	});
 
-	it("clears the search when an agent's logo is picked", async () => {
+	it("hides the agent rail while searching, and brings it back once the search is cleared", async () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		const search = screen.getByPlaceholderText("Search agents and models");
 		await user.type(search, "gpt");
-		await user.click(screen.getByRole("radio", { name: "Codex" }));
-		expect(search).toHaveValue("");
+		expect(screen.queryByRole("radiogroup", { name: "Agents" })).not.toBeInTheDocument();
+		await user.clear(search);
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
 	});
 
 	it("hides a chat agent whose chat adapter is missing", async () => {
@@ -398,7 +398,16 @@ describe("AgentModelPicker", () => {
 		expect(labels[0]).toBe("Claude Code");
 	});
 
-	it("picks a searched model without changing the agent", async () => {
+	it("searches every agent's models and picks one with its agent", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
+		await user.click(await screen.findByRole("menuitemradio", { name: /GPT X.*Codex/ }));
+		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-x" }));
+	});
+
+	it("picks the running agent's searched model without a switch", async () => {
 		const user = userEvent.setup();
 		const { current, onPendingChange } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
