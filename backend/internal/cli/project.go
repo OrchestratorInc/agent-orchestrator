@@ -155,6 +155,7 @@ type projectSetConfigOptions struct {
 	env                   []string
 	symlink               []string
 	postCreate            []string
+	preRemove             []string
 	trackerIntake         bool
 	trackerRepo           string
 	trackerAssignee       string
@@ -260,7 +261,7 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 		Long: "Register a local git repo as a project so sessions can be spawned in it.\n\n" +
 			"The path must be an existing git repository on disk. With --as-workspace, " +
 			"the path may be a parent folder containing direct child git repositories; " +
-			"AO initializes/adopts the parent as the root repo and gitignores children.",
+			"Orchestrator initializes/adopts the parent as the root repo and gitignores children.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.path == "" {
@@ -303,7 +304,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 		Use:   "set-config <id>",
 		Short: "Set the per-project config",
 		Long: "Update a project's per-project config (branch, session prefix, env, " +
-			"symlinks, post-create, rules, agent model/permissions, role overrides, tracker intake, reviewers). The config " +
+			"symlinks, post-create, pre-remove, rules, agent model/permissions, role overrides, tracker intake, reviewers). The config " +
 			"is resolved when a session spawns.\n\n" +
 			"Field flags change only the fields they name and keep the rest of the saved config; " +
 			"a repeatable flag replaces that whole list or map. Field flags refuse a degraded " +
@@ -354,6 +355,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringArrayVar(&opts.env, "env", nil, "Env var KEY=VALUE forwarded into sessions (repeatable)")
 	f.StringArrayVar(&opts.symlink, "symlink", nil, "Repo-relative path to symlink into workspaces (repeatable)")
 	f.StringArrayVar(&opts.postCreate, "post-create", nil, "Command to run after workspace creation (repeatable)")
+	f.StringArrayVar(&opts.preRemove, "pre-remove", nil, "Command to run before workspace removal (repeatable)")
 	f.BoolVar(&opts.trackerIntake, "tracker-intake", false, "Opt this project into issue intake (GitHub or GitLab; provider inferred from git origin). Inert unless the daemon also has AO_TRACKER_INTAKE=on")
 	f.StringVar(&opts.trackerRepo, "tracker-repo", "", "Provider-native repo for issue intake (owner/repo or group/subgroup/repo; default: derive from git origin)")
 	f.StringVar(&opts.trackerAssignee, "tracker-assignee", "", "Issue assignee required for intake eligibility")
@@ -369,13 +371,13 @@ var projectConfigFlags = []string{
 	"canonical-repo-url", "default-branch", "session-prefix", "model", "permission",
 	"worker-agent", "orchestrator-agent", "agent-rules", "agent-rules-file",
 	"orchestrator-rules", "orchestrator-rules-file", "env", "symlink", "post-create",
-	"tracker-intake", "tracker-repo", "tracker-assignee", "reviewer",
+	"pre-remove", "tracker-intake", "tracker-repo", "tracker-assignee", "reviewer",
 }
 
 // buildProjectConfig turns the set-config flags into the typed config sent to
 // the daemon. --clear empties the config; --config-json supplies the whole
 // object; otherwise each changed field flag overwrites its field in the current
-// config, so fields the CLI has no flag for (effort, preRemove, ...) survive.
+// config, so fields the CLI has no flag for (effort, ...) survive.
 // The daemon validates the values.
 func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) bool, current func() (projectConfig, error)) (projectConfig, error) {
 	if opts.clear {
@@ -429,6 +431,9 @@ func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) 
 	}
 	if changed("post-create") {
 		cfg.PostCreate = opts.postCreate
+	}
+	if changed("pre-remove") {
+		cfg.PreRemove = opts.preRemove
 	}
 	if changed("reviewer") {
 		cfg.Reviewers = reviewersForFlags(opts.reviewers)

@@ -43,9 +43,11 @@ type PRConflictFile = contract.PullRequestConflictFile
 // ListPRSummaries returns all PRs owned by a session with concise SCM details
 // assembled from persisted PR/check/review facts.
 func (s *Service) ListPRSummaries(ctx context.Context, id domain.SessionID) ([]PRSummary, error) {
-	if _, ok, err := s.store.GetSession(ctx, id); err != nil {
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
 		return nil, fmt.Errorf("get %s: %w", id, err)
-	} else if !ok {
+	}
+	if !ok {
 		return nil, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	prs, err := s.store.ListPRsBySession(ctx, id)
@@ -89,7 +91,17 @@ func (s *Service) ListPRSummaries(ctx context.Context, id domain.SessionID) ([]P
 				threadsExact = false
 			}
 		}
-		out = append(out, summarizePR(group.primary, checks, reviews, threads, comments, threadsExact))
+		summary := summarizePR(group.primary, checks, reviews, threads, comments, threadsExact)
+		summary.Threads = summarizeThreads(threads, comments)
+		if err := s.addPRDetails(ctx, &summary, group.primary.URL); err != nil {
+			return nil, err
+		}
+		if summary.Mergeability.State == contract.MergeConflicting && (summary.State == contract.PRStateOpen || summary.State == contract.PRStateDraft) {
+			for _, path := range s.prConflictFiles(ctx, rec.Metadata.WorkspacePath, group.primary) {
+				summary.Mergeability.ConflictFiles = append(summary.Mergeability.ConflictFiles, contract.PullRequestConflictFile{Path: path})
+			}
+		}
+		out = append(out, summary)
 	}
 	sortPRSummaries(out)
 	return out, nil
@@ -102,6 +114,8 @@ type PRListing struct {
 }
 
 // ListPRListing combines tracked PRs with created PRs reported by the worker.
+// A reported PR the session already tracks is left out, also when the worker
+// linked it under a renamed repository's old name.
 func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRListing, error) {
 	tracked, err := s.ListPRSummaries(ctx, id)
 	if err != nil {
@@ -111,6 +125,20 @@ func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRLis
 	if err != nil {
 		return PRListing{}, err
 	}
+	renames, err := s.store.ListRepositoryRenames(ctx)
+	if err != nil {
+		return PRListing{}, err
+	}
+	current := make(map[string]string, len(renames))
+	for _, r := range renames {
+		current[r.Host+"/"+r.OldName] = r.Name
+	}
+	key := func(ref domain.ChangeRequestReference) string {
+		if name, ok := current[ref.Host+"/"+strings.ToLower(ref.Repository)]; ok {
+			ref.Repository = name
+		}
+		return ref.Key()
+	}
 	seen := make(map[string]bool, len(tracked)+len(urls))
 	for _, pr := range tracked {
 		ref, err := domain.ParseChangeRequestURL(pr.HTMLURL)
@@ -118,19 +146,132 @@ func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRLis
 			ref, err = domain.ParseChangeRequestURL(pr.URL)
 		}
 		if err == nil {
-			seen[ref.Key()] = true
+			seen[key(ref)] = true
 		}
 	}
 	linked := make([]domain.ChangeRequestReference, 0, len(urls))
 	for _, raw := range urls {
 		ref, err := domain.ParseChangeRequestURL(raw)
-		if err != nil || seen[ref.Key()] {
+		if err != nil || seen[key(ref)] {
 			continue
 		}
-		seen[ref.Key()] = true
+		seen[key(ref)] = true
 		linked = append(linked, ref)
 	}
 	return PRListing{Tracked: tracked, Linked: linked}, nil
+}
+
+// prDetailsReader is the optional store read for a PR's description, labels,
+// requested reviewers, commits and conversation comments.
+type prDetailsReader interface {
+	GetPRDetails(ctx context.Context, prURL string) (domain.PullRequestDetails, bool, error)
+}
+
+// addPRDetails fills the summary's view-only fields from the stored details.
+// A PR whose details were never observed keeps empty lists and a zero
+// DetailsObservedAt, so the view can tell "not loaded" from "none".
+func (s *Service) addPRDetails(ctx context.Context, summary *PRSummary, prURL string) error {
+	summary.Labels = []contract.PullRequestLabel{}
+	summary.RequestedReviewers = []contract.PullRequestRequestedReviewer{}
+	summary.Commits = []contract.PullRequestCommit{}
+	reader, ok := s.store.(prDetailsReader)
+	if !ok {
+		return nil
+	}
+	details, found, err := reader.GetPRDetails(ctx, prURL)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	summary.Description = details.Description
+	summary.DescriptionTruncated = details.DescriptionTruncated
+	for _, label := range details.Labels {
+		summary.Labels = append(summary.Labels, contract.PullRequestLabel{Name: label.Name, Color: label.Color})
+	}
+	for _, reviewer := range details.RequestedReviewers {
+		summary.RequestedReviewers = append(summary.RequestedReviewers, contract.PullRequestRequestedReviewer{Login: reviewer.Login, AvatarURL: reviewer.AvatarURL, IsTeam: reviewer.IsTeam})
+	}
+	for _, commit := range details.Commits {
+		summary.Commits = append(summary.Commits, contract.PullRequestCommit{SHA: commit.SHA, Headline: commit.Headline, Author: commit.Author, CommittedAt: commit.CommittedAt})
+	}
+	summary.CommitCount = details.CommitCount
+	summary.DetailsObservedAt = details.ObservedAt
+	for _, comment := range details.Conversation {
+		summary.Conversation = append(summary.Conversation, contract.PullRequestCommentEntry{
+			ID: comment.ID, Author: comment.Author, IsBot: comment.IsBot, Body: comment.Body, URL: comment.URL, CreatedAt: comment.CreatedAt,
+		})
+	}
+	sort.SliceStable(summary.Conversation, func(i, j int) bool {
+		return summary.Conversation[i].CreatedAt.Before(summary.Conversation[j].CreatedAt)
+	})
+	return nil
+}
+
+// summarizeThreads groups stored review comments by provider thread, each
+// thread's comments oldest first and threads by their first comment. Thread
+// rows supply the anchor and resolution; a thread without stored comments has
+// nothing to show and is left out, as are legacy comments with no thread id.
+// Comments repeated across URL aliases appear once.
+func summarizeThreads(threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment) []contract.PullRequestThread {
+	rows := map[string]domain.PullRequestReviewThread{}
+	for _, th := range dedupeReviewThreads(threads) {
+		if th.ThreadID != "" {
+			rows[th.ThreadID] = th
+		}
+	}
+	byThread := map[string]*contract.PullRequestThread{}
+	allResolved := map[string]bool{}
+	order := []string{}
+	seen := map[string]bool{}
+	for _, c := range comments {
+		threadID := strings.TrimSpace(c.ThreadID)
+		if threadID == "" {
+			continue
+		}
+		if c.ID != "" {
+			key := threadID + "\x00" + c.ID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+		}
+		th, ok := byThread[threadID]
+		if !ok {
+			th = &contract.PullRequestThread{ID: threadID, Path: c.File, Line: c.Line, Comments: []contract.PullRequestCommentEntry{}}
+			byThread[threadID] = th
+			allResolved[threadID] = true
+			order = append(order, threadID)
+		}
+		allResolved[threadID] = allResolved[threadID] && c.Resolved
+		th.Comments = append(th.Comments, contract.PullRequestCommentEntry{
+			ID: c.ID, Author: c.Author, IsBot: c.IsBot, Body: c.Body, URL: c.URL, CreatedAt: c.CreatedAt,
+		})
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	out := make([]contract.PullRequestThread, 0, len(order))
+	for _, id := range order {
+		th := byThread[id]
+		th.Resolved = allResolved[id]
+		if row, ok := rows[id]; ok {
+			th.Path, th.Line, th.Resolved = row.Path, row.Line, row.Resolved
+		}
+		sort.SliceStable(th.Comments, func(i, j int) bool {
+			return th.Comments[i].CreatedAt.Before(th.Comments[j].CreatedAt)
+		})
+		out = append(out, *th)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ai, aj := out[i].Comments[0].CreatedAt, out[j].Comments[0].CreatedAt
+		if !ai.Equal(aj) {
+			return ai.Before(aj)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 func summarizePR(pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, threadsExact bool) PRSummary {
@@ -178,14 +319,66 @@ func summarizePRStateChangedAt(pr domain.PullRequest) time.Time {
 	}
 }
 
+// summarizeChecks lists the head commit's checks by name, failing first, then
+// unfinished, then passed or skipped, each group by name. Checks recorded for
+// an older head are history, not the PR's current state. A check repeated
+// across the PR's URL aliases appears once, as its latest record.
+func summarizeChecks(pr domain.PullRequest, checks []domain.PullRequestCheck) []contract.PullRequestCheckEntry {
+	latest := map[string]domain.PullRequestCheck{}
+	for _, ch := range checks {
+		if pr.HeadSHA != "" && ch.CommitHash != "" && !strings.EqualFold(ch.CommitHash, pr.HeadSHA) {
+			continue
+		}
+		if seen, ok := latest[ch.Name]; !ok || ch.CreatedAt.After(seen.CreatedAt) {
+			latest[ch.Name] = ch
+		}
+	}
+	out := make([]contract.PullRequestCheckEntry, 0, len(latest))
+	for _, ch := range latest {
+		out = append(out, contract.PullRequestCheckEntry{Name: ch.Name, Status: ch.Status, URL: ch.URL})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if ri, rj := checkStatusRank(out[i].Status), checkStatusRank(out[j].Status); ri != rj {
+			return ri < rj
+		}
+		return out[i].Name < out[j].Name
+	})
+	if len(out) > contract.MaxPullRequestChecks {
+		out = out[:contract.MaxPullRequestChecks]
+	}
+	return out
+}
+
+func checkStatusRank(status domain.PRCheckStatus) int {
+	switch status {
+	case domain.PRCheckFailed, domain.PRCheckCancelled:
+		return 0
+	case domain.PRCheckInProgress, domain.PRCheckQueued, domain.PRCheckUnknown:
+		return 1
+	default:
+		return 2
+	}
+}
+
 func summarizeCI(pr domain.PullRequest, checks []domain.PullRequestCheck) PRCISummary {
 	state := ciOrUnknown(pr.CI)
-	out := PRCISummary{State: state, AutoInjectCI: pr.AutoInjectCI}
-	if state != domain.CIFailing || pr.Merged || pr.Closed {
+	out := PRCISummary{State: state, AutoInjectCI: pr.AutoInjectCI, Checks: summarizeChecks(pr, checks)}
+	// Failing lists what failed. Unknown lists cancelled checks, so clients can
+	// show a run cancelled with no replacement as settled rather than loading.
+	var listed domain.PRCheckStatus
+	switch state {
+	case domain.CIFailing:
+		listed = domain.PRCheckFailed
+	case domain.CIUnknown:
+		listed = domain.PRCheckCancelled
+	default:
+		return out
+	}
+	if pr.Merged || pr.Closed {
 		return out
 	}
 	for _, ch := range checks {
-		if ch.Status != domain.PRCheckFailed && ch.Status != domain.PRCheckCancelled {
+		if ch.Status != listed {
 			continue
 		}
 		if pr.HeadSHA != "" && ch.CommitHash != "" && !strings.EqualFold(ch.CommitHash, pr.HeadSHA) {
@@ -211,6 +404,22 @@ func summarizeReview(pr domain.PullRequest, comments []domain.PullRequestComment
 		unresolvedThreadCount = &count
 	}
 	out := PRReviewSummary{Decision: reviewOrNone(pr.Review), UnresolvedThreadCount: unresolvedThreadCount}
+	// Reviews carries every reviewer's latest submitted review, including
+	// non-decisive COMMENTED reviews normalized as ReviewNone. A finished PR
+	// keeps them (who approved is part of its record); the unresolved-comment
+	// grouping below is for PRs that can still be acted on.
+	for reviewer, review := range latestReviewSummaries(reviews) {
+		out.Reviews = append(out.Reviews, PRReviewEntry{
+			Reviewer:         reviewer,
+			Verdict:          reviewOrNone(review.State),
+			Body:             review.Body,
+			URL:              review.URL,
+			SubmittedAt:      review.SubmittedAt,
+			IsBot:            review.IsBot,
+			AutoInjectReview: review.AutoInjectReview,
+		})
+	}
+	sort.Slice(out.Reviews, func(i, j int) bool { return out.Reviews[i].Reviewer < out.Reviews[j].Reviewer })
 	if pr.Merged || pr.Closed {
 		return out
 	}
@@ -263,21 +472,6 @@ func summarizeReview(pr domain.PullRequest, comments []domain.PullRequestComment
 		reviewURLByAuthor[reviewer] = review.URL
 		isBot[reviewer] = review.IsBot
 	}
-	// Reviews carries every reviewer's latest submitted review, including
-	// non-decisive COMMENTED reviews normalized as ReviewNone. The unresolved
-	// grouping above still uses decisive changes-requested reviews only.
-	for reviewer, review := range latestReviewSummaries(reviews) {
-		out.Reviews = append(out.Reviews, PRReviewEntry{
-			Reviewer:         reviewer,
-			Verdict:          reviewOrNone(review.State),
-			Body:             review.Body,
-			URL:              review.URL,
-			SubmittedAt:      review.SubmittedAt,
-			IsBot:            review.IsBot,
-			AutoInjectReview: review.AutoInjectReview,
-		})
-	}
-	sort.Slice(out.Reviews, func(i, j int) bool { return out.Reviews[i].Reviewer < out.Reviews[j].Reviewer })
 	sort.Strings(order)
 	for _, reviewer := range order {
 		out.UnresolvedBy = append(out.UnresolvedBy, PRUnresolvedReviewer{

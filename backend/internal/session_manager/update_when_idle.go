@@ -108,6 +108,18 @@ func (m *Manager) updateBlocker(ctx context.Context, rec domain.SessionRecord) (
 	return "", false
 }
 
+// SessionRuntimeEnv is the environment the session's agent process runs in,
+// as the runtime layers it over the daemon's: the project environment,
+// provider keys and the session's account. It issues no browser capability,
+// for callers that only look the session up through the agent CLI.
+func (m *Manager) SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecord) (map[string]string, error) {
+	project, err := m.loadProject(ctx, rec.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	return m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness), nil
+}
+
 // terminalResumesNatively reports whether a terminal stopped for an update
 // could start again on its own conversation, as resumeAfterUpdate requires:
 // the adapter has a restore command and the conversation was persisted.
@@ -126,13 +138,18 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
+	// Adapters that look the conversation up through the CLI need the
+	// session's environment: a project-level credential or profile reaches the
+	// session, not the daemon. No browser capability is issued for a probe.
+	probeEnv := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
+		Env: probeEnv,
 	})
 	if err != nil || !ok {
 		return false
 	}
-	env, _, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env, _, err := m.launchRuntimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	if err != nil {
 		return false
 	}

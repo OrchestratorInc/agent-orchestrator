@@ -10,7 +10,9 @@ import { useOfferedModels } from "./useOfferedModels";
  * `liveModelsLoaded` reports whether `controllerModels` is the provider's answer yet;
  * until it is, the agent's saved device catalog is shown so the picker never waits.
  * `runsOnDevice` is false for a chat whose agent runs elsewhere (a cloud worker): the
- * device catalog's availability marks describe this computer's CLI, not that one.
+ * device catalog's availability marks describe this computer's CLI, not that one, and
+ * its own list names its models, so the device catalog stands in only while that list
+ * is empty.
  */
 export function useChatModelChoices(
 	harness: string | undefined,
@@ -28,9 +30,12 @@ export function useChatModelChoices(
 	const providerModelOption = options?.find(
 		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
 	);
+	// A worker's CLI can run another model than this computer's for the same alias,
+	// so a cloud chat's own list is never named or filtered through this computer's catalog.
+	const ownList = !runsOnDevice && controllerModels.length > 0;
 	// Other agents show their saved catalog until the live list arrives, then the
 	// live list, which reflects this account's entitlements, replaces it.
-	const showSavedCatalog = isClaude || (!liveModelsLoaded && !providerModelOption);
+	const showSavedCatalog = (isClaude && !ownList) || (!liveModelsLoaded && !providerModelOption);
 	const savedCatalog = useQuery({ ...agentModelsQueryOptions(harness ?? "", "", hostId), enabled: Boolean(harness) && showSavedCatalog }).data;
 	const catalogModels = useMemo(() => {
 		// A catalog response may omit models (an older daemon or a mock); treat that
@@ -62,9 +67,10 @@ export function useChatModelChoices(
 	);
 	// Resolve current Claude aliases before filtering so their labels cannot move
 	// to an older enabled model when the current concrete entry is switched off.
+	// A cloud chat's choices are filtered by their own ids, as New Task filters its Cloud catalog.
 	const resolveClaudeChoice = useMemo(
-		() => isClaude && savedCatalog?.models ? claudeChoiceModel(savedCatalog.models) : undefined,
-		[isClaude, savedCatalog],
+		() => isClaude && runsOnDevice && savedCatalog?.models ? claudeChoiceModel(savedCatalog.models) : undefined,
+		[isClaude, runsOnDevice, savedCatalog],
 	);
 	const currentModels = [currentModel, providerModelOption?.currentValue];
 	const { models } = useOfferedModels(harness, catalogModels, {

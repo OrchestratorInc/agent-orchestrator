@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
+	isThemeStylePreviewActive,
+	onThemeStylePreviewEnd,
 	previewDocumentThemeStyle,
 	readStoredThemePreference,
 	readStoredThemeStyle,
@@ -55,6 +57,44 @@ describe("runThemeTransition", () => {
 		expect(update).toHaveBeenCalledOnce();
 		expect(document.documentElement.dataset.styleTheme).toBe("github");
 		expect(document.documentElement.dataset.themeTransition).toBe("active");
+	});
+
+	it("reveals a translucent window's theme in one frame and flips main on reveal", async () => {
+		document.documentElement.dataset.windowTranslucent = "true";
+		let ready!: () => void;
+		const readyPromise = new Promise<void>((resolve) => {
+			ready = resolve;
+		});
+		let callbackDone: Promise<unknown> = Promise.resolve();
+		const startViewTransition = vi.fn((callback: () => Promise<void>) => {
+			callbackDone = callback();
+			return {
+				finished: callbackDone.then(() => readyPromise),
+				ready: readyPromise,
+				updateCallbackDone: callbackDone,
+				skipTransition: () => undefined,
+			};
+		});
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: startViewTransition,
+		});
+		const onReveal = vi.fn();
+		try {
+			runThemeTransition(() => applyDocumentTheme("light"), onReveal);
+
+			expect(startViewTransition).toHaveBeenCalledOnce();
+			expect(document.documentElement.dataset.theme).toBe("light");
+			await callbackDone;
+			expect(onReveal).not.toHaveBeenCalled();
+			ready();
+			await readyPromise;
+			await Promise.resolve();
+			expect(onReveal).toHaveBeenCalledOnce();
+		} finally {
+			delete document.documentElement.dataset.windowTranslucent;
+		}
 	});
 
 	it("suppresses per-element transitions while the theme tokens swap", async () => {
@@ -159,5 +199,20 @@ describe("previewDocumentThemeStyle", () => {
 		document.documentElement.dataset.styleTheme = "nord";
 		previewDocumentThemeStyle(null, "github");
 		expect(document.documentElement.dataset.styleTheme).toBe("nord");
+	});
+
+	it("calls preview-end listeners once, after the saved theme is back", () => {
+		previewDocumentThemeStyle("nord", "github");
+		expect(isThemeStylePreviewActive()).toBe(true);
+		const seen: (string | undefined)[] = [];
+		onThemeStylePreviewEnd(() => seen.push(document.documentElement.dataset.styleTheme));
+
+		previewDocumentThemeStyle(null, "github");
+		expect(isThemeStylePreviewActive()).toBe(false);
+		expect(seen).toEqual(["github"]);
+
+		previewDocumentThemeStyle("dracula", "github");
+		previewDocumentThemeStyle(null, "github");
+		expect(seen).toEqual(["github"]);
 	});
 });

@@ -11,7 +11,6 @@ describe("SessionInspectorRail session navigation", () => {
 		sessionKey={sessionKey}
 		isOpen={isOpen}
 		settledClosed={!isOpen}
-		onExpand={() => {}}
 		sizing={inspectorSizing("summary")}
 		splitRef={splitRef}
 	><input aria-label="Inspector draft" defaultValue="preserved" /></SessionInspectorRail>;
@@ -52,7 +51,6 @@ describe("SessionInspectorRail session navigation", () => {
 			isOpen={isOpen}
 			settledClosed={false}
 			onCloseAnimationComplete={onClose}
-			onExpand={() => {}}
 			sizing={inspectorSizing("summary")}
 			splitRef={splitRef}
 		>content</SessionInspectorRail>;
@@ -68,7 +66,6 @@ describe("SessionInspectorRail session navigation", () => {
 			isOpen={isOpen}
 			settledClosed={false}
 			onCloseAnimationComplete={onClose}
-			onExpand={() => {}}
 			sizing={inspectorSizing("summary")}
 			splitRef={splitRef}
 		>content</SessionInspectorRail>;
@@ -91,7 +88,6 @@ describe("SessionInspectorRail session navigation", () => {
 				isOpen={isOpen}
 				settledClosed={false}
 				onCloseAnimationComplete={onClose}
-				onExpand={() => {}}
 				sizing={inspectorSizing("summary")}
 				splitRef={splitRef}
 			><span data-testid="inspector-child">content</span></SessionInspectorRail>;

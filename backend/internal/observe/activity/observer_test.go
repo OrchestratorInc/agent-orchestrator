@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -56,15 +57,50 @@ type pollingResolverAgent struct {
 	resolvedID   string
 	resolveErr   error
 	resolveCalls int
+	lastResolve  ports.NativeSessionResolveConfig
 }
 
 func (a *pollingResolverAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
 	return a.state, true
 }
 func (*pollingResolverAgent) ContinuouslyDetectTerminalActivity() bool { return true }
-func (a *pollingResolverAgent) ResolveNativeSessionID(context.Context, ports.NativeSessionResolveConfig) (string, bool, error) {
+func (a *pollingResolverAgent) ResolveNativeSessionID(_ context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
 	a.resolveCalls++
+	a.lastResolve = cfg
 	return a.resolvedID, true, a.resolveErr
+}
+
+// An adapter whose native-identity lookup runs its CLI (Stakpak on a remote
+// profile) may need a credential set only in the project environment. The
+// observer passes the session's runtime environment from the session manager.
+func TestPollResolvesNativeIdentityInTheSessionEnvironment(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	sink := &fakeSink{}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
+	var asked domain.SessionID
+	observer.SetSessionEnv(func(_ context.Context, rec domain.SessionRecord) (map[string]string, error) {
+		asked = rec.ID
+		return map[string]string{"STAKPAK_API_KEY": "project-only"}, nil
+	})
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 1 || asked != session.ID || agent.lastResolve.Env["STAKPAK_API_KEY"] != "project-only" {
+		t.Fatalf("resolve calls=%d asked=%q env=%v; want the session environment passed", agent.resolveCalls, asked, agent.lastResolve.Env)
+	}
+	// A session whose environment cannot be built still resolves, without one.
+	observer.SetSessionEnv(func(context.Context, domain.SessionRecord) (map[string]string, error) {
+		return nil, errors.New("project unavailable")
+	})
+	agent.state = domain.ActivityWaitingInput
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 2 || agent.lastResolve.Env != nil {
+		t.Fatalf("resolve calls=%d env=%v; want a resolve without an environment", agent.resolveCalls, agent.lastResolve.Env)
+	}
 }
 
 func TestPollOnlyResolvesOrdinaryNativeIdentityOnStateChange(t *testing.T) {
@@ -576,5 +612,156 @@ func TestMemcodeObservationUsesCurrentRenderedScreen(t *testing.T) {
 	}
 	if len(rawSink.signals) != 1 || rawSink.signals[0].State != domain.ActivityIdle {
 		t.Fatal("raw output fallback did not detect current chrome", rawSink.signals)
+	}
+}
+
+// raw Tail excludes MiniMax's non-newline-terminated footer; the rendered
+// snapshot includes it and contains only the current composer.
+type styledRuntime struct {
+	fakeRuntime
+	surface      string
+	surfaceErr   error
+	surfaceCalls int
+}
+
+func (f *styledRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	f.surfaceCalls++
+	return f.surface, f.surfaceErr
+}
+
+func TestPollRetainsClaudeAndCodexReconciliationOnOlderHosts(t *testing.T) {
+	for _, tc := range []struct {
+		harness domain.AgentHarness
+		agent   ports.Agent
+		output  string
+		want    domain.ActivityState
+	}{
+		{domain.HarnessClaudeCode, claudecode.New(), claudeStuckActiveScreen, domain.ActivityWaitingInput},
+		{domain.HarnessCodex, codex.New(), "› Write tests for @filename\n\ngpt-5.6-sol low · ~/project\n", domain.ActivityIdle},
+	} {
+		t.Run(string(tc.harness), func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			sink := &fakeSink{}
+			runtime := &styledRuntime{
+				fakeRuntime: fakeRuntime{output: tc.output},
+				surfaceErr:  ports.ErrStyledTerminalOutputUnavailable,
+			}
+			observer := New(
+				fakeSessions{rows: []domain.SessionRecord{activeSession(now, tc.harness)}},
+				sink, runtime, fakeAgents{tc.harness: tc.agent},
+				Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+			)
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.signals) != 1 || sink.signals[0].State != tc.want {
+				t.Fatalf("reconciliation = %+v, want %s", sink.signals, tc.want)
+			}
+			if runtime.calls != 1 || runtime.surfaceCalls != 0 {
+				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+			}
+		})
+	}
+}
+
+func TestPollUsesCurrentMiniMaxSurface(t *testing.T) {
+	const draft = "Stopped · message restored to the Composer.\n───\n› cancelled request\n───\n"
+	const footer = "workspace │ Auto │ ✦ glm-5.3-flash"
+	for _, tt := range []struct {
+		name, raw, surface string
+		err                error
+		want               domain.ActivityState
+	}{
+		{name: "non-newline footer", raw: draft, surface: draft + footer, want: domain.ActivityIdle},
+		{name: "current active beats raw stopped", raw: draft + footer, surface: "Loading · Esc stop\n───\n› draft\n───\n" + footer},
+		{name: "unknown surface does not use old raw", raw: draft + footer, surface: "unknown screen"},
+		{name: "capture error does not use old raw", raw: draft + footer, err: errors.New("capture failed")},
+		{name: "old host does not use old raw", raw: draft + footer, err: ports.ErrStyledTerminalOutputUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, domain.HarnessMiniMaxCode)
+			session.Activity.LastActivityAt = now.Add(-time.Second)
+			sink := &fakeSink{}
+			runtime := &styledRuntime{fakeRuntime: fakeRuntime{output: tt.raw}, surface: tt.surface, surfaceErr: tt.err}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, runtime, fakeAgents{domain.HarnessMiniMaxCode: minimaxcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == "" {
+				if len(sink.signals) != 0 {
+					t.Fatalf("unproven surface changed activity: %+v", sink.signals)
+				}
+			} else if len(sink.signals) != 1 || sink.signals[0].State != tt.want {
+				t.Fatalf("signals=%+v want %s", sink.signals, tt.want)
+			}
+			if runtime.calls != 0 || runtime.surfaceCalls != 1 {
+				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+			}
+		})
+	}
+}
+
+// The daemon starts the observer before the session manager exists. Polling
+// waits for StartAfter, which the daemon closes only after installing the
+// session environment: a state change read earlier would resolve its native
+// identity without it, and a steady session is not looked up again.
+func TestStartWaitsForTheSessionEnvironment(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	applied := make(chan struct{}, 1)
+	sink := &fakeSink{applied: func() {
+		select {
+		case applied <- struct{}{}:
+		default:
+		}
+	}}
+	start := make(chan struct{})
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent},
+		Config{DataDir: t.TempDir(), Tick: time.Hour, Clock: func() time.Time { return now }, Logger: testLogger(), StartAfter: start})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := observer.Start(ctx)
+	defer func() { cancel(); <-done }()
+
+	select {
+	case <-applied:
+		t.Fatal("the observer polled before it was started")
+	case <-time.After(50 * time.Millisecond):
+	}
+	observer.SetSessionEnv(func(context.Context, domain.SessionRecord) (map[string]string, error) {
+		return map[string]string{"STAKPAK_API_KEY": "project-only"}, nil
+	})
+	close(start)
+	select {
+	case <-applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the observer never polled after it was started")
+	}
+	if got := agent.lastResolve.Env["STAKPAK_API_KEY"]; got != "project-only" {
+		t.Fatalf("first lookup environment STAKPAK_API_KEY = %q, want the session's", got)
+	}
+}
+
+func TestStartWithoutStartAfterPollsAtOnce(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	applied := make(chan struct{}, 1)
+	sink := &fakeSink{applied: func() {
+		select {
+		case applied <- struct{}{}:
+		default:
+		}
+	}}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent},
+		Config{DataDir: t.TempDir(), Tick: time.Hour, Clock: func() time.Time { return now }, Logger: testLogger()})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := observer.Start(ctx)
+	defer func() { cancel(); <-done }()
+	select {
+	case <-applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("an observer without StartAfter never polled")
 	}
 }

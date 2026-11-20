@@ -43,7 +43,7 @@ createRoot(document.getElementById("root")!).render(
 				<Sample name="Continue"><ChatComposer onSend={noop} onContinue={noop} /></Sample>
 				<Sample name="Side-chat send"><SideSample /></Sample>
 				<Sample name="Side-chat stop"><SideSample running /></Sample>
-				<Sample name="Message-edit send"><HumanMessageEditor text="An edited message" content={[]} pending={false} busy={false} onCancel={noop} onSend={noop} /></Sample>
+				<Sample name="Message-edit send"><HumanMessageEditor text="An edited message" content={[]} sessionId="contrast" apiBaseUrl={null} pending={false} busy={false} onCancel={noop} onSend={noop} /></Sample>
 			</div>
 		</main>
 	</TooltipProvider></I18nextProvider></QueryClientProvider>,

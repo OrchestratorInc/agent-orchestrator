@@ -110,8 +110,24 @@ func TestTunnelRunnerStartsTheCachedTunnelWhenAOCloudIsDown(t *testing.T) {
 const droppedLines = `2026-10-26T06:46:58Z ERR Serve tunnel error error="control stream encountered a failure while serving" connIndex=0 event=0 ip=198.41.200.13
 2026-10-26T06:46:58Z INF Retrying connection in up to 16s connIndex=0 event=0 ip=198.41.200.13`
 
-// The edge refusing a deleted tunnel's token, as cloudflared words it.
-const refusedLine = `2026-10-06T12:00:00Z ERR Register tunnel error from server side error="Unauthorized: Tunnel not found" connIndex=0 event=0 ip=198.41.200.23`
+// The edge refusing a replaced token, as cloudflared words it.
+const refusedLine = `2026-11-02T09:14:31Z ERR Register tunnel error from server side error="Unauthorized: Invalid tunnel secret" connIndex=2 event=0 ip=198.41.192.7`
+
+func TestEdgeRefusedToken(t *testing.T) {
+	for line, want := range map[string]bool{
+		refusedLine: true,
+		`2026-11-02T09:15:02Z ERR Register tunnel error from server side error="record for tunnel not found" connIndex=0 event=0 ip=198.41.192.27`: true,
+		`2026-11-02T09:15:40Z ERR Register tunnel error from server side error="Failed to get tunnel" connIndex=3 event=0 ip=198.41.200.33`:        true,
+		`2026-11-02T09:16:11Z ERR Register tunnel error from server side error="too many connections" connIndex=1 event=0 ip=198.41.200.43`:        false,
+		`2026-11-02T09:16:30Z ERR Register tunnel error from server side connIndex=1 event=0 ip=198.41.200.43`:                                     false,
+		`2026-11-02T09:17:05Z ERR Serve tunnel error error="Unauthorized: Tunnel not found" connIndex=0 event=0 ip=198.41.192.7`:                   false,
+		`2026-11-02T09:17:44Z INF Registered tunnel connection connIndex=0 event=0 ip=198.41.192.7`:                                                false,
+	} {
+		if got := edgeRefusedToken(line); got != want {
+			t.Errorf("edgeRefusedToken(%q) = %v, want %v", line, got, want)
+		}
+	}
+}
 
 // runUntilStopped runs one fixed connector and returns why the runner stopped it.
 func runUntilStopped(t *testing.T, stderr string, deadAfter time.Duration) (*TunnelRunner, *fakeAOCloud, error) {
@@ -336,9 +352,15 @@ func TestTunnelRunnerKeepsTheQuickTunnelUntilAReplacementIsMade(t *testing.T) {
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- r.runOnce(ctx) }()
-	for deadline := time.Now().Add(10 * time.Second); cloud.requests() < 4; time.Sleep(20 * time.Millisecond) {
+	// The upgrade checks can run before the connector subprocess is scheduled.
+	// Wait for both the repair attempts and the connector's startup record
+	// before cancelling, so the assertion below observes a running quick tunnel.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if b, err := os.ReadFile(argsFile); err == nil && len(b) > 0 && cloud.requests() >= 4 {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("asked AO Cloud %d times", cloud.requests())
+			t.Fatalf("quick tunnel did not start after %d AO Cloud requests", cloud.requests())
 		}
 	}
 	cancel()
