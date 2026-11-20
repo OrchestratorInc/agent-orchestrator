@@ -18,8 +18,9 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// This is the CLI/schema pair whose metadata-only remap was verified with
-// actual run_command output. Unknown releases must not resume a prepared copy.
+// This is the CLI/schema pair whose metadata-only preparation was verified
+// with actual run_command output. Reopens validate prepared native state so a
+// later CLI update does not lock users out of their already imported sessions.
 const supportedImportVersion = "1.5.13"
 const importProofName = ".ao-import.json"
 
@@ -361,22 +362,15 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// ValidateImportedACP fences every private-profile ACP reopen, including a
-// missing proof/database and an upgrade to an unverified native binary. Normal
-// Agy launches outside this adapter's private import directory are unaffected.
+// ValidateImportedACP fences private-profile ACP reopens with native-state
+// checks. The preparation version pin does not apply to a later CLI update.
+// Normal Agy launches outside the private import directory are unaffected.
 func ValidateImportedACP(ctx context.Context, root, id, cwd, binary string) error {
 	if !preparedImportNamespace(root) {
 		return nil
 	}
 	if binary == "" {
 		return errors.New("agy: imported history requires the verified agy acp CLI server")
-	}
-	version, err := importBinaryVersion(ctx, binary)
-	if err != nil {
-		return err
-	}
-	if version != supportedImportVersion {
-		return errors.New("agy: unsupported CLI version for imported restore")
 	}
 	launch, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -389,9 +383,6 @@ func ValidateImportedACP(ctx context.Context, root, id, cwd, binary string) erro
 func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if cfg.ImportConfigDir == "" {
 		return nil
-	}
-	if err := p.checkImportVersion(ctx); err != nil {
-		return err
 	}
 	root, err := GeminiHome(cfg.Env)
 	if err != nil {

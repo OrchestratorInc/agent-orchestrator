@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -322,5 +323,70 @@ func TestImportedTerminalRestoreUsesPrivateRootAndRefusesMissingHistory(t *testi
 	delete(cfg.Session.Metadata, ports.MetadataKeyAgentSessionID)
 	if _, ok, err := p.GetRestoreCommand(ctx, cfg); err == nil || ok {
 		t.Fatalf("missing imported ID accepted: %v,%v", ok, err)
+	}
+}
+
+func TestImportedReopenSurvivesCLIUpgradeButPreparationStaysPinned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI uses a POSIX shell")
+	}
+	ctx := context.Background()
+	root, path, cwd := importFixture(t)
+	fingerprint, err := ImportFingerprint(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "agy")
+	writeVersion := func(version string) {
+		t.Helper()
+		if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeVersion(supportedImportVersion)
+	p := &Plugin{resolvedBinary: binary}
+	launch := t.TempDir()
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: launch, DataDir: t.TempDir(), SourceFingerprint: fingerprint}
+	terminal, err := p.PrepareImportedSession(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Chat, r.DataDir = true, t.TempDir()
+	chat, err := p.PrepareImportedSession(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeVersion("1.5.14")
+	if version, err := importBinaryVersion(ctx, binary); err != nil || version != "1.5.14" {
+		t.Fatalf("upgraded fake binary = %q,%v", version, err)
+	}
+	restore := ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: launch, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: terminal.NativeSessionID, ports.MetadataKeyImportSourceNativeID: importTestID, ports.MetadataKeyImportResumeNativeID: terminal.NativeSessionID, ports.MetadataKeyImportConfigDir: terminal.ConfigDir}}}
+	if _, ok, err := p.GetRestoreCommand(ctx, restore); err != nil || !ok {
+		t.Fatalf("restore after CLI update = %v,%v", ok, err)
+	}
+	hook := ports.WorkspaceHookConfig{ImportConfigDir: terminal.ConfigDir, NativeSessionID: terminal.NativeSessionID, WorkspacePath: launch, Env: map[string]string{"GEMINI_HOME": terminal.ConfigDir}}
+	if err := p.PrepareRuntimeLaunch(ctx, hook); err != nil {
+		t.Fatalf("launch after CLI update = %v", err)
+	}
+	if err := ValidateImportedACP(ctx, chat.ConfigDir, chat.NativeSessionID, launch, binary); err != nil {
+		t.Fatalf("ACP after CLI update = %v", err)
+	}
+	r.DataDir = t.TempDir()
+	if _, err := p.PrepareImportedSession(ctx, r); err == nil || !strings.Contains(err.Error(), "version 1.5.13") {
+		t.Fatalf("new preparation after CLI update = %v", err)
+	}
+	for _, ref := range []ports.NativeSessionRef{terminal, chat} {
+		if err := os.Remove(ref.TranscriptPath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok, err := p.GetRestoreCommand(ctx, restore); err == nil || ok {
+		t.Fatalf("missing terminal history after CLI update = %v,%v", ok, err)
+	}
+	if err := p.PrepareRuntimeLaunch(ctx, hook); err == nil {
+		t.Fatal("missing launch history after CLI update accepted")
+	}
+	if err := ValidateImportedACP(ctx, chat.ConfigDir, chat.NativeSessionID, launch, binary); err == nil {
+		t.Fatal("missing ACP history after CLI update accepted")
 	}
 }

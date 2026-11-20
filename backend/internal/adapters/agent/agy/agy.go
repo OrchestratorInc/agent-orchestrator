@@ -165,9 +165,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		if cfg.Session.Metadata[ports.MetadataKeyImportResumeNativeID] != "" && cfg.Session.Metadata[ports.MetadataKeyImportResumeNativeID] != agentSessionID {
 			return nil, false, ports.ErrNativeHistoryUnavailable
 		}
-		if err := p.checkImportVersion(ctx); err != nil {
-			return nil, false, err
-		}
 		launch, err := filepath.EvalSymlinks(cfg.Session.WorkspacePath)
 		if err != nil {
 			return nil, false, err
