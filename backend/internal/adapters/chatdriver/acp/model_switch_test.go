@@ -65,6 +65,87 @@ func TestConfigOptionValueNamedMatchesTheDescriptionLabel(t *testing.T) {
 	}
 }
 
+// Leading a description with a label is a convention of model lists; any other
+// option still matches on its choices' names only.
+func TestConfigOptionValueNamedReadsDescriptionsOnlyForModels(t *testing.T) {
+	c := &conversation{configOptions: []ports.ChatConfigOption{{
+		ID: "mode", Type: ports.ChatConfigOptionSelect,
+		Current: ports.ChatConfigOptionValue{Select: "default"},
+		Choices: []ports.ChatConfigOptionChoice{
+			{Value: "default", Name: "Default", Description: "Plan · Ask before edits"},
+			{Value: "plan", Name: "Plan mode"},
+		},
+	}}}
+	if got := c.configOptionValueNamed("mode", "Plan"); got != "" {
+		t.Fatalf("configOptionValueNamed(mode, Plan) = %q, want no match from a description", got)
+	}
+	if got := c.configOptionValueNamed("mode", "plan mode"); got != "plan" {
+		t.Fatalf("configOptionValueNamed(mode, plan mode) = %q, want plan", got)
+	}
+}
+
+// After a switch to a full ID the agent lists only under its alias, the
+// session's model is the alias. Later sends on the same full ID are not a
+// switch: they must be neither refused nor sent again.
+func TestSendsAfterADescriptionMatchedSwitchAreNotRefused(t *testing.T) {
+	description := "Opus 5.5 · Best for everyday, complex tasks"
+	choices := acpsdk.SessionConfigSelectOptionsUngrouped{
+		{Value: "opus", Name: "Opus", Description: &description},
+		{Value: "claude-haiku-5-5", Name: "claude-haiku-5-5"},
+	}
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{{Select: &acpsdk.SessionConfigOptionSelect{
+		Id: "model", Name: "Model", CurrentValue: "claude-haiku-5-5",
+		Options: acpsdk.SessionConfigSelectOptions{Ungrouped: &choices}, Type: "select",
+	}}}}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			if settings.Model == "claude-opus-5-5" {
+				return []SessionOption{{ID: "model", Value: settings.Model, Optional: true, Name: "Opus 5.5"}}
+			}
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	started, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(), Model: "claude-haiku-5-5",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer started.Close()
+	conv := started.(*conversation)
+	ctx := context.Background()
+	if err := conv.checkModelSwitch(ctx, "claude-opus-5-5"); err != nil {
+		t.Fatalf("switch to claude-opus-5-5: %v, want allowed", err)
+	}
+	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: "claude-opus-5-5"}); err != nil {
+		t.Fatalf("applyTurnSettings(claude-opus-5-5): %v", err)
+	}
+	if got := conv.configOptionCurrent("model"); got != "opus" {
+		t.Fatalf("current model = %q, want opus", got)
+	}
+	agent.mu.Lock()
+	sets := agent.setCalls
+	agent.mu.Unlock()
+	for range 2 {
+		if err := conv.checkModelSwitch(ctx, "claude-opus-5-5"); err != nil {
+			t.Fatalf("later send on claude-opus-5-5: %v, want allowed", err)
+		}
+		if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: "claude-opus-5-5"}); err != nil {
+			t.Fatalf("later applyTurnSettings(claude-opus-5-5): %v", err)
+		}
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.setCalls != sets {
+		t.Fatalf("set_config_option calls after the switch = %d, want %d (no resend)", agent.setCalls, sets)
+	}
+}
+
 // A switch the session cannot honor used to be skipped, so the old model kept
 // answering while AO showed the new one (#6399).
 func TestCheckModelSwitchRefusesAnOptionalModelTheSessionCannotUse(t *testing.T) {
