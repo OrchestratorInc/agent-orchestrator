@@ -201,7 +201,7 @@ describe("ModelMenuChoices", () => {
 	it("hides the header while searching and gives the list a row more in its place", async () => {
 		const user = userEvent.setup();
 		render(
-			<ModelMenuChoices models={generateModels(30)} searchable rows={4} header={() => <div data-testid="rail" />}>
+			<ModelMenuChoices models={generateModels(30)} searchable rows={4} header={<div data-testid="rail" />}>
 				{(matches) => matches.map((model) => (
 					<button key={model.id} type="button" role="menuitemradio">{model.label}</button>
 				))}
@@ -215,6 +215,34 @@ describe("ModelMenuChoices", () => {
 		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 5 + 1px * 5)");
 		await user.clear(screen.getByRole("searchbox"));
 		expect(screen.getByTestId("rail")).toBeInTheDocument();
+	});
+
+	it("passes over matches that cannot be picked when Enter picks from the search", async () => {
+		const user = userEvent.setup();
+		const picked = vi.fn();
+		const pickable = (model: { id: string }) => model.id !== "provider/model-1";
+		render(
+			<ModelMenuChoices models={generateModels(20)} searchable pickable={pickable}>
+				{(matches, searchActiveID, optionID) => matches.map((model) => (
+					<button
+						key={model.id}
+						id={optionID?.(model.id)}
+						type="button"
+						role="menuitemradio"
+						data-disabled={pickable(model) ? undefined : ""}
+						data-search-active={model.id === searchActiveID || undefined}
+						onClick={() => picked(model.id)}
+					>
+						{model.label}
+					</button>
+				))}
+			</ModelMenuChoices>,
+		);
+		await user.type(screen.getByRole("searchbox"), "Model 1");
+		// "Model 1" is the first match, and cannot be picked; "Model 10" is the first that can.
+		expect(screen.getByRole("menuitemradio", { name: "Model 10" })).toHaveAttribute("data-search-active");
+		await user.keyboard("{Enter}");
+		expect(picked).toHaveBeenCalledExactlyOnceWith("provider/model-10");
 	});
 
 	it("hides the footer while searching a list that grows with its results", async () => {

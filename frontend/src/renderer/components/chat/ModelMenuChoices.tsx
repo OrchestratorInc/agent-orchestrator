@@ -19,6 +19,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	rows,
 	header,
 	footer,
+	pickable,
 	className,
 	children,
 }: {
@@ -43,9 +44,11 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	 * leave them for the search, Down and Tab for the list, and typing goes to the search.
 	 * Hidden while a search is typed; a capped list gets a row more in its place.
 	 */
-	header?: (controls: { clearSearch: () => void }) => ReactNode;
+	header?: ReactNode;
 	/** Rows under the list, kept in view while it scrolls. Hidden while searching, unless `rows` caps the list. */
 	footer?: ReactNode;
+	/** Whether a match can be picked. Search highlights, and Enter picks, the first one that can. */
+	pickable?: (model: T) => boolean;
 	className?: string;
 	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string, query?: string) => ReactNode;
 }) {
@@ -91,7 +94,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		if (hasMore) setLoaded({ list: listKey, count: matches.length + BATCH_SIZE });
 	}, [hasMore, matches.length, listKey]);
 	const [searchFocused, setSearchFocused] = useState(false);
-	const searchActiveID = normalizedQuery && searchFocused ? matches[0]?.id : undefined;
+	const searchActiveID = normalizedQuery && searchFocused ? (pickable ? matches.find(pickable) : matches[0])?.id : undefined;
 	const optionIDPrefix = useId();
 	const optionID = useCallback(
 		(id: string) => `${optionIDPrefix}-option-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
@@ -131,7 +134,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		};
 	}, [holdsHeight]);
 	useEdgeFade(scrollRef);
-	const clearSearch = useCallback(() => setSearch(""), []);
 	// The header's own tab stop (the rail's chosen agent), if it has one.
 	const focusHeader = () => {
 		const target = headerRef.current?.querySelector<HTMLElement>('[tabindex="0"]');
@@ -205,7 +207,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 								: null;
 							(
 								highlighted ??
-								scrollRef.current?.querySelector<HTMLElement>('[role="menuitemradio"]')
+								scrollRef.current?.querySelector<HTMLElement>('[role="menuitemradio"]:not([data-disabled])')
 							)?.click();
 							return;
 						}
@@ -215,7 +217,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						}
 						if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 							event.preventDefault();
-							const items = scrollRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]');
+							const items = scrollRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([data-disabled])');
 							const target = event.key === "ArrowDown" ? items?.[0] : items?.[items.length - 1];
 							target?.focus();
 						}
@@ -269,7 +271,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						typeIntoSearch(event);
 					}}
 				>
-					{header({ clearSearch })}
+					{header}
 				</div>
 			) : null}
 			<div

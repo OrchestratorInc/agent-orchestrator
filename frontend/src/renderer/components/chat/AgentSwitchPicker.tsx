@@ -416,6 +416,8 @@ export function AgentModelPicker({
 			id: `${agent.id} ${model.id}`, label: `${model.label} ${agentLabel(agent.id)}`, harness: agent.id, model,
 		}));
 	});
+	// A match its agent cannot take now, or the agent cannot run, is listed dimmed and passed over by Enter.
+	const searchPickable = (row: { harness: string; model: PickerModel }) => pickable(row.harness) && !row.model.unavailableReason;
 	const shownModels = shownHarness === "claude-code" ? claudeOrder(mergeSameNamedModels(source.models, source.modelId)) : source.models;
 	const browseRows = open && settable
 		? shownModels.map((model) => ({ id: `${shownHarness} ${model.id}`, label: model.label, harness: shownHarness, model }))
@@ -550,17 +552,18 @@ export function AgentModelPicker({
 					searchable
 					searchPlaceholder={t("agentSwitch.search")}
 					rows={VISIBLE_MODEL_ROWS + setups.length}
-					header={({ clearSearch }) => (
+					header={(
 						<AgentRail
 							agents={agents}
 							selected={shownHarness}
 							blockedReason={blockedReason}
-							onPick={(id) => { clearSearch(); pickAgent(id); }}
+							onPick={pickAgent}
 							onSetup={(id) => { management.requestAgentSetup(id); setOpen(false); }}
 							onManage={() => { management.requestManagement(); setOpen(false); }}
 						/>
 					)}
 					footer={settingsFooter}
+					pickable={searchPickable}
 				>
 					{(matches, searchActiveID, optionID, query) => query ? matches.map((row, index) => (
 						// Matches are grouped under their agent, the chosen one first. Typing never
@@ -577,7 +580,7 @@ export function AgentModelPicker({
 								optionId={optionID?.(row.id)}
 								active={row.harness === shownHarness && row.model.id === source.modelId}
 								searchActive={row.id === searchActiveID}
-								disabled={!pickable(row.harness) || Boolean(row.model.unavailableReason)}
+								disabled={!searchPickable(row)}
 								onPick={pickFromSearch}
 							/>
 						</Fragment>
