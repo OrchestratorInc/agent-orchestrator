@@ -12,6 +12,7 @@ import { collectPages, createCloudClient, type CloudClient } from "./client";
 import { CLOUD_API_BASE_URL } from "./config";
 import { CloudAuthError, cloudErrorMessage } from "./errors";
 import { resolveOrganization } from "./org";
+import { mergeCloudProjectLists, upsertCloudProject } from "./standaloneAgents";
 import { presentPlanRefusal } from "./planRefusal";
 import { registerCloudPush, unregisterCloudPush } from "./push";
 import type { CloudMe, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession } from "./types";
@@ -53,6 +54,8 @@ export type CloudState = {
 	refreshNotifications(): Promise<void>;
 	/** Put a session the phone just created or changed into the list without waiting for the poll. */
 	upsertSession(session: CloudSession): void;
+	/** Put a project the phone just created (a standalone agent's) into the list without waiting for a read. */
+	upsertProject(project: CloudProject): void;
 	/** A cloud screen is on view: poll at the live rate until the returned release runs. */
 	watch(): () => void;
 };
@@ -156,9 +159,14 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		const own = generation.current;
 		if (!current) return;
 		try {
-			const items = await collectPages((cursor) => client.listProjects(current.id, { cursor }));
+			// The caller's standalone agents are each a project of their own, read
+			// apart from the projects so many agents can't page the projects out.
+			const [listed, agents] = await Promise.all([
+				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "exclude" })),
+				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "only" })),
+			]);
 			if (own !== generation.current) return;
-			setProjects(items);
+			setProjects(mergeCloudProjectLists(listed, agents));
 			setProjectsLoaded(true);
 			setProjectsError(null);
 		} catch (cause) {
@@ -353,11 +361,15 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
 	}, []);
 
+	const upsertProject = useCallback((project: CloudProject) => {
+		setProjects((current) => upsertCloudProject(current, project));
+	}, []);
+
 	const value = useMemo<CloudState>(() => ({
 		status, account, me, org, error, client,
 		projects, projectsLoaded, projectsError, sessions, sessionsLoaded, sessionsError, connections, connectionsLoaded, notificationsUnread,
 		chatHarnesses: me?.chatHarnesses ?? NO_CHAT_HARNESSES,
-		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, watch,
-	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsError, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsError, sessionsLoaded, signIn, signOut, status, upsertSession, watch]);
+		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, upsertProject, watch,
+	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsError, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsError, sessionsLoaded, signIn, signOut, status, upsertProject, upsertSession, watch]);
 	return <CloudContext.Provider value={value}>{children}</CloudContext.Provider>;
 }

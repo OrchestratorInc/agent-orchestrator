@@ -101,6 +101,30 @@ describe("CloudProvider", () => {
 		expect(latest?.projects).toEqual([project("b-p", "b")]);
 	});
 
+	it("reads the projects and the caller's standalone agents apart, and keeps each project once", async () => {
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		fixtures.client.listProjects.mockImplementation(async (orgId: string, list: { standaloneAgents?: string } = {}) =>
+			list.standaloneAgents === "only" ? page([agent]) : page([project(`${orgId}-p`, orgId)]));
+		await mount();
+		expect(fixtures.client.listProjects.mock.calls.map((call) => call[1]?.standaloneAgents)).toEqual(["exclude", "only"]);
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+
+		// A control plane without agents ignores the filter and lists every project in both reads.
+		fixtures.client.listProjects.mockImplementation(async (orgId: string) => page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshProjects(); await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p"]);
+	});
+
+	it("lists a project the phone just created before the next read", async () => {
+		await mount();
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		act(() => latest!.upsertProject(agent));
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+		act(() => latest!.upsertProject({ ...agent, displayName: "renamed" }));
+		expect(latest?.projects).toHaveLength(2);
+		expect(latest?.projects[1].displayName).toBe("renamed");
+	});
+
 	it("comes back to ready when retried from an error, though it kept its organization", async () => {
 		await mount();
 		fixtures.client.getMe.mockImplementation(async () => { throw new Error("offline"); });
