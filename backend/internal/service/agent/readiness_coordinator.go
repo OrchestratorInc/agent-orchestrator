@@ -31,9 +31,12 @@ const (
 	// The Docker Agent auth check runs `docker-agent doctor`, then asks the
 	// provider to list models with the key; each has its own bound.
 	dockerAgentAuthCheckTimeout = 30 * time.Second
-	opencodeV2MigrationTimeout  = 30 * time.Minute
-	defaultAuthCheckTimeout     = 10 * time.Second
-	defaultReadinessWorkers     = 4
+	// The Cursor auth check runs `cursor-agent status` (3s), and when that
+	// cannot confirm the account, `cursor-agent models` (6s) to verify the login.
+	cursorAuthCheckTimeout     = 15 * time.Second
+	opencodeV2MigrationTimeout = 30 * time.Minute
+	defaultAuthCheckTimeout    = 10 * time.Second
+	defaultReadinessWorkers    = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -633,6 +636,8 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		case domain.HarnessDockerAgent:
 			// `docker-agent doctor` (15s) then the provider key check (10s).
 			timeout = dockerAgentAuthCheckTimeout
+		case domain.HarnessCursor:
+			timeout = cursorAuthCheckTimeout
 		case domain.HarnessMiMoCode:
 			// Allow separate 20-second credential detection and verification budgets.
 			timeout = 40 * time.Second
