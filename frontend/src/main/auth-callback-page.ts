@@ -6,7 +6,10 @@
 //
 // Everything is inline: the page is served by a one-shot local server that
 // closes right after this response, so it can't ask that server for anything
-// else. System fonts stand in for Geist.
+// else. The logo is bundled at build time and embedded as a data URL; system
+// fonts stand in for Geist.
+
+import logoSvg from "../../assets/ao-logo.svg?raw";
 
 export type AuthCallbackProvider = "cloud" | "claude-code" | "github";
 
@@ -34,6 +37,10 @@ export interface AuthCallbackPage {
 	/** Where the success page sends the browser back to the app, if anywhere. */
 	returnUrl?: string;
 }
+
+// An <img> rather than inline markup, so the logo's own ids and gradients
+// can't clash with the page's.
+const LOGO_SRC = `data:image/svg+xml;base64,${Buffer.from(logoSvg).toString("base64")}`;
 
 /** How long the success page shows before it returns to the app. */
 const RETURN_DELAY_MS = 1500;
@@ -139,6 +146,7 @@ main {
 	text-align: center;
 	animation: rise 500ms var(--ease) both;
 }
+.logo { display: block; width: 48px; height: 48px; margin: 0 0 20px; }
 h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
 .lede { margin: 12px 0 0; max-width: 30rem; color: var(--muted); text-wrap: balance; }
 .lede strong { color: var(--fg); font-weight: 500; }
@@ -222,6 +230,7 @@ export function renderAuthCallbackPage({ provider, ok, login, returnUrl }: AuthC
 </head>
 <body>
 <main>
+	<img class="logo" src="${LOGO_SRC}" alt="Orchestrator" width="48" height="48">
 	<h1>${escapeHtml(title)}</h1>
 	<p class="lede">${lede}</p>
 	<ul>${steps(copy, ok)}</ul>
