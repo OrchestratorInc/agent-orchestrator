@@ -27,12 +27,23 @@ import type { HostMetadata } from "../hosts";
 // bound to its chat, so a copy taken off the phone cannot be read. A file that
 // does not decrypt (cut short, another chat's, made under a key since deleted)
 // loads as nothing saved. With no key to be had, nothing is saved.
+//
+// A page is replaced by writing it whole beside the old one (`.page.tmp`),
+// then moving it over the old one. An in-place write would truncate the old
+// page first (Android opens it for overwrite), so a kill mid-write would lose
+// the last offline transcript. expo-file-system's move with `overwrite`
+// deletes the destination just before renaming onto it, so a kill inside that
+// one native call can leave only the `.tmp`, which is whole by then: a read
+// falls back to it when the page is missing or does not open.
 
 /** Where older builds kept the pages; cleared once a launch. */
 const LEGACY_INDEX_KEY = "ao.chat.saved.v1";
 const LEGACY_PAGE_PREFIX = `${LEGACY_INDEX_KEY}.`;
 const DIRECTORY_NAME = "saved-chats";
 const FILE_SUFFIX = ".page";
+/** A replacement page being written, moved over its page once whole. */
+const TMP_SUFFIX = `${FILE_SUFFIX}.tmp`;
+const replacementOf = (name: string) => `${name}.tmp`;
 /** The longest file name used; a chat whose key would need more is not saved. */
 const MAX_FILE_NAME = 200;
 const KEY_STORE_KEY = "ao.chat.savedPagesKey";
@@ -64,15 +75,16 @@ const savedDirectory = () => new Directory(Paths.cache, DIRECTORY_NAME);
  * are still found by its identity (see forget). Null when it would be too long.
  */
 export function savedFileName(key: string): string | null {
-	const name = encodeURIComponent(key) + FILE_SUFFIX;
-	return name.length <= MAX_FILE_NAME ? name : null;
+	const base = encodeURIComponent(key);
+	return base.length + TMP_SUFFIX.length <= MAX_FILE_NAME ? base + FILE_SUFFIX : null;
 }
 
-/** The chat a file holds, or null for a file that is not a saved page. */
+/** The chat a file holds (its page, or a replacement being written), or null for a file that is neither. */
 export function savedFileKey(name: string): string | null {
-	if (!name.endsWith(FILE_SUFFIX)) return null;
+	const suffix = name.endsWith(FILE_SUFFIX) ? FILE_SUFFIX : name.endsWith(TMP_SUFFIX) ? TMP_SUFFIX : null;
+	if (!suffix) return null;
 	try {
-		return decodeURIComponent(name.slice(0, -FILE_SUFFIX.length));
+		return decodeURIComponent(name.slice(0, -suffix.length));
 	} catch {
 		return null;
 	}
@@ -122,25 +134,37 @@ async function savedPagesKey(create: boolean): Promise<AESEncryptionKey | null> 
 /** A chat's key as the encryption's additional data, so a file opens only as its own chat. */
 const boundTo = (key: string) => ({ additionalData: new TextEncoder().encode(key) });
 
+/** A saved file's page, or null when it does not open as a current page of `key`. */
+async function readSavedFile(file: File, key: string, encryptionKey: AESEncryptionKey, now: number): Promise<ConversationPage | null> {
+	try {
+		const plain = await aesDecryptAsync(AESSealedData.fromCombined(await file.bytes()), encryptionKey, boundTo(key));
+		const saved = JSON.parse(new TextDecoder().decode(plain)) as Partial<Saved>;
+		const page = saved.page;
+		return saved.v === 2 && typeof saved.savedAt === "number" && now - saved.savedAt < SAVED_PAGE_KEEP_MS
+			&& page && Array.isArray(page.items) && Array.isArray(page.turns) ? page : null;
+	} catch {
+		return null;
+	}
+}
+
 export async function loadSavedConversation(key: string, now = Date.now()): Promise<ConversationPage | null> {
 	void clearLegacySavedPages();
 	try {
 		const name = savedFileName(key);
 		if (!name) return null;
-		const file = new File(savedDirectory(), name);
-		if (!file.exists) return null;
+		const directory = savedDirectory();
+		// The page, else a whole replacement a kill left before it was moved into place.
+		const files = [new File(directory, name), new File(directory, replacementOf(name))].filter((file) => file.exists);
+		if (!files.length) return null;
 		const encryptionKey = await savedPagesKey(false);
 		if (!encryptionKey) return null;
-		let saved: Partial<Saved> = {};
-		try {
-			const plain = await aesDecryptAsync(AESSealedData.fromCombined(await file.bytes()), encryptionKey, boundTo(key));
-			saved = JSON.parse(new TextDecoder().decode(plain)) as Partial<Saved>;
-		} catch { /* deleted below */ }
-		// Unreadable or expired: it can never show. Not deleted here, where a write
-		// may have replaced it since it was read; the next write prunes or replaces it.
-		if (saved.v !== 2 || typeof saved.savedAt !== "number" || now - saved.savedAt >= SAVED_PAGE_KEEP_MS) return null;
-		const page = saved.page;
-		return page && Array.isArray(page.items) && Array.isArray(page.turns) ? savedPageView(page) : null;
+		// Unreadable or expired files are not deleted here, where a write may have
+		// replaced them since they were read; the next write prunes or replaces them.
+		for (const file of files) {
+			const page = await readSavedFile(file, key, encryptionKey, now);
+			if (page) return savedPageView(page);
+		}
+		return null;
 	} catch {
 		return null;
 	}
@@ -184,9 +208,11 @@ export function savedPageView(page: ConversationPage): ConversationPage {
 
 /**
  * The files to delete once `keep` is written: anything that is not a saved
- * page, pages older than SAVED_PAGE_KEEP_MS, and the pages past `limit` chats
- * or `budget` bytes in all, the least recently saved (by modification time)
- * going first. `keep` always stays.
+ * page, a `.tmp` beside its chat's page (a replacement cut short, or one the
+ * page has since replaced), pages older than SAVED_PAGE_KEEP_MS, and the pages
+ * past `limit` chats or `budget` bytes in all, the least recently saved (by
+ * modification time) going first. A `.tmp` alone stands in for its page.
+ * `keep` always stays.
  */
 export function savedPageEvictions(
 	files: readonly SavedFile[],
@@ -195,7 +221,10 @@ export function savedPageEvictions(
 	limit = SAVED_CONVERSATIONS,
 	budget = SAVED_TOTAL_MAX_BYTES,
 ): string[] {
-	const current = (file: SavedFile) => file.name === keep || (savedFileKey(file.name) !== null && now - file.modified < SAVED_PAGE_KEEP_MS);
+	const names = new Set(files.map((file) => file.name));
+	const beside = (file: SavedFile) => file.name.endsWith(TMP_SUFFIX) && names.has(file.name.slice(0, FILE_SUFFIX.length - TMP_SUFFIX.length));
+	const current = (file: SavedFile) => file.name === keep
+		|| (savedFileKey(file.name) !== null && !beside(file) && now - file.modified < SAVED_PAGE_KEEP_MS);
 	const evicted = files.filter((file) => !current(file)).map((file) => file.name);
 	const newestFirst = files.filter(current).sort((a, b) => Number(b.name === keep) - Number(a.name === keep) || b.modified - a.modified);
 	let kept = 0;
@@ -223,9 +252,11 @@ async function writeSaved(key: string, page: ConversationPage, now: number): Pro
 	const sealed = await aesEncryptAsync(plain, encryptionKey, boundTo(key));
 	const directory = savedDirectory();
 	if (!directory.exists) directory.create({ intermediates: true, idempotent: true });
-	// Written in place: a write cut short leaves a file that does not decrypt,
-	// which loads as nothing saved.
-	new File(directory, name).write(await sealed.combined());
+	// Written whole beside the old page, then moved over it (see the top of this
+	// file): a write cut short leaves the old page as it was.
+	const replacement = new File(directory, replacementOf(name));
+	replacement.write(await sealed.combined());
+	replacement.moveSync(new File(directory, name), { overwrite: true });
 	pruneSaved(directory, name, now);
 }
 
