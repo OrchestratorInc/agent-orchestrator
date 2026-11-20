@@ -61,6 +61,7 @@ type spawnRequest struct {
 	RequestedOutput     string `json:"requestedOutput,omitempty"`
 	DisplayName         string `json:"displayName"`
 	DisplayNameExplicit bool   `json:"displayNameExplicit,omitempty"`
+	TerminateOnPRMerge  *bool  `json:"terminateOnPrMerge,omitempty"`
 	// Async publishes a Chat session as starting, with its prompt queued, before
 	// the worktree and agent are up, as the desktop's new task does. The CLI
 	// then waits for the start to settle so failures still reach the caller.

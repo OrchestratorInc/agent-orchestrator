@@ -731,6 +731,9 @@ type SpawnSessionRequest struct {
 	// DisplayNameExplicit says displayName was deliberately chosen, so it wins
 	// over a terminal program's title. Omit it for a name derived from the prompt.
 	DisplayNameExplicit bool `json:"displayNameExplicit,omitempty"`
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 	// Attachments are files pasted or dropped into the task brief. Each carries
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.

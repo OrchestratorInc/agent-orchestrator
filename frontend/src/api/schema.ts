@@ -5418,6 +5418,7 @@ export interface components {
             mode?: string;
             model?: string;
             permissions?: string;
+            terminateOnPrMerge?: null | boolean;
         };
         AgentInfo: {
             /**
@@ -7907,6 +7908,7 @@ export interface components {
             reviewers?: components["schemas"]["DomainReviewerConfig"][];
             sessionPrefix?: string;
             symlinks?: string[];
+            terminateOnPrMerge?: null | boolean;
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
             worker?: components["schemas"]["RoleOverride"];
             workersRequestReview?: boolean;
@@ -9142,6 +9144,7 @@ export interface components {
             prompt?: string;
             /** @enum {string} */
             requestedOutput?: "artifact";
+            terminateOnPrMerge?: null | boolean;
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };

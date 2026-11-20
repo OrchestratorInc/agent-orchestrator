@@ -281,6 +281,46 @@ func TestTaskPreparationBaseWriteCannotOverwritePromotedSession(t *testing.T) {
 	}
 }
 
+func TestTaskPreparationPromotionPersistsTerminateOnPRMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		prepVal   bool
+		launchVal bool
+	}{
+		{name: "prep false promoted to true", prepVal: false, launchVal: true},
+		{name: "prep true promoted to false", prepVal: true, launchVal: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, s, "mer")
+
+			prepared := sampleRecord("mer")
+			prepared.IsTaskPreparation = true
+			prepared.ProvisionState = domain.SessionProvisionProvisioning
+			prepared.TerminateOnPRMerge = tc.prepVal
+			created, err := s.CreateSession(ctx, prepared)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			visible := sampleRecord("mer")
+			visible.TerminateOnPRMerge = tc.launchVal
+			if ok, err := s.PromoteTaskPreparation(ctx, created.ID, visible); err != nil || !ok {
+				t.Fatalf("promote preparation = %v, %v", ok, err)
+			}
+
+			got, ok, err := s.GetSession(ctx, created.ID)
+			if err != nil || !ok {
+				t.Fatalf("get promoted session = %v, %v", ok, err)
+			}
+			if got.TerminateOnPRMerge != tc.launchVal {
+				t.Fatalf("promoted TerminateOnPRMerge = %v, want %v", got.TerminateOnPRMerge, tc.launchVal)
+			}
+		})
+	}
+}
+
 func TestProvisionedWorkspaceRejectsTerminatedSession(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
