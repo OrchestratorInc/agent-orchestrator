@@ -21,12 +21,14 @@ const logClockSlack = 5 * time.Second
 // of its own, so the log is the only output there is.
 //
 // The path comes from the command line, never from a request. Relative paths
-// start at dir, after any plain `cd` the command runs first. The file is read
-// only when it is a regular file, not a symlink, written no earlier than the
-// task started: a stale log from an earlier run, or an existing file the
+// start at dir, after any plain `cd` the command runs first. Only a log inside
+// dir, the session's workspace, is read: an absolute path elsewhere, or a
+// symlink anywhere on the way that leaves dir, is not followed. The file is
+// read only when it is a regular file, not a symlink, written no earlier than
+// the task started: a stale log from an earlier run, or an existing file the
 // command opened without writing to, is not shown.
 func RedirectedOutput(command, dir string, startedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
-	if startedAt == nil {
+	if startedAt == nil || !filepath.IsAbs(dir) {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
 	home, _ := os.UserHomeDir()
@@ -34,21 +36,31 @@ func RedirectedOutput(command, dir string, startedAt *time.Time) (ports.ChatBack
 	if !ok {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
-	raw, dropped, ok := readLogTail(path, startedAt.Add(-logClockSlack))
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return ports.ChatBackgroundTaskOutput{}, false
+	}
+	raw, dropped, ok := readLogTail(dir, rel, startedAt.Add(-logClockSlack))
 	if !ok {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
 	return TailOutput(raw, dropped), true
 }
 
-// readLogTail reads at most MaxOutputBytes from the end of a log, starting on
-// a whole line. dropped says older output was left out.
-func readLogTail(path string, notBefore time.Time) (raw string, dropped, ok bool) {
-	info, err := os.Lstat(path)
+// readLogTail reads at most MaxOutputBytes from the end of the log at rel
+// inside dir, starting on a whole line. dropped says older output was left out.
+// os.Root keeps every step of rel, symlinked parents included, inside dir.
+func readLogTail(dir, rel string, notBefore time.Time) (raw string, dropped, ok bool) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", false, false
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat(rel)
 	if err != nil || !info.Mode().IsRegular() || info.ModTime().Before(notBefore) {
 		return "", false, false
 	}
-	file, err := os.Open(path)
+	file, err := root.Open(rel)
 	if err != nil {
 		return "", false, false
 	}
@@ -80,6 +92,11 @@ func readLogTail(path string, notBefore time.Time) (raw string, dropped, ok bool
 // to: the last redirect of descriptor 1 (`>`, `>>`, `1>`, `&>`, `>|`). It
 // answers only for a path the shell would not expand further, and never for a
 // device such as /dev/null.
+//
+// The line is read as a POSIX shell (sh, bash, zsh, Git Bash) reads it, on
+// every platform. On Windows that means a backslash escapes, so only a path
+// written with forward slashes is followed: drive-absolute (C:/logs/dev.log)
+// or relative to dir.
 func stdoutFile(command, dir, home string) (string, bool) {
 	tokens, ok := lexShell(command)
 	if !ok {
@@ -128,13 +145,23 @@ func stdoutFile(command, dir, home string) (string, bool) {
 				continue
 			}
 			// The last redirect decides, even one that can't be followed.
+			if isDevice(to.text) {
+				target, found = "", false
+				continue
+			}
 			target, found = resolveShellPath(to, cwd.dir, cwd.known, home)
 		}
 	}
-	if !found || target == "/dev" || strings.HasPrefix(target, "/dev/") {
+	if !found || isDevice(target) {
 		return "", false
 	}
 	return target, true
+}
+
+// isDevice reports a /dev path, checked as written too, since on Windows
+// /dev/null is not absolute and would otherwise resolve under dir.
+func isDevice(path string) bool {
+	return path == "/dev" || strings.HasPrefix(path, "/dev/")
 }
 
 func changeDir(cwd string, known bool, args []shellToken, home string) (string, bool) {

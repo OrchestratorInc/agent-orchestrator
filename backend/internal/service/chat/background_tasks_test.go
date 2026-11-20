@@ -206,15 +206,14 @@ func TestBackgroundTaskOutputIsUnavailableWithoutAReader(t *testing.T) {
 
 func TestBackgroundTaskOutputShowsTheLogACommandWritesTo(t *testing.T) {
 	ctx := context.Background()
-	logPath := filepath.Join(t.TempDir(), "dev.log")
-	if err := os.WriteFile(logPath, []byte("ready on :3000\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	started := time.Now().Add(-time.Minute)
-	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Command: "npm run dev > '" + logPath + "' 2>&1", StartedAt: &started}
+	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Command: "npm run dev > dev.log 2>&1", StartedAt: &started}
 
 	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}}
 	h := newHarnessWithConversation(t, conv)
+	if err := os.WriteFile(filepath.Join(h.workspace, "dev.log"), []byte("ready on :3000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// Until a reading reports the command, the provider's empty output stands.
 	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "" {
 		t.Fatalf("before a reading: output=%+v err=%v", got, err)
@@ -239,6 +238,9 @@ func TestBackgroundTaskOutputShowsTheLogACommandWritesTo(t *testing.T) {
 	// A harness that keeps no output still shows the log its command names.
 	plain := &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}
 	h = newHarnessWithConversation(t, plain)
+	if err := os.WriteFile(filepath.Join(h.workspace, "dev.log"), []byte("ready on :3000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
@@ -263,14 +265,13 @@ func (c *stoppableOutputConversation) StopBackgroundTask(context.Context, string
 
 func TestBackgroundTaskOutputKeepsTheLogAfterTheTaskLeavesTheInventory(t *testing.T) {
 	ctx := context.Background()
-	logPath := filepath.Join(t.TempDir(), "server.log")
-	if err := os.WriteFile(logPath, []byte("ready on :3000\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	started := time.Now().Add(-time.Minute)
-	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Stoppable: true, Command: "npm run dev > '" + logPath + "' 2>&1", StartedAt: &started}
+	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Stoppable: true, Command: "npm run dev > server.log 2>&1", StartedAt: &started}
 	conv := &stoppableOutputConversation{outputConversation: &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}}}
 	h := newHarnessWithConversation(t, conv)
+	if err := os.WriteFile(filepath.Join(h.workspace, "server.log"), []byte("ready on :3000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
@@ -287,5 +288,45 @@ func TestBackgroundTaskOutputKeepsTheLogAfterTheTaskLeavesTheInventory(t *testin
 	// Switching back to its open tab reads the log again.
 	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "ready on :3000\n[killed]" {
 		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputKeepsAFinishedRunsLogWhenARestartReusesThePath(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	first := ports.ChatBackgroundTask{ID: "first", Kind: "shell", State: "running", Stoppable: true, Command: "npm run dev > server.log 2>&1", StartedAt: &started}
+	conv := &stoppableOutputConversation{outputConversation: &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{first}}}}
+	h := newHarnessWithConversation(t, conv)
+	logPath := filepath.Join(h.workspace, "server.log")
+	if err := os.WriteFile(logPath, []byte("first run ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.StopBackgroundTask(ctx, testSession, "first"); err != nil {
+		t.Fatal(err)
+	}
+	// A reading sees the first run settle.
+	ended := time.Now()
+	first.State, first.EndedAt = "stopped", &ended
+	conv.tasks = []ports.ChatBackgroundTask{first}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+
+	// The server restarts and rewrites the same log.
+	restarted := time.Now()
+	second := ports.ChatBackgroundTask{ID: "second", Kind: "shell", State: "running", Command: first.Command, StartedAt: &restarted}
+	conv.tasks = []ports.ChatBackgroundTask{first, second}
+	if err := os.WriteFile(logPath, []byte("second run ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(2 * time.Second)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "first"); err != nil || got.Text != "first run ready\n[killed]" {
+		t.Fatalf("first run output=%+v err=%v", got, err)
 	}
 }

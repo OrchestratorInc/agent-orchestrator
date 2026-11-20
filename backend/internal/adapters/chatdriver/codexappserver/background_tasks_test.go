@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -197,5 +198,43 @@ func TestBackgroundTasksCodexTerminalOutputOutlivesTheInventory(t *testing.T) {
 	got, err := conv.(ports.ChatBackgroundTaskOutputReader).BackgroundTaskOutput(ctx, "93667")
 	if err != nil || got.Text != "ready on :3000" {
 		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTasksCodexOutputSurvivesForegroundOutputChurn(t *testing.T) {
+	ctx := context.Background()
+	d, srv := newTestDriver(t)
+	// More listed terminals than the settled bound: every listed one keeps its output.
+	var listed []map[string]string
+	for i := range backgroundRunsKept + 4 {
+		listed = append(listed, map[string]string{"processId": fmt.Sprint(i), "itemId": fmt.Sprintf("exec-%d", i), "command": "npm run dev"})
+	}
+	body, _ := json.Marshal(map[string]any{"data": listed, "nextCursor": nil})
+	srv.reply("thread/backgroundTerminals/list", string(body))
+	conv, err := d.Start(ctx, ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	c := conv.(*conversation)
+	delta := func(item, text string) {
+		params, _ := json.Marshal(map[string]string{"threadId": c.threadID, "itemId": item, "turnId": "turn-1", "delta": text})
+		c.observeBackgroundNotification(notification{Method: "item/commandExecution/outputDelta", Params: params})
+	}
+	delta("exec-0", "ready on :3000\n")
+	if _, err := conv.(ports.ChatBackgroundTaskInspector).BackgroundTasks(ctx); err != nil && !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
+	// Foreground commands print after the quiet server.
+	for i := range 40 {
+		delta(fmt.Sprintf("foreground-%d", i), "ok\n")
+	}
+	reader := conv.(ports.ChatBackgroundTaskOutputReader)
+	if got, err := reader.BackgroundTaskOutput(ctx, "0"); err != nil || got.Text != "ready on :3000" {
+		t.Fatalf("server output=%+v err=%v", got, err)
+	}
+	last := fmt.Sprint(backgroundRunsKept + 3)
+	if _, err := reader.BackgroundTaskOutput(ctx, last); err != nil {
+		t.Fatalf("listed terminal %s lost its output key: %v", last, err)
 	}
 }

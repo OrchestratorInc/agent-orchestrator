@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
 import type { BackgroundTask, BackgroundTaskReading } from "../hooks/useBackgroundTasks";
-import { BackgroundTasksBadge, ComposerBackgroundTasks, SessionBackgroundTasks, formatElapsed } from "./BackgroundTasks";
+import { BackgroundTasksBadge, ComposerBackgroundTasks, SessionBackgroundTasks, formatElapsed, resetStopsInFlightForTest } from "./BackgroundTasks";
 import { failedTaskKey, useUiStore } from "../stores/ui-store";
 
 const { queryMock, mutateMock } = vi.hoisted(() => ({ queryMock: vi.fn(), mutateMock: vi.fn() }));
@@ -24,6 +24,7 @@ const reading = readingOf([shell("shell", "Dev server")]);
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	resetStopsInFlightForTest();
 	mutateMock.mockResolvedValue(undefined);
 	queryMock.mockReturnValue({ data: reading, isError: false });
 });
@@ -160,16 +161,22 @@ describe("composer tab", () => {
 		expect(screen.getByRole("button", { name: "Stop Watcher" })).toBeDisabled();
 	});
 
-	it("disables every control for a task while one of them stops it", async () => {
-		mutateMock.mockImplementationOnce(() => new Promise<void>(() => {}));
-		const strip = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
-		const panel = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
-		await userEvent.click(within(strip.container).getByRole("button", { name: "Stop Dev server" }));
-		expect(within(panel.container).getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
-		// The control that started the stop lets it go when it leaves.
-		strip.unmount();
-		expect(within(panel.container).getByRole("button", { name: "Stop Dev server" })).toBeEnabled();
+	it("disables every control for a task while one of them stops it, even after that control leaves", async () => {
+		let rejectStop!: (error: Error) => void;
+		mutateMock.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectStop = reject; }));
+		const detail = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+		const composer = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+		await userEvent.click(within(detail.container).getByRole("button", { name: "Stop Dev server" }));
+		const composerStop = () => within(composer.container).getByRole("button", { name: "Stop Dev server" });
+		expect(composerStop()).toBeDisabled();
+		// Leaving the task's detail mid-request keeps the stop in flight.
+		detail.unmount();
+		expect(composerStop()).toBeDisabled();
+		await userEvent.click(composerStop());
 		expect(mutateMock).toHaveBeenCalledTimes(1);
+		// The pending request still settles its own stop.
+		await act(async () => { rejectStop(new Error("stop failed")); });
+		expect(composerStop()).toBeEnabled();
 	});
 
 	it("leaves out a failure once its tab has shown it, until the task fails again", () => {

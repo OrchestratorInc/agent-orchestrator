@@ -175,15 +175,28 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 // redirectedBackgroundOutput reads the log file a background task's command
 // sends its output to. The command comes from the controller's task readings,
 // so it is known only once the task has been read, and stays known after the
-// task leaves the inventory.
+// task leaves the inventory. A settled task shows the log as it was when a
+// reading first saw it settled, not whatever a later run wrote to that path.
 func (c *Controller) redirectedBackgroundOutput(taskID string) (ports.ChatBackgroundTaskOutput, bool) {
 	c.backgroundMu.Lock()
-	task, ok := c.backgroundCommands[taskID]
+	entry, ok := c.backgroundCommands[taskID]
 	c.backgroundMu.Unlock()
 	if !ok {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
-	return backgroundtasks.RedirectedOutput(task.Command, c.workDir, task.StartedAt)
+	if entry.settled {
+		return entry.finalLog, entry.hasLog
+	}
+	return backgroundtasks.RedirectedOutput(entry.task.Command, c.workDir, entry.task.StartedAt)
+}
+
+// backgroundCommand is what a task's readings leave for its output: its
+// command and, once it settled, the bounded tail its log had then.
+type backgroundCommand struct {
+	task     ports.ChatBackgroundTask
+	settled  bool
+	finalLog ports.ChatBackgroundTaskOutput
+	hasLog   bool
 }
 
 // backgroundCommandsKept bounds how many tasks keep their command.
@@ -197,16 +210,24 @@ func (c *Controller) rememberBackgroundCommand(task ports.ChatBackgroundTask) {
 		return
 	}
 	if c.backgroundCommands == nil {
-		c.backgroundCommands = make(map[string]ports.ChatBackgroundTask)
+		c.backgroundCommands = make(map[string]backgroundCommand)
 	}
-	if _, ok := c.backgroundCommands[task.ID]; !ok {
+	entry, ok := c.backgroundCommands[task.ID]
+	if !ok {
 		if len(c.backgroundCommandOrder) >= backgroundCommandsKept {
 			delete(c.backgroundCommands, c.backgroundCommandOrder[0])
 			c.backgroundCommandOrder = c.backgroundCommandOrder[1:]
 		}
 		c.backgroundCommandOrder = append(c.backgroundCommandOrder, task.ID)
 	}
-	c.backgroundCommands[task.ID] = task
+	entry.task = task
+	if !entry.settled && task.State != "running" && task.State != "paused" {
+		// Keep this run's final tail: a restart that reuses the log path must
+		// not show its output under the run that ended.
+		entry.settled = true
+		entry.finalLog, entry.hasLog = backgroundtasks.RedirectedOutput(task.Command, c.workDir, task.StartedAt)
+	}
+	c.backgroundCommands[task.ID] = entry
 }
 
 // ListBackgroundTasks inspects only already attached controllers. Sessions

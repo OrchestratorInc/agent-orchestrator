@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { create } from "zustand";
@@ -113,18 +113,38 @@ const STOP_ERROR_MS = 4_000;
 /**
  * Stops in flight for every control that can stop a task (the composer strip
  * and its side-panel tab), keyed by session and task, so a stop started in one
- * disables the other.
+ * disables the other. Each holds the request that took it: only that request
+ * releases it, and it outlives the control that started it, so leaving a task's
+ * detail mid-request never re-enables Stop elsewhere.
  */
-const useStopsInFlight = create<{ keys: ReadonlySet<string> }>(() => ({ keys: new Set() }));
+const useStopsInFlight = create<{ keys: ReadonlyMap<string, number> }>(() => ({ keys: new Map() }));
 const stopKey = (sessionId: string, taskId: string) => `${sessionId}\n${taskId}`;
-function setStopInFlight(key: string, on: boolean) {
+const settleTimers = new Map<number, number>();
+let lastStopRequest = 0;
+
+function takeStop(key: string): number {
+	const request = ++lastStopRequest;
+	useStopsInFlight.setState((state) => ({ keys: new Map(state.keys).set(key, request) }));
+	// A task that never leaves the live set gets its button back.
+	settleTimers.set(request, window.setTimeout(() => releaseStop(key, request), STOP_SETTLE_MS));
+	return request;
+}
+
+function releaseStop(key: string, request: number) {
+	window.clearTimeout(settleTimers.get(request));
+	settleTimers.delete(request);
 	useStopsInFlight.setState((state) => {
-		if (state.keys.has(key) === on) return state;
-		const keys = new Set(state.keys);
-		if (on) keys.add(key);
-		else keys.delete(key);
+		if (state.keys.get(key) !== request) return state;
+		const keys = new Map(state.keys);
+		keys.delete(key);
 		return { keys };
 	});
+}
+
+export function resetStopsInFlightForTest(): void {
+	for (const timer of settleTimers.values()) window.clearTimeout(timer);
+	settleTimers.clear();
+	useStopsInFlight.setState({ keys: new Map() });
 }
 
 /** Stop requests in flight, per task (shared by every control for this session), and the one that last failed here. */
@@ -133,36 +153,32 @@ export function useTaskStops(sessionId: string, liveIds: string) {
 	const keys = useStopsInFlight((state) => state.keys);
 	const stopping = useMemo(() => {
 		const prefix = stopKey(sessionId, "");
-		return new Set([...keys].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length)));
+		return new Set([...keys.keys()].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length)));
 	}, [keys, sessionId]);
 	const [failed, setFailed] = useState<string | null>(null);
-	// The stops this control started; it settles them, and lets them go when it unmounts.
-	const timers = useRef(new Map<string, number>());
-	const release = useCallback((id: string) => {
-		window.clearTimeout(timers.current.get(id));
-		timers.current.delete(id);
-		setStopInFlight(stopKey(sessionId, id), false);
-	}, [sessionId]);
-	// A stopped task leaves the live set; one that never does gets its button back.
+	// The stops this control started, by task: a stopped task leaves the live set and lets its stop go.
+	const started = useRef(new Map<string, number>());
 	useEffect(() => {
 		const live = new Set(liveIds ? liveIds.split("\n") : []);
-		for (const id of [...timers.current.keys()]) if (!live.has(id)) release(id);
-	}, [liveIds, release]);
+		for (const [id, request] of [...started.current]) {
+			if (live.has(id)) continue;
+			started.current.delete(id);
+			releaseStop(stopKey(sessionId, id), request);
+		}
+	}, [liveIds, sessionId]);
 	useEffect(() => {
 		if (!failed) return;
 		const timer = window.setTimeout(() => setFailed(null), STOP_ERROR_MS);
 		return () => window.clearTimeout(timer);
 	}, [failed]);
-	useEffect(() => () => {
-		for (const id of [...timers.current.keys()]) release(id);
-	}, [release]);
 	const stop = (id: string) => {
 		if (stopping.has(id)) return;
 		setFailed(null);
-		setStopInFlight(stopKey(sessionId, id), true);
-		timers.current.set(id, window.setTimeout(() => release(id), STOP_SETTLE_MS));
+		const key = stopKey(sessionId, id);
+		const request = takeStop(key);
+		started.current.set(id, request);
 		void mutation.mutateAsync(id).catch(() => {
-			release(id);
+			releaseStop(key, request);
 			setFailed(id);
 		});
 	};

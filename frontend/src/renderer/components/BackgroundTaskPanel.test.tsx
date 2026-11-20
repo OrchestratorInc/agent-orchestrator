@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackgroundTask } from "../hooks/useBackgroundTasks";
 import { useUiStore } from "../stores/ui-store";
-import { BackgroundTaskPanel, BackgroundTasksPanel, TailedOutput } from "./BackgroundTaskPanel";
+import { BackgroundTaskPanel, BackgroundTasksPanel, TailedOutput, newestTasksFirst } from "./BackgroundTaskPanel";
+import { resetStopsInFlightForTest } from "./BackgroundTasks";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { outputMock, mutateMock } = vi.hoisted(() => ({ outputMock: vi.fn(), mutateMock: vi.fn() }));
@@ -29,6 +30,7 @@ function Panel({ onBack = () => {}, ...props }: Omit<ComponentProps<typeof Backg
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	resetStopsInFlightForTest();
 	mutateMock.mockResolvedValue(undefined);
 	outputMock.mockReturnValue(outputOf("> vite\n  Local: http://localhost:3000/"));
 });
@@ -81,6 +83,25 @@ describe("background task panel", () => {
 		expect(refetch).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps a task readable while its reading fails to refresh, without Stop or live output, until it recovers", () => {
+		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
+		const stopButton = () => screen.getByRole("button", { name: "Stop Dev server on port 3000" });
+		expect(stopButton()).toBeEnabled();
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: true });
+
+		rerender(<Panel isVisible sessionId="s" stale tab={{ task: task() }} />);
+		expect(screen.getByText("Running")).toBeVisible();
+		expect(screen.getByText("stale")).toBeVisible();
+		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("Local: http://localhost:3000/");
+		expect(stopButton()).toBeDisabled();
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: false });
+
+		rerender(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
+		expect(screen.queryByText("stale")).toBeNull();
+		expect(stopButton()).toBeEnabled();
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: true });
+	});
+
 	it.each([
 		["unavailable", outputOf("", { availability: "unavailable" }), "This agent doesn't report this task's output"],
 		["empty", outputOf(""), "No output yet"],
@@ -128,6 +149,18 @@ describe("background tasks list", () => {
 		await userEvent.click(screen.getByRole("button", { name: "All background tasks" }));
 		expect(useUiStore.getState().inspectorSessions[uiKey]?.activeTaskTab).toBeUndefined();
 		expect(screen.getByRole("button", { name: /Building/ })).toHaveFocus();
+	});
+});
+
+describe("background task order", () => {
+	it("puts the newest start first, whatever order the tasks arrived in", () => {
+		// One batch, ordered by ID as the daemon sends it: the newest task has the lowest ID.
+		const entries = [
+			{ task: task({ id: "a", description: "newest", startedAt: ago(5_000) }) },
+			{ task: task({ id: "m", description: "no start time", startedAt: undefined }) },
+			{ task: task({ id: "z", description: "oldest", startedAt: ago(60 * 60_000) }) },
+		];
+		expect(newestTasksFirst(entries).map((entry) => entry.task.id)).toEqual(["a", "z", "m"]);
 	});
 });
 

@@ -111,6 +111,9 @@ jobs:
       - name: Test Windows Chat environment precedence
         run: go test -race -count=1 ./internal/adapters/chatdriver/processenv/ ./internal/agentlaunch/
 
+      - name: Test Windows background task log redirects
+        run: go test -race -count=1 -run '^(TestStdoutFile|TestRedirectedOutput)' ./internal/adapters/chatdriver/backgroundtasks/
+
       - name: Test Windows shell terminal start grid (pty-host --size)
         run: go test -race -count=3 -v -run '^(TestConPTYStartsAtRequestedGrid|TestHostStartGrid|TestPtyHostArgsCarryInitialGrid|TestPtyHostArgsCarryHostOptions)$' ./internal/adapters/runtime/conpty/
 

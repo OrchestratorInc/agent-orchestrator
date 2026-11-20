@@ -26,6 +26,7 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 		return nil, errConversationClosed
 	}
 	out := make([]ports.ChatBackgroundTask, 0)
+	var runs []backgroundRun
 	seenIDs := make(map[string]bool)
 	cursors := make(map[string]bool)
 	cursor := ""
@@ -60,11 +61,12 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 				return nil, errors.New("background-terminal response has missing or duplicate identity")
 			}
 			seenIDs[task.ProcessID] = true
-			c.rememberBackgroundRun(task.ProcessID, task.ItemID)
+			runs = append(runs, backgroundRun{processID: task.ProcessID, itemID: task.ItemID})
 			command := domain.SanitizeControlChars(task.Command)
 			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: command, Command: command, State: "running"})
 		}
 		if response.NextCursor == nil || *response.NextCursor == "" {
+			c.rememberBackgroundRuns(runs)
 			c.backgroundObserved.ReconcileShells(out, time.Now())
 			tasks := c.backgroundObserved.Snapshot(time.Now())
 			// Shell inventory is complete, but event-derived agents may predate
@@ -106,26 +108,50 @@ func (c *conversation) BackgroundTaskOutput(_ context.Context, taskID string) (p
 	return ports.ChatBackgroundTaskOutput{}, nil
 }
 
-// backgroundRunsKept bounds how many terminals keep their output key.
+// backgroundRunsKept bounds how many terminals no longer listed keep their
+// output. Listed terminals always keep theirs.
 const backgroundRunsKept = 32
 
-func (c *conversation) rememberBackgroundRun(processID, itemID string) {
-	if itemID == "" {
-		return
-	}
+type backgroundRun struct{ processID, itemID string }
+
+// rememberBackgroundRuns records each terminal of a complete listing with its
+// exec item, the key of its buffered output, and holds that output so
+// foreground commands cannot evict it. Of the terminals no longer listed, the
+// newest backgroundRunsKept keep their output; older ones let it go.
+func (c *conversation) rememberBackgroundRuns(listed []backgroundRun) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.backgroundRuns == nil {
 		c.backgroundRuns = make(map[string]string)
 	}
-	if _, ok := c.backgroundRuns[processID]; !ok {
-		if len(c.backgroundRunOrder) >= backgroundRunsKept {
-			delete(c.backgroundRuns, c.backgroundRunOrder[0])
-			c.backgroundRunOrder = c.backgroundRunOrder[1:]
+	current := make(map[string]bool, len(listed))
+	for _, run := range listed {
+		if run.itemID == "" {
+			continue
 		}
-		c.backgroundRunOrder = append(c.backgroundRunOrder, processID)
+		current[run.processID] = true
+		previous, known := c.backgroundRuns[run.processID]
+		switch {
+		case !known:
+			c.backgroundRunOrder = append(c.backgroundRunOrder, run.processID)
+		case previous != run.itemID:
+			c.backgroundOutput.Release(previous)
+		}
+		c.backgroundRuns[run.processID] = run.itemID
+		c.backgroundOutput.Keep(run.itemID)
 	}
-	c.backgroundRuns[processID] = itemID
+	settled := len(c.backgroundRunOrder) - len(current)
+	order := c.backgroundRunOrder[:0]
+	for _, processID := range c.backgroundRunOrder {
+		if settled > backgroundRunsKept && !current[processID] {
+			c.backgroundOutput.Release(c.backgroundRuns[processID])
+			delete(c.backgroundRuns, processID)
+			settled--
+			continue
+		}
+		order = append(order, processID)
+	}
+	c.backgroundRunOrder = order
 }
 
 func (c *conversation) observeBackgroundNotification(n notification) {

@@ -222,7 +222,7 @@ type Controller struct {
 	backgroundTasks        []ports.ChatBackgroundTask
 	backgroundSampledAt    time.Time
 	backgroundPartial      bool
-	backgroundCommands     map[string]ports.ChatBackgroundTask
+	backgroundCommands     map[string]backgroundCommand
 	backgroundCommandOrder []string
 	store                  Store
 	continuationReader     SnapshotReader

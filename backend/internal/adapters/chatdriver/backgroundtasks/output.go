@@ -71,6 +71,7 @@ func TailOutput(raw string, dropped bool) ports.ChatBackgroundTaskOutput {
 // outputBufferKeys bounds how many commands keep output at once. Output is
 // buffered before a provider says a command runs in the background, so
 // foreground commands pass through too; the least recently written goes first.
+// Items passed to Keep are outside this bound until Release.
 const outputBufferKeys = 16
 
 // OutputBuffer keeps the latest raw output of recent commands, by provider
@@ -85,6 +86,35 @@ type outputEntry struct {
 	data    []byte
 	dropped bool
 	written uint64
+	// kept: a background command's output, never evicted for other output.
+	kept bool
+}
+
+// Keep holds an item's output, from now on and whatever it already printed,
+// until Release: a background command's output must not be evicted by
+// foreground commands that print after it.
+func (b *OutputBuffer) Keep(key string) {
+	if key == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.entries == nil {
+		b.entries = make(map[string]*outputEntry)
+	}
+	entry := b.entries[key]
+	if entry == nil {
+		entry = &outputEntry{}
+		b.entries[key] = entry
+	}
+	entry.kept = true
+}
+
+// Release drops an item's output, kept or not.
+func (b *OutputBuffer) Release(key string) {
+	b.mu.Lock()
+	delete(b.entries, key)
+	b.mu.Unlock()
 }
 
 // Append adds streamed output for one item, keeping only a bounded tail.
@@ -100,7 +130,7 @@ func (b *OutputBuffer) Append(key, delta string) {
 	b.clock++
 	entry := b.entries[key]
 	if entry == nil {
-		if len(b.entries) >= outputBufferKeys {
+		if b.unkept() >= outputBufferKeys {
 			b.evictOldest()
 		}
 		entry = &outputEntry{}
@@ -139,9 +169,23 @@ func (b *OutputBuffer) Read(key string) (ports.ChatBackgroundTaskOutput, bool) {
 }
 
 // Caller holds mu.
+func (b *OutputBuffer) unkept() int {
+	n := 0
+	for _, entry := range b.entries {
+		if !entry.kept {
+			n++
+		}
+	}
+	return n
+}
+
+// Caller holds mu.
 func (b *OutputBuffer) evictOldest() {
 	oldest, at := "", uint64(0)
 	for key, entry := range b.entries {
+		if entry.kept {
+			continue
+		}
 		if oldest == "" || entry.written < at {
 			oldest, at = key, entry.written
 		}

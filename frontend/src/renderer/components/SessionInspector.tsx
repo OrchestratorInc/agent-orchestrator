@@ -228,7 +228,10 @@ export const SessionInspector = memo(function SessionInspector({
 	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
 	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
 	const tasksWatchable = Boolean(session && supportsLocalBackgroundTasks(session));
-	const tasksReading = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task").data;
+	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task");
+	const tasksReading = tasksQuery.data;
+	// A failed refresh keeps the last reading: still shown, but marked stale.
+	const tasksStale = tasksQuery.isError && tasksReading !== undefined;
 	useEffect(() => {
 		if (!uiKey) return;
 		// An ended session sends no more readings, and an unavailable one means its
@@ -393,7 +396,7 @@ export const SessionInspector = memo(function SessionInspector({
 				}
 				tabs={tabs}
 				taskView={session && taskTabs?.length ? (
-					<BackgroundTasksPanel isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} tasks={taskTabs} uiKey={uiKey} />
+					<BackgroundTasksPanel isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} stale={tasksStale} tasks={taskTabs} uiKey={uiKey} />
 				) : undefined}
 			/>
 		</div>

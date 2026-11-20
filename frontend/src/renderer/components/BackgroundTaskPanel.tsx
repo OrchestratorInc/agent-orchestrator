@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
  * chat ran, running ones first, and one task's output at a time behind a header
  * that leads back to the list.
  */
-export function BackgroundTasksPanel({ sessionId, uiKey, tasks, openTask, isVisible }: {
+export function BackgroundTasksPanel({ sessionId, uiKey, tasks, openTask, isVisible, stale = false }: {
 	sessionId: string;
 	/** The session's side-panel key, where the open task is kept. */
 	uiKey: string;
@@ -25,6 +25,8 @@ export function BackgroundTasksPanel({ sessionId, uiKey, tasks, openTask, isVisi
 	/** The task whose output shows; the list shows while unset. */
 	openTask?: BackgroundTaskTab;
 	isVisible: boolean;
+	/** The last reading failed to refresh: its rows stay readable, but Stop and live output wait for the next one. */
+	stale?: boolean;
 }) {
 	// The list and a task replace each other, so focus would leave with them.
 	// Opening a row moves it to Back, and Back returns it to the row it left.
@@ -57,33 +59,53 @@ export function BackgroundTasksPanel({ sessionId, uiKey, tasks, openTask, isVisi
 					isVisible={isVisible}
 					onBack={back}
 					sessionId={sessionId}
+					stale={stale}
 					tab={openTask}
 				/>
 			) : (
-				<BackgroundTaskList tasks={tasks} onOpen={openFromList} />
+				<BackgroundTaskList tasks={tasks} stale={stale} onOpen={openFromList} />
 			)}
 		</div>
 	);
 }
 
 /** Running tasks first, then the finished ones; the newest at the top of each. */
-function BackgroundTaskList({ tasks, onOpen }: { tasks: readonly BackgroundTaskTab[]; onOpen: (taskId: string) => void }) {
+function BackgroundTaskList({ tasks, stale, onOpen }: { tasks: readonly BackgroundTaskTab[]; stale: boolean; onOpen: (taskId: string) => void }) {
 	const { t } = useTranslation();
-	const newestFirst = [...tasks].reverse();
+	const newestFirst = newestTasksFirst(tasks);
 	const running = newestFirst.filter(isRunning);
 	const finished = newestFirst.filter((entry) => !isRunning(entry));
 	const now = useNow(running.map((entry) => entry.task));
 	// The side panel's own body and sections, as Summary and Subagents draw theirs.
 	return (
 		<div className="board-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden pt-0.5 pb-3">
-			<BackgroundTaskGroup label={t("backgroundTasks.state.running")} tasks={running} now={now} onOpen={onOpen} />
+			<BackgroundTaskGroup label={t("backgroundTasks.state.running")} note={stale ? t("backgroundTasks.stale") : undefined} tasks={running} now={now} onOpen={onOpen} />
 			<BackgroundTaskGroup label={t("backgroundTasks.panel.finished")} tasks={finished} now={now} onOpen={onOpen} />
 		</div>
 	);
 }
 
-function BackgroundTaskGroup({ label, tasks, now, onOpen }: {
+/**
+ * Newest start first. A task without a start time (a provider may not report
+ * one) goes after the timed ones, newest seen first; the list keeps tasks in
+ * the order they were first seen.
+ */
+export function newestTasksFirst(tasks: readonly BackgroundTaskTab[]): BackgroundTaskTab[] {
+	const startOf = (entry: BackgroundTaskTab) => (entry.task.startedAt ? Date.parse(entry.task.startedAt) : Number.NaN);
+	return tasks.map((entry, seen) => ({ entry, seen, start: startOf(entry) }))
+		.sort((a, b) => {
+			const aTimed = Number.isFinite(a.start);
+			const bTimed = Number.isFinite(b.start);
+			if (aTimed !== bTimed) return aTimed ? -1 : 1;
+			if (aTimed && a.start !== b.start) return b.start - a.start;
+			return b.seen - a.seen;
+		})
+		.map(({ entry }) => entry);
+}
+
+function BackgroundTaskGroup({ label, note, tasks, now, onOpen }: {
 	label: string;
+	note?: string;
 	tasks: readonly BackgroundTaskTab[];
 	now: number;
 	onOpen: (taskId: string) => void;
@@ -91,7 +113,7 @@ function BackgroundTaskGroup({ label, tasks, now, onOpen }: {
 	if (tasks.length === 0) return null;
 	return (
 		<div role="group" aria-label={label}>
-			<InspectorSection surface={false} title={`${label} · ${tasks.length}`}>
+			<InspectorSection surface={false} title={`${label} · ${tasks.length}${note ? ` · ${note}` : ""}`}>
 				<ul className="flex min-w-0 flex-col">
 					{tasks.map((entry) => (
 						<li key={entry.task.id}>
@@ -172,10 +194,12 @@ function TaskState({ entry }: { entry: BackgroundTaskTab }) {
  * how it stands, the command it runs and its latest output. A task that just
  * failed or left the reading can still be read here.
  */
-export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFocusBack = false }: {
+export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFocusBack = false, stale = false }: {
 	sessionId: string;
 	tab: BackgroundTaskTab;
 	isVisible: boolean;
+	/** The reading failed to refresh: Stop and live output wait until the provider answers again. */
+	stale?: boolean;
 	onBack: () => void;
 	/** Opened from the list: focus starts on Back, where the reader's row was. */
 	autoFocusBack?: boolean;
@@ -186,7 +210,7 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 	const name = backgroundTaskName(task, t);
 	const now = useNow(live ? [task] : []);
 	const { stopping, failed, stop } = useTaskStops(sessionId, live ? task.id : "");
-	const output = useBackgroundTaskOutput(sessionId, task.id, { enabled: isVisible, live: live && isVisible });
+	const output = useBackgroundTaskOutput(sessionId, task.id, { enabled: isVisible, live: live && isVisible && !stale });
 	// The last lines land after the task ends: read once more when it does.
 	const { refetch } = output;
 	const wasLive = useRef(live);
@@ -220,6 +244,7 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 				<h3 className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{name}</h3>
 				{failed === task.id ? <span role="status" className="shrink-0 text-caption text-destructive">{t("backgroundTasks.stopFailed")}</span> : null}
 				<TaskState entry={tab} />
+				{stale ? <span className="shrink-0 text-caption text-muted-foreground/70">{t("backgroundTasks.stale")}</span> : null}
 				{time ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground/70">{time}</span> : null}
 				{live && task.stoppable ? (
 					<Button
@@ -228,7 +253,7 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 						size="xs"
 						className="-mr-1 shrink-0"
 						aria-label={t("backgroundTasks.stop", { name })}
-						disabled={stopping.has(task.id)}
+						disabled={stale || stopping.has(task.id)}
 						onClick={() => stop(task.id)}
 					>
 						<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />

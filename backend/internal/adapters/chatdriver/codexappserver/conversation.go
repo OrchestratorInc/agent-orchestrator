@@ -77,7 +77,8 @@ type conversation struct {
 	closed        bool
 	// backgroundRuns maps each listed background terminal to its exec item,
 	// the key of its buffered output, so a settled terminal's output stays
-	// readable after it leaves the 30-second inventory. The oldest goes first.
+	// readable after it leaves the 30-second inventory. Listed terminals are
+	// always kept; of the settled ones, the oldest goes first.
 	backgroundRuns     map[string]string
 	backgroundRunOrder []string
 

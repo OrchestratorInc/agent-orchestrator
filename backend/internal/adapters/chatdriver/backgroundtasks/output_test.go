@@ -82,6 +82,22 @@ func TestOutputBufferKeepsATailPerItemAndEvictsTheStalest(t *testing.T) {
 	}
 }
 
+func TestOutputBufferKeepsHeldOutputThroughOtherCommandsOutput(t *testing.T) {
+	var b OutputBuffer
+	b.Append("server", "ready on :3000\n")
+	b.Keep("server")
+	for i := range 2 * outputBufferKeys {
+		b.Append(fmt.Sprintf("foreground-%d", i), "x\n")
+	}
+	if got, ok := b.Read("server"); !ok || got.Text != "ready on :3000" {
+		t.Fatalf("held output = %+v, %v", got, ok)
+	}
+	b.Release("server")
+	if _, ok := b.Read("server"); ok {
+		t.Fatal("released output is still read")
+	}
+}
+
 func TestTrackerKeepsTheCommandAcrossUpdates(t *testing.T) {
 	var tracker Tracker
 	now := time.Now()
