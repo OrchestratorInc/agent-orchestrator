@@ -33,6 +33,15 @@ import type {
 } from "../shared/browser-annotations";
 import { createBrowserAnnotationSession } from "../shared/browser-annotations";
 import {
+  REGION_SELECT_MAX_DIMENSION,
+  regionCaptureRect,
+  type BrowserRegionSelectCanceledPayload,
+  type BrowserRegionSelectCancelReason,
+  type BrowserRegionSelectCapturedPayload,
+  type BrowserRegionSelectModeInput,
+  type BrowserRegionSelectPagePayload,
+} from "../shared/browser-region-select";
+import {
   browserProfilePartition,
   isValidBrowserProfileSessionId,
   normalizeBrowserProfileId,
@@ -642,6 +651,8 @@ type BrowserEntry = {
     { session: BrowserAnnotationSession; token: string }
   >;
   annotationTheme?: BrowserAnnotationModeInput["theme"];
+  // The region snip overlay is up on this tab, waiting for a drag.
+  regionSelecting?: boolean;
   documentGeneration: number;
   navigationGeneration: number;
   blockedNavigationGeneration: number;
@@ -827,6 +838,9 @@ const SCREENSHOT_FALLBACK_TIMEOUT_MS = 5_000;
 // Caps the longest edge so the encoded image stays small and matches Claude
 // vision's effective resolution — larger just costs more tokens for no gain.
 const ANNOTATION_SNAPSHOT_MAX_DIMENSION = 1568;
+// A region snip waits on a person, so it may take longer than the annotation
+// snapshot, but a hung capturePage() must still end the snip.
+const REGION_SELECT_TIMEOUT_MS = 5_000;
 const UNTRUSTED_BEGIN = "<<<BEGIN UNTRUSTED EXTERNAL CONTENT>>>";
 const UNTRUSTED_END = "<<<END UNTRUSTED EXTERNAL CONTENT>>>";
 // Browser targets are shared with session automation after navigation. Keep
@@ -2197,6 +2211,7 @@ export function createBrowserViewHost(
       );
     const previous = session.tabs.get(session.activeTabId);
     if (previous && previous !== next) {
+      cancelRegionSelect(options, previous, "tab");
       applyBrowserViewBounds(previous.view, OFFSCREEN_BOUNDS, false);
     }
     session.activeTabId = tabId;
@@ -3674,6 +3689,124 @@ export function createBrowserViewHost(
     return true;
   };
 
+  // Region snip: the shell turns the overlay on for the active tab; the page
+  // reports the dragged rectangle (or a cancel), and main crops the capture.
+  const setRegionSelectMode = (
+    event: IpcMainInvokeEvent,
+    input: BrowserRegionSelectModeInput,
+  ): boolean => {
+    if (!input || !isRendererOwned(event, input.viewId)) return false;
+    const browserSession = entries.get(input.viewId);
+    if (!browserSession || !browserSession.tabs.size) return false;
+    const entry = activeEntry(browserSession);
+    if (!input.enabled) {
+      if (entry.regionSelecting) {
+        entry.regionSelecting = false;
+        entry.view.webContents.send("browser:regionSelect:setMode", {
+          enabled: false,
+        });
+      }
+      return false;
+    }
+    assertProfileStable(browserSession);
+    // An agent tab shows the agent's page as its viewer's picture, and a
+    // blank tab has nothing to snip.
+    if (entry.agentTab !== undefined || isBlankBrowserEntry(entry))
+      return false;
+    entry.regionSelecting = true;
+    entry.view.webContents.send("browser:regionSelect:setMode", {
+      enabled: true,
+    });
+    // Escape reaches the overlay only while the page has the keyboard.
+    entry.view.webContents.focus();
+    return true;
+  };
+
+  const cancelRegionSelectFromPage = (event: IpcMainEvent): void => {
+    const entry = tabsByWebContentsId.get(event.sender.id);
+    if (!entry?.regionSelecting) return;
+    entry.regionSelecting = false;
+    sendRegionSelectCanceled(entry.state.viewId, "cancel");
+  };
+
+  const sendRegionSelectCanceled = (
+    viewId: string,
+    reason: BrowserRegionSelectCancelReason,
+  ): void => {
+    const payload: BrowserRegionSelectCanceledPayload = { viewId, reason };
+    shellWebContents.send("browser:regionSelect:canceled", payload);
+  };
+
+  const captureRegion = async (
+    event: IpcMainEvent,
+    payload: BrowserRegionSelectPagePayload | undefined,
+  ): Promise<void> => {
+    const entry = tabsByWebContentsId.get(event.sender.id);
+    if (!entry?.regionSelecting) return;
+    entry.regionSelecting = false;
+    const viewId = entry.state.viewId;
+    const browserSession = entries.get(viewId);
+    const stillShown = () =>
+      browserSession !== undefined &&
+      entries.get(viewId) === browserSession &&
+      !browserSession.profileSwitching &&
+      browserSession.tabs.get(entry.tabId) === entry &&
+      activeEntry(browserSession) === entry;
+    if (!stillShown()) {
+      sendRegionSelectCanceled(viewId, "tab");
+      return;
+    }
+    const bounds = entry.view.getBounds();
+    const rect = regionCaptureRect(
+      payload?.rect,
+      entry.view.webContents.getZoomFactor(),
+      { width: bounds.width, height: bounds.height },
+    );
+    if (!rect) {
+      sendRegionSelectCanceled(viewId, "failed");
+      return;
+    }
+    let image: NativeImage | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      image = await Promise.race([
+        entry.view.webContents.capturePage(rect),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), REGION_SELECT_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      image = undefined;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!stillShown()) {
+      sendRegionSelectCanceled(viewId, "tab");
+      return;
+    }
+    if (!image || image.isEmpty()) {
+      sendRegionSelectCanceled(viewId, "failed");
+      return;
+    }
+    const { width, height } = image.getSize();
+    const resized =
+      Math.max(width, height) > REGION_SELECT_MAX_DIMENSION
+        ? image.resize(
+            width >= height
+              ? { width: REGION_SELECT_MAX_DIMENSION }
+              : { height: REGION_SELECT_MAX_DIMENSION },
+          )
+        : image;
+    const captured: BrowserRegionSelectCapturedPayload = {
+      viewId,
+      image: {
+        mimeType: "image/png",
+        data: resized.toPNG().toString("base64"),
+      },
+    };
+    shellWebContents.send("browser:regionSelect:captured", captured);
+  };
+
   const discardAnnotationSession = (entry: BrowserEntry): void => {
     entry.annotationSessions.delete(
       annotationPageKey(entry.view.webContents.getURL()),
@@ -4112,6 +4245,19 @@ export function createBrowserViewHost(
       forwardAnnotationSubmit(event, payload),
   );
   handle("browser:annotation:capture", (event) => captureAnnotation(event));
+  handle(
+    "browser:regionSelect:setMode",
+    (event, input: BrowserRegionSelectModeInput) =>
+      setRegionSelectMode(event, input),
+  );
+  on(
+    "browser:regionSelect:select",
+    (event, payload: BrowserRegionSelectPagePayload) =>
+      void captureRegion(event, payload),
+  );
+  on("browser:regionSelect:cancel", (event) =>
+    cancelRegionSelectFromPage(event),
+  );
   handle(
     "browser:annotation:complete",
     (event, input: BrowserAnnotationCompleteInput) =>
@@ -5934,6 +6080,9 @@ function wireNavEvents(
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
     });
     if (entry.annotationEnabled) contents.focus();
+    // A reload rebuilt the page's preload state; put the snip overlay back.
+    if (entry.regionSelecting)
+      contents.send("browser:regionSelect:setMode", { enabled: true });
     pushAnnotationState(options, entry, annotationSession);
     recordHistory(contents.getURL(), contents.getTitle(), false);
     update();
@@ -6134,11 +6283,30 @@ async function readBoundedResponseBody(
   );
 }
 
+function cancelRegionSelect(
+  options: BrowserViewHostOptions,
+  entry: BrowserEntry,
+  reason: BrowserRegionSelectCancelReason,
+): void {
+  if (!entry.regionSelecting) return;
+  entry.regionSelecting = false;
+  entry.view.webContents.send("browser:regionSelect:setMode", {
+    enabled: false,
+  });
+  shellContents(options).send("browser:regionSelect:canceled", {
+    viewId: entry.state.viewId,
+    reason,
+  } satisfies BrowserRegionSelectCanceledPayload);
+}
+
 function cancelAnnotation(
   options: BrowserViewHostOptions,
   entry: BrowserEntry,
   reason: BrowserAnnotationCancelPayload["reason"],
 ): void {
+  // Whatever leaves the page (navigation, a failed load, a profile switch)
+  // also ends a region snip on it.
+  cancelRegionSelect(options, entry, "navigation");
   if (!entry.annotationEnabled) return;
   entry.annotationEnabled = false;
   entry.view.webContents.send("browser:annotation:setMode", { enabled: false });

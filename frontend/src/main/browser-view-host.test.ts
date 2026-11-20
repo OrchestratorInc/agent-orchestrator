@@ -702,6 +702,116 @@ describe("annotation screenshots", () => {
 	});
 });
 
+describe("region snip", () => {
+	const startSnip = async () => {
+		const harness = setupHost();
+		const state = await harness.invoke("browser:ensure", "sess-1");
+		await harness.invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
+		return { ...harness, viewId: state.viewId };
+	};
+	const regionMessages = (sent: Array<{ channel: string; payload: unknown }>) =>
+		sent.filter((message) => message.channel.startsWith("browser:regionSelect:"));
+
+	it("puts the overlay on the active page and hands the cropped capture to the shell", async () => {
+		const { invoke, send, sent, setBrowserZoomFactor, viewId, webContents } = await startSnip();
+		setBrowserZoomFactor(1.25);
+
+		expect(await invoke("browser:regionSelect:setMode", { viewId, enabled: true })).toBe(true);
+		expect(webContents.send).toHaveBeenCalledWith("browser:regionSelect:setMode", { enabled: true });
+		expect(webContents.focus).toHaveBeenCalled();
+
+		send("browser:regionSelect:select", 99, { rect: { x: 10, y: 20, width: 100, height: 40 } });
+
+		await vi.waitFor(() =>
+			expect(regionMessages(sent)).toEqual([
+				{
+					channel: "browser:regionSelect:captured",
+					payload: { viewId, image: { mimeType: "image/png", data: Buffer.from("png-snapshot").toString("base64") } },
+				},
+			]),
+		);
+		expect(webContents.capturePage).toHaveBeenCalledWith({ x: 12, y: 25, width: 126, height: 50 });
+	});
+
+	it("scales a very large capture down before handing it over", async () => {
+		const { invoke, send, sent, viewId, webContents } = await startSnip();
+		const resize = vi.fn(() => ({ toPNG: () => Buffer.from("resized-png") }));
+		webContents.capturePage.mockResolvedValueOnce({
+			isEmpty: () => false,
+			toJPEG: () => Buffer.from("snapshot"),
+			toPNG: () => Buffer.from("png-snapshot"),
+			getSize: () => ({ width: 5120, height: 2880 }),
+			resize,
+		});
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });
+		send("browser:regionSelect:select", 99, { rect: { x: 0, y: 0, width: 1280, height: 720 } });
+
+		await vi.waitFor(() => expect(regionMessages(sent)).toHaveLength(1));
+		expect(resize).toHaveBeenCalledWith({ width: 2560 });
+		expect(regionMessages(sent)[0]?.payload).toMatchObject({
+			image: { data: Buffer.from("resized-png").toString("base64") },
+		});
+	});
+
+	it("ignores a rectangle nobody asked for", async () => {
+		const { send, sent, webContents } = await startSnip();
+		send("browser:regionSelect:select", 99, { rect: { x: 0, y: 0, width: 50, height: 50 } });
+		await Promise.resolve();
+		expect(webContents.capturePage).not.toHaveBeenCalled();
+		expect(regionMessages(sent)).toEqual([]);
+	});
+
+	it("refuses to start from a renderer that does not own the panel, or on a blank tab", async () => {
+		const { invokeFromTab, viewId, webContents } = await startSnip();
+		expect(await invokeFromTab("browser:regionSelect:setMode", 99, { viewId, enabled: true })).toBe(false);
+		expect(webContents.send).not.toHaveBeenCalledWith("browser:regionSelect:setMode", expect.anything());
+
+		const blank = setupHost();
+		const state = await blank.invoke("browser:ensure", "sess-1");
+		expect(await blank.invoke("browser:regionSelect:setMode", { viewId: state.viewId, enabled: true })).toBe(false);
+	});
+
+	it("tells the shell once when the person cancels on the page", async () => {
+		const { invoke, send, sent, viewId } = await startSnip();
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });
+		send("browser:regionSelect:cancel", 99);
+		send("browser:regionSelect:cancel", 99);
+		expect(regionMessages(sent)).toEqual([{ channel: "browser:regionSelect:canceled", payload: { viewId, reason: "cancel" } }]);
+	});
+
+	it("reports a capture that comes back empty as failed", async () => {
+		const { invoke, send, sent, viewId, webContents } = await startSnip();
+		webContents.capturePage.mockResolvedValueOnce({
+			isEmpty: () => true,
+			toJPEG: () => Buffer.from(""),
+			toPNG: () => Buffer.from(""),
+			getSize: () => ({ width: 0, height: 0 }),
+			resize: vi.fn(),
+		});
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });
+		send("browser:regionSelect:select", 99, { rect: { x: 0, y: 0, width: 50, height: 50 } });
+		await vi.waitFor(() =>
+			expect(regionMessages(sent)).toEqual([{ channel: "browser:regionSelect:canceled", payload: { viewId, reason: "failed" } }]),
+		);
+	});
+
+	it("ends the snip when the page navigates away", async () => {
+		const { invoke, sent, viewId, webContents } = await startSnip();
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });
+		await invoke("browser:navigate", { viewId, url: "https://other.test/" });
+		expect(webContents.send).toHaveBeenCalledWith("browser:regionSelect:setMode", { enabled: false });
+		expect(regionMessages(sent)).toEqual([{ channel: "browser:regionSelect:canceled", payload: { viewId, reason: "navigation" } }]);
+	});
+
+	it("takes the overlay down when the shell turns it off", async () => {
+		const { invoke, sent, viewId, webContents } = await startSnip();
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });
+		expect(await invoke("browser:regionSelect:setMode", { viewId, enabled: false })).toBe(false);
+		expect(webContents.send).toHaveBeenLastCalledWith("browser:regionSelect:setMode", { enabled: false });
+		expect(regionMessages(sent)).toEqual([]);
+	});
+});
+
 describe("browser shortcut matching", () => {
 	it("matches contextual browser shortcuts with platform-native primary modifiers", () => {
 		const input = { control: true, meta: false, shift: false, alt: false, type: "keyDown" };
