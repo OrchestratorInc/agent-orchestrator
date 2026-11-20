@@ -13,6 +13,8 @@ import { reorderBrowserTabs } from "../lib/browser-tab-order";
 import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
+import { subscribeChatComposerImages } from "../lib/chat-context-bus";
+import type { BrowserRegionSelectCapturedPayload } from "../../shared/browser-region-select";
 import type { WorkspaceSession } from "../types/workspace";
 import { TooltipProvider } from "./ui/tooltip";
 import type {
@@ -865,6 +867,56 @@ describe("BrowserPanel", () => {
 
 		await openBrowserControls();
 		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
+	});
+
+	it("offers the area snip only while the session's chat can take an image", () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/" };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const snip = screen.getByRole("button", { name: "Select an area to add to chat" });
+		expect(snip).toBeDisabled();
+		let stop = () => {};
+		act(() => {
+			stop = subscribeChatComposerImages("sess-1", () => true);
+		});
+		expect(snip).toBeEnabled();
+		act(() => stop());
+		expect(snip).toBeDisabled();
+	});
+
+	it("snips an area of the page into the session's chat", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/" };
+		hookState.annotationMode = true;
+		let deliverCapture: ((payload: BrowserRegionSelectCapturedPayload) => void) | undefined;
+		const setRegionSelectMode = vi.fn(async () => true);
+		window.ao!.browser.setRegionSelectMode = setRegionSelectMode;
+		window.ao!.browser.onRegionSelectCaptured = vi.fn((listener: (payload: BrowserRegionSelectCapturedPayload) => void) => {
+			deliverCapture = listener;
+			return () => {
+				deliverCapture = undefined;
+			};
+		});
+		const received = vi.fn((_file: File) => true);
+		const stop = subscribeChatComposerImages("sess-1", received);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Select an area to add to chat" }));
+
+		// Annotate steps aside so the two overlays never stack.
+		expect(hookState.setAnnotationMode).toHaveBeenCalledWith(false);
+		expect(setRegionSelectMode).toHaveBeenCalledWith({ viewId: "42:sess-1", enabled: true });
+		expect(await screen.findByRole("button", { name: "Cancel area selection" })).toHaveAttribute("aria-pressed", "true");
+
+		act(() => deliverCapture?.({ viewId: "42:sess-1", image: { mimeType: "image/png", data: btoa("png-bytes") } }));
+
+		expect(received).toHaveBeenCalledOnce();
+		const file = received.mock.calls[0]![0];
+		expect(file.type).toBe("image/png");
+		expect(file.name).toMatch(/^browser-selection-.+\.png$/);
+		expect(await file.text()).toBe("png-bytes");
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("Added to chat"));
+		expect(screen.getByRole("button", { name: "Select an area to add to chat" })).toHaveAttribute("aria-pressed", "false");
+		stop();
 	});
 
 	it("disables screenshots until the active tab has a page", async () => {
