@@ -37,26 +37,34 @@ func (m *Manager) commitTrailerWanted(ctx context.Context, project domain.Projec
 // Orchestrator footer. Projects without a remote have no PRs to sign; in a
 // workspace project the remotes may live only on its child repositories.
 func (m *Manager) prFooterWanted(ctx context.Context, project domain.ProjectRecord) bool {
+	want, _ := m.prFooterChoice(ctx, project)
+	return want
+}
+
+// prFooterChoice is prFooterWanted plus whether the answer is settled: false
+// when a workspace's repositories could not be listed, so the footer is left
+// out for now but no choice is recorded for the session.
+func (m *Manager) prFooterChoice(ctx context.Context, project domain.ProjectRecord) (want, known bool) {
 	if project.Config.Attribution.DisablePRFooter || !m.commitAttributionEnabled(ctx) {
-		return false
+		return false, true
 	}
 	if strings.TrimSpace(project.RepoOriginURL) != "" {
-		return true
+		return true, true
 	}
 	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
-		return false
+		return false, true
 	}
 	repos, err := m.store.ListWorkspaceRepos(ctx, project.ID)
 	if err != nil {
 		m.logger.Warn("attribution: list workspace repos", "project", project.ID, "error", err)
-		return false
+		return false, false
 	}
 	for _, repo := range repos {
 		if strings.TrimSpace(repo.RepoOriginURL) != "" {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // attributionChoice says which choice applyCommitAttribution applies.
@@ -72,15 +80,6 @@ const (
 	attributionRecorded
 )
 
-// applyCommitAttribution routes a session's git hooks through the Orchestrator
-// dispatcher and sets the trailer it adds, or undoes that in a reused worktree
-// an earlier session configured. With attribution never turned on (no hooks
-// dir) it runs no git at all.
-//
-// A workspace project's root is a worktree of the root repository, and each
-// child repository has its own worktree below it; every one is configured.
-// Failures are logged, never fatal: a missing trailer must not stop a session
-// from starting.
 // recordPRFooterChoice keeps whether a starting session's agents sign PRs, so
 // its prompt says the same when it is rebuilt for a relaunch, a restore or a
 // switch between Chat and the terminal, whatever the settings say by then.
@@ -88,7 +87,12 @@ func (m *Manager) recordPRFooterChoice(ctx context.Context, project domain.Proje
 	if m.store == nil || sessionID == "" {
 		return
 	}
-	if err := m.store.SetSessionPRFooter(ctx, sessionID, m.prFooterWanted(ctx, project)); err != nil {
+	footer, known := m.prFooterChoice(ctx, project)
+	if !known {
+		// Not settled: later prompts follow the settings until a lookup works.
+		return
+	}
+	if err := m.store.SetSessionPRFooter(ctx, sessionID, footer); err != nil {
 		m.logger.Warn("attribution: record PR footer choice", "sessionID", sessionID, "error", err)
 	}
 }
@@ -108,6 +112,15 @@ func (m *Manager) sessionPRFooter(ctx context.Context, project domain.ProjectRec
 	return m.prFooterWanted(ctx, project)
 }
 
+// applyCommitAttribution routes a session's git hooks through the Orchestrator
+// dispatcher and sets the trailer it adds, or undoes that in a reused worktree
+// an earlier session configured. With attribution never turned on (no hooks
+// dir) it runs no git at all.
+//
+// A workspace project's root is a worktree of the root repository, and each
+// child repository has its own worktree below it; every one is configured.
+// Failures are logged, never fatal: a missing trailer must not stop a session
+// from starting.
 func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) {
 	if workspacePath == "" {
 		return

@@ -203,6 +203,9 @@ func TestHookFollowsGitsUnchangedTemplateRule(t *testing.T) {
 awk '{ print } /------------------------ >8 ------------------------/ { exit }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`)
 	addSignoff := editor("add-signoff.sh", `printf '\nSigned-off-by: Dev <dev@example.com>\n' >> "$1"`)
 	onlySignoff := editor("only-signoff.sh", `printf 'Signed-off-by: Dev <dev@example.com>\n' > "$1"`)
+	// Fails unless git added a sign-off, then removes only that line.
+	dropSignoff := editor("drop-signoff.sh", `grep -q '^Signed-off-by: ' "$1" || exit 1
+grep -v '^Signed-off-by: ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`)
 	// A staged change, so `commit -v` shows a diff to remove.
 	if err := os.WriteFile(filepath.Join(r.worktree, "staged.txt"), []byte("change\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -216,6 +219,7 @@ awk '{ print } /------------------------ >8 ------------------------/ { exit }' 
 		{"verbose diff removed", dropDiff, []string{"-v"}},
 		{"sign-off appended", addSignoff, nil},
 		{"with -s", "true", []string{"-s"}},
+		{"-s with the generated sign-off removed", dropSignoff, []string{"-s"}},
 		{"only a sign-off", onlySignoff, nil},
 		// Literal messages follow the same rule: git ignores sign-offs.
 		{"-s -m empty", "true", []string{"-s", "-m", ""}},
@@ -250,6 +254,62 @@ awk '{ print } /------------------------ >8 ------------------------/ { exit }' 
 	msg = r.message("HEAD")
 	if !strings.Contains(msg, "Signed-off-by: Dev <dev@example.com>") || countTrailer(msg) != 1 || !strings.HasSuffix(strings.TrimSpace(msg), testCoAuthor) {
 		t.Fatalf("-s -m: want sign-off kept and one trailer last, got:\n%s", msg)
+	}
+}
+
+// Git only cuts a message at the scissors line when it carries the comment
+// prefix; an uncommented copy is message text, so the commit keeps it and gets
+// the trailer. A real scissors line still drops the diff below it, whatever the
+// comment character.
+func TestHookCutsOnlyAtTheCommentedScissorsLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, commentChar string
+	}{
+		{"default comment char", ""},
+		{"core.commentChar=;", ";"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t, testCoAuthor, func(r repo) {
+				if tc.commentChar != "" {
+					r.git(r.main, "config", "core.commentChar", tc.commentChar)
+				}
+			})
+			dir := t.TempDir()
+			editor := func(name, body string) string {
+				path := filepath.Join(dir, name)
+				if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			}
+			run := func(ed string, args ...string) (string, error) {
+				cmd := exec.Command("git", append([]string{"-C", r.worktree, "commit", "--allow-empty"}, args...)...)
+				cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_EDITOR="+ed,
+					"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
+				out, err := cmd.CombinedOutput()
+				return string(out), err
+			}
+			uncommented := editor("uncommented-cut.sh", `printf '%s\nfeat: change\n' '------------------------ >8 ------------------------' > "$1"`)
+			if out, err := run(uncommented); err != nil {
+				t.Fatalf("uncommented cut line: %v\n%s", err, out)
+			}
+			if msg := r.message("HEAD"); !strings.Contains(msg, "feat: change") || countTrailer(msg) != 1 {
+				t.Fatalf("want the text kept and one trailer, got:\n%s", msg)
+			}
+			// -v: the message, then git's scissors line and the diff.
+			if err := os.WriteFile(filepath.Join(r.worktree, "staged.txt"), []byte("change\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r.git(r.worktree, "add", "staged.txt")
+			verbose := editor("verbose.sh", `grep -q '^diff --git' "$1" || exit 1
+{ printf 'feat: verbose\n'; cat "$1"; } > "$1.tmp" && mv "$1.tmp" "$1"`)
+			if out, err := run(verbose, "-v"); err != nil {
+				t.Fatalf("-v: %v\n%s", err, out)
+			}
+			if msg := r.message("HEAD"); strings.Contains(msg, "diff --git") || countTrailer(msg) != 1 || !strings.HasSuffix(strings.TrimSpace(msg), testCoAuthor) {
+				t.Fatalf("-v: want the diff dropped and one trailer last, got:\n%s", msg)
+			}
+		})
 	}
 }
 

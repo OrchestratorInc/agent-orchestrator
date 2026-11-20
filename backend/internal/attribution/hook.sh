@@ -46,13 +46,14 @@ replaying() {
 	return 1
 }
 
-# has_message reports whether the message file holds anything besides comment
-# lines and whitespace. The comment string is matched literally. With
+# comment_awk runs awk program $1 on file $2 with two helpers: comment(line),
+# whether a line is a comment, and scissors(line), whether it is the
+# `git commit -v` scissors line. The comment string is matched literally. With
 # core.commentChar=auto git picks a character the message does not start a
 # line with, so any of git's candidates counts as a comment there; at worst
-# that skips the trailer, never breaks the commit. `git commit -v` appends a
-# diff below a scissors line; it is not message.
-has_message() {
+# that skips the trailer, never breaks the commit. Like git, the scissors line
+# must be exactly the comment string, a space and the cut marker.
+comment_awk() {
 	cs=$(git config --get core.commentString 2>/dev/null) ||
 		cs=$(git config --get core.commentChar 2>/dev/null) || cs='#'
 	[ -n "$cs" ] || cs='#'
@@ -65,8 +66,21 @@ has_message() {
 				if (substr(line, 1, 1) == substr(auto, i, 1)) return 1
 			return 0
 		}
-		BEGIN { cs = ENVIRON["ORCHESTRATOR_CS"]; auto = "#;@!$%^&|:"; found = 0 }
-		comment($0) && index($0, "------------------------ >8 ------------------------") { exit }
+		function scissors(line) {
+			if (cs != "auto") return line == cs " " cut
+			return comment(line) && substr(line, 2) == " " cut
+		}
+		BEGIN { cs = ENVIRON["ORCHESTRATOR_CS"]; auto = "#;@!$%^&|:"; cut = "------------------------ >8 ------------------------" }
+	'"$1" "$2"
+}
+
+# has_message reports whether the message file holds anything besides comment
+# lines and whitespace. `git commit -v` appends a diff below a scissors line;
+# it is not message.
+has_message() {
+	comment_awk '
+		BEGIN { found = 0 }
+		scissors($0) { exit }
 		!comment($0) && $0 ~ /[^ \t\r]/ { found = 1; exit }
 		END { exit !found }
 	' "$1"
@@ -88,14 +102,20 @@ snapshot_template() {
 	[ -n "$snap" ] || return 0
 	rm -f "$snap"
 	if [ "$2" = template ] && [ -n "$1" ] && [ -f "$1" ]; then
-		message_text "$1" >"$snap" || rm -f "$snap"
+		# With -s git has already added a sign-off; git compares against the
+		# template without it, so the snapshot leaves trailing sign-offs out.
+		message_text "$1" | awk '
+			{ line[NR] = $0 }
+			!/^[[:space:]]*$/ && !/^Signed-off-by: / { last = NR }
+			END { for (i = 1; i <= last; i++) print line[i] }
+		' >"$snap" || rm -f "$snap"
 	fi
 }
 
 # message_text prints the message in file $1 the way git reads it: without
 # comment lines, and without the `commit -v` scissors line and the diff below it.
 message_text() {
-	sed '/------------------------ >8 ------------------------/,$d' "$1" | git stripspace --strip-comments 2>/dev/null
+	comment_awk 'scissors($0) { exit } { print }' "$1" | git stripspace --strip-comments 2>/dev/null
 }
 
 # only_signoffs reports whether text $1 holds nothing but blank lines and

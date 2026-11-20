@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -418,6 +419,37 @@ func TestPRFooterPromptForWorkspaceChildRemotes(t *testing.T) {
 				t.Fatalf("prFooterWanted = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A workspace whose repositories cannot be listed records no footer choice,
+// so the session's prompts follow the settings once the lookup works again.
+func TestPRFooterChoiceIsNotRecordedWhenReposCannotBeListed(t *testing.T) {
+	ctx := context.Background()
+	m, st, _, _ := newManager()
+	project := st.projects["mer"]
+	project.Kind = domain.ProjectKindWorkspace
+	project.RepoOriginURL = ""
+	st.projects["mer"] = project
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{ProjectID: "mer", Name: "api", RelativePath: "api", RepoOriginURL: "https://github.com/o/api"}}
+	m.SetCommitAttributionEnabled(func(context.Context) bool { return true })
+
+	st.workspaceRepoErr = errors.New("database is locked")
+	m.recordPRFooterChoice(ctx, project, "mer-1")
+	if _, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); recorded {
+		t.Fatal("recorded a footer choice from a failed repository lookup")
+	}
+	st.workspaceRepoErr = nil
+	prompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, attribution.PRFooter) {
+		t.Fatal("footer missing once the repository lookup works")
+	}
+	m.recordPRFooterChoice(ctx, project, "mer-1")
+	if footer, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); !recorded || !footer {
+		t.Fatalf("after a working lookup: footer %v recorded %v; want true recorded", footer, recorded)
 	}
 }
 

@@ -55,6 +55,7 @@ type fakeStore struct {
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	workspaceRepoErr                   error
 	commitAttributionMu                sync.Mutex
 	commitAttribution                  map[domain.SessionID]string
 	prFooter                           map[domain.SessionID]bool
@@ -102,6 +103,9 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	return r, ok, nil
 }
 func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
+	if f.workspaceRepoErr != nil {
+		return nil, f.workspaceRepoErr
+	}
 	return f.workspaceRepo[projectID], nil
 }
 func (f *fakeStore) SetSessionCommitAttribution(_ context.Context, id domain.SessionID, coAuthor string) error {
