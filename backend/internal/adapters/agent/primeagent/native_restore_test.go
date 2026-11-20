@@ -320,17 +320,58 @@ func TestPrimePreparationMatchesProviderDecimalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOpenAIImportedPrimeRestorePinsEndpointAfterLoginShell(t *testing.T) {
-	t.Setenv("OPENAI_BASE_URL", "https://stray.invalid/v1")
+func TestOpenAIImportedPrimeRestorePreservesConfiguredEndpoint(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "https://shell.example/v1")
 	root, workspace := t.TempDir(), t.TempDir()
 	path := writePrimeNativeFixture(t, root, primeForkID, workspace, "", `{"type":"model_change","id":"model","parentId":null,"provider":"openai","modelId":"gpt-4.1-mini"}`, primeForkFixtureRows()[0])
-	cfg := primeTestRestoreConfig(t, root, workspace, primeForkID)
-	argv, ok, err := primeTestPlugin().GetRestoreCommand(context.Background(), cfg)
-	if err != nil || !ok {
-		t.Fatalf("restore: %v, %v", ok, err)
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want []string
+	}{
+		{"inherited", nil, []string{"/synthetic/prime-agent"}},
+		{"custom gateway", map[string]string{"OPENAI_BASE_URL": "https://gateway.example/v1"}, []string{"env", "OPENAI_BASE_URL=https://gateway.example/v1", "/synthetic/prime-agent"}},
+		{"explicit public endpoint", map[string]string{"OPENAI_BASE_URL": "https://api.openai.com/v1"}, []string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1", "/synthetic/prime-agent"}},
+		{"explicit clear", map[string]string{"OPENAI_BASE_URL": ""}, []string{"env", "-u", "OPENAI_BASE_URL", "/synthetic/prime-agent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := primeTestRestoreConfig(t, root, workspace, primeForkID)
+			cfg.Env = tc.env
+			argv, ok, err := primeTestPlugin().GetRestoreCommand(context.Background(), cfg)
+			if err != nil || !ok || len(argv) < len(tc.want) || !slices.Equal(argv[:len(tc.want)], tc.want) || !slices.Contains(argv, path) {
+				t.Fatalf("imported endpoint routing = %v, %v, %v", argv, ok, err)
+			}
+		})
 	}
-	if !slices.Equal(argv[:3], []string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1", "/synthetic/prime-agent"}) || !slices.Contains(argv, path) {
-		t.Fatalf("OpenAI native restore inherits a login-shell endpoint: %v", argv)
+
+}
+
+func TestOpenAIPrimePreparationPreservesEndpointOverrides(t *testing.T) {
+	for _, endpoint := range []string{"https://gateway.example/v1", ""} {
+		t.Run(endpoint, func(t *testing.T) {
+			root, cwd, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+			model := `{"type":"model_change","id":"model","parentId":null,"provider":"openai","modelId":"gpt-4.1-mini"}`
+			source := writePrimeNativeFixture(t, root, primeSourceID, cwd, "", append([]string{model}, primeNativeFixtureRows()...)...)
+			request := ports.ImportedSessionRelocation{NativeSessionID: primeSourceID, ConfigDir: root, TranscriptPath: source, SourceCWD: cwd, LaunchCWD: workspace, DataDir: t.TempDir(), Env: map[string]string{"OPENAI_BASE_URL": endpoint}}
+			plugin := primeTestPlugin()
+			plugin.runCommand = func(_ context.Context, _, _ string, env map[string]string, _ ...string) ([]byte, error) {
+				if value, present := env["OPENAI_BASE_URL"]; !present || value != endpoint {
+					t.Fatalf("preparation replaced endpoint: %q, present=%v", value, present)
+				}
+				target, err := sessionDir(request.DataDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writePrimeNativeFixture(t, target, primeForkID, workspace, source, append([]string{model}, primeForkFixtureRows()...)...)
+				return nil, nil
+			}
+			if _, err := plugin.PrepareImportedSession(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Env["OPENAI_BASE_URL"] != endpoint {
+				t.Fatal("preparation mutated caller endpoint")
+			}
+		})
 	}
 }
 

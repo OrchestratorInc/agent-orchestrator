@@ -11,6 +11,8 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,9 +90,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	}
 	env[primeAgentCodingAgentDirEnv] = profile
 	env["PRIME_AGENT_DAEMON_SOCKET"] = filepath.Join(profile, "daemon.sock")
-	if expected.provider == "openai" {
-		env["OPENAI_BASE_URL"] = "https://api.openai.com/v1"
-	}
 	runner := p.runCommand
 	if runner == nil {
 		runner = runPrimeNativeFork
@@ -219,6 +218,10 @@ func runPrimeNativeFork(ctx context.Context, binary, workingDir string, env map[
 	cmd.Dir = workingDir
 	cmd.Env = os.Environ()
 	for key, value := range env {
+		if key == "OPENAI_BASE_URL" && value == "" {
+			cmd.Env = slices.DeleteFunc(cmd.Env, func(entry string) bool { return strings.HasPrefix(entry, key+"=") })
+			continue
+		}
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
 	// A nil stdin supplies EOF, not a prompt or an RPC command. Prime's RPC
