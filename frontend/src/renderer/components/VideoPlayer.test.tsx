@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMediaTime, VideoPlayer } from "./VideoPlayer";
@@ -51,8 +51,7 @@ describe("VideoPlayer", () => {
 		expect(pause).toHaveBeenCalledTimes(1);
 		Object.defineProperty(video, "paused", { configurable: true, value: true });
 		await user.click(video);
-		// A click on the video waits briefly in case it starts a double-click.
-		await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+		expect(play).toHaveBeenCalledTimes(2);
 	});
 
 	it("enters fullscreen on a double-click without toggling playback", async () => {
@@ -65,10 +64,34 @@ describe("VideoPlayer", () => {
 			loadMetadata(video, 2);
 			video.currentTime = 1.92;
 			await user.dblClick(video);
-			await new Promise((resolve) => setTimeout(resolve, 400));
 			expect(requestFullscreen).toHaveBeenCalledTimes(1);
-			expect(play).not.toHaveBeenCalled();
-			expect(pause).not.toHaveBeenCalled();
+			// The first click started playback; the double-click put it back.
+			expect(play).toHaveBeenCalledTimes(1);
+			expect(pause).toHaveBeenCalledTimes(1);
+			expect(video.currentTime).toBe(1.92);
+			expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+		} finally {
+			delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;
+			delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
+		}
+	});
+
+	it("restores playback after a slow double-click the system still recognizes", async () => {
+		Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+		const requestFullscreen = vi.fn(() => Promise.resolve());
+		HTMLElement.prototype.requestFullscreen = requestFullscreen;
+		try {
+			const video = renderPlayer();
+			loadMetadata(video, 2);
+			video.currentTime = 1.92;
+			fireEvent.click(video, { detail: 1 });
+			await new Promise((resolve) => setTimeout(resolve, 350));
+			video.currentTime = 2;
+			fireEvent.click(video, { detail: 2 });
+			fireEvent.doubleClick(video, { detail: 2 });
+			expect(requestFullscreen).toHaveBeenCalledTimes(1);
+			expect(play).toHaveBeenCalledTimes(1);
+			expect(pause).toHaveBeenCalledTimes(1);
 			expect(video.currentTime).toBe(1.92);
 		} finally {
 			delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;

@@ -9,8 +9,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 export const PLAYBACK_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const SKIP_SECONDS = 5;
 const VOLUME_STEP = 0.05;
-/** How long a click on the video waits to learn whether it starts a double-click. */
-const DOUBLE_CLICK_MS = 250;
 /** Controls a narrow player leaves out; see the controls row. */
 const COMPACT_HIDDEN = "@max-[26rem]:hidden";
 
@@ -45,7 +43,9 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
 	const videoRef = useRef<HTMLVideoElement>(null);
-	const clickTimer = useRef<number | undefined>(undefined);
+	// What playback looked like before the latest single click on the video, so
+	// a double-click can put it back.
+	const beforeClick = useRef<{ paused: boolean; time: number } | null>(null);
 	const [playing, setPlaying] = useState(false);
 	const [time, setTime] = useState(0);
 	const [duration, setDuration] = useState(0);
@@ -97,8 +97,6 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 		frame = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(frame);
 	}, [playing]);
-
-	useEffect(() => () => window.clearTimeout(clickTimer.current), []);
 
 	useEffect(() => {
 		const sync = () => setFullscreen(document.fullscreenElement !== null && document.fullscreenElement === rootRef.current);
@@ -187,14 +185,26 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 				key={src}
 				loop={loop}
 				onClick={(event) => {
-					// A double-click is for fullscreen: its first click waits to see
-					// whether a second follows, and the second never toggles playback.
-					window.clearTimeout(clickTimer.current);
+					// A single click toggles at once; the second click of a double-click
+					// leaves playback to the double-click handler.
 					if (event.detail > 1) return;
-					clickTimer.current = window.setTimeout(togglePlay, DOUBLE_CLICK_MS);
+					const video = event.currentTarget;
+					beforeClick.current = { paused: video.paused || video.ended, time: video.currentTime };
+					togglePlay();
 				}}
-				onDoubleClick={() => {
-					window.clearTimeout(clickTimer.current);
+				onDoubleClick={(event) => {
+					// The browser recognizes a double-click at the system's own speed, after
+					// its first click already toggled playback: undo that, then go fullscreen.
+					const before = beforeClick.current;
+					beforeClick.current = null;
+					const video = event.currentTarget;
+					if (before?.paused) {
+						video.pause();
+						video.currentTime = before.time;
+						setTime(before.time);
+					} else if (before && video.paused) {
+						void Promise.resolve(video.play()).catch(() => {});
+					}
 					toggleFullscreen();
 				}}
 				onDurationChange={(event) => setDuration(event.currentTarget.duration)}
