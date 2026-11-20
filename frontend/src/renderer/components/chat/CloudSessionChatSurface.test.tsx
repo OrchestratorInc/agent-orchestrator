@@ -365,6 +365,22 @@ describe("CloudSessionChatSurface", () => {
 		expect(lastProps().snapshot.turns).toContainEqual(expect.objectContaining({ id: "turn-sent", state: "running" }));
 	});
 
+	it("keeps an accepted send waiting for its turn when a later send is refused", async () => {
+		const userMessage = { sessionId: session.id, sequence: 7, type: "chat.user_message", payload: { text: "Ship it", turnId: "turn-sent" }, createdAt: "2026-09-22T00:01:00Z" } satisfies CloudCpClientEvent;
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValueOnce({ event: userMessage }).mockRejectedValueOnce(new Error("offline"));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const lastProps = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(lastProps()).toBeDefined());
+		await act(async () => { await lastProps().onSend("Ship it", undefined, "accepted-1"); });
+		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(true));
+
+		await act(async () => { await expect(lastProps().onSend("And this", undefined, "refused-2")).rejects.toThrow("offline"); });
+		expect(lastProps().sendAwaitingTurn).toBe(true);
+	});
+
 	it("does not report a refused send as waiting for a turn", async () => {
 		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });

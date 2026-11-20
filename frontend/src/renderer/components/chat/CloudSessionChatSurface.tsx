@@ -1853,6 +1853,10 @@ export function CloudSessionChatSurface({
 				name: attachment.name || "attachment", data: attachment.data,
 			}, { signal }))));
 	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
+	// The newest accepted send's event per session, so a later send that fails
+	// cannot hide an earlier one still waiting for its turn. Sequences only grow,
+	// so a record stops mattering once the chat has read that far.
+	const [acceptedThrough, setAcceptedThrough] = useState<Readonly<Record<string, number>>>({});
 	const send = useMutation({
 		// `sessionId` names the session the send went to: this surface outlives it.
 		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean; sessionId: string }) => {
@@ -1893,9 +1897,13 @@ export function CloudSessionChatSurface({
 				return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
 			}
 		},
-		onSuccess: () => {
+		onSuccess: (data, { sessionId }) => {
 			// The send released the lease to whoever is next in line.
 			leaseRef.current.sent();
+			const sequence = data?.event?.sequence;
+			if (typeof sequence === "number") {
+				setAcceptedThrough((current) => (current[sessionId] ?? 0) >= sequence ? current : { ...current, [sessionId]: sequence });
+			}
 			void invalidate();
 		},
 	});
@@ -2134,10 +2142,10 @@ export function CloudSessionChatSurface({
 	useChatMessageFocus(sessionUiKey(session.id), undefined, eventsQuery.isSuccess, focusMessage);
 	// A message the control plane accepted whose event this chat has not read yet.
 	// Its turn is not in the snapshot until then, but a next message would wait
-	// behind it all the same. A refused send has no data, and another session's
-	// send is not this chat's.
-	const acceptedSequence = send.isSuccess && send.variables?.sessionId === session.id ? send.data?.event?.sequence : undefined;
-	const sendAwaitingTurn = typeof acceptedSequence === "number" &&
+	// behind it all the same. A refused send records nothing, and another
+	// session's send is not this chat's.
+	const acceptedSequence = acceptedThrough[session.id];
+	const sendAwaitingTurn = acceptedSequence !== undefined &&
 		(eventsQuery.data?.at(-1)?.sequence ?? 0) < acceptedSequence;
 	// A next-message suggestion once a turn settles, as a local chat offers, only
 	// while this person can send and the chat is in front.
