@@ -38,15 +38,16 @@ func TestPragmasSetJournalSizeLimit(t *testing.T) {
 // the daemon: the writer Open returns cuts it back at the next WAL reset.
 func TestOpenWriterTrimsAnInflatedWALAtTheNextReset(t *testing.T) {
 	dir := t.TempDir()
-	store, err := Open(dir)
+	repairDone := make(chan struct{})
+	store, err := openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: timestampFenceTimeout, repairDone: repairDone})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	<-repairDone
 
-	// Inflate the log from a connection that has no limit. It checkpoints the
-	// log into the database right after the commit, so the writer is free to
-	// reset it on its next transaction.
+	// Inflate the log from a connection that has no limit, with a reader
+	// deliberately preventing its passive automatic checkpoint from finishing.
 	burst, err := sql.Open("sqlite", plainDSN(dir))
 	if err != nil {
 		t.Fatalf("open burst connection: %v", err)
@@ -55,6 +56,20 @@ func TestOpenWriterTrimsAnInflatedWALAtTheNextReset(t *testing.T) {
 	t.Cleanup(func() { _ = burst.Close() })
 	if _, err := burst.Exec(`CREATE TABLE wal_burst (payload BLOB)`); err != nil {
 		t.Fatalf("create burst table: %v", err)
+	}
+	reader, err := sql.Open("sqlite", databaseURI(dir)+readOnlyPragmas)
+	if err != nil {
+		t.Fatalf("open held reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	readTx, err := reader.Begin()
+	if err != nil {
+		t.Fatalf("begin held read: %v", err)
+	}
+	t.Cleanup(func() { _ = readTx.Rollback() })
+	var rows int
+	if err := readTx.QueryRow(`SELECT COUNT(*) FROM wal_burst`).Scan(&rows); err != nil {
+		t.Fatalf("hold pre-burst snapshot: %v", err)
 	}
 	if _, err := burst.Exec(`INSERT INTO wal_burst VALUES (zeroblob(?))`, walSizeLimit+(2<<20)); err != nil {
 		t.Fatalf("write burst: %v", err)
@@ -66,6 +81,25 @@ func TestOpenWriterTrimsAnInflatedWALAtTheNextReset(t *testing.T) {
 	}
 	if grown.Size() <= walSizeLimit {
 		t.Fatalf("setup left the -wal file at %d bytes; it must exceed the %d byte cap", grown.Size(), walSizeLimit)
+	}
+	if err := readTx.Rollback(); err != nil {
+		t.Fatalf("release held reader: %v", err)
+	}
+	// A completed RESTART makes the next writer reset the WAL, but unlike
+	// TRUNCATE it leaves the oversized allocation for AO's writer to trim.
+	var busy, frames, checkpointed int
+	if err := burst.QueryRow(`PRAGMA wal_checkpoint(RESTART)`).Scan(&busy, &frames, &checkpointed); err != nil {
+		t.Fatalf("prepare WAL reset: %v", err)
+	}
+	if busy != 0 || frames < 0 || frames != checkpointed {
+		t.Fatalf("WAL is not ready to reset: busy=%d frames=%d checkpointed=%d", busy, frames, checkpointed)
+	}
+	ready, err := os.Stat(wal)
+	if err != nil {
+		t.Fatalf("stat WAL before reset: %v", err)
+	}
+	if ready.Size() <= walSizeLimit {
+		t.Fatalf("setup trimmed WAL to %d bytes before AO's writer could enforce its limit", ready.Size())
 	}
 
 	if err := store.UpsertProject(context.Background(), domain.ProjectRecord{ID: "after-burst", Path: filepath.Join(dir, "repo")}); err != nil {

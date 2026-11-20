@@ -260,6 +260,12 @@ func (m *codexAccountManager) runGlobalReconciliation(call *accountReconcileCall
 	}
 	close(call.done)
 	m.mu.Unlock()
+	// A display check can have cached account_sync_pending while discovery was
+	// running. Recompute readiness after settling, even when no Settings view is
+	// open. Never invoke the service callback under the account-manager lock.
+	if m.ctx.Err() == nil && m.onAuthenticationChanged != nil {
+		m.onAuthenticationChanged()
+	}
 	m.publish()
 	if schedule {
 		m.scheduleGlobalReconciliation(delay)

@@ -321,6 +321,13 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const send = async (text: string, attachments?: FileAttachmentPayload[], clientMessageId: string = crypto.randomUUID()) => {
 		const target = { ...targetRef.current };
 		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
+		const retryPendingLaunch = Boolean(saved && target.projectId === STANDALONE_WORKSPACE_ID && !target.hostId);
+		// A readiness recovery only enables Send; it must never turn an early
+		// keystroke into a queued task or clear the user's draft. A prior uncertain
+		// send still resolves through the daemon with its original request ID.
+		if (!retryPendingLaunch && taskRef.current.sendBlockedReason) {
+			throw Object.assign(new Error(taskRef.current.sendBlockedReason), { code: "TASK_NOT_READY" });
+		}
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
 		setEcho(brief);
 		setRefusedRetry(undefined);
@@ -331,7 +338,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			if (saved && saved.projectId !== target.projectId) throw new Error(t("newTask.unableToStart"));
 			// A send right after opening waits for the project and agents to load,
 			// unless loading has already failed or the page has gone.
-			if (!(await until(() => !mounted.current || taskRef.current.canSubmit || Boolean(taskRef.current.remoteLoadError), 10_000)) || !mounted.current || !taskRef.current.canSubmit) {
+			if (!retryPendingLaunch && (!(await until(() => !mounted.current || taskRef.current.canSubmit || Boolean(taskRef.current.remoteLoadError), 10_000)) || !mounted.current || !taskRef.current.canSubmit)) {
 				// The composer shows this reason with the returned brief, so the notice below steps aside.
 				setReportedLoadError(taskRef.current.remoteLoadError);
 				throw Object.assign(new Error(taskRef.current.remoteLoadError ?? t("newTask.unableToStart")), { code: "TASK_NOT_READY" });
@@ -347,7 +354,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
+			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments, ...(retryPendingLaunch ? { retryPendingLaunch: true } : {}) });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -438,6 +445,11 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		</div>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
+	) : !pendingLaunch && task.readinessNotice ? (
+		<div role={task.readinessNotice.checking ? "status" : "alert"} className="flex items-center gap-2 px-1 text-xs text-foreground">
+			<span>{task.readinessNotice.message}</span>
+			{task.readinessNotice.action ? <Button size="xs" variant="ghost" onClick={task.readinessNotice.action.onClick}>{task.readinessNotice.action.label}</Button> : null}
+		</div>
 	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{task.remoteLoadError}</p>
 	) : typeof task.modelWarning === "string" ? (
@@ -497,6 +509,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 					</>
 				}
 				onSend={send}
+				sendBlockedReason={pendingLaunch ? undefined : task.sendBlockedReason}
 				busy={pending}
 				// The Cloud session started for this task is still coming up.
 				// The session's own composer controls from the start: the same bar, held

@@ -597,6 +597,7 @@ func accountAuthenticationObservation(at time.Time, state domain.AgentAuthentica
 func (m *codexAccountManager) finishAuthentication(ctx context.Context, id string, observation domain.AgentAuthenticationObservation, method domain.CodexAuthMethod, email *string, failed bool, call *accountAuthCall) {
 	m.mu.Lock()
 	state := m.auth[id]
+	previous, _ := m.catalog.record(id)
 	if !state.reauthenticationRequired {
 		if failed {
 			m.catalog.updateSnapshot(id, func(s *domain.CodexAccountSnapshot) { preserveAuthenticationFailure(&s.Authentication, observation) })
@@ -635,8 +636,16 @@ func (m *codexAccountManager) finishAuthentication(ctx context.Context, id strin
 		}
 	}
 	state.call = nil
+	latest, _ := m.catalog.record(id)
+	changed := id == m.deviceAccountID && (previous.Snapshot.Authentication.State != latest.Snapshot.Authentication.State ||
+		previous.Snapshot.AuthMethod != latest.Snapshot.AuthMethod ||
+		(previous.Snapshot.AccountEmail != latest.Snapshot.AccountEmail &&
+			(previous.Snapshot.AccountEmail == nil || latest.Snapshot.AccountEmail == nil || *previous.Snapshot.AccountEmail != *latest.Snapshot.AccountEmail)))
 	close(call.done)
 	m.mu.Unlock()
+	if changed && m.onAuthenticationChanged != nil {
+		m.onAuthenticationChanged()
+	}
 	m.publish()
 }
 

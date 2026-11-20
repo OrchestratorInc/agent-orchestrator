@@ -162,7 +162,7 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
 			snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				states := turnStateByText(t, s)
-				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning
+				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning && len(h.conv.sentTexts()) >= 3
 			})
 			// Typed messages take one turn each, so the last one waits its turn.
 			if state := turnStateByText(t, snapshot)["last valid"]; state != domain.TurnStateQueued {
@@ -177,7 +177,8 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				ProviderTurnID: "provider-turn-3", TurnState: domain.TurnStateCompleted})
 			snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				states := turnStateByText(t, s)
-				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning
+				// Claiming marks a turn running before SendTurn reaches the provider.
+				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning && len(h.conv.sentTexts()) >= 4
 			})
 			if turnStateByText(t, snapshot)["stale excerpt"] != domain.TurnStateFailed {
 				t.Fatal("later drains retried the stale turn")

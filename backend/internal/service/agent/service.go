@@ -176,6 +176,7 @@ func NewWithDeps(deps Deps) *Service {
 	if svc.codexAccounts != nil {
 		svc.codexAccounts.onAuthenticationChanged = func() {
 			svc.readiness.Invalidate(string(domain.HarnessCodex), readinessInvalidateAuthentication)
+			svc.RecheckAgent(string(domain.HarnessCodex))
 		}
 	}
 	if svc.codexAccounts != nil && deps.CodexAccountSwitches != nil && deps.CodexOperationGate != nil {

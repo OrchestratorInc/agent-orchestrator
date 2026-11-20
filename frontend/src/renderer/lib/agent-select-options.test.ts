@@ -5,12 +5,29 @@ import {
 	defaultAuthorizedAgentForRole,
 	defaultProjectAgents,
 	isLaunchableAgent,
+	isPendingAgent,
 	preferredAgentList,
 	preferredAgentNeedsChecks,
 	type RoleSession,
 } from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
+
+describe("standalone readiness presentation", () => {
+	it("keeps known-good agents usable while checking and treats stale failures as unresolved", () => {
+		const good = agent("codex");
+		good.authentication.freshness = "checking";
+		expect(isPendingAgent(good)).toBe(false);
+		const signedOut = agent("codex", "installed", "unauthorized");
+		expect(isPendingAgent(signedOut)).toBe(false);
+		signedOut.authentication.freshness = "checking";
+		expect(isPendingAgent(signedOut)).toBe(true);
+		const missing = agent("codex", "not_installed", "unknown");
+		expect(isPendingAgent(missing)).toBe(false);
+		missing.installation.freshness = "stale";
+		expect(isPendingAgent(missing)).toBe(true);
+	});
+});
 
 function agent(
 	id: string,
