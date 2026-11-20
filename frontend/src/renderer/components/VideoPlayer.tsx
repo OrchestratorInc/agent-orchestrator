@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Maximize2, Minimize2, Pause, Play, Repeat, Volume2, VolumeX } from "@/components/app-icons";
 import { cn } from "../lib/utils";
@@ -20,6 +20,11 @@ export function formatMediaTime(seconds: number): string {
 	const minutes = Math.floor((total % 3600) / 60);
 	const secs = String(total % 60).padStart(2, "0");
 	return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${secs}` : `${minutes}:${secs}`;
+}
+
+/** Where `amount` sits on a 0–`max` track, as a CSS percentage. */
+function trackPercent(amount: number, max: number): string {
+	return `${max > 0 ? Math.min(Math.max(amount / max, 0), 1) * 100 : 0}%`;
 }
 
 /** How far the file has loaded past the playhead, in seconds. */
@@ -48,6 +53,7 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
 	const videoRef = useRef<HTMLVideoElement>(null);
+	const seekTrackRef = useRef<HTMLDivElement>(null);
 	// What playback looked like before the latest single click on the video, so
 	// a double-click can put it back.
 	const beforeClick = useRef<{ paused: boolean; time: number } | null>(null);
@@ -103,14 +109,17 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 		video.muted = muted;
 	}, [muted, volume, src]);
 
-	// timeupdate fires a few times a second; follow the frame clock while
-	// playing so the scrubber moves smoothly.
+	// timeupdate fires a few times a second, which is enough for the time label
+	// but makes the scrubber step. While playing, follow the frame clock and move
+	// only the seek track's fill, straight in the DOM: setting state every frame
+	// would re-render every control 60 times a second.
 	useEffect(() => {
 		if (!playing) return;
 		let frame = 0;
 		const tick = () => {
 			const video = videoRef.current;
-			if (video) setTime(video.currentTime);
+			const track = seekTrackRef.current;
+			if (video && track && Number.isFinite(video.duration)) track.style.setProperty("--slider-value", trackPercent(video.currentTime, video.duration));
 			frame = requestAnimationFrame(tick);
 		};
 		frame = requestAnimationFrame(tick);
@@ -255,6 +264,7 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 						onChange={seek}
 						secondary={seekable ? buffered : 0}
 						step="any"
+						trackRef={seekTrackRef}
 						value={seekable ? Math.min(time, duration) : 0}
 						valueText={t("files.video.time", { current: formatMediaTime(time), duration: formatMediaTime(duration) })}
 					/>
@@ -341,7 +351,7 @@ function ControlButton({ children, className, disabled, label, onClick, portal, 
  * and keyboard focus show the thumb through --slider-thumb rather than a
  * group-has variant, which would restyle the whole app on DOM changes.
  */
-function MediaSlider({ className, disabled, label, max, onChange, secondary = 0, step, value, valueText, volume }: {
+function MediaSlider({ className, disabled, label, max, onChange, secondary = 0, step, trackRef, value, valueText, volume }: {
 	className?: string;
 	disabled?: boolean;
 	label: string;
@@ -350,12 +360,16 @@ function MediaSlider({ className, disabled, label, max, onChange, secondary = 0,
 	/** A lighter fill behind the value, such as how much has loaded. */
 	secondary?: number;
 	step: number | "any";
+	/**
+	 * The drawn track, whose --slider-value sets the fill and thumb. A caller may
+	 * move them more often than it renders by writing that variable directly.
+	 */
+	trackRef?: Ref<HTMLDivElement>;
 	value: number;
 	valueText: string;
 	/** Arrow keys adjust this slider natively instead of skipping through the video. */
 	volume?: boolean;
 }) {
-	const percent = (amount: number) => `${max > 0 ? Math.min(Math.max(amount / max, 0), 1) * 100 : 0}%`;
 	return (
 		<div
 			className={cn(
@@ -364,12 +378,15 @@ function MediaSlider({ className, disabled, label, max, onChange, secondary = 0,
 				className,
 			)}
 		>
-			<div className="pointer-events-none absolute inset-x-1.5 h-1 rounded-full bg-interactive-active">
-				{secondary > 0 ? <div className="absolute inset-y-0 left-0 rounded-full bg-passive/40" style={{ width: percent(secondary) }} /> : null}
-				<div className="absolute inset-y-0 left-0 rounded-full bg-foreground" style={{ width: percent(value) }} />
+			<div
+				className="pointer-events-none absolute inset-x-1.5 h-1 rounded-full bg-interactive-active"
+				ref={trackRef}
+				style={{ "--slider-value": trackPercent(value, max) } as CSSProperties}
+			>
+				{secondary > 0 ? <div className="absolute inset-y-0 left-0 rounded-full bg-passive/40" style={{ width: trackPercent(secondary, max) }} /> : null}
+				<div className="absolute inset-y-0 left-0 w-(--slider-value) rounded-full bg-foreground" />
 				<div
-					className="absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground opacity-[var(--slider-thumb,0)] transition-opacity duration-(--duration-fast) motion-reduce:transition-none"
-					style={{ left: percent(value) }}
+					className="absolute top-1/2 left-(--slider-value) size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground opacity-[var(--slider-thumb,0)] transition-opacity duration-(--duration-fast) motion-reduce:transition-none"
 				/>
 			</div>
 			<input

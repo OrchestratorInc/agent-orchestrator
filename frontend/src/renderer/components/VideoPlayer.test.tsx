@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { Profiler } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMediaTime, VideoPlayer } from "./VideoPlayer";
@@ -42,6 +43,37 @@ describe("VideoPlayer", () => {
 		}
 		expect(screen.getByRole("slider", { name: "Seek" })).toBeDisabled();
 		expect(screen.getByText("0:00 / 0:00")).toBeInTheDocument();
+	});
+
+	it("moves the scrubber every frame without re-rendering the controls", () => {
+		const frames: FrameRequestCallback[] = [];
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+		vi.stubGlobal("cancelAnimationFrame", () => {});
+		try {
+			let commits = 0;
+			render(
+				<Profiler id="player" onRender={() => { commits++; }}>
+					<VideoPlayer label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />
+				</Profiler>,
+			);
+			const video = screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
+			const track = screen.getByRole("slider", { name: "Seek" }).previousElementSibling as HTMLElement;
+			loadMetadata(video, 10);
+			fireEvent.play(video);
+			const rendered = commits;
+			for (const time of [1, 2.5, 5]) {
+				video.currentTime = time;
+				act(() => frames.shift()?.(0));
+			}
+			// The fill follows the playhead, but nothing re-rendered.
+			expect(track.style.getPropertyValue("--slider-value")).toBe("50%");
+			expect(commits).toBe(rendered);
+			// The time label still follows the media's own progress events.
+			fireEvent.timeUpdate(video);
+			expect(screen.getByText("0:05 / 0:10")).toBeInTheDocument();
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("plays and pauses from the button and from clicking the video", async () => {
