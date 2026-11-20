@@ -1879,7 +1879,8 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 			rendererUrl(),
 		);
 		// Dev keeps a line for every request; packaged daemons log routine reads at trace.
-		if (!process.env.AO_LOG_LEVEL) devExtras.AO_LOG_LEVEL = "trace";
+		// A level set in the app or login-shell environment wins.
+		if (!process.env.AO_LOG_LEVEL && !cachedShellEnv?.AO_LOG_LEVEL) devExtras.AO_LOG_LEVEL = "trace";
 	}
 	// Windows keeps its native environment semantics while overlaying values
 	// exported by the selected login-shell probe.
