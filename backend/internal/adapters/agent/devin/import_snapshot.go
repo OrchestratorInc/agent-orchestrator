@@ -62,6 +62,9 @@ func sourceStoreFile(ctx context.Context, root *os.Root, name string, optional b
 		return nil, errors.New("devin: native store changed while opening")
 	}
 	_, _ = digest.Write([]byte("present:" + name))
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(opened.Size()))
+	_, _ = digest.Write(size[:])
 	r := io.TeeReader(io.LimitReader(importContextReader{ctx, f}, *remaining+1), digest)
 	var data []byte
 	var n int64
@@ -120,6 +123,11 @@ func readSourceStore(ctx context.Context, root string) (*importStore, error) {
 	}
 	if !bytes.Equal(fingerprint, digest.Sum(nil)) {
 		return nil, errors.New("devin: native store changed; scan again")
+	}
+	if journal, err := r.Lstat("cli/sessions.db-journal"); err == nil && journal.Size() != 0 {
+		return nil, errors.New("devin: source transaction started during import")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 	merged, err := committedImportPages(ctx, main, wal)
 	if err != nil {
@@ -196,13 +204,13 @@ func committedImportPages(ctx context.Context, main, wal []byte) ([]byte, error)
 			if s0 != binary.BigEndian.Uint32(frame[16:20]) || s1 != binary.BigEndian.Uint32(frame[20:24]) {
 				break
 			}
-			page := int(binary.BigEndian.Uint32(frame[:4]))
-			count := int(binary.BigEndian.Uint32(frame[4:8]))
-			if page < 1 || page > maxImportStoreBytes/pageSize || count > maxImportStoreBytes/pageSize {
+			page := uint64(binary.BigEndian.Uint32(frame[:4]))
+			count := uint64(binary.BigEndian.Uint32(frame[4:8]))
+			if page < 1 || page > uint64(maxImportStoreBytes/pageSize) || count > uint64(maxImportStoreBytes/pageSize) {
 				return nil, errors.New("devin: native WAL exceeds import budget")
 			}
 			if count != 0 {
-				end, pages = offset+24+pageSize, count
+				end, pages = offset+24+pageSize, int(count)
 			}
 		}
 		if pages != 0 {

@@ -50,8 +50,10 @@ var devinBinarySpec = binaryutil.BinarySpec{
 // Plugin is the Devin for Terminal agent adapter.
 type Plugin struct {
 	agentbase.Base
-	binaryMu       sync.Mutex
-	resolvedBinary string
+	binaryMu         sync.Mutex
+	resolvedBinary   string
+	importVersion    func(context.Context) error
+	importInitialize func(context.Context, string) error
 }
 
 // New returns a ready-to-register Devin adapter.
@@ -85,6 +87,9 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // The `-- <prompt>` form starts an interactive session. Do not use `-p`, which
 // is Devin's non-interactive print mode.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
+	if preparedImportNamespace(cfg.Env[importStoreEnv]) {
+		return nil, ports.ErrNativeHistoryUnavailable
+	}
 	binary, err := p.devinBinary(ctx)
 	if err != nil {
 		return nil, err
@@ -120,6 +125,13 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if cfg.WorkspacePath == "" {
 		return nil
 	}
+	if root := cfg.Env[importStoreEnv]; preparedImportNamespace(root) {
+		proof, err := readImportProof(root)
+		if err != nil {
+			return err
+		}
+		return validatePrivateImport(ctx, root, proof.ID, cfg.WorkspacePath)
+	}
 	nativePath, err := devinTrustedWorkspacesPath()
 	if err != nil {
 		return err
@@ -147,8 +159,18 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
+	root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]
+	imported := cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" || preparedImportNamespace(root)
 	if agentSessionID == "" {
+		if imported {
+			return nil, false, ports.ErrNativeHistoryUnavailable
+		}
 		return nil, false, nil
+	}
+	if imported {
+		if err := validatePrivateImport(ctx, root, agentSessionID, cfg.Session.WorkspacePath); err != nil {
+			return nil, false, err
+		}
 	}
 
 	binary, err := p.devinBinary(ctx)
@@ -158,9 +180,15 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	cmd = make([]string, 0, 5)
 	cmd = append(cmd, binary)
+	if imported {
+		cmd = append(cmd, "--config", filepath.Join(root, "config", "devin", "config.json"), "--respect-workspace-trust", "false")
+	}
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	cmd = append(cmd, "-r", agentSessionID)
+	if imported && strings.TrimSpace(cfg.Prompt) != "" {
+		cmd = append(cmd, "--", cfg.Prompt)
+	}
 	return cmd, true, nil
 }
 
