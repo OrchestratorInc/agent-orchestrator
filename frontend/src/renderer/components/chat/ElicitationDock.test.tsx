@@ -258,6 +258,55 @@ describe("ElicitationDock", () => {
 		});
 	});
 
+	// claude-agent-acp marks no question required, so any of them can be skipped.
+	const optionalClaudeQuestions = { ...claudeQuestions, required: [] };
+
+	it("keeps earlier Claude answers when the last question is skipped", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: optionalClaudeQuestions })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("radio", { name: /Native/ }));
+		await user.click(screen.getByRole("button", { name: "Next" }));
+		await user.click(screen.getByRole("radio", { name: /Go/ }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { question_0: "Native" });
+	});
+
+	it("moves past a skipped Claude question and leaves it blank", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: optionalClaudeQuestions })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("radio", { name: /Native/ }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).not.toHaveBeenCalled();
+		expect(screen.getByRole("group", { name: /Language/ })).toBeVisible();
+
+		await user.click(screen.getByRole("button", { name: "Back" }));
+		expect(screen.getByRole("radio", { name: /Native/ })).not.toBeChecked();
+		await user.click(screen.getByRole("button", { name: "Next" }));
+		await user.click(screen.getByRole("radio", { name: /TypeScript/ }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { question_1: "TypeScript" });
+	});
+
+	it("skips the whole Claude form when every question is skipped", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: optionalClaudeQuestions })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "decline", undefined);
+	});
+
+	it("offers no Skip on a required Claude question", () => {
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: claudeQuestions })} onResolve={vi.fn()} />);
+		expect(screen.queryByRole("button", { name: "Skip" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+	});
+
 	it("keeps generic MCP forms in the all-fields layout", () => {
 		render(
 			<ElicitationDock
