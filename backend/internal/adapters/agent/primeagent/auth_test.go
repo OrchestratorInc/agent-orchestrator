@@ -4,16 +4,17 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestPrimeLocalAuthStatusAuthorizedFromProviderEnv(t *testing.T) {
+func TestPrimeProfileAuthStatusAuthorizedFromProviderEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
-	status, ok, err := primeLocalAuthStatus(context.Background())
+	status, ok, err := primeProfileAuthStatus(context.Background(), primeConfigDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +23,7 @@ func TestPrimeLocalAuthStatusAuthorizedFromProviderEnv(t *testing.T) {
 	}
 }
 
-func TestPrimeLocalAuthStatusAuthorizedFromAuthFile(t *testing.T) {
+func TestPrimeProfileAuthStatusAuthorizedFromAuthFile(t *testing.T) {
 	clearPrimeCredentialEnv(t)
 	dir := t.TempDir()
 	t.Setenv(primeAgentCodingAgentDirEnv, dir)
@@ -31,7 +32,7 @@ func TestPrimeLocalAuthStatusAuthorizedFromAuthFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, ok, err := primeLocalAuthStatus(context.Background())
+	status, ok, err := primeProfileAuthStatus(context.Background(), primeConfigDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +41,7 @@ func TestPrimeLocalAuthStatusAuthorizedFromAuthFile(t *testing.T) {
 	}
 }
 
-func TestPrimeLocalAuthStatusUnknownForEmptyAuthFile(t *testing.T) {
+func TestPrimeProfileAuthStatusUnknownForEmptyAuthFile(t *testing.T) {
 	clearPrimeCredentialEnv(t)
 	dir := t.TempDir()
 	t.Setenv(primeAgentCodingAgentDirEnv, dir)
@@ -48,7 +49,7 @@ func TestPrimeLocalAuthStatusUnknownForEmptyAuthFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, ok, err := primeLocalAuthStatus(context.Background())
+	status, ok, err := primeProfileAuthStatus(context.Background(), primeConfigDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestPrimeLocalAuthStatusUnknownForEmptyAuthFile(t *testing.T) {
 	}
 }
 
-func TestPrimeLocalAuthStatusAuthorizedFromModelsFileCredentials(t *testing.T) {
+func TestPrimeProfileAuthStatusAuthorizedFromModelsFileCredentials(t *testing.T) {
 	clearPrimeCredentialEnv(t)
 	dir := t.TempDir()
 	t.Setenv(primeAgentCodingAgentDirEnv, dir)
@@ -65,7 +66,7 @@ func TestPrimeLocalAuthStatusAuthorizedFromModelsFileCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, evidence := ports.WithAuthEvidence(context.Background())
-	status, ok, err := primeLocalAuthStatus(ctx)
+	status, ok, err := primeProfileAuthStatus(ctx, primeConfigDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +118,87 @@ func TestPrimeCredentialJSONAuthorizedFromOAuth(t *testing.T) {
 	}
 	if !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+}
+
+func TestAuthStatusForRuntimeReadsTheSessionProfile(t *testing.T) {
+	const credential = `{"anthropic":{"type":"api_key","key":"test-key"}}`
+	tests := []struct {
+		name        string
+		fileProfile string
+		envKey      bool
+		want        ports.AgentAuthStatus
+	}{
+		{name: "no credentials", want: ports.AgentAuthStatusUnknown},
+		{name: "login only in the default profile", fileProfile: "default", want: ports.AgentAuthStatusUnknown},
+		{name: "login in the session profile", fileProfile: "session", want: ports.AgentAuthStatusAuthorized},
+		{name: "provider key in the environment", envKey: true, want: ports.AgentAuthStatusAuthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearPrimeCredentialEnv(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv(primeAgentCodingAgentDirEnv, "")
+			t.Setenv("PI_CODING_AGENT_DIR", "")
+			dataDir := t.TempDir()
+			profile, err := primeDataDir(dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dirs := map[string]string{"default": filepath.Join(home, ".prime", "agent"), "session": profile}
+			if tt.fileProfile != "" {
+				dir := dirs[tt.fileProfile]
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(credential), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.envKey {
+				t.Setenv("ANTHROPIC_API_KEY", "test-key")
+			}
+
+			status, _, _, err := (&Plugin{resolvedBinary: "prime-agent"}).AuthStatusForRuntime(context.Background(), dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status != tt.want {
+				t.Fatalf("status = %q, want %q", status, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthStatusForRuntimeRecordsTheSessionProfileAsEvidence(t *testing.T) {
+	clearPrimeCredentialEnv(t)
+	dataDir := t.TempDir()
+	profile, err := primeDataDir(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(profile, "auth.json")
+	if err := os.WriteFile(path, []byte(`{"anthropic":{"type":"api_key","key":"test-key"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	if _, _, _, err := (&Plugin{resolvedBinary: "prime-agent"}).AuthStatusForRuntime(ctx, dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if got := evidence.Identity().Source; !strings.Contains(got, path) {
+		t.Fatalf("evidence source = %q, want it to name %q", got, path)
+	}
+}
+
+func TestAuthStatusForRuntimeRequiresDataDir(t *testing.T) {
+	if _, _, _, err := (&Plugin{resolvedBinary: "prime-agent"}).AuthStatusForRuntime(context.Background(), " "); err == nil {
+		t.Fatal("AuthStatusForRuntime error = nil, want a DataDir error")
 	}
 }
 
