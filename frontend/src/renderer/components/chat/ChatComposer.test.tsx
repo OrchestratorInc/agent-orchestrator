@@ -4018,9 +4018,10 @@ describe("queue hint while a send waits for its turn", () => {
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("Ship it"));
 		await waitFor(() => expect(drawnPlaceholder(field)).toBe(QUEUED));
 		expect(stop()).toEqual([null, QUEUED]);
-		// With no surface here to report the echo, the box is idle once the send is answered.
+		// With no surface here to report the echo or withdraw the suggestion, the box
+		// offers it again once the send is answered: the hint does not stick.
 		await act(async () => pending.resolve());
-		await waitFor(() => expect(drawnPlaceholder(field)).toBe("Message the agent"));
+		await waitFor(() => expect(drawnPlaceholder(field)).toBe("suggestion: Run the tests"));
 	});
 
 	it("drops the queue hint when the send fails, with the draft back and nothing held over", async () => {

@@ -356,11 +356,13 @@ describe("CloudSessionChatSurface", () => {
 		view.rerender(surface(session.id));
 		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(true));
 
-		// The read that brings its event brings its turn too, queued until the agent starts it.
+		// The read that brings its event brings its turn too, already in flight: with
+		// nothing else running, the projection shows the first waiting send as the
+		// active request.
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [userMessage], hasMore: false, nextAfter: 7 });
 		await act(async () => { await queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", "org-1", session.id] }); });
 		await waitFor(() => expect(lastProps().sendAwaitingTurn).toBe(false));
-		expect(lastProps().snapshot.turns).toContainEqual(expect.objectContaining({ id: "turn-sent", state: "queued" }));
+		expect(lastProps().snapshot.turns).toContainEqual(expect.objectContaining({ id: "turn-sent", state: "running" }));
 	});
 
 	it("does not report a refused send as waiting for a turn", async () => {
