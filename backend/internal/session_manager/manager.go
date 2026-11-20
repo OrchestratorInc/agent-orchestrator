@@ -2064,9 +2064,10 @@ const refusedModelRefreshInterval = 10 * time.Minute
 
 // refuseUnavailableCodexModel refuses a Codex session on a model Codex already
 // refused for the account the session runs on, instead of starting a worker
-// whose first turn fails (#4518). Another account is never refused for it. A
-// model a fresh saved catalog lists again is allowed and forgotten; a stale
-// catalog's listing proves nothing, so the refusal stays.
+// whose first turn fails (#4518). Another account is never refused for it. On
+// the computer's own account, a model a fresh saved catalog lists again is
+// allowed and forgotten; a stale catalog's listing proves nothing, so the
+// refusal stays.
 func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, model string) error {
 	if model == "" {
 		return nil
@@ -2077,7 +2078,10 @@ func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.Spa
 		return nil
 	}
 	var available []string
-	if m.modelCatalog != nil {
+	// Codex's catalog is discovered under the computer's own login only, never
+	// a saved account's or a project's CODEX_HOME, so it says nothing about
+	// another account's models: that account's refusal stays, without a list.
+	if m.modelCatalog != nil && strings.TrimSpace(home) == "" {
 		if catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false); err == nil {
 			for _, item := range catalog.Models {
 				if item.ID == model {
