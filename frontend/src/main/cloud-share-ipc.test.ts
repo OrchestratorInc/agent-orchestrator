@@ -111,8 +111,12 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 				return json({ share: { id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
 			}
 			if (pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`) {
-				const emails = init.method === "POST" ? (JSON.parse(String(init.body)) as { emails: string[] }).emails : ["maya@acme.co"];
-				return json({ grants: emails.map((email, index) => ({ id: `${GRANT_ID.slice(0, -1)}${index}`, email: email.toLowerCase(), createdAt: "" })) });
+				const body = init.method === "POST" ? (JSON.parse(String(init.body)) as { emails?: string[]; orgId?: string; teamIds?: string[]; workspace?: boolean }) : { emails: ["maya@acme.co"] };
+				const grants = (body.emails ?? []).map((email, index) => ({ id: `${GRANT_ID.slice(0, -1)}${index}`, email: email.toLowerCase(), createdAt: "" }));
+				// Answering without teams, as a control plane that predates team sharing does.
+				if (!body.orgId) return json({ grants });
+				const subject = (teamId?: string) => ({ id: GRANT_ID, orgId: body.orgId, ...(teamId ? { teamId } : {}), name: teamId ? "Design" : "Acme", memberCount: 3, createdAt: "" });
+				return json({ grants, teams: (body.teamIds ?? []).map(subject), workspaces: body.workspace ? [subject()] : [] });
 			}
 			if (init.method === "PATCH" && pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}`) {
 				return json({ id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/", ...(JSON.parse(String(init.body)) as object) });
@@ -596,8 +600,8 @@ describe("cloudShare IPC", () => {
 		const { invoke, requests, bodies } = setup();
 		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" })).resolves.toMatchObject({ id: SHARE_ID, access: "anyone" });
 		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}`)).toEqual({ access: "anyone" });
-		await expect(invoke("cloudShare:grants", { baseUrl: "https://cp.test", shareId: SHARE_ID })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "maya@acme.co", createdAt: "" }]);
-		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["Dev@acme.co"] })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "dev@acme.co", createdAt: "" }]);
+		await expect(invoke("cloudShare:grants", { baseUrl: "https://cp.test", shareId: SHARE_ID })).resolves.toEqual({ people: [{ id: `${GRANT_ID.slice(0, -1)}0`, email: "maya@acme.co", createdAt: "" }], teams: [], workspaces: [] });
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["Dev@acme.co"] })).resolves.toEqual({ people: [{ id: `${GRANT_ID.slice(0, -1)}0`, email: "dev@acme.co", createdAt: "" }], teams: [], workspaces: [] });
 		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`)).toEqual({ emails: ["Dev@acme.co"] });
 		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: GRANT_ID })).resolves.toBeUndefined();
 		expect(requests).toEqual([
@@ -610,6 +614,20 @@ describe("cloudShare IPC", () => {
 		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: "../x", access: "anyone" })).rejects.toThrow("Not a share link");
 		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: [] })).rejects.toThrow("Not a list of emails");
 		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: "../x" })).rejects.toThrow("Not someone the link is shared with");
+	});
+
+	it("shares a link with a team workspace's teams and everyone in it", async () => {
+		const { invoke, bodies } = setup();
+		const orgId = "0c6e6d0a-7a3b-4c39-9a51-5d0f3c1d2e41";
+		const teamId = "1d7f7e1b-8b4c-4d4a-8b62-6e1a4d2e3f52";
+		const shared = await invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, orgId, teamIds: [teamId], workspace: true });
+		// Only what is set is sent: no empty emails.
+		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`)).toEqual({ orgId, teamIds: [teamId], workspace: true });
+		expect(shared).toMatchObject({ people: [], teams: [{ orgId, teamId, name: "Design" }], workspaces: [{ orgId, name: "Acme" }] });
+		// A team needs the workspace it belongs to.
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, teamIds: [teamId] })).rejects.toThrow("Not a team or workspace");
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, orgId: "../x", workspace: true })).rejects.toThrow("Not a team or workspace");
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, orgId, workspace: "yes" })).rejects.toThrow("Not a workspace");
 	});
 
 	it("changes access, invites and removes people only from the app's main frame", async () => {
