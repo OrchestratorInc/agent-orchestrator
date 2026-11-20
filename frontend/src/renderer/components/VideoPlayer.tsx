@@ -9,6 +9,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 export const PLAYBACK_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const SKIP_SECONDS = 5;
 const VOLUME_STEP = 0.05;
+/** Videos start at half volume, so one with loud audio does not blast when it autoplays. */
+const DEFAULT_VOLUME = 0.5;
 /** Controls a narrow player leaves out; see the controls row. */
 const COMPACT_HIDDEN = "@max-[26rem]:hidden";
 
@@ -62,7 +64,7 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 	const [duration, setDuration] = useState(0);
 	const [buffered, setBuffered] = useState(0);
 	const [muted, setMuted] = useState(false);
-	const [volume, setVolume] = useState(1);
+	const [volume, setVolume] = useState(DEFAULT_VOLUME);
 	const [loop, setLoop] = useState(false);
 	const [speed, setSpeed] = useState(1);
 	const [fullscreen, setFullscreen] = useState(false);
@@ -164,7 +166,7 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 		const video = videoRef.current;
 		if (!video) return;
 		if (video.muted || video.volume === 0) {
-			if (video.volume === 0) video.volume = 1;
+			if (video.volume === 0) video.volume = DEFAULT_VOLUME;
 			video.muted = false;
 		} else {
 			video.muted = true;

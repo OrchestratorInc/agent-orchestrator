@@ -215,6 +215,9 @@ describe("VideoPlayer", () => {
 	it("mutes, unmutes, and sets the volume", async () => {
 		const user = userEvent.setup();
 		const video = renderPlayer();
+		// Videos start at half volume.
+		expect(video.volume).toBe(0.5);
+		expect(screen.getByRole("slider", { name: "Volume" })).toHaveAttribute("aria-valuetext", "50%");
 		await user.click(screen.getByRole("button", { name: "Mute" }));
 		expect(video.muted).toBe(true);
 		fireEvent.volumeChange(video);
@@ -225,6 +228,10 @@ describe("VideoPlayer", () => {
 		expect(video.volume).toBeCloseTo(0.4);
 		fireEvent.change(screen.getByRole("slider", { name: "Volume" }), { target: { value: "0" } });
 		expect(video.muted).toBe(true);
+		// Unmuting from zero comes back at the default level, not full volume.
+		await user.click(screen.getByRole("button", { name: "Unmute" }));
+		expect(video.volume).toBe(0.5);
+		expect(video.muted).toBe(false);
 	});
 
 	it("starts a new file version from the beginning, keeping loop and speed", async () => {
