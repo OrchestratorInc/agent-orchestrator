@@ -32,6 +32,7 @@ type kimiImportProvider struct {
 	APIKeyEnv     string            `toml:"api_key_env"`
 	CustomHeaders map[string]string `toml:"custom_headers"`
 	Env           map[string]string `toml:"env"`
+	OAuth         map[string]string `toml:"oauth"`
 }
 
 type kimiImportConfig struct {
@@ -42,7 +43,8 @@ type kimiImportConfig struct {
 
 // ImportedRuntimeEnv reads the existing provider credential into process memory
 // only. The private native config contains an api_key_env reference, never the
-// value. This function is used only by the ACP process launch (whose env goes
+// value. Hosted OAuth uses the ordinary native credential-store link. This
+// function is used only by the ACP process launch (whose env goes
 // directly to exec), never the terminal mux's environment-file path.
 func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model string, env map[string]string) (map[string]string, bool, error) {
 	if !IsImportedHome(home, dataDir) {
@@ -101,6 +103,9 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	}
 	defer func() { _ = source.Close() }()
 	data, err := readKimiFile(ctx, source, "config.toml", 1<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, true, errKimiProviderMissing
+	}
 	if err != nil {
 		return nil, true, err
 	}
@@ -119,19 +124,50 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	}
 	selected, ok := config.Models[model]
 	if !ok {
-		return fail()
+		return nil, true, errKimiProviderMissing
 	}
 	providerID, ok := selected["provider"].(string)
 	if !ok {
 		return fail()
 	}
 	provider, ok := config.Providers[providerID]
-	if !ok || provider.Type == "" || len(provider.CustomHeaders) != 0 || len(provider.Env) != 0 {
+	if !ok {
+		return nil, true, errKimiProviderMissing
+	}
+	if provider.Type == "" {
 		return fail()
+	}
+	if len(provider.CustomHeaders) != 0 || len(provider.Env) != 0 {
+		return nil, true, errors.New("kimi: custom provider authentication headers or environment are not supported for import")
 	}
 	endpoint, err := url.Parse(provider.BaseURL)
 	if err != nil || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return fail()
+	}
+	oauth := len(provider.OAuth) != 0 || providerID == "managed:kimi-code"
+	if oauth {
+		provider.OAuth, err = kimiImportOAuthRef(provider.OAuth)
+		if err != nil {
+			return nil, true, err
+		}
+		if err := kimiImportedOAuthReady(ctx, proof.Source, provider.OAuth); err != nil {
+			return nil, true, err
+		}
+		// Native refresh uses credentials/<name>.json and oauth/<name>.lock.
+		// Share both directories so file replacement and cross-process locks
+		// address the user's existing store, with no independent token copies.
+		if err := os.MkdirAll(filepath.Join(proof.Source, "oauth"), 0o700); err != nil {
+			return nil, true, err
+		}
+		for _, name := range []string{"credentials", "oauth"} {
+			shared, err := shareKimiNativeDirectory(proof.Source, home, name)
+			if err != nil {
+				return nil, true, err
+			}
+			if !shared {
+				return nil, true, errors.New("kimi: OAuth import requires a shared native credential store; no token copy was made")
+			}
+		}
 	}
 	key := provider.APIKey
 	if provider.APIKeyEnv != "" {
@@ -141,18 +177,26 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 			key = os.Getenv(provider.APIKeyEnv)
 		}
 	}
-	if strings.TrimSpace(key) == "" {
+	if !oauth && strings.TrimSpace(key) == "" {
 		return fail()
 	}
 	// Copy only documented non-secret model fields. Provider custom headers,
-	// environment maps, OAuth references and arbitrary settings are excluded.
+	// environment maps and arbitrary settings are excluded.
 	nativeModel := map[string]any{}
 	for _, name := range []string{"provider", "model", "max_context_size", "max_output_size", "capabilities", "display_name", "reasoning_key", "adaptive_thinking"} {
 		if value, ok := selected[name]; ok {
 			nativeModel[name] = value
 		}
 	}
-	sanitized := map[string]any{"default_model": model, "telemetry": false, "providers": map[string]any{providerID: map[string]string{"type": provider.Type, "base_url": provider.BaseURL, "api_key_env": "AO_KIMI_IMPORT_API_KEY"}}, "models": map[string]any{model: nativeModel}}
+	nativeProvider := map[string]any{"type": provider.Type, "base_url": provider.BaseURL}
+	overrides := map[string]string{"KIMI_CODE_HOME": home}
+	if oauth {
+		nativeProvider["oauth"] = provider.OAuth
+	} else {
+		nativeProvider["api_key_env"] = "AO_KIMI_IMPORT_API_KEY"
+		overrides["AO_KIMI_IMPORT_API_KEY"] = key
+	}
+	sanitized := map[string]any{"default_model": model, "telemetry": false, "providers": map[string]any{providerID: nativeProvider}, "models": map[string]any{model: nativeModel}}
 	encoded, err := toml.Marshal(sanitized)
 	if err != nil {
 		return nil, true, err
@@ -160,5 +204,5 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	if err := hookutil.AtomicWriteFile(filepath.Join(home, "config.toml"), encoded, 0o600); err != nil {
 		return nil, true, err
 	}
-	return map[string]string{"KIMI_CODE_HOME": home, "AO_KIMI_IMPORT_API_KEY": key}, true, nil
+	return overrides, true, nil
 }

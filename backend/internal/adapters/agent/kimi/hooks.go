@@ -197,13 +197,19 @@ func seedKimiCredentials(targetHome string) error {
 // sign each other out. It reports false where the user has no Kimi login or a
 // link cannot be made (Windows without the privilege), leaving the copy below.
 func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
-	source := filepath.Join(sourceHome, "credentials")
-	target := filepath.Join(targetHome, "credentials")
+	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(sourceHome, "credentials", "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
+	}
+	return shareKimiNativeDirectory(sourceHome, targetHome, "credentials")
+}
+
+// Both ordinary credential sharing and imported OAuth use this same link
+// operation. Imports refuse its copy fallback so rotating tokens stay shared.
+func shareKimiNativeDirectory(sourceHome, targetHome, name string) (bool, error) {
+	source := filepath.Join(sourceHome, name)
+	target := filepath.Join(targetHome, name)
 	if sameKimiConfigPath(source, target) {
 		return true, nil
-	}
-	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(source, "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
-		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
 	}
 	if link, err := os.Readlink(target); err == nil && sameKimiConfigPath(link, source) {
 		return true, nil

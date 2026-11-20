@@ -10,9 +10,41 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+func TestKimiOAuthDiscoveryKeepsLoggedOutHistoryAndImportExplainsLogin(t *testing.T) {
+	root, project := t.TempDir(), t.TempDir()
+	state, err := json.Marshal(map[string]any{"id": kimiSession, "cwd": project, "updatedAt": time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, string(state), kimiWire)
+	config := "default_model = 'kimi-for-coding'\n[providers.'managed:kimi-code']\ntype = 'kimi'\n[providers.'managed:kimi-code'.oauth]\nstorage = 'file'\nkey = 'oauth/kimi-code'\n[models.'kimi-for-coding']\nprovider = 'managed:kimi-code'\n"
+	writeFile(t, filepath.Join(root, "config.toml"), config)
+	store := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
+	svc := New(store, "", chatSupported)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimi: root}
+	preview, err := svc.Scan(t.Context())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("OAuth history disappeared while logged out: %v", err)
+	}
+	results, err := svc.Import(t.Context(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "failed" || !strings.Contains(results[0].Error, "sign in to Kimi") || !strings.Contains(results[0].Error, "kimi login") || len(store.sessions) != 0 {
+		t.Fatalf("logged-out import did not explain native login: %v %v", results, err)
+	}
+	token, err := json.Marshal(map[string]any{"access_token": fmt.Sprintf("synthetic-%x", sha256.Sum256([]byte(t.Name()))), "expires_at": time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "credentials", "kimi-code.json"), string(token))
+	results, err = svc.Import(t.Context(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" || len(store.sessions) != 1 {
+		t.Fatalf("native login did not unblock the same selected history: %v %v", results, err)
+	}
+}
 
 const kimiSession = "session_11111111-2222-3333-4444-555555555555"
 

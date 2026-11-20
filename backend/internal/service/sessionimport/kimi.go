@@ -151,6 +151,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		return t, errors.New("kimi transcript selection changed")
 	}
 	t.fingerprint = snapshot.Fingerprint
+	t.model = snapshot.Model
 	t.path, t.paths = snapshot.Path, []string{snapshot.Path}
 	var state kimiState
 	if err := json.Unmarshal(snapshot.State, &state); err != nil {

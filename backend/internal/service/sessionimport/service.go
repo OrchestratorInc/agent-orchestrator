@@ -19,6 +19,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	kimiadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -736,6 +738,12 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		delete(s.cache, item.cacheKey)
 		result.Error = "The source or project changed. Scan again before importing."
 		return result
+	}
+	if source.harness == domain.HarnessKimi {
+		if err := kimiadapter.CheckImportedOAuth(ctx, source.root, source.model); err != nil {
+			result.Error = err.Error()
+			return result
+		}
 	}
 	adopt := harnessImporters[source.harness].adopt
 	if adopt != nil {
