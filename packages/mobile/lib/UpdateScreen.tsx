@@ -75,7 +75,11 @@ function UpdateScreenBody({ phase }: { phase: UpdateScreenPhase }) {
 				{/* Both blocks below stay laid out in either phase and only swap
 				    visibility, so nothing moves when the buttons give way to the
 				    progress line. */}
-				<View style={!restarting && styles.hidden} importantForAccessibility={restarting ? "auto" : "no-hide-descendants"}>
+				<View
+					style={!restarting && styles.hidden}
+					accessibilityElementsHidden={!restarting}
+					importantForAccessibility={restarting ? "auto" : "no-hide-descendants"}
+				>
 					<View style={[styles.track, { backgroundColor: t.bgSubtle }]}>
 						{restarting ? <Segment color={t.textSecondary} /> : null}
 					</View>
@@ -87,6 +91,7 @@ function UpdateScreenBody({ phase }: { phase: UpdateScreenPhase }) {
 			<View
 				style={[styles.actions, restarting && styles.hidden]}
 				pointerEvents={restarting ? "none" : "auto"}
+				accessibilityElementsHidden={restarting}
 				importantForAccessibility={restarting ? "no-hide-descendants" : "auto"}
 			>
 				<Button

@@ -70,9 +70,21 @@ export function classifyRoute(
 	return { kind: "page", href: query.length > 0 ? `${pathname}?${query.join("&")}` : pathname };
 }
 
+/** The route as one comparable string: a page's full href, otherwise its path. */
+export function routeHref(
+	pathname: string,
+	segments: readonly string[],
+	params: Readonly<Record<string, string | string[] | undefined>>,
+): string {
+	const route = classifyRoute(pathname, segments, params);
+	return route.kind === "page" ? route.href : pathname || "/";
+}
+
 /**
- * How to reopen the saved page from where the reload landed (`landingPath`,
- * the page showing when navigation first became ready).
+ * How to reopen the saved page from where the reload landed (`landing`, the
+ * route showing when navigation first became ready). Routes are compared as
+ * full hrefs (`routeHref`): the same session path on another machine
+ * (`?hostId=`) is a different page.
  *
  * Usually the board: push, so Back leads home. But expo-router reopens the last
  * deep link after a reload — a notification tapped long before — and that stale
@@ -81,15 +93,10 @@ export function classifyRoute(
  * landing page, the restore is dropped: replacing a page they chose would be
  * worse than not restoring at all.
  */
-export function restoreAction(
-	currentPath: string,
-	landingPath: string,
-	saved: string,
-): "none" | "drop" | "push" | "replace" {
-	if (currentPath !== landingPath) return "drop";
-	const savedPath = saved.split("?")[0];
-	if (currentPath === savedPath) return "none";
-	return currentPath === "/" || currentPath === "" ? "push" : "replace";
+export function restoreAction(current: string, landing: string, saved: string): "none" | "drop" | "push" | "replace" {
+	if (current !== landing) return "drop";
+	if (current === saved) return "none";
+	return current === "/" || current === "" ? "push" : "replace";
 }
 
 export function encodeResumeRoute(href: string, now: number): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRoute, decodeResumeRoute, encodeResumeRoute, restoreAction, RESUME_MAX_AGE_MS } from "./updateResume";
+import { classifyRoute, decodeResumeRoute, encodeResumeRoute, restoreAction, RESUME_MAX_AGE_MS, routeHref } from "./updateResume";
 
 describe("classifyRoute", () => {
 	it("keeps a session page with its machine, without repeating the id in the query", () => {
@@ -82,11 +82,26 @@ describe("restoreAction", () => {
 
 	it("does nothing when the reload already landed on the page", () => {
 		expect(restoreAction("/settings/theme", "/settings/theme", "/settings/theme")).toBe("none");
-		expect(restoreAction("/session/abc", "/session/abc", "/session/abc?hostId=h_1")).toBe("none");
+	});
+
+	it("compares the whole route, so the same session on another machine is replaced", () => {
+		expect(restoreAction("/session/abc?hostId=h_2", "/session/abc?hostId=h_2", "/session/abc?hostId=h_1")).toBe("replace");
+		expect(restoreAction("/session/abc?hostId=h_1", "/session/abc?hostId=h_1", "/session/abc?hostId=h_1")).toBe("none");
 	});
 
 	it("never takes the user off a page they moved to after the reload", () => {
 		expect(restoreAction("/settings", "/", "/session/abc?hostId=h_1")).toBe("drop");
 		expect(restoreAction("/session/other", "/session/old", "/session/abc?hostId=h_1")).toBe("drop");
+	});
+});
+
+describe("routeHref", () => {
+	it("is the full href of a page, query included", () => {
+		expect(routeHref("/session/abc", ["session", "[id]"], { id: "abc", hostId: "h_1" })).toBe("/session/abc?hostId=h_1");
+	});
+
+	it("is the bare path of the board, a sheet or a setup screen", () => {
+		expect(routeHref("/", ["(tabs)"], {})).toBe("/");
+		expect(routeHref("/sheets/model", ["sheets", "model"], { sessionId: "abc" })).toBe("/sheets/model");
 	});
 });
