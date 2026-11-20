@@ -198,7 +198,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err := importcopy.WriteOnce(ctx, receipts, filepath.Base(receiptPath)+".verified", []byte(r.SourceFingerprint)); err != nil && !errors.Is(err, os.ErrExist) {
 		return ports.NativeSessionRef{}, err
 	}
-	if _, err := verifyDroidReceipt(ctx, r.DataDir, config, target, launch); err != nil {
+	if err := verifyDroidReceipt(ctx, r.DataDir, config, target, launch); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	return ports.NativeSessionRef{NativeSessionID: target, ConfigDir: config, TranscriptPath: receipt.Path}, nil
@@ -208,19 +208,19 @@ func droidReceiptPath(dataDir, id string) string {
 	return filepath.Join(dataDir, "native-imports", "droid", id+".json")
 }
 
-func verifyDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (droidImportReceipt, error) {
+func verifyDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) error {
 	r, err := readDroidReceipt(ctx, dataDir, config, id, cwd)
 	if err != nil {
-		return r, err
+		return err
 	}
 	completed, err := droidImportCompleted(dataDir, id, r.Fingerprint)
 	if err != nil {
-		return r, err
+		return err
 	}
 	if !completed {
-		return r, errors.New("droid: native preparation has not completed source verification")
+		return errors.New("droid: native preparation has not completed source verification")
 	}
-	return r, nil
+	return nil
 }
 
 func droidImportCompleted(dataDir, id, fingerprint string) (bool, error) {
@@ -358,8 +358,7 @@ func (p *Plugin) validateImportedRuntime(ctx context.Context, cfg ports.Workspac
 	if err != nil {
 		return err
 	}
-	_, err = verifyDroidReceipt(ctx, cfg.DataDir, config, cfg.NativeSessionID, cwd)
-	return err
+	return verifyDroidReceipt(ctx, cfg.DataDir, config, cfg.NativeSessionID, cwd)
 }
 
 // PrepareRuntimeLaunch guards imported first-open and every later reopen before
