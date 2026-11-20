@@ -47,6 +47,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	// Archived Codex threads are not resumable without unarchiving them in Codex.
 	domain.HarnessCodex:    {root: codexRoot, discover: walkSources(domain.HarnessCodex, "sessions", codexKey), read: readCodexTranscript},
 	domain.HarnessCopilot:  {root: copilotRoot, discover: discoverCopilot, read: readCopilotTranscript},
+	domain.HarnessKilocode: {root: kiloCodeRoot, discover: discoverKiloCode, read: readKiloCodeTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessCrush:    {root: crushRoot, discover: discoverCrush, read: readCrushTranscript},
 	domain.HarnessKimchi:   {root: kimchiRoot, discover: walkSources(domain.HarnessKimchi, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessKimchi)},
 	domain.HarnessOMP:      {root: ompRoot, discover: walkSources(domain.HarnessOMP, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessOMP)},

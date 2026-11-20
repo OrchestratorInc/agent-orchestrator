@@ -1,12 +1,14 @@
 import { type RefObject, useCallback, useEffect, useRef } from "react";
 import { aoBridge } from "../lib/bridge";
+import { claimSwipe, NO_SWIPE_NAV_ATTRIBUTE } from "../lib/swipe-ownership";
 
 // A two-finger horizontal trackpad swipe, or a pointer drag, to the right moves
 // the element with the fingers. Letting go past DISMISS_FRACTION of its width,
 // or flicking it, slides it out and dismisses it; anything shorter springs back.
 // As in SwipeNavigation, the main process relays native scroll begin/end, so
 // momentum after the lift is ignored; without that signal a gesture ends after
-// IDLE_MS without wheel events.
+// IDLE_MS without wheel events. A swipe it takes never also goes back or
+// forward: the element opts out of swipe navigation and claims what it tracks.
 const IDLE_MS = 120;
 const AXIS_DECIDE_PX = 8;
 const DISMISS_FRACTION = 0.35;
@@ -150,6 +152,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			if (leaving.current || event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
 			if (nativePhases && !fingersDown) return;
 			if (scrollSpent) {
+				claimSwipe();
 				if (!nativePhases) {
 					window.clearTimeout(scrollSpentTimer);
 					scrollSpentTimer = window.setTimeout(() => { scrollSpent = false; }, IDLE_MS);
@@ -167,9 +170,13 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			if (mode === "pending") {
 				sumX += event.deltaX;
 				sumY += event.deltaY;
-				if (decide(sumX, sumY)) track(-sumX);
+				if (decide(sumX, sumY)) {
+					claimSwipe();
+					track(-sumX);
+				}
 				return;
 			}
+			claimSwipe();
 			track(offset - event.deltaX);
 			if (speed > 0 && speed < lastSpeed) decay += 1;
 			else {
@@ -236,6 +243,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			fingersDown = false;
 			if (mode !== "idle") finish();
 		});
+		element.setAttribute(NO_SWIPE_NAV_ATTRIBUTE, "");
 		element.addEventListener("wheel", onWheel, { passive: true });
 		element.addEventListener("pointerdown", onPointerDown);
 		// A native drag would cancel the pointer stream mid-gesture.
@@ -247,6 +255,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			mountedCount -= 1;
 			if (mountedCount === 0) scrollSpent = false;
 			element.removeEventListener("dragstart", onDragStart);
+			element.removeAttribute(NO_SWIPE_NAV_ATTRIBUTE);
 			stopPhases();
 			element.removeEventListener("wheel", onWheel);
 			element.removeEventListener("pointerdown", onPointerDown);

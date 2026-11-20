@@ -270,6 +270,11 @@ export type CloudCpCue = Cue;
 export type CloudCpCueDefinition = CueDefinitionInput;
 export type CloudCpInvokeCueResult = InvokeCueResult;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+/**
+ * Where a Coder project's orchestrator runs (config.orchestratorSandboxProvider):
+ * "freestyle", the default and the same as absent, or "coder".
+ */
+export type CloudCpOrchestratorSandboxProvider = NonNullable<ProjectConfig["orchestratorSandboxProvider"]>;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
  * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
@@ -813,6 +818,42 @@ export interface CloudCpChatSearchHit {
 /** GET /orgs/{orgId}/chat-search */
 export interface CloudCpChatSearchResponse {
 	results: CloudCpChatSearchHit[];
+}
+
+/**
+ * A link someone else published and shared with the signed-in person
+ * (listSharedArtifacts), by their email, a team they are in, or a workspace
+ * they are a member of. It names no owner.
+ */
+export interface CloudCpSharedArtifact {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	access: "restricted" | "anyone";
+	viewerUrl?: string;
+	/** The first that holds: direct, shared with their email; team, with a team they are in; workspace, with their workspace. */
+	via: "direct" | "team" | "workspace";
+	/** Every team of theirs the link is shared with; empty when none. */
+	teams: { id: string; name: string }[];
+	/** Every workspace of theirs the link is shared with; empty when none (and on an older control plane). */
+	workspaces?: { id: string; name: string }[];
+	sharedAt: string;
+}
+
+/** What viewArtifactShare returns for a link that opens for the signed-in person. */
+export interface CloudCpArtifactShareView {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	/** Where the file is served; a private link's carries a short-lived view token. */
+	contentUrl: string;
+	access?: "restricted" | "anyone";
+	/** The link's viewer page; absent where the control plane has no viewer. */
+	viewerUrl?: string;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */

@@ -31,6 +31,7 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 	domain.HarnessFX:         {configEnvKey: "FX_HOME", ownedElsewhere: fxImportOwnedElsewhere, adoptedOwnedElsewhere: fxImportOwnedElsewhere},
 	domain.HarnessGemini:     {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
 	domain.HarnessGrok:       {configEnvKey: "GROK_HOME", ownedElsewhere: grokImportOwnedElsewhere, adoptedOwnedElsewhere: grokImportOwnedElsewhere},
+	domain.HarnessKilocode:   {configEnvKey: "XDG_DATA_HOME", configValue: kiloCodeImportDataHome, ownedElsewhere: kiloCodeImportOwnedElsewhere},
 	domain.HarnessKimchi:     {configEnvKey: "KIMCHI_CODING_AGENT_DIR"},
 	domain.HarnessOMP:        {configEnvKey: "PI_CODING_AGENT_DIR"},
 	domain.HarnessMemcode:    {},
