@@ -190,8 +190,8 @@ export type WorkspaceSession = {
 	 */
 	displayStatus?: string;
 	/**
-	 * One-line card summary the agent set with `ao summary`. Absent until it
-	 * sets one.
+	 * One-line card summary written from the worker's latest report. Absent
+	 * until there is one.
 	 */
 	summary?: string;
 	statusReadiness?: "checking" | "ready" | "unavailable";

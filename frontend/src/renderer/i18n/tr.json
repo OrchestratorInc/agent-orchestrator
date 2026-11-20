@@ -1952,7 +1952,7 @@
 	"settings.prView": "PR görünümü",
 	"settings.prViewHint": "Bir çekme isteğini açıklaması, yorumları, denetimleri ve PR zinciriyle kendi sekmesinde açar.",
 	"settings.cardSummaries": "Kart özetleri",
-	"settings.cardSummariesHint": "Worker'lar ne yaptıklarını kartlarında tek satırlık bir özetle gösterir. Bundan sonra başlatılan worker'lara uygulanır.",
+	"settings.cardSummariesHint": "Hafif bir model, worker'ın her raporunu kartında tek satırlık bir özete dönüştürür.",
 	"settings.chromeAgents.label": "Chrome tarayıcımda aracıları kullan",
 	"settings.chromeAgents.hint": "Aracıların kendi Chrome tarayıcınızda, sizin oturumunuzla gezinmesine izin verin. Tarayıcı ayarlarından kurun.",
 	"settings.chromeAgents.goTo": "Git",

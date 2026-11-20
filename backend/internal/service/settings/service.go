@@ -48,10 +48,10 @@ type Snapshot struct {
 	// default, keeps it.
 	SessionRetentionDays int
 	AccountHandoff       bool
-	// CardSummaries asks new workers to keep a one-line summary on their
-	// kanban card. It lives in memory and is off on every daemon start: the
-	// desktop app turns it on while Developer Mode and its Card summaries
-	// toggle are both on.
+	// CardSummaries turns worker reports into a one-line summary on the
+	// worker's kanban card. It lives in memory and is off on every daemon
+	// start: the desktop app turns it on while Developer Mode and its Card
+	// summaries toggle are both on.
 	CardSummaries bool
 	UpdatedAt     time.Time
 }
@@ -223,12 +223,12 @@ func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, e
 	return s.Get(ctx)
 }
 
-// CardSummariesEnabled reports whether new workers are asked to keep a kanban
-// card summary. Off on every daemon start until the desktop app turns it on.
+// CardSummariesEnabled reports whether worker reports become kanban card
+// summaries. Off on every daemon start until the desktop app turns it on.
 func (s *Service) CardSummariesEnabled(context.Context) bool { return s.cardSummaries.Load() }
 
-// SetCardSummaries changes the in-memory card summaries gate. Workers already
-// running keep the prompt they started with.
+// SetCardSummaries changes the in-memory card summaries gate. It applies to
+// the next report of every worker, running or new.
 func (s *Service) SetCardSummaries(ctx context.Context, enabled bool) (Snapshot, error) {
 	s.cardSummaries.Store(enabled)
 	return s.Get(ctx)

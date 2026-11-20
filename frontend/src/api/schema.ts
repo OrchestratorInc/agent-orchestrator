@@ -4757,7 +4757,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Turn the card summaries preview on or off for workers spawned next (in memory; the desktop app sets it from Developer Mode) */
+        /** Turn the card summaries preview on or off (in memory; the desktop app sets it from Developer Mode) */
         patch: operations["updateCardSummaries"];
         trace?: never;
     };
@@ -4958,23 +4958,6 @@ export interface paths {
         get: operations["exportSideChatLaunch"];
         put?: never;
         post: operations["recoverSideChatLaunch"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Update the kanban card summary for a session */
-        post: operations["updateCardSummary"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8866,7 +8849,7 @@ export interface components {
         SettingsResponse: {
             /** @description A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts). */
             accountHandoff: boolean;
-            /** @description New workers keep a one-line summary on their kanban card with ao summary. A Developer Mode preview: off on every daemon start until the desktop app turns it on. */
+            /** @description Each worker report is rewritten by a light model into a one-line summary on the worker's kanban card. A Developer Mode preview: off on every daemon start until the desktop app turns it on. */
             cardSummaries: boolean;
             chatHarnesses: string[];
             chatHibernationEnabled: boolean;
@@ -9435,16 +9418,6 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
-        };
-        UpdateSummaryRequest: {
-            done?: boolean;
-            sessionId: string;
-            summary: string;
-        };
-        UpdateSummaryResponse: {
-            ok: boolean;
-            retryAfterSeconds?: number;
-            updated: boolean;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -28353,66 +28326,6 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    updateCardSummary: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateSummaryRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UpdateSummaryResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };

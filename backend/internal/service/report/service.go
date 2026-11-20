@@ -33,11 +33,10 @@ type ArtifactRecorder interface {
 	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
 }
 
-// CardSummaryFiller sets a session's kanban card summary only while it is empty
-// or still previous, the text an earlier fill wrote, so it never replaces a
-// summary the agent set.
-type CardSummaryFiller interface {
-	FillSessionCardSummary(ctx context.Context, id domain.SessionID, summary, previous string) (bool, error)
+// CardSummaries hears about every created report, to turn its note into the
+// worker's kanban card summary. ReportFiled must return without waiting.
+type CardSummaries interface {
+	ReportFiled(domain.ReportRecord)
 }
 
 // Service validates and creates durable worker reports.
@@ -47,7 +46,7 @@ type Service struct {
 	newID         func() string
 	onCreated     func(domain.ReportRecord)
 	artifacts     ArtifactRecorder
-	cardSummaries CardSummaryFiller
+	cardSummaries CardSummaries
 }
 
 // Deps configures a Service. Artifacts and CardSummaries are optional.
@@ -57,7 +56,7 @@ type Deps struct {
 	NewID         func() string
 	OnCreated     func(domain.ReportRecord)
 	Artifacts     ArtifactRecorder
-	CardSummaries CardSummaryFiller
+	CardSummaries CardSummaries
 }
 
 // New constructs a report Service.
@@ -158,48 +157,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 			}
 		}
 	}
-	s.fillCardSummary(ctx, created)
+	if s.cardSummaries != nil {
+		s.cardSummaries.ReportFiled(created)
+	}
 	return created, nil
-}
-
-// fillCardSummary gives a finished worker's card its done report as a summary
-// when the agent never set one with `ao summary`. Agents reliably file the
-// done report but often skip the summary. Best effort: it never fails the
-// report, and a summary the agent set is never replaced.
-func (s *Service) fillCardSummary(ctx context.Context, report domain.ReportRecord) {
-	if s.cardSummaries == nil || report.State != domain.ReportDone {
-		return
-	}
-	if text := doneReportSummary(report); text != "" {
-		_, _ = s.cardSummaries.FillSessionCardSummary(ctx, report.SessionID, text, s.previousDoneSummary(ctx, report))
-	}
-}
-
-func doneReportSummary(report domain.ReportRecord) string {
-	if text := domain.CardSummaryFromNote(report.Note); text != "" {
-		return text
-	}
-	return domain.CardSummaryFromNote(report.Message)
-}
-
-// previousDoneSummary is the card text the session's previous done report
-// would have filled in, so a newer done report can replace it. Empty when
-// there is none or the reports cannot be read.
-func (s *Service) previousDoneSummary(ctx context.Context, current domain.ReportRecord) string {
-	reader, ok := s.store.(interface {
-		ListReportsBySession(context.Context, domain.SessionID) ([]domain.ReportRecord, error)
-	})
-	if !ok {
-		return ""
-	}
-	reports, err := reader.ListReportsBySession(ctx, current.SessionID)
-	if err != nil {
-		return ""
-	}
-	for i := len(reports) - 1; i >= 0; i-- {
-		if reports[i].ID != current.ID && reports[i].State == domain.ReportDone {
-			return doneReportSummary(reports[i])
-		}
-	}
-	return ""
 }

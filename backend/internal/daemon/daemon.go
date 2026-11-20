@@ -61,6 +61,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
@@ -461,9 +462,6 @@ func Run(buildVersion string) (retErr error) {
 			}()
 		}
 	}
-	// Card summaries are a Developer Mode preview: the limiter writes nothing
-	// while the desktop has not turned them on.
-	cardSummaries := sessionsvc.NewCardSummaryLimiter(store, settingsSvc.CardSummariesEnabled, time.Now)
 	// The review and chat services and the hook route start before the SCM
 	// observer they ask for early refreshes, so they hold a late-bound handle.
 	reviewRefresher := &scmReviewRefresher{}
@@ -559,11 +557,6 @@ func Run(buildVersion string) (retErr error) {
 			if err := sessMgr.PersistChatModel(ctx, sessionID, model); err != nil {
 				log.Warn("persist ChatUI model on session failed; a TUI rebuild may resume with a different model",
 					"sessionID", sessionID, "model", model, "error", err)
-			}
-		},
-		OnCardSummary: func(ctx context.Context, sessionID domain.SessionID, summary string, done bool) {
-			if _, _, err := cardSummaries.Update(ctx, sessionID, summary, done); err != nil {
-				log.Warn("update card summary from event stream failed", "sessionID", sessionID, "error", err)
 			}
 		},
 	})
@@ -844,6 +837,16 @@ func Run(buildVersion string) (retErr error) {
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
 	}
+	// Card summaries are a Developer Mode preview: each worker report becomes
+	// the card line, rewritten by a light model, and nothing is written while
+	// the desktop has not turned them on.
+	var cardSummaryRewrite sessionsvc.CardSummaryRewriter
+	if summarizer, ok := sessMgr.(interface {
+		SummarizeCardNote(context.Context, domain.SessionID, string) (string, error)
+	}); ok {
+		cardSummaryRewrite = summarizer.SummarizeCardNote
+	}
+	cardSummaries := sessionsvc.NewCardSummarizer(ctx, store, settingsSvc.CardSummariesEnabled, cardSummaryRewrite, log)
 	var reportCoordinator *reportsvc.Coordinator
 	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, CardSummaries: cardSummaries, OnCreated: func(domain.ReportRecord) {
 		if reportCoordinator != nil {
@@ -923,7 +926,6 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
-	sessMgr.SetCardSummariesEnabled(settingsSvc.CardSummariesEnabled)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})
@@ -1019,6 +1021,15 @@ func Run(buildVersion string) (retErr error) {
 		usagePricing = pricingRuntime
 		if pricingErr := pricingRuntime.Start(ctx); pricingErr != nil {
 			log.Warn("usage pricing startup failed; continuing without catalog enrichment", "err", pricingErr)
+		}
+		// Card summaries rank catalog models by these prices to pick a light one.
+		if priced, ok := sessMgr.(interface {
+			SetModelRates(func(string) (pricing.TokenRates, bool))
+		}); ok {
+			manager := pricingRuntime.Manager()
+			priced.SetModelRates(func(modelID string) (pricing.TokenRates, bool) {
+				return manager.Snapshot().RatesForModel(modelID)
+			})
 		}
 		defer func() {
 			stop()
@@ -1309,7 +1320,6 @@ func Run(buildVersion string) (retErr error) {
 		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		Reports:            reportSvc,
-		CardSummaries:      cardSummaries,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,

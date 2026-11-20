@@ -815,3 +815,22 @@ func TestProviderForModelResolvesOnlyAnUnambiguousOwner(t *testing.T) {
 		t.Fatalf("nil snapshot resolved to %q", got)
 	}
 }
+
+func TestRatesForModelReturnsTheOwnersStandardRates(t *testing.T) {
+	snapshot := decodeTestSnapshot(t, map[string][]testModel{
+		"anthropic": {{ID: "claude-test", Input: "0.1", Output: "0.2"}},
+		"openai":    {{ID: "gpt-test", Input: "0.3", Output: "0.4"}},
+		"zai":       {{ID: "glm-test", Input: "0.1", Output: "0.2"}},
+	})
+	rates, ok := snapshot.RatesForModel("anthropic/claude-test")
+	if !ok || rates.ProviderID != "anthropic" || rates.Input.RatString() != "1/10" || rates.Output.RatString() != "1/5" {
+		t.Fatalf("RatesForModel = %+v, %v; want anthropic at 0.1 and 0.2", rates, ok)
+	}
+	if _, ok := snapshot.RatesForModel("unlisted"); ok {
+		t.Fatal("an unlisted model has no rates")
+	}
+	var empty *Snapshot
+	if _, ok := empty.RatesForModel("claude-test"); ok {
+		t.Fatal("a nil snapshot has no rates")
+	}
+}

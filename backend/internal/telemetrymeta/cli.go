@@ -57,7 +57,7 @@ func CLIActorType(actorType, commandPath string) string {
 		return "user"
 	}
 	switch normalized {
-	case "ao hooks", "ao report", "ao artifact", "ao artifact add", "ao summary":
+	case "ao hooks", "ao report", "ao artifact", "ao artifact add":
 		return "agent"
 	}
 	return "system"

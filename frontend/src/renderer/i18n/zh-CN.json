@@ -3098,7 +3098,7 @@
 	"settings.prView": "PR 视图",
 	"settings.prViewHint": "在单独的标签页中打开拉取请求，查看其描述、评论、检查和堆栈。",
 	"settings.cardSummaries": "卡片摘要",
-	"settings.cardSummariesHint": "工作代理在卡片上用一行文字显示正在做的事。仅对之后启动的工作代理生效。",
+	"settings.cardSummariesHint": "轻量模型会把工作代理的每份报告变成其卡片上的一行摘要。",
 	"settings.chromeAgents.label": "在我的 Chrome 中使用智能体",
 	"settings.chromeAgents.hint": "让智能体以你的登录身份在你自己的 Chrome 中浏览。请在浏览器设置中进行设置。",
 	"settings.chromeAgents.goTo": "前往",

@@ -2025,7 +2025,7 @@
 	"settings.prView": "Просмотр PR",
 	"settings.prViewHint": "Открывайте pull request в отдельной вкладке с описанием, комментариями, проверками и стеком.",
 	"settings.cardSummaries": "Сводки на карточках",
-	"settings.cardSummariesHint": "Воркеры пишут на своей карточке одну строку о том, чем заняты. Применяется к воркерам, запущенным после включения.",
+	"settings.cardSummariesHint": "Лёгкая модель превращает каждый отчёт воркера в однострочную сводку на его карточке.",
 	"settings.chromeAgents.label": "Использовать агентов в моём Chrome",
 	"settings.chromeAgents.hint": "Разрешить агентам работать в вашем Chrome под вашим аккаунтом. Настройте это в настройках браузера.",
 	"settings.chromeAgents.goTo": "Перейти",

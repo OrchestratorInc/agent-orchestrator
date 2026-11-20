@@ -1,5 +1,5 @@
 -- +goose Up
--- The one-line summary an agent sets on its kanban card with `ao summary`.
+-- The one-line kanban card summary, written from the worker's reports.
 -- It has its own column rather than sharing latest_assistant_update, which
 -- lifecycle hooks rewrite on every stop. No full-row UPDATE lists this column,
 -- so those writers cannot overwrite it.

@@ -234,7 +234,6 @@ type Controller struct {
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	prChanged              func(domain.SessionID)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
-	onCardSummary          func(context.Context, domain.SessionID, string, bool)
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -419,7 +418,6 @@ func newController(
 	prChanged func(domain.SessionID),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
-	onCardSummary func(context.Context, domain.SessionID, string, bool),
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -439,7 +437,6 @@ func newController(
 		recheckAccount:         recheckAccount,
 		prChanged:              prChanged,
 		onCodexCapacityChanged: onCodexCapacityChanged,
-		onCardSummary:          onCardSummary,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
@@ -3937,14 +3934,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, primaryTurn bool) {
 	now := c.now()
 	switch event.Kind {
-	case ports.ChatEventActivityStarted:
-		// The CLI call reaches the daemon too; reading it here keeps summaries
-		// working from sandboxes that cannot, and the limiter folds the pair.
-		if c.onCardSummary != nil && c.reviewID == "" && event.ActivityKind == domain.ActivityKindCommand {
-			if text, done := cardSummaryFromCommandDetail(event.Detail); text != "" {
-				c.onCardSummary(ctx, c.sessionID, text, done)
-			}
-		}
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)

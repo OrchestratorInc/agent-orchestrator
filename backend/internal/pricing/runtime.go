@@ -359,6 +359,28 @@ func (s *Snapshot) ProviderForModel(modelID string) string {
 	return found
 }
 
+// TokenRates is a model's standard USD price per uncached input token and
+// per output token, with the provider that lists it.
+type TokenRates struct {
+	ProviderID string
+	Input      *big.Rat
+	Output     *big.Rat
+}
+
+// RatesForModel returns modelID's standard rates from the one catalog provider
+// that lists it, as ProviderForModel resolves it. The rates are copies.
+func (s *Snapshot) RatesForModel(modelID string) (TokenRates, bool) {
+	providerID := s.ProviderForModel(modelID)
+	if providerID == "" {
+		return TokenRates{}, false
+	}
+	rates := s.providers[providerID].models[CanonicalModelID(providerID, modelID)]
+	if rates.input == nil || rates.output == nil {
+		return TokenRates{}, false
+	}
+	return TokenRates{ProviderID: providerID, Input: new(big.Rat).Set(rates.input), Output: new(big.Rat).Set(rates.output)}, true
+}
+
 // Estimate contains final per-component integer nano-USD estimates. A nil
 // component is unknown. TotalNanos is present only when every component is
 // known.

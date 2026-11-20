@@ -21,7 +21,6 @@ ao
 ├── automation                    create, list, get, update, delete, runs
 ├── cue                           create, list
 ├── report                        Report worker progress or artifacts
-├── summary                       Set the one-line summary on a worker's card
 ├── orchestrator ls               List orchestrator sessions
 ├── send                           Send a message to a session
 ├── pr                             merge, resolve-comments
@@ -189,7 +188,7 @@ ao report --done --note "Focused tests passed"
 
 `ao report` must run in a worker environment that provides `AO_SESSION_ID`.
 
-With Card summaries on (a Developer Mode preview in Settings), a worker keeps a one-line summary of what it is doing on its board card with `ao summary "<text>"`, and sets a final one with `ao summary --done "<text>"`. Updates are accepted at most once a minute; `--done` always is. A worker that never sets one shows the note from its `ao report --done`. Like `ao report`, it needs `AO_SESSION_ID`.
+With Card summaries on (a Developer Mode preview in Settings), a light model rewrites each report's note as a one-line summary on the worker's board card. A card changes at most once a minute; `--done`, `--needs-input` and `--stuck` reports always go through.
 
 ## Pull requests and reviews
 

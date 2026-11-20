@@ -226,8 +226,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateCardSummariesRequest":                "UpdateCardSummariesRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
-	"ControllersUpdateSummaryRequest":                      "UpdateSummaryRequest",
-	"ControllersUpdateSummaryResponse":                     "UpdateSummaryResponse",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -866,7 +864,6 @@ func operations() []operation {
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
 	ops = append(ops, reportOperations()...)
-	ops = append(ops, summaryOperations()...)
 	ops = append(ops, usageOperations()...)
 	ops = append(ops, pushOperations()...)
 	ops = append(ops, importOperations()...)
@@ -1028,21 +1025,6 @@ func reportOperations() []operation {
 		reqBody: controllers.CreateReportRequest{},
 		resps: []respUnit{
 			{http.StatusCreated, controllers.CreateReportResponse{}},
-			{http.StatusBadRequest, envelope.APIError{}},
-			{http.StatusNotFound, envelope.APIError{}},
-			{http.StatusInternalServerError, envelope.APIError{}},
-			{http.StatusNotImplemented, envelope.APIError{}},
-		},
-	}}
-}
-
-func summaryOperations() []operation {
-	return []operation{{
-		method: http.MethodPost, path: "/api/v1/summary", id: "updateCardSummary", tag: "sessions",
-		summary: "Update the kanban card summary for a session",
-		reqBody: controllers.UpdateSummaryRequest{},
-		resps: []respUnit{
-			{http.StatusOK, controllers.UpdateSummaryResponse{}},
 			{http.StatusBadRequest, envelope.APIError{}},
 			{http.StatusNotFound, envelope.APIError{}},
 			{http.StatusInternalServerError, envelope.APIError{}},
@@ -1510,7 +1492,7 @@ func shellTerminalOperations() []operation {
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/settings/card-summaries", id: "updateCardSummaries", tag: "settings",
-			summary: "Turn the card summaries preview on or off for workers spawned next (in memory; the desktop app sets it from Developer Mode)",
+			summary: "Turn the card summaries preview on or off (in memory; the desktop app sets it from Developer Mode)",
 			reqBody: controllers.UpdateCardSummariesRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},

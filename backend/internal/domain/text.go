@@ -3,7 +3,6 @@ package domain
 import (
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 // SanitizeControlChars removes control characters that are unsafe to deliver
@@ -26,20 +25,8 @@ func SanitizeControlChars(s string) string {
 	}, s)
 }
 
-// MaxCardSummaryRunes bounds the one-line summary an agent sets on its card.
+// MaxCardSummaryRunes bounds the one-line summary on a worker's card.
 const MaxCardSummaryRunes = 200
-
-// NormalizeCardSummary returns s as a single clean line, or "" when nothing
-// usable is left or it exceeds MaxCardSummaryRunes. The CLI, HTTP endpoint and
-// event stream all go through it, so the same text is accepted or rejected
-// however the agent delivered it.
-func NormalizeCardSummary(s string) string {
-	s = cleanCardSummary(s)
-	if utf8.RuneCountInString(s) > MaxCardSummaryRunes {
-		return ""
-	}
-	return s
-}
 
 // cleanCardSummary drops control characters and collapses whitespace to single
 // spaces. Bidi overrides and zero-width characters can make a card read
@@ -54,10 +41,10 @@ func cleanCardSummary(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// CardSummaryFromNote turns free text, such as a worker's final report note,
-// into a card summary. It cleans the text like NormalizeCardSummary, but a
-// note longer than MaxCardSummaryRunes is cut at a word boundary and marked
-// with an ellipsis instead of being refused.
+// CardSummaryFromNote turns free text, such as a worker's report note or a
+// model's rewrite of one, into a card summary: one clean line, cut at a word
+// boundary and marked with an ellipsis when it is longer than
+// MaxCardSummaryRunes.
 func CardSummaryFromNote(note string) string {
 	runes := []rune(cleanCardSummary(note))
 	if len(runes) <= MaxCardSummaryRunes {

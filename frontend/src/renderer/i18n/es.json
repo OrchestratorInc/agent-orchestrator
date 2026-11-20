@@ -3092,7 +3092,7 @@
 	"settings.prView": "Vista de PR",
 	"settings.prViewHint": "Abre un pull request en su propia pestaña, con su descripción, comentarios, comprobaciones y pila.",
 	"settings.cardSummaries": "Resúmenes en tarjetas",
-	"settings.cardSummariesHint": "Los workers muestran en su tarjeta una línea sobre lo que están haciendo. Se aplica a los workers que se inicien después.",
+	"settings.cardSummariesHint": "Un modelo ligero convierte cada informe de un worker en un resumen de una línea en su tarjeta.",
 	"settings.chromeAgents.label": "Usar agentes en mi Chrome",
 	"settings.chromeAgents.hint": "Permite que los agentes naveguen en tu propio Chrome, con tus sesiones iniciadas. Configúralo en los ajustes del navegador.",
 	"settings.chromeAgents.goTo": "Ir",

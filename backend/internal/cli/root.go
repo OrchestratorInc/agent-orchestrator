@@ -259,7 +259,6 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newSendCommand(ctx))
 	root.AddCommand(newReportCommand(ctx))
 	root.AddCommand(newArtifactCommand(ctx))
-	root.AddCommand(newSummaryCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))
 	root.AddCommand(newPaneCommand(ctx))
 	root.AddCommand(newRenderCommand(ctx))

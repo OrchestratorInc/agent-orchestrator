@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -596,9 +597,10 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
-	// cardSummaries reports the card summaries setting; nil is off.
-	cardSummariesMu sync.Mutex
-	cardSummaries   func(context.Context) bool
+	// modelRates prices catalog models so card summaries can pick a light one;
+	// nil keeps the worker's own model.
+	modelRatesMu sync.Mutex
+	modelRates   func(modelID string) (pricing.TokenRates, bool)
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -6719,9 +6721,6 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)
-	}
-	if kind == domain.KindWorker && m.cardSummariesEnabled(ctx) {
-		cfg.AdditionalSections = append(cfg.AdditionalSections, cardSummaryPrompt)
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)

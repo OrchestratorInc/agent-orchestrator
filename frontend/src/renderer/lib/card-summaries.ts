@@ -1,10 +1,10 @@
 import { useUiStore, type UiState } from "../stores/ui-store";
 
 /**
- * Card summaries are a Developer mode preview: new workers keep a one-line
- * summary on their card with `ao summary`, and cards show it. Off, workers get
- * no Card Summary prompt section and no card shows a summary line, whatever
- * the toggle was set to before.
+ * Card summaries are a Developer mode preview: each worker report becomes a
+ * one-line summary on its card, rewritten by a light model. Off, the daemon
+ * writes none and no card shows a summary line, whatever the toggle was set
+ * to before.
  */
 export function cardSummariesEnabled(state: Pick<UiState, "developerMode" | "cardSummaries">): boolean {
 	return state.developerMode && state.cardSummaries;

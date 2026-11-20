@@ -1952,7 +1952,7 @@
 	"settings.prView": "PR view",
 	"settings.prViewHint": "Open a pull request in its own tab, with its description, comments, checks and stack.",
 	"settings.cardSummaries": "Card summaries",
-	"settings.cardSummariesHint": "Workers keep a one-line summary of what they are doing on their card. Applies to workers started afterwards.",
+	"settings.cardSummariesHint": "A light model turns each worker report into a one-line summary on the worker's card.",
 	"settings.chromeAgents.label": "Use agents in my Chrome",
 	"settings.chromeAgents.hint": "Let agents browse in your own Chrome, signed in as you. Set it up in Browser settings.",
 	"settings.chromeAgents.goTo": "Go to",

@@ -3028,7 +3028,7 @@
 	"settings.prView": "PR-Ansicht",
 	"settings.prViewHint": "Einen Pull Request in einem eigenen Tab öffnen, mit Beschreibung, Kommentaren, Checks und Stack.",
 	"settings.cardSummaries": "Kartenzusammenfassungen",
-	"settings.cardSummariesHint": "Worker halten auf ihrer Karte in einer Zeile fest, woran sie gerade arbeiten. Gilt für danach gestartete Worker.",
+	"settings.cardSummariesHint": "Ein leichtes Modell macht aus jedem Bericht eines Workers eine Zusammenfassung in einer Zeile auf seiner Karte.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",
 	"settings.chromeAgents.hint": "Agenten können in deinem eigenen Chrome surfen, mit deinen Anmeldungen. Richte es in den Browser-Einstellungen ein.",
 	"settings.chromeAgents.goTo": "Öffnen",

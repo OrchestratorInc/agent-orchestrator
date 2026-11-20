@@ -136,62 +136,29 @@ func TestCreateShowsEachReportedArtifactAfterTheReportIsStored(t *testing.T) {
 	}
 }
 
-// cardSummaryStore records reports so the service can find the previous done
-// report, and applies fills with the store's empty-or-previous rule.
-type cardSummaryStore struct {
-	fakeStore
-	created []domain.ReportRecord
-	summary string
+type cardSummaryRecorder struct{ filed []domain.ReportRecord }
+
+func (r *cardSummaryRecorder) ReportFiled(report domain.ReportRecord) {
+	r.filed = append(r.filed, report)
 }
 
-func (f *cardSummaryStore) CreateReport(_ context.Context, r domain.ReportRecord) (domain.ReportRecord, error) {
-	f.created = append(f.created, r)
-	return r, nil
-}
-
-func (f *cardSummaryStore) ListReportsBySession(context.Context, domain.SessionID) ([]domain.ReportRecord, error) {
-	return append([]domain.ReportRecord(nil), f.created...), nil
-}
-
-func (f *cardSummaryStore) FillSessionCardSummary(_ context.Context, _ domain.SessionID, summary, previous string) (bool, error) {
-	if f.summary != "" && f.summary != previous {
-		return false, nil
-	}
-	f.summary = summary
-	return true, nil
-}
-
-// A finished worker's card gets its done note when the agent never set a
-// summary, and a newer done note replaces an older one. Checkpoint reports, and
-// a summary the agent set itself, are left alone.
-func TestCreateFillsTheCardSummaryFromTheDoneReport(t *testing.T) {
-	st := &cardSummaryStore{fakeStore: fakeStore{ok: true, session: domain.SessionRecord{ID: "ao-8", ProjectID: "ao", Kind: domain.KindWorker}}}
+// Every stored report, of any state, goes on to the card summarizer; a rejected
+// one does not.
+func TestCreatePassesEveryStoredReportToCardSummaries(t *testing.T) {
+	st := &fakeStore{ok: true, session: domain.SessionRecord{ID: "ao-8", ProjectID: "ao", Kind: domain.KindWorker}}
+	summaries := &cardSummaryRecorder{}
 	ids := 0
-	svc := New(Deps{Store: st, CardSummaries: st, NewID: func() string { ids++; return fmt.Sprintf("rpt_%d", ids) }})
+	svc := New(Deps{Store: st, CardSummaries: summaries, NewID: func() string { ids++; return fmt.Sprintf("rpt_%d", ids) }})
 	ctx := context.Background()
-	report := func(state domain.ReportState, note string) {
-		t.Helper()
-		if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: state, Note: note}); err != nil {
+	for _, state := range []domain.ReportState{domain.ReportCheckpoint, domain.ReportDone} {
+		if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: state, Note: "note"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	report(domain.ReportCheckpoint, "Halfway")
-	if st.summary != "" {
-		t.Fatalf("a checkpoint report filled the card summary: %q", st.summary)
+	if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: domain.ReportDone}); err == nil {
+		t.Fatal("a done report without a note was accepted")
 	}
-	report(domain.ReportDone, "Listed every API route\nin a markdown summary")
-	if st.summary != "Listed every API route in a markdown summary" {
-		t.Fatalf("card summary = %q", st.summary)
-	}
-	report(domain.ReportDone, "Also listed the server actions")
-	if st.summary != "Also listed the server actions" {
-		t.Fatalf("a newer done report did not replace the older one: %q", st.summary)
-	}
-
-	st.summary = "Set by the agent"
-	report(domain.ReportDone, "A later note")
-	if st.summary != "Set by the agent" {
-		t.Fatalf("a done report replaced the agent's own summary: %q", st.summary)
+	if len(summaries.filed) != 2 || summaries.filed[0].State != domain.ReportCheckpoint || summaries.filed[1].State != domain.ReportDone {
+		t.Fatalf("filed = %+v, want the checkpoint then the done report", summaries.filed)
 	}
 }

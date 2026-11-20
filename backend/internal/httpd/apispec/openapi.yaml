@@ -14591,8 +14591,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Turn the card summaries preview on or off for workers spawned next
-        (in memory; the desktop app sets it from Developer Mode)
+      summary: Turn the card summaries preview on or off (in memory; the desktop app
+        sets it from Developer Mode)
       tags:
       - settings
   /api/v1/settings/chat-hibernation:
@@ -15133,49 +15133,6 @@ paths:
       summary: ""
       tags:
       - conversations
-  /api/v1/summary:
-    post:
-      operationId: updateCardSummary
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateSummaryRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UpdateSummaryResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Update the kanban card summary for a session
-      tags:
-      - sessions
   /api/v1/system/github-auth:
     get:
       operationId: getGitHubAuthRequirement
@@ -25146,9 +25103,9 @@ components:
             is retried there once (Settings, Agent accounts).
           type: boolean
         cardSummaries:
-          description: 'New workers keep a one-line summary on their kanban card with
-            ao summary. A Developer Mode preview: off on every daemon start until
-            the desktop app turns it on.'
+          description: 'Each worker report is rewritten by a light model into a one-line
+            summary on the worker''s kanban card. A Developer Mode preview: off on
+            every daemon start until the desktop app turns it on.'
           type: boolean
         chatHarnesses:
           items:
@@ -26627,32 +26584,6 @@ components:
           type: string
       required:
       - title
-      type: object
-    UpdateSummaryRequest:
-      properties:
-        done:
-          type: boolean
-        sessionId:
-          type: string
-        summary:
-          maxLength: 200
-          minLength: 1
-          type: string
-      required:
-      - sessionId
-      - summary
-      type: object
-    UpdateSummaryResponse:
-      properties:
-        ok:
-          type: boolean
-        retryAfterSeconds:
-          type: integer
-        updated:
-          type: boolean
-      required:
-      - ok
-      - updated
       type: object
     UpdateVersionRefreshRequest:
       properties:

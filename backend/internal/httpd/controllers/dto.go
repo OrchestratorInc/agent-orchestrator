@@ -4353,8 +4353,8 @@ type SettingsResponse struct {
 	// ComputerUse gives new chat sessions the computer-use tools.
 	ComputerUse    bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
 	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
-	// CardSummaries asks new workers to keep a kanban card summary.
-	CardSummaries bool `json:"cardSummaries" description:"New workers keep a one-line summary on their kanban card with ao summary. A Developer Mode preview: off on every daemon start until the desktop app turns it on."`
+	// CardSummaries turns worker reports into one-line kanban card summaries.
+	CardSummaries bool `json:"cardSummaries" description:"Each worker report is rewritten by a light model into a one-line summary on the worker's kanban card. A Developer Mode preview: off on every daemon start until the desktop app turns it on."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
 	// CloudEnabled reports whether the cloud offering is available: on for
@@ -4406,7 +4406,7 @@ type UpdateAccountHandoffRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
-// UpdateCardSummariesRequest flips whether new workers keep a kanban card summary.
+// UpdateCardSummariesRequest turns kanban card summaries on or off.
 type UpdateCardSummariesRequest struct {
 	Enabled *bool `json:"enabled"`
 }

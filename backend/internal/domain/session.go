@@ -347,8 +347,9 @@ type SessionMetadata struct {
 	// before any internal agent-switch coordination turn.
 	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`
 	LatestAssistantUpdateAt time.Time `json:"-"`
-	// CardSummary is the one-line card text the agent set with `ao summary`. It is
-	// stored apart from LatestAssistantUpdate, which lifecycle hooks rewrite.
+	// CardSummary is the one-line card text written from the worker's latest
+	// report. It is stored apart from LatestAssistantUpdate, which lifecycle
+	// hooks rewrite.
 	CardSummary string `json:"-"`
 	// ConversationCheckpointState and its owner provenance are internal replay
 	// safety facts. They survive daemon restart but are not part of the session
@@ -733,8 +734,8 @@ type Session struct {
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
 	DisplayStatus DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Waiting on base PR,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	// Summary is the one-line Kanban card text the agent set with `ao summary`.
-	// Empty means the agent has not set one and the card renders no line.
+	// Summary is the one-line Kanban card text written from the worker's latest
+	// report. Empty means there is none yet and the card renders no line.
 	Summary          string `json:"summary,omitempty"`
 	TerminalHandleID string `json:"terminalHandleId,omitempty"`
 	// TerminalTitle is the title the session's terminal program set, present
