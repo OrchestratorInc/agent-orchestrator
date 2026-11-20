@@ -32,7 +32,12 @@ function bufferedEnd(video: HTMLVideoElement): number {
 }
 
 /** Plays a video with the app's own controls instead of Chromium's. */
-export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
+export function VideoPlayer({ active = true, src, label, crossOrigin, onError, className }: {
+	/**
+	 * False while the player is mounted in a hidden pane, such as an inactive file
+	 * tab. It then does not autoplay, and pauses if it was playing.
+	 */
+	active?: boolean;
 	src: string;
 	/** Accessible name of the video itself, usually its path. */
 	label: string;
@@ -76,6 +81,20 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 		video.defaultPlaybackRate = speed;
 		video.playbackRate = speed;
 	}, [speed, src]);
+
+	// Hidden panes stay mounted, so only the visible one may play: pause when the
+	// pane is hidden, and give a video that has never played its autoplay the
+	// first time its pane is shown. One the person paused stays paused.
+	const wasActive = useRef(active);
+	useEffect(() => {
+		const shown = active && !wasActive.current;
+		wasActive.current = active;
+		const video = videoRef.current;
+		if (!video) return;
+		if (!active) {
+			if (!video.paused) video.pause();
+		} else if (shown && video.paused && (video.played?.length ?? 0) === 0) void Promise.resolve(video.play()).catch(() => {});
+	}, [active]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -179,7 +198,7 @@ export function VideoPlayer({ src, label, crossOrigin, onError, className }: {
 			<video
 				ref={videoRef}
 				aria-label={label}
-				autoPlay
+				autoPlay={active}
 				className="min-h-0 w-full flex-1 cursor-pointer rounded-md object-contain outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 				crossOrigin={crossOrigin}
 				key={src}

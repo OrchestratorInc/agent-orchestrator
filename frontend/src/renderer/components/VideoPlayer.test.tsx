@@ -216,6 +216,26 @@ describe("VideoPlayer", () => {
 		expect(next.playbackRate).toBe(2);
 	});
 
+	it("plays only while its pane is visible", () => {
+		const view = render(<VideoPlayer active={false} label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
+		const video = screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
+		// A hidden pane, such as an inactive file tab, does not autoplay.
+		expect(video).not.toHaveAttribute("autoplay");
+		expect(play).not.toHaveBeenCalled();
+		// Shown for the first time: it starts.
+		view.rerender(<VideoPlayer active label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
+		expect(play).toHaveBeenCalledTimes(1);
+		// Hidden again while playing: it pauses, so two tabs never play at once.
+		Object.defineProperty(video, "paused", { configurable: true, value: false });
+		view.rerender(<VideoPlayer active={false} label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
+		expect(pause).toHaveBeenCalledTimes(1);
+		// Shown again after it has played: it stays paused for the person to resume.
+		Object.defineProperty(video, "paused", { configurable: true, value: true });
+		Object.defineProperty(video, "played", { configurable: true, value: { length: 1 } });
+		view.rerender(<VideoPlayer active label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
+		expect(play).toHaveBeenCalledTimes(1);
+	});
+
 	it("reports a failed load", () => {
 		const onError = vi.fn();
 		const video = renderPlayer({ onError });
