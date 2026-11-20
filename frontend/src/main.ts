@@ -4432,6 +4432,9 @@ installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, async () => {
 		console.warn("AO: could not delete the cached Cloud artifact previews", error);
 	});
 	await telemetryIdentity.signOut();
+}, async () => {
+	await ensureShellEnv();
+	return daemonEnv();
 });
 
 // Dev-only local (email/password) sign-in against a loopback Docker control

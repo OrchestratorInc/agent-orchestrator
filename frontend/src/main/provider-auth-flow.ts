@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { shell } from "electron";
 import crypto from "node:crypto";
+import { resolveShellPath } from "../shared/shell-env";
 
 const MAX_AUTH_DOCUMENT_BYTES = 64 << 10;
 
@@ -118,9 +119,8 @@ export async function firstExecutable(name: string, dirs: readonly string[]): Pr
 // by version managers (nvm, asdf) that neither the inherited PATH nor the static
 // list above can know. Bounded by a hard timeout so a slow or prompting shell
 // can never hang the login flow; any failure just falls through to "not found".
-function resolveViaLoginShell(name: string): Promise<string | null> {
+function resolveViaLoginShell(name: string, shell: string): Promise<string | null> {
 	if (process.platform === "win32") return Promise.resolve(null);
-	const shell = process.env.SHELL || "/bin/zsh";
 	return new Promise((resolve) => {
 		let out = "";
 		let settled = false;
@@ -157,12 +157,28 @@ function resolveViaLoginShell(name: string): Promise<string | null> {
 // Resolve an agent CLI to an absolute path and build a PATH the spawned CLI can
 // use to find its own helpers (node, git). Returns null when the binary cannot
 // be located anywhere, so the caller can surface an actionable error.
-async function resolveProviderBinary(name: string): Promise<{ path: string; pathEnv: string } | null> {
-	const inherited = (process.env.PATH ?? "").split(path.delimiter);
-	let resolved = await firstExecutable(name, [...inherited, ...knownBinDirs()]);
-	if (!resolved) resolved = await resolveViaLoginShell(name);
+//
+// env is the environment the desktop starts the daemon with: the PATH and SHELL
+// recovered from the user's login shell, and the daemon's AO_DATA_DIR. Searching
+// it in the daemon's order (AO's managed launcher, then PATH) finds the copy
+// AO's own sessions run, so a harness the Harness page shows is never reported
+// missing here. A Finder/Dock launch can carry launchd's generic SHELL=/bin/sh,
+// which never reads the user's zsh/bash startup files, so the login-shell
+// fallback runs the account's configured shell instead.
+export async function resolveProviderBinary(
+	name: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<{ path: string; pathEnv: string } | null> {
+	const envPath = (env.PATH ?? "").split(path.delimiter);
+	const dataDir = env.AO_DATA_DIR?.trim();
+	const managed = dataDir ? [path.join(dataDir, "harnesses", "bin")] : [];
+	let resolved = await firstExecutable(name, [...managed, ...envPath, ...knownBinDirs()]);
+	if (!resolved) {
+		const accountShell = process.platform === "darwin" ? os.userInfo().shell ?? undefined : undefined;
+		resolved = await resolveViaLoginShell(name, resolveShellPath(env, accountShell));
+	}
 	if (!resolved) return null;
-	const pathEnv = [path.dirname(resolved), ...knownBinDirs(), ...inherited]
+	const pathEnv = [path.dirname(resolved), ...envPath, ...knownBinDirs()]
 		.filter(Boolean)
 		.join(path.delimiter);
 	return { path: resolved, pathEnv };
@@ -192,12 +208,13 @@ export interface ProviderAuthCredential {
 
 export interface ProviderAuthFlow {
 	provider: string;
-	authenticate(dataDir: string, signal?: AbortSignal): Promise<ProviderAuthCredential>;
+	// env: the environment agent CLIs run with (see resolveProviderBinary).
+	authenticate(dataDir: string, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<ProviderAuthCredential>;
 }
 
 const codexAuthFlow: ProviderAuthFlow = {
 	provider: "codex",
-	async authenticate(dataDir: string, signal?: AbortSignal): Promise<ProviderAuthCredential> {
+	async authenticate(dataDir: string, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<ProviderAuthCredential> {
 		// mkdtemp does not create its parent. Keep this temporary, credential-bearing
 		// directory within AO's data root and private even on a fresh install.
 		await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -207,7 +224,7 @@ const codexAuthFlow: ProviderAuthFlow = {
 		try {
 			await mkdir(codexHome, { recursive: true, mode: 0o700 });
 			await chmod(codexHome, 0o700);
-			const binary = await resolveProviderBinary("codex");
+			const binary = await resolveProviderBinary("codex", env);
 			if (!binary) {
 				throw new Error(
 					'Codex is not installed or could not be found. Install the Codex CLI, or connect with the "API key" credential type instead.',
