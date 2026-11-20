@@ -61,8 +61,6 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessGrok:     {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
 	domain.HarnessGemini:   {root: geminiRoot, discover: discoverGemini, readWithProjects: readGeminiTranscriptWithProjects},
 	conductorSource:        {root: conductorRoot, discover: discoverConductor, read: readConductorTranscript, as: domain.HarnessClaudeCode, adopt: writeConductorTranscript},
-
-	domain.HarnessCommandCode: {root: commandCodeRoot, discover: discoverCommandCode, read: readCommandCodeTranscript},
 }
 
 func claudeRoot(home string) string {

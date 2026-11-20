@@ -71,8 +71,8 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 
 // configure passes model/permission flags for agents that reject runtime setters.
 // Standing instructions use memory; ACP ignores mods (upstream issue #6784).
-func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
-	env, err := prepareSessionHome(ctx, cfg)
+func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	env, err := prepareSessionHome(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -92,13 +92,11 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 }
 
 // prepareSessionHome shares Terminal's durable memory and native restore catalog.
-func prepareSessionHome(ctx context.Context, cfg acpdriver.LaunchConfig) (map[string]string, error) {
+func prepareSessionHome(cfg acpdriver.LaunchConfig) (map[string]string, error) {
 	if _, err := commandcode.PrepareSessionHome(cfg.DataDir, cfg.SessionID, cfg.SystemPrompt); err != nil {
 		return nil, err
 	}
-	if err := commandcode.PrepareNativeHistory(ctx, cfg.DataDir, cfg.SessionID, cfg.ProviderConversationID, cfg.WorkspacePath); err != nil {
-		return nil, err
-	}
+	commandcode.MigrateNativeHistory(cfg.DataDir, cfg.SessionID, cfg.ProviderConversationID)
 	return commandcode.SessionProcessEnv(cfg.DataDir, cfg.SessionID, cfg.Env), nil
 }
 
