@@ -129,7 +129,7 @@ export type ReviewTarget = {
 	/** Set when exactly one commit is picked. */
 	sha?: string;
 	subject?: string;
-	/** Historical targets carry their source when opening a file. */
+	/** Historical targets carry their source when opening a file; false until that source is fenced to a tip. */
 	openable: boolean;
 	source?: FilesSource;
 	state: "ready" | "pending" | "error" | "not_combinable";

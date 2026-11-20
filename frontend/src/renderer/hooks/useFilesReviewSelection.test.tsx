@@ -299,8 +299,8 @@ describe("useFilesReviewSelection", () => {
 		useUiStore.getState().setFilesSelection(SESSION, { branch: CHECKED_OUT, changes: { kind: "commits", shas: [] } });
 		const { result } = renderSelection(manifest());
 
-		expect(result.current.target).toMatchObject({ state: "ready", scope: "committed", commitShas: undefined, files: [file("c.ts", 5, 2)] });
-		// Its snapshot source still waits for the tip the history lists.
+		// Its snapshot source still waits for the tip the history lists, and so do its file opens.
+		expect(result.current.target).toMatchObject({ state: "ready", scope: "committed", commitShas: undefined, files: [file("c.ts", 5, 2)], openable: false });
 		expect(result.current.sourcePending).toBe(true);
 		await waitFor(() => expect(requests("/workspace/history")).toHaveLength(1));
 	});
@@ -315,7 +315,7 @@ describe("useFilesReviewSelection", () => {
 		const { result } = renderSelection(manifest());
 
 		await waitFor(() => expect(result.current.sourcePending).toBe(false));
-		expect(result.current.target).toMatchObject({ state: "ready", files: [file("c.ts", 5, 2)] });
+		expect(result.current.target).toMatchObject({ state: "ready", files: [file("c.ts", 5, 2)], openable: false });
 	});
 
 	it("waits for the history before reviewing a ticked commit", async () => {

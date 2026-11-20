@@ -165,9 +165,10 @@ export function useFilesReviewSelection({
 				historyError: historyQuery.error,
 				selection: request ? { data: selectionQuery.data, error: selectionQuery.error, pending: selectionQuery.isPending } : undefined,
 			});
-			return awaitsHistory
-				? { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined }
-				: built;
+			if (awaitsHistory) return { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined };
+			// Until the history fences the range's tip, a file opened from it would
+			// read whatever the branch points at by then, not what the list shows.
+			return built.source && !history ? { ...built, openable: false } : built;
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- settledChanges and branch are read through their keys: normalizing rebuilds equal values on every render.
 		[branchKey(branch), settledKey, manifest, legacy, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],

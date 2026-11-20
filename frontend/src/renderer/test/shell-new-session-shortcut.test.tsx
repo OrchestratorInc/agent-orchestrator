@@ -625,9 +625,22 @@ describe("shell workspace startup", () => {
 	it("starts agent update checks once launch has settled, not with the app", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {
-			shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
-			await renderShell();
+			shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+			const view = await renderShell();
 			// Each check can hold a daemon connection for seconds on a fresh daemon.
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "false");
+			await act(async () => {
+				vi.advanceTimersByTime(15_000);
+			});
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "true");
+
+			// A new daemon that replaces it while still ready waits out its own launch.
+			shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
+			view.rerender(
+				<Suspense fallback={null}>
+					<ShellRoute />
+				</Suspense>,
+			);
 			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "false");
 			await act(async () => {
 				vi.advanceTimersByTime(15_000);

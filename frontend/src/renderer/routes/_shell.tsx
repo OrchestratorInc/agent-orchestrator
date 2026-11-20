@@ -402,12 +402,13 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!daemonIsReady) return;
 		const timer = setTimeout(() => setHarnessUpdateChecksDue(true), HARNESS_UPDATE_CHECKS_DELAY_MS);
-		// A daemon that comes back has cold checks again: wait out its launch too.
+		// A daemon that comes back, or a new one that replaces it, has cold checks
+		// again: wait out its launch too.
 		return () => {
 			clearTimeout(timer);
 			setHarnessUpdateChecksDue(false);
 		};
-	}, [daemonIsReady]);
+	}, [daemonIsReady, daemonStatus.pid, daemonStatus.port]);
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
