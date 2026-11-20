@@ -117,6 +117,10 @@ type AgentAccountLimits struct {
 	// not only in AO. Codex reports it; Claude does not.
 	Activity  *AgentAccountActivity `json:"activity,omitempty"`
 	FetchedAt time.Time             `json:"fetchedAt"`
+	// Unreported is an answer the CLI gave without asking the provider, as
+	// Claude does for a `claude setup-token` login, so it says nothing about
+	// whether the login still works.
+	Unreported bool `json:"-"`
 }
 
 // HandoffHeadroom reports the room left in the meters a request for model draws on.
