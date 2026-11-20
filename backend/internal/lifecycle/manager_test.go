@@ -4566,6 +4566,68 @@ func TestSCMObservation_ReviewFeedbackSkipsThreadsResolvedSinceThePoll(t *testin
 	}
 }
 
+// One re-read reports T1 resolved; the next partial window leaves T1 out while
+// the stored row still says unresolved. The stale comment stays unrelayed.
+func TestSCMObservation_ReviewFeedbackKeepsResolutionAcrossPartialRereads(t *testing.T) {
+	m, st, msg := newManager()
+	threads := &fakeReviewThreads{review: ports.SCMReviewObservation{Partial: true, Threads: []ports.SCMReviewThreadObservation{{ID: "T1", Resolved: true}}}}
+	m.SetReviewThreadReader(threads)
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", ThreadID: "T1", Author: "alice", File: "a.go", Line: 1, Body: "resolved since", AutoInjectReview: true}}
+	obs := ports.SCMObservation{Fetched: true, PR: ports.SCMPRObservation{URL: "pr1"}}
+
+	if err := m.ApplySCMObservation(ctx, "mer-1", obs); err != nil {
+		t.Fatal(err)
+	}
+	threads.review = ports.SCMReviewObservation{Partial: true}
+	if err := m.ApplySCMObservation(ctx, "mer-1", obs); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("relayed %v, want the thread seen resolved to stay dropped", msg.msgs)
+	}
+	if threads.calls != 2 {
+		t.Fatalf("re-read threads %d times, want twice", threads.calls)
+	}
+}
+
+// blockingReviewThreads stalls the re-read until its context ends.
+type blockingReviewThreads struct{}
+
+func (blockingReviewThreads) ReviewThreads(ctx context.Context, _ ports.SCMObservation) (ports.SCMReviewObservation, error) {
+	<-ctx.Done()
+	return ports.SCMReviewObservation{}, ctx.Err()
+}
+
+// A stalled re-read gives up on its own timeout, leaving the poll's context
+// live for the sends, which fall back to the stored threads.
+func TestSCMObservation_ReviewFeedbackRereadHasItsOwnTimeout(t *testing.T) {
+	prev := reviewThreadRereadTimeout
+	reviewThreadRereadTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { reviewThreadRereadTimeout = prev })
+	m, st, msg := newManager()
+	m.SetReviewThreadReader(blockingReviewThreads{})
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", ThreadID: "T1", Author: "alice", File: "a.go", Line: 1, Body: "fix this", AutoInjectReview: true}}
+	obs := ports.SCMObservation{Fetched: true, PR: ports.SCMPRObservation{URL: "pr1"}}
+
+	pollCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	if err := m.ApplySCMObservation(pollCtx, "mer-1", obs); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("re-read held the poll for %v, want about %v", elapsed, reviewThreadRereadTimeout)
+	}
+	if pollCtx.Err() != nil {
+		t.Fatalf("re-read spent the poll budget: %v", pollCtx.Err())
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "fix this") {
+		t.Fatalf("relayed %v, want the stored feedback after the re-read timed out", msg.msgs)
+	}
+}
+
 // Delivered feedback is not re-read on later polls, and a failed re-read
 // relays the stored threads as before.
 func TestSCMObservation_ReviewFeedbackRereadOnlyWhileDue(t *testing.T) {

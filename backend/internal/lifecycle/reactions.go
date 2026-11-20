@@ -18,6 +18,12 @@ import (
 
 const reviewMaxNudge = 3
 
+// reviewThreadRereadTimeout bounds the send-time review-thread re-read. It sits
+// well under the observer's 30s lifecycle budget so a slow review endpoint
+// cannot spend the time the queued CI and merge-conflict nudges need to send.
+// A var so tests can shorten it.
+var reviewThreadRereadTimeout = 10 * time.Second
+
 type reactionState struct {
 	mu       sync.Mutex
 	seen     map[string]string
@@ -37,10 +43,15 @@ type reactionState struct {
 	// check-send-record span, so mu is free while a nudge is written and a
 	// send wedged on one session's pane does not hold up other sessions'.
 	sending map[string]*sync.Mutex
+	// resolvedThreads keeps, per PR URL, the threads a send-time re-read last
+	// reported resolved. A later partial re-read can leave a thread out of its
+	// window, and the stored rows still say unresolved until the next poll, so
+	// the latest explicit status is what keeps that comment from being relayed.
+	resolvedThreads map[string]map[string]bool
 }
 
 func newReactionState() reactionState {
-	return reactionState{seen: map[string]string{}, attempts: map[string]int{}, loaded: map[string]bool{}, pendingRearm: map[string]bool{}, sending: map[string]*sync.Mutex{}}
+	return reactionState{seen: map[string]string{}, attempts: map[string]int{}, loaded: map[string]bool{}, pendingRearm: map[string]bool{}, sending: map[string]*sync.Mutex{}, resolvedThreads: map[string]map[string]bool{}}
 }
 
 // lockKey takes key's send lock and returns its unlock.
@@ -351,8 +362,10 @@ func (m *Manager) applyPRObservation(ctx context.Context, id domain.SessionID, o
 
 // dropResolvedThreads re-reads the PR's review threads from the provider when
 // a review-comment nudge is still due, and drops the nudges whose thread was
-// resolved after the poll that stored it. A failed read keeps the stored
-// threads the nudges were built from.
+// resolved after the poll that stored it. A thread a re-read reported resolved
+// stays dropped until a later re-read reports it unresolved, even if a partial
+// window leaves it out. A failed or timed-out read keeps the stored threads the
+// nudges were built from, minus those already seen resolved.
 func (m *Manager) dropResolvedThreads(ctx context.Context, scm *ports.SCMObservation, prURL string, nudges []pendingNudge) ([]pendingNudge, error) {
 	m.mu.Lock()
 	reader := m.reviewThreads
@@ -377,15 +390,26 @@ func (m *Manager) dropResolvedThreads(ctx context.Context, scm *ports.SCMObserva
 	if !due {
 		return nudges, nil
 	}
-	review, err := reader.ReviewThreads(ctx, *scm)
+	readCtx, cancel := context.WithTimeout(ctx, reviewThreadRereadTimeout)
+	review, err := reader.ReviewThreads(readCtx, *scm)
+	cancel()
 	if err != nil {
 		slog.Default().Warn("lifecycle: re-read review threads before relaying feedback", "pr", prURL, "err", err)
-		return nudges, nil
 	}
-	resolved := map[string]bool{}
-	for _, th := range review.Threads {
-		if th.Resolved {
-			resolved[th.ID] = true
+	m.react.mu.Lock()
+	defer m.react.mu.Unlock()
+	resolved := m.react.resolvedThreads[prURL]
+	if err == nil {
+		for _, th := range review.Threads {
+			switch {
+			case th.Resolved && resolved == nil:
+				resolved = map[string]bool{th.ID: true}
+				m.react.resolvedThreads[prURL] = resolved
+			case th.Resolved:
+				resolved[th.ID] = true
+			default:
+				delete(resolved, th.ID)
+			}
 		}
 	}
 	kept := make([]pendingNudge, 0, len(nudges))
