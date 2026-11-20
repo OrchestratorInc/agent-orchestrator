@@ -14,7 +14,7 @@ vi.mock("../lib/sentry", async (importOriginal) => ({
 vi.mock("../hooks/useSystemRequirementsGate", () => ({
 	useSystemRequirementsGate: () => ({ query: { refetch: vi.fn(), isSuccess: true, isError: false }, requirements: [{ id: "gh", satisfied: true }] }),
 	useGitHubAuthRequirement: () => auth.current,
-	useStartGitHubAuthTerminal: () => ({ mutate: vi.fn(), isPending: false, isError: login.isError }),
+	useStartGitHubAuthTerminal: () => ({ mutate: vi.fn(), isPending: false, isError: login.isError, error: login.isError ? new Error("Login could not start") : null }),
 	useGitHubAuthTerminal: () => ({ data: null, clear: vi.fn() }),
 }));
 vi.mock("../hooks/useShellTerminals", () => ({ useCloseShellTerminal: () => ({ mutate: vi.fn() }) }));
