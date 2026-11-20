@@ -409,6 +409,65 @@ func TestCallStartsStoppedDaemonAndRetries(t *testing.T) {
 	}
 }
 
+// slowStartDriver takes a moment to bring the service up, as the real one does,
+// so calls that arrive meanwhile still see it stopped.
+type slowStartDriver struct{ *fakeDriver }
+
+func (d slowStartDriver) StartDaemon(ctx context.Context, binary string) error {
+	time.Sleep(50 * time.Millisecond)
+	return d.fakeDriver.StartDaemon(ctx, binary)
+}
+
+func TestConcurrentCallsStartStoppedDaemonOnce(t *testing.T) {
+	driver := &fakeDriver{startsUp: true}
+	driver.onCall = func([]string) ([]byte, []byte, error) {
+		driver.mu.Lock()
+		up := driver.daemonUp
+		driver.mu.Unlock()
+		if !up {
+			return nil, []byte("Cua Driver daemon is not running."), errors.New("exit status 1")
+		}
+		return []byte(`{"apps":[]}`), nil, nil
+	}
+	s := New(slowStartDriver{driver}, t.TempDir())
+	s.SetEnabled(func(context.Context) bool { return true })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	const callers = 5
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.Call(context.Background(), CallRequest{Tool: "list_windows"})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Call() error = %v", err)
+		}
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.started != 1 {
+		t.Fatalf("StartDaemon ran %d times, want 1", driver.started)
+	}
+}
+
+func TestEnsureDaemonStopsWaitingWhenCancelled(t *testing.T) {
+	s := newTestService(t, &fakeDriver{}, "linux")
+	s.daemonStart <- struct{}{} // another caller is starting the service
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.ensureDaemon(ctx, "/opt/cua-driver"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensureDaemon() error = %v, want context.Canceled", err)
+	}
+}
+
 func TestCallReportsDaemonStartFailure(t *testing.T) {
 	driver := &fakeDriver{startErr: errors.New("no desktop session")}
 	driver.onCall = func([]string) ([]byte, []byte, error) {

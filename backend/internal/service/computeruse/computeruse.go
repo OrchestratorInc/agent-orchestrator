@@ -155,6 +155,10 @@ type Service struct {
 	stop       context.CancelFunc
 	workers    sync.WaitGroup
 
+	// daemonStart admits one ensureDaemon at a time; holding it is sending on
+	// the channel.
+	daemonStart chan struct{}
+
 	mu         sync.Mutex
 	granting   bool
 	grantError string
@@ -190,6 +194,7 @@ func New(driver Driver, dataDir string) *Service {
 		goos:        runtime.GOOS,
 		background:  background,
 		stop:        stop,
+		daemonStart: make(chan struct{}, 1),
 		sessionless: map[string]bool{},
 		snapshots:   snapshotWindows{windows: map[string]window{}},
 	}
@@ -528,7 +533,16 @@ func (s *Service) locate(ctx context.Context) (string, error) {
 }
 
 // ensureDaemon starts the service when it is not answering and waits for it.
+// Calls that arrive while it is down take turns: each later one finds the
+// service the first started and returns, instead of starting another copy
+// (macOS's `open -n` always launches a new instance).
 func (s *Service) ensureDaemon(ctx context.Context, binary string) error {
+	select {
+	case s.daemonStart <- struct{}{}:
+		defer func() { <-s.daemonStart }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if s.daemonState(ctx, binary) == DaemonRunning {
 		return nil
 	}
