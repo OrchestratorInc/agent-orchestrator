@@ -526,3 +526,23 @@ it("closes italics inside bold on the bold's own closing run", () => {
 	expect(italic.props.style).toEqual(expect.objectContaining({ fontStyle: "italic" }));
 	act(() => renderer.unmount());
 });
+
+it.each([
+	["an unclosed ** before many italic spans", `**${"*x* ".repeat(25)}`],
+	["a note whose bold never closes", `**Note: ${"abcdefghijklmnopqrstuvwxy".split("").map((letter) => `*${letter}*`).join(" ")}`],
+])("renders %s without backtracking", (_name, text) => {
+	let renderer!: ReactTestRenderer;
+	const started = performance.now();
+	act(() => { renderer = create(<ChatMarkdown text={text} />); });
+	expect(performance.now() - started).toBeLessThan(250);
+	// The spans still render as italics; the unclosed ** stays as written.
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true)).startsWith("**")).toBe(true);
+	act(() => renderer.unmount());
+});
+
+it("does not open or close italics beside a space", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text={"2 * 3 * 4 and *real italics*"} />); });
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true))).toBe("2 * 3 * 4 and real italics");
+	act(() => renderer.unmount());
+});

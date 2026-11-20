@@ -441,9 +441,12 @@ const WEB_OR_AO_LINK = /^(?:https?|ao):\/\//i;
 function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>, openFiles = true): ReactNode[] {
 	// Web links, AO's own `ao://` links, and file links (`[a.ts:12](src/a.ts:12)`); a bare session link stops before prose punctuation.
 	// A destination may hold balanced parentheses, as a route group does: `app/(tabs)/index.tsx`.
-	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair;
-	// a whole `*italic*` inside one may end on the bold's own closing run: `**bold *italic***`.
-	const pattern = /\\(?<escaped>[!-/:-@[-`{-~])|\[(?<label>[^\]]+)\]\((?<href>(?:[^\s()]|\([^\s()]*\))+)\)|<(?<angle>(?:https?|ao):\/\/[^\s>]+)>|`(?<code>[^`]+)`|\*\*\*(?<strongEm>[^*\n]+)\*\*\*|\*\*(?<strong>(?:\*[^*\n]+\*|[^*]|\*(?!\*))+)\*\*|__(?<underStrong>(?:[^_]|_(?!_))+)__|~~(?<strike>[^~]+)~~|\*(?<em>[^*\n]+)\*|_(?<underEm>[^_\n]+)_|(?<bare>https?:\/\/[^\s<]+)|(?<session>ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"])/g;
+	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair.
+	// `**bold *italic***`, italics ending on the bold's closing run, is a branch of
+	// its own. Every branch gives each `*` exactly one way to match: alternatives
+	// that could both take the same `*` backtrack exponentially on an unclosed `**`.
+	// Italics neither open before nor close after a space, as in CommonMark: `2 * 3 * 4` stays arithmetic.
+	const pattern = /\\(?<escaped>[!-/:-@[-`{-~])|\[(?<label>[^\]]+)\]\((?<href>(?:[^\s()]|\([^\s()]*\))+)\)|<(?<angle>(?:https?|ao):\/\/[^\s>]+)>|`(?<code>[^`]+)`|\*\*\*(?<strongEm>[^*\n]+)\*\*\*|\*\*(?<strongLead>[^*]*)\*(?<strongTail>[^*]+)\*\*\*|\*\*(?<strong>(?:[^*]|\*(?!\*))+)\*\*|__(?<underStrong>(?:[^_]|_(?!_))+)__|~~(?<strike>[^~]+)~~|\*(?<em>[^*\s](?:[^*\n]*[^*\s])?)\*|_(?<underEm>[^_\n]+)_|(?<bare>https?:\/\/[^\s<]+)|(?<session>ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"])/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;
@@ -475,6 +478,8 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{g.code}</Text>);
 		} else if (g.strongEm) {
 			nodes.push(<Text key={`${match.index}-strong-em`} style={[styles.strong, styles.em]}>{inline(g.strongEm, styles, linksPressable, codeStyle, openFiles)}</Text>);
+		} else if (g.strongTail) {
+			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(g.strongLead, styles, linksPressable, codeStyle, openFiles)}<Text style={styles.em}>{inline(g.strongTail, styles, linksPressable, codeStyle, openFiles)}</Text></Text>);
 		} else if (g.strong || g.underStrong) {
 			// Emphasis holds inline Markdown of its own: a link inside bold is still a link.
 			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(g.strong ?? g.underStrong, styles, linksPressable, codeStyle, openFiles)}</Text>);
