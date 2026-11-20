@@ -11,6 +11,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -54,7 +55,10 @@ func promptFailureCode(err error) domain.ConversationFailureCode {
 	return domain.ConversationFailureProviderKeyMissing
 }
 
-func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	if err := deepseekharness.ValidateImportedACP(ctx, cfg.Env["DSH_HOME"], cfg.ProviderConversationID, cfg.WorkspacePath); err != nil {
+		return nil, nil, err
+	}
 	return []string{"--profile", acpProfile}, nil, nil
 }
 

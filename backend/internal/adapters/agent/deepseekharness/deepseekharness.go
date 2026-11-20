@@ -72,6 +72,7 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
+	importVersion  func(context.Context) (string, error)
 }
 
 // New returns a ready-to-register DeepSeek Harness adapter.
@@ -159,7 +160,18 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if agentSessionID == "" {
+		if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+			return nil, false, ports.ErrNativeHistoryUnavailable
+		}
 		return nil, false, nil
+	}
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		if err := p.checkImportVersion(ctx); err != nil {
+			return nil, false, err
+		}
+		if _, err := validatePrivateImport(ctx, cfg.Session.Metadata[ports.MetadataKeyImportConfigDir], agentSessionID, cfg.Session.WorkspacePath); err != nil {
+			return nil, false, err
+		}
 	}
 
 	binary, err := p.deepseekBinary(ctx)

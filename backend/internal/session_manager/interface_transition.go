@@ -1088,6 +1088,7 @@ func (m *Manager) preflightInterfaceTarget(
 	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
+	m.applyImportedConfigEnv(ctx, rec, env)
 	if err := m.preflightLaunchAuth(ctx, agent, rec, env); err != nil {
 		return err
 	}
