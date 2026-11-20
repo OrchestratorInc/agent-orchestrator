@@ -3247,6 +3247,7 @@
 	"settings.harness.models.default": "Standard",
 	"settings.harness.models.efforts": "Aufwand: {{levels}}",
 	"settings.harness.models.empty": "Dieses Harness meldet keine Modelle.",
+	"settings.harness.models.directEntry": "Gib in „Neue Aufgabe“ eine Modell-ID ein. Richte zuerst den Anbieter in {{agent}} ein.",
 	"settings.harness.models.notInstalled": "Installiere {{agent}}, um seine Modelle zu sehen.",
 	"settings.harness.models.needsLogin": "Melde dich bei {{agent}} an, um seine Modelle zu laden.",
 	"settings.harness.models.loadFailed": "Modelle konnten nicht geladen werden.",

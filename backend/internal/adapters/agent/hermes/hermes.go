@@ -1829,7 +1829,7 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 }
 
 // ValidateTerminalMessage refuses ordinary AO text while native decisions own input.
-func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
+func (p *Plugin) ValidateTerminalMessage(screen, _ string) error {
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
 		return fmt.Errorf("hermes: ordinary Orchestrator sends require the current empty native composer; enter approval decisions directly in the terminal")
