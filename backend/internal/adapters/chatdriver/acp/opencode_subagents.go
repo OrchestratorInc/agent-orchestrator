@@ -69,8 +69,10 @@ type openCodeSubagents struct {
 	// inflight holds launches that started but have not named their child.
 	inflight map[string]struct{}
 	// launchOf maps a child session to the launch that started it, or that last
-	// sent it a follow-up.
+	// sent it a follow-up. awaiting lists every launch that sent the child work
+	// since it last reported, which all get its report.
 	launchOf map[string]string
+	awaiting map[string][]string
 
 	// held keeps a child's updates, in order, until a launch names it.
 	held      map[string][]openCodeChildUpdate
@@ -95,6 +97,7 @@ func (c *conversation) subagentsLocked() *openCodeSubagents {
 			launchTurn: map[string]string{},
 			inflight:   map[string]struct{}{},
 			launchOf:   map[string]string{},
+			awaiting:   map[string][]string{},
 			held:       map[string][]openCodeChildUpdate{},
 			tools:      map[string]*toolState{},
 			open:       map[string]childMessage{},
@@ -185,6 +188,9 @@ func (c *conversation) observeSubagentLaunch(turnID string, tool *toolState, emi
 		}
 		switch {
 		case child != "":
+			if s.launchOf[child] != tool.id {
+				s.awaiting[child] = append(s.awaiting[child], tool.id)
+			}
 			s.launchOf[child] = tool.id
 			delete(s.inflight, tool.id)
 		case toolTerminal(tool.status):
@@ -441,14 +447,23 @@ func (c *conversation) childEnded(update openCodeChildUpdate, launch string) {
 		report = strings.TrimSpace(open.text)
 	}
 	delete(s.lastSaid, child)
+	launches := s.awaiting[child]
+	delete(s.awaiting, child)
 	c.mu.Unlock()
+	if len(launches) == 0 {
+		launches = []string{launch}
+	}
 	if streaming {
 		emit(c.childMessageEvent(open, true))
 	}
 	if status == domain.ActivityStatusFailed && update.Error != nil && strings.TrimSpace(update.Error.Message) != "" {
 		report = strings.TrimSpace(update.Error.Message)
 	}
-	emit(c.handbackEvent("", launch, status, report))
+	// A follow-up joins the child's run, so its outcome answers each launch that
+	// is waiting on it, not only the latest.
+	for _, waiting := range launches {
+		emit(c.handbackEvent("", waiting, status, report))
+	}
 }
 
 // handbackEvent is a child's report to the launch that started it.

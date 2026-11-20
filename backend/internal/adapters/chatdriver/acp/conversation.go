@@ -1582,6 +1582,8 @@ func (c *conversation) emit(event ports.ChatEvent) {
 }
 
 func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+	// Child work released by the turn's unnamed launches joins what it settles.
+	c.settleSubagentLaunches(turnID)
 	c.mu.Lock()
 	messages := c.messages
 	thoughts := c.thoughts
@@ -1627,7 +1629,6 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 			c.emit(event)
 		}
 	}
-	c.settleSubagentLaunches(turnID)
 }
 
 func sortedKeys[T any](values map[string]T) []string {

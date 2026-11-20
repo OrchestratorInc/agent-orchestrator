@@ -305,22 +305,75 @@ func TestOpenCodeV1TaskReportsItsResult(t *testing.T) {
 }
 
 // A launch whose turn settled before it named a child names nothing later, so
-// what waits on it goes out instead of being held until the cap.
+// what waits on it goes out instead of being held until the cap, and the turn's
+// settlement closes it like the rest of its work.
 func TestOpenCodeV2SettledTurnReleasesHeldChildWork(t *testing.T) {
 	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
 	_ = launchSubagent(t, agent, conv, "call_launch")
 	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update",
 		"update": childToolCall("ses_child:call_read", "Find tests: read", "pending")})
-	// The child update is read off the wire before the turn settles.
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update", "update": map[string]any{
+		"sessionUpdate": "agent_message_chunk", "messageId": "msg_1",
+		"content": map[string]any{"type": "text", "text": "Looking."},
+	}})
+	// The child updates are read off the wire before the turn settles.
 	time.Sleep(50 * time.Millisecond)
 
 	conv.settleOpenItems("turn-1")
-	if launch := nextActivity(t, conv); launch.ProviderItemID != "call_launch" ||
-		launch.ActivityStatus != domain.ActivityStatusFailed {
-		t.Fatalf("settled launch = %#v", launch)
+	var stepStarted, messageCompleted bool
+	launchStatus := domain.ActivityStatus("")
+	for quiet := time.After(300 * time.Millisecond); ; {
+		select {
+		case event := <-conv.Events():
+			switch {
+			case event.ProviderItemID == "ses_child:call_read" && event.Kind == ports.ChatEventActivityStarted:
+				stepStarted = true
+			case event.ProviderItemID == "msg_1" && event.Kind == ports.ChatEventMessageCompleted:
+				messageCompleted = true
+			case event.ProviderItemID == "call_launch" && event.Kind == ports.ChatEventActivityCompleted:
+				launchStatus = event.ActivityStatus
+			}
+			continue
+		case <-quiet:
+		}
+		break
 	}
-	if step := nextActivity(t, conv); step.ProviderItemID != "ses_child:call_read" {
-		t.Fatalf("held child step after the turn settled = %#v", step)
+	if !stepStarted || launchStatus != domain.ActivityStatusFailed {
+		t.Fatalf("after the turn settled: child step started=%v, launch status %q", stepStarted, launchStatus)
+	}
+	if !messageCompleted {
+		t.Fatal("a child message released by the settling turn was never completed")
+	}
+}
+
+// A follow-up joins its child's run, so when the child ends, the launch that
+// started it gets the outcome as well as the follow-up.
+func TestOpenCodeV2ChildReportsToEveryLaunchWaitingOnIt(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+	_ = launchSubagent(t, agent, conv, "call_first")
+	_ = completeLaunch(t, agent, conv, "call_first", "ses_child")
+	sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+		SessionUpdate: "tool_call", ToolCallId: "call_second", Title: "subagent",
+		Kind: acpsdk.ToolKindThink, Status: acpsdk.ToolCallStatusInProgress,
+		RawInput: map[string]any{"agent": "explore", "description": "Find tests", "prompt": "And the e2e tests",
+			"sessionID": "ses_child"},
+	}})
+	_ = nextActivity(t, conv)
+	_ = completeLaunch(t, agent, conv, "call_second", "ses_child")
+
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": "failed",
+		"error": map[string]any{"type": "provider", "message": "rate limited"}})
+	reported := map[any]domain.ActivityStatus{}
+	for range 2 {
+		handback := nextActivity(t, conv)
+		detail := detailOf(t, handback)
+		if detail["providerToolName"] != subagentHandbackTool {
+			t.Fatalf("event = %#v, want a hand-back", handback)
+		}
+		reported[detail["parentProviderItemId"]] = handback.ActivityStatus
+	}
+	if reported["call_first"] != domain.ActivityStatusFailed || reported["call_second"] != domain.ActivityStatusFailed {
+		t.Fatalf("hand-backs by launch = %v, want both launches failed", reported)
 	}
 }
 
