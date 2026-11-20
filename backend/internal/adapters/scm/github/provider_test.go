@@ -857,6 +857,51 @@ func contains(ss []string, x string) bool {
 	return false
 }
 
+// TestListPRsByRepoReusesOneCacheEntryAcrossPolls catches the listing growing
+// the response cache by one full page per poll. A since parameter that changed
+// every poll gave each page a new cache key, so a long-running daemon filled the
+// cache with up to cacheMaxEntries copies of a multi-megabyte listing.
+func TestListPRsByRepoReusesOneCacheEntryAcrossPolls(t *testing.T) {
+	f := newFakeGH(t)
+	var conditional int
+	f.on(http.MethodGet, "/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("since") {
+			t.Errorf("listing sent since=%q, which GitHub ignores", r.URL.Query().Get("since"))
+		}
+		if r.Header.Get("If-None-Match") == `W/"list-v1"` {
+			conditional++
+			w.Header().Set("ETag", `W/"list-v1"`)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `W/"list-v1"`)
+		_, _ = w.Write([]byte(`[{"number":7,"state":"open","updated_at":"2026-11-17T10:00:00Z"}]`))
+	})
+	p := newProviderForTest(t, f)
+	repo := ports.SCMRepo{Provider: "github", Owner: "acme", Name: "widgets"}
+
+	cursor := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	for poll := range 3 {
+		pulls, err := p.ListPRsByRepo(ctx(), repo, cursor.Add(time.Duration(poll)*time.Minute))
+		if err != nil {
+			t.Fatalf("poll %d: %v", poll, err)
+		}
+		if len(pulls) != 1 || pulls[0].Number != 7 {
+			t.Fatalf("poll %d pulls = %+v, want PR 7", poll, pulls)
+		}
+	}
+	if conditional != 2 {
+		t.Fatalf("conditional requests = %d, want 2 revalidations of one cached page", conditional)
+	}
+	p.client.mu.Lock()
+	entries := len(p.client.bodyOut)
+	p.client.mu.Unlock()
+	if entries != 1 {
+		t.Fatalf("cached bodies = %d, want 1 for one page polled three times", entries)
+	}
+}
+
 func TestObserve_ETag304Cached(t *testing.T) {
 	// Second call to the REST pull endpoint must send If-None-Match and
 	// reuse the cached body, while still completing the rest of the
@@ -1269,6 +1314,45 @@ func TestSCMObservationUsesRollupStateWhenContextsPaginated(t *testing.T) {
 	obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello", Repo: "octocat/hello"}, Number: 42}, pr)
 	if obs.CI.Summary != string(domain.CIFailing) {
 		t.Fatalf("observer CI summary = %q, want failing from aggregate rollup state", obs.CI.Summary)
+	}
+}
+
+// A PR whose head is a fork's branch or the repository's default branch is
+// flagged, so the stack-parent lookup never treats it as a stack base.
+func TestSCMObservationFlagsHeadsThatCannotBeStackParents(t *testing.T) {
+	defaultBranch := func(name string) map[string]any {
+		return map[string]any{"defaultBranchRef": map[string]any{"name": name}}
+	}
+	cases := []struct {
+		name               string
+		head               string
+		crossRepository    bool
+		headRepository     any
+		wantFork, wantMain bool
+	}{
+		{name: "feature branch", head: "feat/base", headRepository: defaultBranch("main")},
+		{name: "sync from main", head: "main", headRepository: defaultBranch("main"), wantMain: true},
+		{name: "fork branch", head: "develop", crossRepository: true, headRepository: defaultBranch("develop"), wantFork: true},
+		{name: "deleted fork", head: "patch-1", crossRepository: true, headRepository: nil, wantFork: true},
+		{name: "empty repository", head: "main", headRepository: map[string]any{"defaultBranchRef": nil}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var pr map[string]any
+			basePRFixture().prData(func(m map[string]any) {
+				pr = m
+				m["headRefName"] = tc.head
+				m["isCrossRepository"] = tc.crossRepository
+				m["headRepository"] = tc.headRepository
+			})
+			obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello", Repo: "octocat/hello"}, Number: 42}, pr)
+			if obs.PR.HeadFromFork != tc.wantFork || obs.PR.HeadIsDefaultBranch != tc.wantMain {
+				t.Fatalf("fork=%v default=%v, want fork=%v default=%v", obs.PR.HeadFromFork, obs.PR.HeadIsDefaultBranch, tc.wantFork, tc.wantMain)
+			}
+		})
+	}
+	if !strings.Contains(scmPRFields(), "isCrossRepository headRepository{ defaultBranchRef{ name } }") {
+		t.Fatal("PR query does not read the head repository facts")
 	}
 }
 

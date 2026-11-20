@@ -88,7 +88,7 @@ describe("Interface affordances", () => {
 	it("keeps a list that holds an input tappable while the keyboard is up", () => {
 		// Android's default `never` spends the first tap on the keyboard, so a row
 		// under a focused field takes two taps to choose.
-		for (const file of ["./NativePickerList.tsx", "./chat/ComposerPickerSheet.tsx"]) {
+		for (const file of ["./NativePickerList.tsx", "./chat/ComposerSuggestionPanel.tsx"]) {
 			expect(source(file), `${file} should keep taps while the keyboard is up`).toContain(
 				'keyboardShouldPersistTaps="handled"',
 			);

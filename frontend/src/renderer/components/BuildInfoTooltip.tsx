@@ -77,7 +77,8 @@ export function BuildInfoTooltip({ children }: { children: React.ReactNode }) {
       <TooltipContent
         align="start"
         className={cn(
-          "relative min-w-52 max-w-72 overflow-hidden px-3 py-2.5",
+          // Grows to fit the dev branch name, up to 32rem and never past the window edge.
+          "relative min-w-52 max-w-[min(32rem,var(--radix-tooltip-content-available-width))] overflow-hidden px-3 py-2.5",
           isNightly && "build-info-nightly",
         )}
         hideArrow
@@ -99,11 +100,11 @@ export function BuildInfoTooltip({ children }: { children: React.ReactNode }) {
             ) : null}
           </div>
           {channel === "dev" ? (
-            <div className="flex items-center gap-1.5 border-t border-border pt-2 text-muted-foreground">
-              <GitBranch aria-hidden="true" className="size-3 shrink-0" />
-              <span className="truncate font-mono text-[11px]" title={DEV_BUILD_INFO.branch}>
-                {DEV_BUILD_INFO.branch}
-              </span>
+            // Show the whole branch: a name longer than the card wraps instead of truncating
+            // (the tooltip ignores the pointer, so a title attribute could never reveal it).
+            <div className="flex items-start gap-1.5 border-t border-border pt-2 text-muted-foreground">
+              <GitBranch aria-hidden="true" className="mt-px size-3 shrink-0" />
+              <span className="min-w-0 font-mono text-[11px] [overflow-wrap:anywhere]">{DEV_BUILD_INFO.branch}</span>
             </div>
           ) : null}
         </div>

@@ -209,7 +209,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 					/>
 				</div>
 			) : (
-				<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
+				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
 					<code className="font-mono text-xs leading-[1.6] text-foreground">{code}</code>
 				</pre>
 			)}

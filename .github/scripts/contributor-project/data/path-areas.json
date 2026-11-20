@@ -423,7 +423,6 @@
   {"glob": "frontend/src/renderer/hooks/useWorkspaceQuery*", "area": "files-artifacts"},
   {"glob": "frontend/src/renderer/hooks/useFileAnnotation*", "area": "files-artifacts"},
   {"glob": "frontend/src/renderer/hooks/useFileAttachments*", "area": "files-artifacts"},
-  {"glob": "frontend/src/renderer/hooks/useImageAttachments*", "area": "files-artifacts"},
   {"glob": "frontend/src/renderer/hooks/useDiffHighlight*", "area": "files-artifacts"},
   {"glob": "frontend/src/renderer/hooks/useParsedDiff*", "area": "files-artifacts"},
   {"glob": "frontend/src/renderer/hooks/usePierreFile*", "area": "files-artifacts"},

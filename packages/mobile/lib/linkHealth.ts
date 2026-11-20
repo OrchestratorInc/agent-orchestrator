@@ -182,23 +182,3 @@ export function failedPollOutcome(error: unknown, status: number | undefined): P
 	}
 	return "no-answer";
 }
-
-export type LinkBannerCopy = { text: string; icon: "wifi-off" | "refresh-cw" | "activity" };
-
-/**
- * One line for the banner above the board, or null where the existing
- * failure copy (or silence) is right.
- */
-export function describeLinkHealth(health: LinkHealth, machine: string | undefined): LinkBannerCopy | null {
-	const name = machine?.trim() || "your machine";
-	switch (health) {
-		case "phone-offline":
-			return { icon: "wifi-off", text: "You're offline. Check this phone's Wi-Fi or mobile data." };
-		case "reconnecting":
-			return { icon: "refresh-cw", text: `Reconnecting to ${name}…` };
-		case "slow":
-			return { icon: "activity", text: "Slow connection. Updates may lag." };
-		default:
-			return null;
-	}
-}

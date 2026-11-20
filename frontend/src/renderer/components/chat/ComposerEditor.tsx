@@ -27,6 +27,7 @@ import {
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
+	SKIP_DOM_SELECTION_TAG,
 	TextNode,
 	type EditorConfig,
 	type LexicalEditor,
@@ -85,10 +86,12 @@ export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
-	setText(text: string, caret?: "start" | "end"): void;
+	setText(text: string, caret?: "start" | "end", options?: { preserveFocus?: boolean }): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Removes the typed `/query` or `@query`, for a completion that runs instead of inserting. */
+	removeTrigger(trigger: ComposerTrigger): void;
 	/**
 	 * Shows a dictation transcript at the caret (or the end), replacing the one
 	 * shown before it, so the words appear as they are recognized.
@@ -360,6 +363,26 @@ function $composerTokens(): ComposerSentToken[] {
 		);
 }
 
+/**
+ * What onComplete returns for a choice that runs at once rather than becoming a
+ * chip, such as AO's `/model`: the typed trigger is removed and nothing inserted.
+ */
+export const CONSUME_TRIGGER = Symbol("consume-trigger");
+
+function $removeComposerTrigger(trigger: ComposerTrigger): boolean {
+	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
+	if (!$isTextNode(node)) return false;
+	const text = node.getTextContent();
+	const expected = `${trigger.kind === "skill" ? "/" : "@"}${trigger.query}`;
+	if (text.slice(trigger.start, trigger.end) !== expected) return false;
+	const before = text.slice(0, trigger.start);
+	// Drop the space after the trigger too, so no gap is left where it was.
+	const after = text.slice(trigger.end).replace(/^ /, "");
+	node.setTextContent(before + after);
+	node.select(before.length, before.length);
+	return true;
+}
+
 function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean {
 	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
 	if (!$isTextNode(node)) return false;
@@ -623,7 +646,7 @@ const EditorBridge = forwardRef<
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | typeof CONSUME_TRIGGER | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
 >(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
@@ -657,8 +680,9 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			setText: (text, caret) => {
+			setText: (text, caret, options) => {
 				editor.update(() => {
+					if (options?.preserveFocus) $addUpdateTag(SKIP_DOM_SELECTION_TAG);
 					$replaceEditorText(text, attachedImages(), caret);
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
@@ -669,6 +693,11 @@ const EditorBridge = forwardRef<
 			insertToken: (trigger, value) => {
 				editor.update(() => {
 					$insertComposerToken(trigger, value);
+				}, { discrete: true });
+			},
+			removeTrigger: (trigger) => {
+				editor.update(() => {
+					$removeComposerTrigger(trigger);
 				}, { discrete: true });
 			},
 			dictate: (text) => {
@@ -801,7 +830,15 @@ const EditorBridge = forwardRef<
 				return true;
 			}
 			const value = onComplete(snapshot, key);
-			if (snapshot.trigger && value) {
+			if (snapshot.trigger && value === CONSUME_TRIGGER) {
+				if (!$removeComposerTrigger(snapshot.trigger)) return false;
+				if (event) {
+					completionHandledEvents.add(event);
+					event.preventDefault();
+				}
+				return true;
+			}
+			if (snapshot.trigger && typeof value === "string" && value) {
 				if (!$insertComposerToken(snapshot.trigger, value)) return false;
 				if (event) {
 					completionHandledEvents.add(event);
@@ -862,7 +899,15 @@ const EditorBridge = forwardRef<
 			if (!plainKey(event)) return false;
 			const caret = $caretLine();
 			const action = caret && listEnter(caret.line, caret.column, caret.previous);
-			if (!caret || !action) return false;
+			if (!caret || !action) {
+				// Shift+Enter inserts a plain newline (PlainTextPlugin has no default handler).
+				if (!event.shiftKey) return false;
+				const selection = $getSelection();
+				if (!$isRangeSelection(selection)) return false;
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				selection.insertRawText("\n");
+				return handled(event);
+			}
 			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
 			$addUpdateTag(HISTORY_PUSH_TAG);
 			caret.selection.insertRawText(action.text);
@@ -936,7 +981,7 @@ export const ComposerEditor = forwardRef<
 		activeIndex: number;
 		images?: ComposerImage[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | typeof CONSUME_TRIGGER | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 		onCompositionChange: (isComposing: boolean) => void;
 		onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
