@@ -172,15 +172,19 @@ export function focusReadinessIds(agents: AgentReadinessSnapshot[]): string[] {
 		.filter((agent) =>
 			agent.usageCount > 0 ||
 			agent.installation.state !== "installed" ||
-			(agent.authentication.checkedAt != null && (agent.authentication.state === "unauthorized" || agent.authentication.state === "unknown")),
+			((agent.authentication.checkedAt != null || agent.authentication.attemptedAt != null) && (agent.authentication.state === "unauthorized" || agent.authentication.state === "unknown")),
 		)
 		.map((agent) => agent.id);
 }
 
-/** The renderer's readiness snapshot, fetched once (no checks run) when it holds none. */
+/**
+ * A fresh readiness snapshot (fetching it runs no checks), so the agents a
+ * return to the app re-checks reflect sessions started since the cache filled.
+ */
 export function loadAgentReadinessSnapshot(queryClient: QueryClient, hostId?: string): Promise<AgentReadiness> {
-	return queryClient.ensureQueryData({
+	return queryClient.fetchQuery({
 		...agentReadinessQueryOptions,
+		staleTime: 0,
 		queryKey: agentReadinessQueryKeyForHost(hostId),
 		queryFn: () => fetchAgentReadiness(hostId),
 	});

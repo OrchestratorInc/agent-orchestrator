@@ -68,6 +68,14 @@ function useFreshInstallationSnapshot(readiness: ReturnType<typeof useAgentReadi
 		}, 1_000);
 		return () => clearTimeout(timer);
 	}, [fresh, pending, tries, refetch]);
+	// A snapshot read that failed (retries spent) is read again every 5 s, so
+	// the notice recovers once the daemon answers.
+	const { isError, errorUpdatedAt } = readiness;
+	useEffect(() => {
+		if (!enabled || since === null || fresh || !isError) return;
+		const timer = setTimeout(() => void refetch(), 5_000);
+		return () => clearTimeout(timer);
+	}, [enabled, since, fresh, isError, errorUpdatedAt, refetch]);
 	return enabled && fresh && (!pending || tries >= INSTALLATION_SETTLE_TRIES);
 }
 
@@ -91,7 +99,19 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const advisories = useHarnessUpdates(installed, undefined, installationKnown && !readiness.isError);
 	const updateCandidates = AGENT_OPTIONS.filter((id) => installed.has(id) && hasConfirmedHarnessUpdate(advisories.get(id)?.data));
 	const candidatesChecked = useEnsureAgentReadiness({ agentIds: updateCandidates, enabled: installationKnown && updateCandidates.length > 0, retryOnError: true });
-	const readinessComplete = installationKnown && (updateCandidates.length === 0 || candidatesChecked);
+	// Candidates whose sign-in check has finished. A candidate added later is
+	// checked on its own; meanwhile the cards already shown stay up.
+	const [checkedCandidates, setCheckedCandidates] = useState<ReadonlySet<string>>(() => new Set());
+	const candidateKey = updateCandidates.join(",");
+	useEffect(() => {
+		if (!candidatesChecked || !candidateKey) return;
+		setCheckedCandidates((current) => {
+			const ids = candidateKey.split(",");
+			if (ids.every((id) => current.has(id))) return current;
+			return new Set([...current, ...ids]);
+		});
+	}, [candidatesChecked, candidateKey]);
+	const readinessComplete = installationKnown && (updateCandidates.length === 0 || candidatesChecked || checkedCandidates.size > 0);
 	const installers = useQuery({ ...installersQueryOptions(), enabled });
 	const authPlans = useAgentAuthPlans(undefined, enabled);
 	const jobs = useQuery({ ...installJobsQueryOptions(), enabled });
@@ -269,7 +289,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	};
 	const localUpdate = (agentId: AgentId) => {
 		const query = advisories.get(agentId);
-		const confirmed = installed.has(agentId) && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
+		const checked = candidatesChecked || checkedCandidates.has(agentId);
+		const confirmed = installed.has(agentId) && checked && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
 		const advisory = confirmed ?? failedUpdateAdvisory(agentId);
 		if (!advisory) return undefined;
 		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
