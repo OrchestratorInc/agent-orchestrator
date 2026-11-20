@@ -638,6 +638,22 @@ describe("native WorkOS authentication", () => {
       expect(await fileStore()).toMatchObject({ session: { user: { email: "other@example.com" } }, pkce: null });
     });
 
+    it("keeps the saved sign-in when storage drops between reading it and saving a sign-in started on it, even across a restart", async () => {
+      await signIn(await restart());
+      let auth = await restart();
+      const store = await auth.readAuthStore(dataDir);
+      mocks.encryptionAvailable = false;
+      await auth.writeAuthStore(dataDir, { ...store, pkce: { codeVerifier: "verifier_456", state: "state_456", expiresAt: Date.now() + 60_000 } });
+
+      await expect(readFile(storeFile())).resolves.toBeInstanceOf(Buffer);
+      expect(warn).not.toHaveBeenCalled();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+
+      auth = await restart();
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+    });
+
     it("removes the saved sign-in for good when signing out during the outage", async () => {
       await signIn(await restart());
       mocks.encryptionAvailable = false;
