@@ -155,7 +155,7 @@ func TestKimiPreparationRefusesBlobBackedMedia(t *testing.T) {
 	}
 	// Native 2.4.1 stores image URLs in imageUrl.url, with the payload in
 	// agents/main/blobs/<hash>. The journal alone cannot preserve that media.
-	media := `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"describe this image"},{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + strings.Repeat("a", 64) + `"}}],"origin":{"kind":"user"}}` + "\n"
+	media := `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"describe this image"},{"type":"image_url","imageUrl":{"url":"blobref:image/png;` + strings.Repeat("a", 64) + `"}}],"origin":{"kind":"user"}}}` + "\n"
 	wire = append(wire, []byte(media)...)
 	if err := os.WriteFile(r.TranscriptPath, wire, 0o600); err != nil {
 		t.Fatal(err)

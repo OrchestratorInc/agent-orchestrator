@@ -163,7 +163,7 @@ func TestKimiPreviewRefusesBlobMediaWithoutRejectingLiteralText(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			record := `{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"readable prompt"},` + tc.part + `],"origin":{"kind":"user"}}` + "\n"
+			record := `{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"readable prompt"},` + tc.part + `],"origin":{"kind":"user"}}}` + "\n"
 			path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, "", record)
 			got, err := readKimiTranscript(t.Context(), root, path)
 			if tc.refuse {
