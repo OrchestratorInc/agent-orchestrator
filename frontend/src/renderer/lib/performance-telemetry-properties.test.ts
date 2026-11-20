@@ -24,7 +24,7 @@ describe("sanitizePerformanceProperties", () => {
 
 	it("keeps only the documented summary properties and closed values", () => {
 		const safe = sanitizePerformanceProperties("ao.usage.ui_performance", {
-			measurement_schema_version: 1,
+			measurement_schema_version: 2,
 			flush_reason: "interval",
 			window_seconds: 2_700,
 			active_seconds: 1_200.4,
@@ -42,7 +42,7 @@ describe("sanitizePerformanceProperties", () => {
 			script_url: "file:///app.js",
 		});
 		expect(safe).toEqual({
-			measurement_schema_version: 1,
+			measurement_schema_version: 2,
 			flush_reason: "interval",
 			window_seconds: 2_700,
 			active_seconds: 1_200,
@@ -59,7 +59,7 @@ describe("sanitizePerformanceProperties", () => {
 
 	it("drops values outside the closed lists", () => {
 		expect(sanitizePerformanceProperties("ao.usage.ui_performance", {
-			measurement_schema_version: 2,
+			measurement_schema_version: 1,
 			flush_reason: "quit",
 			slowest_area: "button.send",
 			long_frame_top_cause: "renderSidebar",
@@ -72,6 +72,7 @@ describe("sanitizePerformanceProperties", () => {
 	it("is what the renderer client applies to both events", async () => {
 		expect(await sanitizeRendererProperties("ao.launches.timed", { launch_kind: "warm", to_usable_ms: 420, extra: 1 })).toEqual({ launch_kind: "warm", to_usable_ms: 420 });
 		expect(await sanitizeRendererProperties("ao.usage.ui_performance", { long_frame_top_cause: "user-callback", element_text: "Send" })).toEqual({ long_frame_top_cause: "user-callback" });
+		expect(await sanitizeRendererProperties("ao.usage.ui_performance", { long_frame_top_cause: "rendering" })).toEqual({ long_frame_top_cause: "rendering" });
 		// ao.app.loaded is sent at init with no properties, as before.
 		expect(await sanitizeRendererProperties("ao.app.loaded", { launch_kind: "warm", to_usable_ms: 420 })).toEqual({});
 	});

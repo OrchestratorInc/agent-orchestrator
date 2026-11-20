@@ -7,7 +7,7 @@ import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
-import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
+import { drawnComposerPlaceholder, placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityRevealScrollDelta, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, currentScrollMarker, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
 import { onComposerSent } from "../../lib/guided-tour-signals";
@@ -24,6 +24,7 @@ import {
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
 import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
@@ -1011,6 +1012,87 @@ describe("ChatWorkspace timeline", () => {
 		const durableNode = screen.getAllByText("Swapped without a remount");
 		expect(durableNode).toHaveLength(1);
 		expect(durableNode[0]).toBe(echoNode);
+	});
+
+	describe("queue hint while a sent message waits for its turn", () => {
+		const QUEUED = "Next message you send will be queued";
+		const composerField = () => screen.getByRole("combobox", { name: "Message the agent" });
+
+		function withSentTurn(snapshot: ConversationSnapshot, state: "queued" | "running" | "completed", clientMessageId: string, turnId: string): ConversationSnapshot {
+			const next = structuredClone(snapshot);
+			const sequence = next.latestSequence + 1;
+			next.latestSequence = sequence;
+			next.turns.push({ id: turnId, state, requestedAt: "2026-09-09T00:00:00Z", ...(state === "queued" ? {} : { startedAt: "2026-09-09T00:00:01Z" }), ...(state === "completed" ? { completedAt: "2026-09-09T00:00:02Z" } : {}) });
+			next.items.push({
+				kind: "message", id: `durable-${clientMessageId}`, turnId, sequence, revision: 0,
+				role: "user", origin: "human", text: "Ship it", clientMessageId, streaming: false,
+				createdAt: "2026-09-09T00:00:00Z",
+			});
+			return next;
+		}
+
+		it("keeps the queue hint through the echo, the durable row and the echo's removal, then follows the turn", () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-echo-handoff" };
+			const before = { id: "before", text: "Explain the fix." };
+			const echo = { clientMessageId: "handoff-send", text: "Ship it", createdAt: "2026-09-09T00:00:00Z" };
+			const accepted = { ...echo, turnId: "turn-handoff" };
+			const view = render(<ChatWorkspace snapshot={settled} promptSuggestion={before} />);
+			const field = composerField();
+			expect(drawnComposerPlaceholder(field)).toBe("suggestion: Explain the fix.");
+
+			const drawn: (string | null)[] = [];
+			const frame = (snapshot: ConversationSnapshot, localEchos?: ConversationLocalEcho[]) => {
+				// The suggestion is still handed down: the composer must not draw it.
+				view.rerender(<ChatWorkspace snapshot={snapshot} promptSuggestion={before} localEchos={localEchos} />);
+				drawn.push(drawnComposerPlaceholder(field));
+				expect(field).toHaveAttribute("aria-placeholder", QUEUED);
+			};
+			// Sending, then accepted with the snapshot a read behind.
+			frame(settled, [echo]);
+			frame(settled, [accepted]);
+			// The durable row lands with its queued turn (one daemon transaction), echo not yet acknowledged.
+			frame(withSentTurn(settled, "queued", echo.clientMessageId, accepted.turnId), [accepted]);
+			// The echo is acknowledged and removed.
+			frame(withSentTurn(settled, "queued", echo.clientMessageId, accepted.turnId));
+			frame(withSentTurn(settled, "running", echo.clientMessageId, accepted.turnId));
+			expect(drawn).toEqual([QUEUED, QUEUED, QUEUED, QUEUED, QUEUED]);
+
+			// The turn finished: idle, offering the suggestion for this turn.
+			view.rerender(<ChatWorkspace snapshot={withSentTurn(settled, "completed", echo.clientMessageId, accepted.turnId)} promptSuggestion={{ id: "after", text: "Open a PR" }} />);
+			expect(drawnComposerPlaceholder(field)).toBe("suggestion: Open a PR");
+		});
+
+		it("is idle at once when the accepted turn already finished before the snapshot showed it running", async () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-fast-finish" };
+			const accepted = { clientMessageId: "fast-send", text: "Ship it", createdAt: "2026-09-09T00:00:00Z", turnId: "turn-fast" };
+			const view = render(<ChatWorkspace snapshot={settled} localEchos={[accepted]} />);
+			expect(composerField()).toHaveAttribute("aria-placeholder", QUEUED);
+			// The echo is still held (its acknowledgement runs after this render).
+			view.rerender(<ChatWorkspace snapshot={withSentTurn(settled, "completed", accepted.clientMessageId, accepted.turnId)} localEchos={[accepted]} />);
+			expect(composerField()).toHaveAttribute("aria-placeholder", "Message the agent");
+			// The hint fades from the queue words to the idle ones, as at any turn's end.
+			await waitFor(() => expect(drawnComposerPlaceholder(composerField())).toBe("Message the agent"));
+		});
+
+		it("does not treat a failed, uncertain or opening echo as a send waiting for its turn", () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-not-waiting" };
+			const echo = { clientMessageId: "kept-echo", text: "Ship it", createdAt: "2026-09-09T00:00:00Z" };
+			const view = render(<ChatWorkspace snapshot={settled} localEchos={[{ ...echo, delivery: "failed" as const }]} />);
+			expect(drawnComposerPlaceholder(composerField())).toBe("Message the agent");
+			view.rerender(<ChatWorkspace snapshot={settled} localEchos={[{ ...echo, delivery: "uncertain" as const }]} />);
+			expect(drawnComposerPlaceholder(composerField())).toBe("Message the agent");
+			view.rerender(<ChatWorkspace snapshot={settled} localEchos={[{ ...echo, opening: true }]} />);
+			expect(composerField()).toHaveAttribute("aria-placeholder", "Message the agent");
+		});
+
+		it("holds the queue hint while a surface without echoes reports an accepted send it has not read back", () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-cloud-ack" };
+			const before = { id: "before", text: "Explain the fix." };
+			const view = render(<ChatWorkspace snapshot={settled} promptSuggestion={before} sendAwaitingTurn />);
+			expect(drawnComposerPlaceholder(composerField())).toBe(QUEUED);
+			view.rerender(<ChatWorkspace snapshot={settled} promptSuggestion={before} />);
+			expect(drawnComposerPlaceholder(composerField())).toBe("suggestion: Explain the fix.");
+		});
 	});
 
 	it("shows a send made behind a running turn in the queue dock, not as a chat bubble", () => {

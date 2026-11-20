@@ -156,20 +156,29 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 		if (terminal) closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
 		readyRef.current();
 	}, [signedIn, terminal, closeTerminal, terminalQuery.clear]);
+	// The onboarding attempt this panel's own Sign in started, if any. Its
+	// login failing ends only that one: an attempt started elsewhere (the
+	// Tools page's login, before Skip setup) is not this panel's to end.
+	const ownAttempt = useRef<number | undefined>(undefined);
 	useEffect(() => {
-		if (startLogin.isError) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
+		if (startLogin.isError && ownAttempt.current !== undefined) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed", attempt: ownAttempt.current });
 	}, [startLogin.isError]);
 	// The login process ending usually means it finished; confirm with a fresh check.
 	useEffect(() => {
 		if (terminalState !== "exited" && terminalState !== "error") return;
 		// The attempt this login belonged to, so a retry started before the check answers is left alone.
-		const attempt = onboardingActionAttempt("gh_sign_in", "gh");
+		const attempt = ownAttempt.current;
 		void authRefetch.current().then((result) => {
 			if (attempt !== undefined && result.data && !result.data.satisfied) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in", attempt });
 		});
 	}, [terminalState]);
 	const signIn = () => {
-		if (onboardingInProgress()) startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		if (onboardingInProgress()) {
+			startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+			ownAttempt.current = onboardingActionAttempt("gh_sign_in", "gh");
+		} else {
+			ownAttempt.current = undefined;
+		}
 		startLogin.mutate();
 	};
 

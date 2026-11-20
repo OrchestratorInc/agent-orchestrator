@@ -89,6 +89,8 @@ import {
 	writeUiSettings,
 	type UiSettings,
 } from "./main/ui-settings";
+import { findArtifactIssues, publishIssueArtifact } from "./main/github-issue-artifact";
+import type { GitHubIssueArtifact } from "./shared/github-issue-artifact";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -186,7 +188,9 @@ import {
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
 	protectedStorageAvailable,
+	isSavedSignInHidden,
 	readAuthStore,
+	recheckSavedSignIn,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
@@ -3663,7 +3667,8 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 	const cloudUserId = stored?.session?.authProvider === "workos" ? stored.session.user.id : null;
 	// No stored sign-in but a binding left behind: a sign-out the daemon never
 	// heard (it was down, then the app quit). Retire it before anything exports.
-	if (stored && !stored.session) await telemetryIdentity.retireSignedOutBinding();
+	// A sign-in hidden by a secure storage outage is not a sign-out.
+	if (stored && !stored.session && !isSavedSignInHidden(cloudDataDir())) await telemetryIdentity.retireSignedOutBinding();
 	if (cloudUserId && cloudUserId === await boundCloudUserId(desktopDataDir)) bootstrap.cloudUserId = cloudUserId;
 	return bootstrap;
 });
@@ -3927,6 +3932,14 @@ async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 	}
 }
 
+ipcMain.handle("app:findArtifactIssues", async (_event, repo: string, query: string) => {
+	await ensureShellEnv();
+	return findArtifactIssues(repo, query, daemonEnv());
+});
+ipcMain.handle("app:publishIssueArtifact", async (_event, input: GitHubIssueArtifact) => {
+	await ensureShellEnv();
+	return publishIssueArtifact(input, daemonEnv());
+});
 ipcMain.handle("app:listGitHubRepos", (_event, query: unknown) => listGitHubRepos(typeof query === "string" ? query : ""));
 ipcMain.handle("app:getCachedGitHubOwners", () => cachedGitHubOwners);
 ipcMain.handle("app:refreshGitHubOwners", () => refreshGitHubOwners());
@@ -4378,7 +4391,11 @@ ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 // The account this run last told the renderer about, to notice another one signing in.
 let notifiedCloudUserId: string | undefined;
 
+// Whether anything has bound the Cloud artifact previews to an account yet this run.
+let artifactSnapshotsBound = false;
+
 function bindArtifactSnapshotsToCloudAccount(userId: string | null): void {
+	artifactSnapshotsBound = true;
 	artifactSnapshotStore.bindCloudAccount(userId).catch((error) => {
 		// The old files stay on record as another account's, so the next sign-in, or the next launch, tries again.
 		console.warn("AO: could not delete the cached Cloud artifact previews", error);
@@ -4739,6 +4756,10 @@ app.whenReady().then(async () => {
 	});
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
+	// Nothing says when secure storage comes back (a keychain unlocked, say), so
+	// a Cloud sign-in waiting on it is checked again when the person returns.
+	powerMonitor.on("unlock-screen", () => recheckSavedSignIn(cloudDataDir()));
+	app.on("browser-window-focus", () => recheckSavedSignIn(cloudDataDir()));
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
@@ -4861,10 +4882,25 @@ app.whenReady().then(async () => {
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.
-	void getCloudSessionCached(cloudDataDir()).then(
-		(account) => bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null),
-		() => bindArtifactSnapshotsToCloudAccount(null),
-	);
+	// A sign-in hidden by a secure storage outage is not a lost one: leave the previews, and let the
+	// session notice that shows it again bind them. Nor is a login file that could not be read: that read
+	// is tried again, backing off, until one answers or something else (a session notice, a sign-in) binds
+	// them first. Until then the previews stay on disk, unbound, and cards render live.
+	const bindArtifactSnapshotsAtStartup = (attempt: number): void => {
+		void getCloudSessionCached(cloudDataDir()).then(
+			(account) => {
+				if (artifactSnapshotsBound) return;
+				if (account || !isSavedSignInHidden(cloudDataDir())) bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
+			},
+			() => {
+				if (artifactSnapshotsBound) return;
+				setTimeout(() => {
+					if (!artifactSnapshotsBound) bindArtifactSnapshotsAtStartup(attempt + 1);
+				}, Math.min(1_000 * 2 ** attempt, 30_000)).unref();
+			},
+		);
+	};
+	bindArtifactSnapshotsAtStartup(0);
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))

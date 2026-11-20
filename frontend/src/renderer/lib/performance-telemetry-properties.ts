@@ -11,8 +11,12 @@ export const PERFORMANCE_EVENTS: ReadonlySet<string> = new Set(["ao.launches.tim
 
 export const LAUNCH_KINDS = ["cold", "warm", "update"] as const;
 export const FLUSH_REASONS = ["interval", "startup"] as const;
-/** Long Animation Frame script invoker types, plus "other" for a frame with no script attributed. */
+/**
+ * Long Animation Frame script invoker types, "rendering" for style, layout and
+ * paint, and "other" for a frame with neither attributed.
+ */
 export const LONG_FRAME_CAUSES = [
+	"rendering",
 	"event-listener",
 	"user-callback",
 	"resolve-promise",
@@ -74,7 +78,7 @@ export function sanitizePerformanceProperties(event: string, properties?: Proper
 			candidates.to_usable_ms = wholeNumber(properties?.to_usable_ms, MAX_LAUNCH_MS);
 		}
 	} else if (event === "ao.usage.ui_performance") {
-		candidates.measurement_schema_version = properties?.measurement_schema_version === 1 ? 1 : undefined;
+		candidates.measurement_schema_version = properties?.measurement_schema_version === 2 ? 2 : undefined;
 		candidates.flush_reason = oneOf(properties?.flush_reason, FLUSH_REASONS);
 		for (const key of PERFORMANCE_SUMMARY_COUNTS) candidates[key] = wholeNumber(properties?.[key]);
 		candidates.long_frame_top_cause = oneOf(properties?.long_frame_top_cause, LONG_FRAME_CAUSES);

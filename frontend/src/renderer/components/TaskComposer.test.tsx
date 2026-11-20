@@ -2327,6 +2327,95 @@ describe("TaskComposer", () => {
 		expect(await screen.findByTitle("Provider temporarily unavailable")).toBeInTheDocument();
 	});
 
+	it("submits a directly entered Mastra Code model", async () => {
+		const agent = "mastra-code";
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: {
+				agentId: agent,
+				selectionMode: "text",
+				models: [],
+				allowCustom: true,
+				customModelEntry: "direct",
+			} };
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "custom-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		const search = await screen.findByRole("searchbox", { name: "Search model" });
+		await userEvent.type(search, "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		fireEvent.change(task(), { target: { value: "Use the selected native model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
+			"/api/v1/sessions",
+			expect.objectContaining({ body: expect.objectContaining({ harness: agent, model: "private/model-id" }) }),
+		));
+	});
+
+	it("returns a directly entered Mastra Code model to the native default", async () => {
+		const agent = "mastra-code";
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
+			: { data: { status: "ok", project: { config: {} } } });
+		h.post.mockResolvedValueOnce({ data: { session: { id: "default-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		await userEvent.type(await screen.findByRole("searchbox", { name: "Search model" }), "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Use project or agent default" }));
+		expect(picker).not.toHaveTextContent("private/model-id");
+		fireEvent.change(task(), { target: { value: "Use the native default model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.anything()));
+		expect(h.post.mock.calls.at(-1)?.[1]?.body?.model ?? "").toBe("");
+	});
+
+	// Other direct-entry harnesses keep the local catalog-only picker.
+	it.each([
+		["codex", "Codex"],
+		["claude-code", "Claude Code"],
+	] as const)("keeps local %s on its catalog when direct entry is advertised", async (agent, label) => {
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
+			: { data: { status: "ok", project: { config: {} } } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		// An empty catalog may offer no search at all; where search is offered,
+		// a typed model ID must still not become a custom choice.
+		const search = screen.queryByRole("searchbox", { name: "Search model" });
+		if (search) await userEvent.type(search, "private/model-id");
+		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
+	});
+
+	it("refuses direct model entry when the catalog explicitly disables it", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "codex", selectionMode: "catalog", models: [], allowCustom: true, customModelEntry: "none" } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
+	});
+
 	it("does not render free text when models must be configured in the agent", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
@@ -4179,7 +4268,7 @@ describe("TaskComposer local saved choices", () => {
 describe("useTaskLaunch agent choices", () => {
 	function Choices() {
 		const task = useTaskLaunch({ projectId: "proj-1" });
-		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.id}</li>)}</ul>;
+		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.unavailable ? `${agent.id}: ${agent.unavailable}` : agent.id}</li>)}</ul>;
 	}
 
 	it("offers locally only agents that can start, never an \"Auth unknown\" one", async () => {
@@ -4188,12 +4277,24 @@ describe("useTaskLaunch agent choices", () => {
 			agentReadiness("claude-code", "Claude Code"),
 			agentReadiness("amp", "Amp", { authentication: "unknown" }),
 			agentReadiness("fx", "fx", { authentication: "configured" }),
-			agentReadiness("goose", "Goose", { authentication: "unauthorized" }),
 			agentReadiness("crush", "Crush", { installation: "unknown" }),
 			agentReadiness("aider", "Aider", { installation: "not_installed" }),
 		] };
 		render(<Wrap><Choices /></Wrap>);
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort()).toEqual(["claude-code", "fx"]));
+	});
+
+	it("offers a chat agent that is not installed, and any agent not signed in, dimmed for setup", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("codex", "Codex", { installation: "not_installed" }),
+			agentReadiness("goose", "Goose", { authentication: "unauthorized" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["claude-code", "codex: Not installed", "goose: Not signed in"]));
 	});
 });
 
