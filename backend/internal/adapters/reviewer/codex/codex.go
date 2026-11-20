@@ -41,6 +41,10 @@ var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 var _ ports.ReviewerChatProfile = (*Reviewer)(nil)
 
+// ReviewActivityHooks reports that Codex's launch-scoped managed hooks report
+// reviewer turns as active and idle.
+func (r *Reviewer) ReviewActivityHooks() bool { return true }
+
 // ReviewChatHarness selects Codex's typed app-server driver for review runs.
 func (r *Reviewer) ReviewChatHarness() domain.AgentHarness { return domain.HarnessCodex }
 

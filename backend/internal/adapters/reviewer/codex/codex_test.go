@@ -76,6 +76,12 @@ func TestReviewCommandUsesReadOnlySandbox(t *testing.T) {
 	}
 }
 
+func TestReviewerReportsActivityHooks(t *testing.T) {
+	if !New().ReviewActivityHooks() {
+		t.Fatal("Codex reviewer must advertise its launch-scoped active/idle hooks")
+	}
+}
+
 func TestReviewCommandEmitsConfiguredCodexEffort(t *testing.T) {
 	binDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\n"), 0o700); err != nil {
