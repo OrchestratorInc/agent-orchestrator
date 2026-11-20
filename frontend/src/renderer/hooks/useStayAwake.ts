@@ -8,7 +8,10 @@ import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./use
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
 // idleFallback: the sidebar asked for wake, not specifically closed-lid wake,
 // so a lid setup failure must still leave idle wake on.
-type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean; idleFallback?: boolean };
+// rememberIfNoBattery: the sidebar asked; save the choice for boot when the
+// daemon reports no battery, read when the request runs so a click before
+// mobile status loads is still remembered.
+type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean; idleFallback?: boolean; rememberIfNoBattery?: boolean };
 const mutationKey = ["stay-awake-toggle"] as const;
 
 /** The desktop and mobile controls share intent, pending state, and ownership. */
@@ -152,7 +155,12 @@ export function useStayAwake(enabled = true) {
 				await confirmLid();
 			} else {
 				await ensureDesktop();
-				if (change.rememberMobile) await updateMobile(true, false);
+				const noBattery = async () => {
+					const status = cache.getQueryData<MobileStatus>(mobileStatusQueryKey)
+						?? await cache.fetchQuery<MobileStatus>({ queryKey: mobileStatusQueryKey }).catch(() => undefined);
+					return status?.keepAwake?.hasBattery === false;
+				};
+				if (change.rememberMobile || (change.rememberIfNoBattery && await noBattery())) await updateMobile(true, false);
 			}
 		},
 	});
@@ -178,8 +186,7 @@ export function useStayAwake(enabled = true) {
 			// Elsewhere the desktop request ends at every daemon restart. A Mac
 			// without a battery needs none of its battery safety stops, so also
 			// save the choice where boot restores it.
-			const remember = on && mobileState?.keepAwake?.hasBattery === false;
-			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true, idleFallback: true } : { on, rememberMobile: remember });
+			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true, idleFallback: true } : { on, rememberIfNoBattery: on });
 		},
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),

@@ -648,6 +648,20 @@ describe("shared Stay Awake controls", () => {
 		expect(mobile.keepAwake.enabled).toBe(false);
 		expect(test.post).not.toHaveBeenCalledWith("/api/v1/mobile/keep-awake", expect.anything());
 	});
+	it("remembers sidebar wake on a Mac without a battery when clicked before mobile status loads", async () => {
+		mobile.keepAwake.hasBattery = false;
+		const get = test.get.getMockImplementation()!;
+		let mobileReads = 0;
+		test.get.mockImplementation(async (path, options) => path !== "/api/v1/awake" && mobileReads++ === 0
+			? new Promise(() => {})
+			: get(path, options));
+		render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
+		await waitFor(() => expect(coffee()).toBeEnabled());
+		expect(client.getQueryData(mobileStatusQueryKey)).toBeUndefined();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: false } }));
+		expect(state.active).toBe(true);
+	});
 	it("keeps sidebar wake on across a daemon restart on a Mac without a battery or closed-lid wake", async () => {
 		mobile.keepAwake.hasBattery = false;
 		const view = render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
