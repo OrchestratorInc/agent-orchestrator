@@ -221,7 +221,7 @@ export function InspectorSection({
 	const reduceMotion = useReducedMotion();
 	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
-		<section className="group/inspector-section flex flex-col" data-testid="inspector-section">
+		<section className="flex flex-col" data-testid="inspector-section">
 			<div className="px-1.5 py-0.5">
 				<button
 					aria-controls={contentId}
@@ -246,7 +246,13 @@ export function InspectorSection({
 						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
-						<div className="min-w-0 px-3 pt-0.5 pb-3.5 group-last/inspector-section:pb-0" id={contentId}>
+						{/*
+						 * The last section drops its bottom padding. Match the section as this div's
+						 * grandparent, not as any ancestor (`group-last/...`): an any-ancestor
+						 * `:last-child` makes Chromium restyle the whole document whenever a node is
+						 * added to <body>, which every tooltip and hover card does.
+						 */}
+						<div className="min-w-0 px-3 pt-0.5 pb-3.5 [:last-child>*>&]:pb-0" id={contentId}>
 							{surface ? <div className="overflow-hidden bg-settings-row py-1">{children}</div> : children}
 						</div>
 					</motion.div>
@@ -345,6 +351,7 @@ export function InspectorPullRequestCardView({
 	externalIcon,
 	externalLink: ExternalLink,
 	headerless = false,
+	hideDiffCounts = false,
 	mergeAction,
 	mergeError,
 	openLabel,
@@ -371,6 +378,8 @@ export function InspectorPullRequestCardView({
 	 * header row, as the inspector's PR card does with its own state row.
 	 */
 	headerless?: boolean;
+	/** Leave +/− off the branch line: a row under the card states the same numbers. */
+	hideDiffCounts?: boolean;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
@@ -423,6 +432,7 @@ export function InspectorPullRequestCardView({
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				hideDiffCounts={hideDiffCounts}
 				inline={compact}
 				openedViaLabel={openedViaLabel}
 				pr={pr}

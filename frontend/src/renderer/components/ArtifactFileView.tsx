@@ -42,6 +42,7 @@ export function ArtifactFileView({
 	path,
 	rawUrl,
 	readOnly = false,
+	noFeedback = false,
 	cloud = false,
 	artifactRoot,
 	onAccessRefused,
@@ -61,6 +62,8 @@ export function ArtifactFileView({
 	rawUrl?: string;
 	/** Hides the edit action, as for a cloud session's artifacts. */
 	readOnly?: boolean;
+	/** Offers no feedback to the worker, as for an archived session's files. */
+	noFeedback?: boolean;
 	/** Told whenever the file enters or leaves edit mode. */
 	onEditingChange?: (editing: boolean) => void;
 	/** Fetches rawUrl through the cloud control-plane bridge. */
@@ -81,8 +84,8 @@ export function ArtifactFileView({
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName, sendMessage });
 	const source = useMemo(
-		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save }),
-		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save],
+		() => ({ kind: "artifact" as const, rawUrl, readOnly, noFeedback, cloud, artifactRoot, onAccessRefused, save }),
+		[rawUrl, readOnly, noFeedback, cloud, artifactRoot, onAccessRefused, save],
 	);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// The Send bar sits under the scrolling content, so the zoom never scales or moves it.
@@ -129,7 +132,7 @@ export function ArtifactFileView({
 
 	useEffect(() => {
 		if (feedbackRequestKey === undefined) return;
-		annotation.begin({ path, side: "file", surface: "focused" });
+		if (!noFeedback) annotation.begin({ path, side: "file", surface: "focused" });
 		onFeedbackRequestConsumed?.(feedbackRequestKey);
 		// This effect is intentionally keyed to the external one-shot request,
 		// not the annotation model object, which changes when the composer opens.
@@ -145,7 +148,7 @@ export function ArtifactFileView({
 				</div>
 			</div>
 			<div className="shrink-0" ref={setFooterHost} />
-			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
+			{noFeedback ? null : <ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />}
 		</div>
 	);
 }

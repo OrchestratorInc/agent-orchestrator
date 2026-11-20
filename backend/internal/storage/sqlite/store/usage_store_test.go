@@ -160,6 +160,43 @@ func TestSourceLessPiBindingRemainsDiscoverable(t *testing.T) {
 	}
 }
 
+// TestSettledBindingWithMissingSourceStopsDiscovery catches discovery staying
+// pending for a binding that ListUsageDiscoveryBindings never revisits, which
+// kept the coordinator retrying for as long as the session lived.
+func TestSettledBindingWithMissingSourceStopsDiscovery(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessCodex)
+	now := time.Unix(1700000000, 0).UTC()
+	source := seedUsageSource(t, s, sess, now)
+	if _, err := s.MarkUsageSourceState(
+		ctx, source.ID, domain.UsageSourceError, domain.UsageErrorArtifactMissing, nil, now,
+	); err != nil {
+		t.Fatalf("mark source missing: %v", err)
+	}
+
+	pending, err := s.HasPendingUsageDiscovery(ctx)
+	mustNoError(t, err)
+	if !pending {
+		t.Fatal("active binding with a missing rollout did not request discovery")
+	}
+
+	for _, state := range []domain.UsageBindingState{domain.UsageBindingPartial, domain.UsageBindingComplete} {
+		if _, err := s.UpdateUsageBindingState(
+			ctx, source.BindingID, state, domain.UsageErrorArtifactMissing, now.Add(time.Hour),
+		); err != nil {
+			t.Fatalf("settle binding as %s: %v", state, err)
+		}
+		pending, err = s.HasPendingUsageDiscovery(ctx)
+		mustNoError(t, err)
+		discovery, err := s.ListUsageDiscoveryBindings(ctx, 0, 8)
+		mustNoError(t, err)
+		if pending || len(discovery) != 0 {
+			t.Fatalf("%s binding: pending=%v discovery=%+v, want neither", state, pending, discovery)
+		}
+	}
+}
+
 func TestListLatestRetiredCodexReplacementClaimsByPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -58,7 +58,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	if !in.retry && len(in.cfg.Attachments) > 0 {
 		stageStarted := time.Now()
 		for i, attachment := range in.cfg.Attachments {
-			if err := m.attachments.PutCanonical(ctx, id, spawnAttachmentName(i, attachment), attachment.Data); err != nil {
+			if err := m.attachments.PutCanonicalSource(ctx, id, spawnAttachmentName(i, attachment), attachmentSource(attachment)); err != nil {
 				rollback()
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAttachments, err)
 			}
