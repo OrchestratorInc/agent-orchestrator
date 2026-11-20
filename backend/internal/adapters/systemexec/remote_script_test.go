@@ -469,6 +469,35 @@ func TestInstallerDownloadBackoff(t *testing.T) {
 	})
 }
 
+func TestRunInstallScriptPrefixesEveryRunnerLine(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, "exit 0") // a quiet installer
+	}))
+	t.Cleanup(server.Close)
+	// Agent installs pass one progress writer as both stdout and stderr.
+	var shared bytes.Buffer
+	if _, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
+		URL: server.URL, Interpreter: []string{"sh"},
+	}, &shared, &shared); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(shared.String(), "download attempt 1/3") {
+		t.Fatalf("output = %q, want the failed attempt kept as a diagnostic", shared.String())
+	}
+	for line := range strings.Lines(shared.String()) {
+		if !strings.HasPrefix(line, "[installer] ") {
+			t.Fatalf("runner line %q lacks the [installer] prefix; output = %q", line, shared.String())
+		}
+	}
+}
+
 type downloadReports struct {
 	io.Writer
 	reports []ports.InstallScriptDownload

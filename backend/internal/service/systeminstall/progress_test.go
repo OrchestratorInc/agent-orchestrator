@@ -132,6 +132,22 @@ func TestProgressTrackerLetsVendorOutputDriveThePhaseAfterBootstrapLines(t *test
 	}
 }
 
+func TestProgressTrackerKeepsARecoveredDownloadFailureOutOfTheDetail(t *testing.T) {
+	// Agent installs pass the tracker as both stdout and stderr.
+	tracker := newProgressTracker(io.Discard)
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 1, MaxAttempts: 3})
+	_, _ = tracker.Write([]byte("[installer] Downloading installer (attempt 1/3).\n"))
+	_, _ = tracker.Write([]byte("[installer] download attempt 1/3 elapsed=10s source=https://example.invalid/install.sh: TLS handshake timeout\n"))
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: time.Second})
+	_, _ = tracker.Write([]byte("[installer] Retrying download in 1s (attempt 2/3).\n"))
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{})
+	_, _ = tracker.Write([]byte("[installer] Installing harness.\n"))
+	// A quiet installer prints nothing, so no stale failure may remain.
+	if got := tracker.Snapshot(); got != nil {
+		t.Fatalf("quiet installer after a recovered download = %+v, want no progress", got)
+	}
+}
+
 func TestProgressTrackerReportsScriptDownloadAsData(t *testing.T) {
 	tracker := newProgressTracker(io.Discard)
 	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 1, MaxAttempts: 3})

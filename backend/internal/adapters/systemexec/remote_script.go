@@ -180,7 +180,9 @@ func (a Adapter) downloadInstallScript(ctx context.Context, source string, stdou
 			reportDownload(stdout, ports.InstallScriptDownload{})
 			return body, nil
 		}
-		_, _ = fmt.Fprintf(stderr, "download attempt %d/%d elapsed=%s source=%s: %v\n", attempt, remoteScriptDownloadAttempts, time.Since(started).Round(time.Millisecond), source, err)
+		// Prefixed like every runner line, so a caller sharing one writer for both
+		// streams keeps it as a diagnostic rather than vendor progress.
+		_, _ = fmt.Fprintf(stderr, "[installer] download attempt %d/%d elapsed=%s source=%s: %v\n", attempt, remoteScriptDownloadAttempts, time.Since(started).Round(time.Millisecond), source, err)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
