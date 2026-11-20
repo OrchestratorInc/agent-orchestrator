@@ -2,8 +2,9 @@
  * Subagents, read back out of the activities their parent recorded.
  *
  * Claude records a subagent launch as one tool call (the `Agent` tool, `Task` before
- * it was renamed) and stamps every step the child takes with that call's id. ACP files
- * the launch as reasoning, which the timeline drops, so the child's commands used to
+ * it was renamed) and stamps every step the child takes with that call's id. Codex
+ * launches with `spawnAgent`, and its driver stamps the child's thread the same way.
+ * ACP files the launch as reasoning, which the timeline drops, so the child's commands used to
  * surface as loose tool calls in the parent's turn: interleaved with everything else
  * the parent did, with nothing saying which agent ran them or whether it finished.
  *
@@ -14,8 +15,11 @@
 
 import { fileChangeFiles, type ConversationActivity, type ConversationItem } from "../../types/conversation";
 
-/** Tool names a provider uses for "start a subagent". `Task` is Claude's older name. */
-const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
+/**
+ * Tool names a provider uses for "start a subagent". `Task` is Claude's older name;
+ * `spawnAgent` is Codex's.
+ */
+const LAUNCH_TOOLS = new Set(["Agent", "Task", "spawnAgent"]);
 
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";
@@ -148,7 +152,9 @@ export function readSubagent(
 	);
 	const steps = allSteps.filter((step) => step !== handback);
 	const result = launchResultText(launch);
-	const background = ASYNC_RESULT.test(result);
+	// A background launch settles as soon as the child starts. Codex's driver says so
+	// in the detail; Claude says it in the result note.
+	const background = launch.detail?.background === true || ASYNC_RESULT.test(result);
 	const startedAt = timeOf(launch.createdAt);
 	const lastStepAt = steps.reduce((latest, step) => Math.max(latest, timeOf(step.createdAt)), startedAt);
 	const base = {
@@ -164,6 +170,10 @@ export function readSubagent(
 		return { ...base, state: "failed", error: firstParagraph(result), endedAt: lastStepAt };
 	}
 	if (launch.status === "cancelled") return { ...base, state: "stopped", endedAt: lastStepAt };
+	if (handback?.status === "failed") {
+		return { ...base, state: "failed", error: stringOf(launchInput(handback).message), endedAt: timeOf(handback.createdAt) };
+	}
+	if (handback?.status === "cancelled") return { ...base, state: "stopped", endedAt: timeOf(handback.createdAt) };
 	if (handback && handback.status === "completed") {
 		return {
 			...base,

@@ -41,6 +41,10 @@ const (
 	itemFileChange       = codexproto.ThreadItemTypeFileChange
 	itemMcpToolCall      = codexproto.ThreadItemTypeMcpToolCall
 	itemWebSearch        = codexproto.ThreadItemTypeWebSearch
+	// itemCollabAgentToolCall is a call to one of Codex's multi-agent tools. Only
+	// spawnAgent becomes an activity: it is the launch a subagent's work hangs from
+	// (see subagents.go). Wait, send-input and close calls stay out of the timeline.
+	itemCollabAgentToolCall = codexproto.ThreadItemTypeCollabAgentToolCall
 	// itemContextCompaction is how a current app-server reports that it summarized
 	// earlier history to reclaim context. The schema also declares a
 	// `thread/compacted` notification for the same thing and marks it "Deprecated:
@@ -1056,6 +1060,14 @@ func normalizeItem(params json.RawMessage, completed bool) []ports.ChatEvent {
 		if it.Success != nil && !*it.Success {
 			ev.ActivityStatus = domain.ActivityStatusFailed
 		}
+		if it.Type == itemCollabAgentToolCall && it.Status != nil {
+			switch codexproto.CollabAgentToolCallStatus(*it.Status) {
+			case codexproto.CollabAgentToolCallStatusFailed:
+				ev.ActivityStatus = domain.ActivityStatusFailed
+			case "interrupted":
+				ev.ActivityStatus = domain.ActivityStatusCancelled
+			}
+		}
 	} else {
 		ev.Kind = ports.ChatEventActivityStarted
 		ev.ActivityStatus = domain.ActivityStatusRunning
@@ -1083,6 +1095,11 @@ func activityFor(it threadItem) (domain.ActivityKind, string, bool) {
 		return domain.ActivityKindCommand, "Searched the web", true
 	case itemError:
 		return domain.ActivityKindError, firstNonEmpty(it.Message, "Provider error"), true
+	case itemCollabAgentToolCall:
+		if !isSpawnAgent(it) {
+			return "", "", false
+		}
+		return domain.ActivityKindMCPTool, spawnSummary(deref(it.Prompt)), true
 	default:
 		return "", "", false
 	}
@@ -1159,6 +1176,9 @@ func truncateLabel(value string) string {
 // activityDetail is the provider-neutral payload AO persists for an activity.
 // Provider DTOs are not passed through: only named fields AO renders.
 func activityDetail(it threadItem) []byte {
+	if isSpawnAgent(it) {
+		return spawnDetail(it)
+	}
 	detail := map[string]any{}
 	if cmd := deref(it.Command); cmd != "" {
 		detail["command"] = commanddetail.UnwrapShell(cmd)

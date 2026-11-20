@@ -275,6 +275,61 @@ describe("readSubagent", () => {
 	});
 });
 
+// The shape the Codex driver records: a spawnAgent call that settles as soon as the
+// child starts, so only the hand-back the driver writes at the child's turn end says
+// it finished.
+function codexLaunch(id: string, status: ConversationActivity["status"] = "completed"): ConversationActivity {
+	return {
+		kind: "activity",
+		id,
+		providerItemId: `call-${id}`,
+		sequence: 1,
+		revision: 0,
+		activityKind: "mcp_tool",
+		status,
+		summary: "Check the build",
+		detail: {
+			providerToolName: "spawnAgent",
+			background: true,
+			input: { prompt: "Check the build\nThen report back." },
+		} as ConversationActivity["detail"],
+		createdAt: at(0),
+	};
+}
+
+describe("Codex subagents", () => {
+	it("recognizes a spawnAgent call as a launch", () => {
+		expect(isSubagentLaunch(codexLaunch("c"))).toBe(true);
+	});
+
+	it("reads the task line as the title and the whole task as the prompt", () => {
+		expect(readSubagent(codexLaunch("c"), [], true)).toMatchObject({
+			title: "Check the build",
+			prompt: "Check the build\nThen report back.",
+		});
+	});
+
+	it("keeps a child working after its launch settled, and never calls it done without a report", () => {
+		expect(readSubagent(codexLaunch("c"), [], true).state).toBe("working");
+		const settled = readSubagent(codexLaunch("c"), [], false);
+		expect(settled.state).toBe("unknown");
+		expect(settled.report).toBeUndefined();
+	});
+
+	it("is done with the child's last message once it hands back", () => {
+		const agent = readSubagent(codexLaunch("c"), [step("c1", "call-c"), handback("h", "call-c", "Build passes.")], false);
+		expect(agent).toMatchObject({ state: "done", report: "Build passes." });
+		expect(agent.steps.map((item) => item.id)).toEqual(["c1"]);
+	});
+
+	it("reports a child whose turn failed or was stopped", () => {
+		const failed = { ...handback("h", "call-c", "context window exceeded"), status: "failed" as const };
+		expect(readSubagent(codexLaunch("c"), [failed], true)).toMatchObject({ state: "failed", error: "context window exceeded" });
+		const stopped = { ...handback("h", "call-c", ""), status: "cancelled" as const };
+		expect(readSubagent(codexLaunch("c"), [stopped], true).state).toBe("stopped");
+	});
+});
+
 describe("stepSections", () => {
 	const said = (id: string, text: string) =>
 		step(id, "tool-a", { activityKind: "mcp_tool", summary: "Subagent response", detail: { nestedAgent: true, progress: text } });
