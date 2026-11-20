@@ -35,8 +35,8 @@ describe("launch timings", () => {
 		launch.markLaunchUsable();
 
 		const properties = await launch.launchProperties(start, "1.2.3");
-		expect(properties.launch_kind).toBe("cold");
-		expect(properties.to_usable_ms).toBeGreaterThanOrEqual(1_200);
+		expect(properties?.launch_kind).toBe("cold");
+		expect(properties?.to_usable_ms).toBeGreaterThanOrEqual(1_200);
 	});
 
 	it("sends no timings when the window is hidden after it was shown", async () => {
