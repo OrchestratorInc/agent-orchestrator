@@ -149,11 +149,12 @@ func TestKimiImportedOAuthRequiresUsableNativeLogin(t *testing.T) {
 					}
 				}
 			}
-			if mode == "logged out" {
+			switch mode {
+			case "logged out":
 				if err := os.WriteFile(filepath.Join(r.ConfigDir, "config.toml"), []byte("telemetry = false\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-			} else if mode == "config removed" {
+			case "config removed":
 				if err := os.Remove(filepath.Join(r.ConfigDir, "config.toml")); err != nil {
 					t.Fatal(err)
 				}
