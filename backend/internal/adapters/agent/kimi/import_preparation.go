@@ -28,7 +28,8 @@ type kimiImportProof struct {
 	Model     string `json:"model"`
 }
 
-// CheckImportVersion refuses unverified native contracts before any import launch.
+// CheckImportVersion refuses unverified native contracts for new preparations.
+// Existing private snapshots remain resumable after the native binary updates.
 func (p *Plugin) CheckImportVersion(ctx context.Context) error {
 	binary, err := p.kimiBinary(ctx)
 	if err != nil {
