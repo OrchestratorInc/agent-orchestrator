@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+  commentTextLines,
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
@@ -80,6 +81,18 @@ describe("SessionInspectorShellView", () => {
     const body = screen.getByTestId("side-slot").parentElement;
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
+  });
+  it("lets the Subagents panel own its scrolling, like side chat", () => {
+    const withSubagents = [...tabs, { id: "subagents" as const, icon: <svg />, label: "Subagents" }];
+    render(<SessionInspectorShellView
+      activeView="subagents" ariaLabel="Session inspector" browserPoppedOut={false}
+      subagentsView={<div data-testid="subagents-slot" />}
+      tabs={withSubagents} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("subagents-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
   });
   it("makes summary and review details selectable but leaves the browser's drag chrome alone (#4268)", () => {
     const slots = { summaryView: <div data-testid="slot" />, reviewsView: <div data-testid="slot" />, browserView: <div data-testid="slot" /> };
@@ -1024,8 +1037,11 @@ describe("portable inspector presentations", () => {
 
     setRenderedOverflow(preview, "horizontal", true);
     await waitFor(() => expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "false"));
+    const toggle = preview.closest('[role="button"]')!;
     fireEvent.click(preview);
-    expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // Opened, the comment's text is drawn as markdown under its header.
+    expect(screen.getByTestId("inline-comment-body")).toHaveTextContent("A short comment");
   });
 
   it("offers AO browser, system browser, and worker-send actions for summaries", async () => {
@@ -1121,3 +1137,30 @@ const reviewLabels: InspectorReviewLabels = {
   viewInFileWorkInProgress: "View in file is coming soon.",
   viewOnPR: "View on PR",
 };
+
+describe("commentTextLines", () => {
+  it("reads a bot comment's words without its HTML, markers or rules", () => {
+    const body = [
+      "<!-- coderabbit-ai-generated:v1 -->",
+      "",
+      "**<picture><img src=\"x.svg\" width=\"16\" alt=\"\"></picture> Minor** · **Quick win**",
+      "",
+      "---",
+      "## Fix `rrule`",
+      "- [ ] keep it",
+    ].join("\n");
+    expect(commentTextLines(body)).toEqual(["Minor · Quick win", "Fix rrule", "keep it"]);
+  });
+
+  it("keeps generics and comparisons, in code and in prose", () => {
+    expect(commentTextLines("Use `Map<string, number>` here")).toEqual(["Use Map<string, number> here"]);
+    expect(commentTextLines("Reject when `a < b && c > d`.")).toEqual(["Reject when a < b && c > d."]);
+    expect(commentTextLines("Holds when a < b > c, <b>really</b>.")).toEqual(["Holds when a < b > c, really."]);
+  });
+
+  it("previews a suggestion block as its code and drops _emphasis_ but not snake_case", () => {
+    expect(commentTextLines("```suggestion\nconst x = 1;\n```")).toEqual(["const x = 1;"]);
+    expect(commentTextLines("_⚠️ Potential issue_\n\n**Rename `snake_case_name`.**\n\n___")).toEqual(["⚠️ Potential issue", "Rename snake_case_name."]);
+    expect(commentTextLines("Keep my_var and `_private_` as written.")).toEqual(["Keep my_var and _private_ as written."]);
+  });
+});

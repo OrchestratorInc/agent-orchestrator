@@ -4,14 +4,15 @@ import { pathToFileURL } from 'node:url';
 const FRONTEND = /^(frontend\/(?!src\/docs\/|native\/)|packages\/(product-ui|shared|cloud-client)\/)/;
 
 export const LANES = {
-  go: [/^backend\//, /^pricing\//, /^go\.work(\.sum)?$/, /^contracts\/session-start-interface\.json$/, /^frontend\/scripts\/prepare-cloudflared\.mjs$/, /^frontend\/src\/api\/schema\.ts$/, /^package(-lock)?\.json$/, /^\.github\/scripts\/go-test-parallel\.sh$/],
+  go: [/^backend\//, /^go\.work(\.sum)?$/, /^contracts\/session-start-interface\.json$/, /^frontend\/scripts\/prepare-cloudflared\.mjs$/, /^frontend\/src\/api\/schema\.ts$/, /^package(-lock)?\.json$/, /^\.github\/scripts\/go-test-parallel\.sh$/],
   'cli-e2e': [/^backend\//, /^test\/cli\//],
   frontend: [FRONTEND],
   docs: [/^frontend\/src\/docs\//],
   boundary: [FRONTEND, /^backend\/internal\/httpd\//],
   cloud: [/^packages\/cloud-client\//, /^contracts\/cloud\//],
   'product-ui': [/^packages\/product-ui\//],
-  mobile: [/^packages\/(mobile|shared)\//],
+  // The app copies the desktop's harness marks; its parity test reads them and the daemon's harness list.
+  mobile: [/^packages\/(mobile|shared)\//, /^frontend\/src\/renderer\/(assets\/agents\/|components\/AgentAvatar\.tsx$)/, /^backend\/internal\/domain\/harness\.go$/],
   'mac-native': [/^frontend\/native\//, /^frontend\/scripts\/build-(mac|update|wake|dictation)/, /^frontend\/assets\/(icon\.icns$|dmg\/)/],
   config: [/^\.github\//, /^scripts\//],
 };

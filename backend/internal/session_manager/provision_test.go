@@ -600,6 +600,104 @@ func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	}
 }
 
+// TestResolveAgentConfigValidatesPiEffort covers effort resolution for the Pi
+// and Prime Agent harnesses: a level the model advertises starts, no effort
+// needs no catalog, an explicitly requested unsupported level is rejected, and an
+// inherited level that is unsupported or has no resolvable model is cleared
+// rather than failing the launch.
+func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
+	// Pi and Prime Agent advertise per-model thinking levels as efforts and
+	// consume them at launch via `--thinking`, so a level the model offers must
+	// select and start, while a level it does not offer is still rejected.
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+			{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"minimal", "low", "medium", "high", "xhigh"}},
+		}}}}
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: "high"}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+		if err != nil {
+			t.Fatalf("harness %q supported effort error = %v, want nil", harness, err)
+		}
+		if resolved.Effort != "high" {
+			t.Fatalf("harness %q effort = %q, want high", harness, resolved.Effort)
+		}
+
+		// A launch without an effort starts unchanged.
+		resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol"},
+		}, domain.ProjectConfig{})
+		if err != nil || resolved.Effort != "" {
+			t.Fatalf("harness %q no-effort launch = %#v, %v", harness, resolved, err)
+		}
+
+		// An explicitly requested level the model does not offer is still rejected.
+		_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: "max"}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("harness %q unsupported effort error = %v, want ErrUnsupportedEffort", harness, err)
+		}
+
+		// A level the request carries itself is explicit even without the override
+		// flag, so an unsupported choice is rejected rather than silently cleared.
+		_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: "max"},
+		}, domain.ProjectConfig{})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("harness %q request-supplied unsupported effort error = %v, want ErrUnsupportedEffort", harness, err)
+		}
+
+		// An inherited (not explicitly requested) level the model does not offer is
+		// cleared silently rather than failing the launch: these harnesses only
+		// began honoring effort now, so stale role/project config must not break.
+		resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol"},
+		}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "max"}}})
+		if err != nil || resolved.Effort != "" {
+			t.Fatalf("harness %q inherited unsupported effort = %#v, %v, want cleared", harness, resolved, err)
+		}
+	}
+
+	// With no model or catalog default, a terminal leaves inherited effort to
+	// the CLI's default model, as it did before catalog validation.
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+			{ID: "openai/gpt-6.1-sol", Efforts: []string{"low", "high"}},
+		}}}}
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			RequestedMode: domain.SessionModeTUI,
+		}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+		if err != nil || resolved.Effort != "high" {
+			t.Fatalf("harness %q inherited effort without a resolvable model = %#v, %v, want high", harness, resolved, err)
+		}
+	}
+}
+
+func TestResolveTUIAgentConfigResetsPiEffortOnModelChangeWithoutCatalog(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		t.Run(string(harness), func(t *testing.T) {
+			m := &Manager{}
+			project := domain.ProjectConfig{Worker: domain.RoleOverride{
+				Harness: harness, AgentConfig: domain.AgentConfig{Model: "fixture/old", Effort: "high"},
+			}}
+			resolved, err := m.resolveTUIAgentConfig(t.Context(), ports.SpawnConfig{
+				Kind: domain.KindWorker, Harness: harness,
+				AgentConfig: ports.AgentConfig{Model: "fixture/new"},
+			}, project, ports.AgentConfig{Model: "fixture/new", Effort: "high"})
+			if err != nil || resolved.Model != "fixture/new" || resolved.Effort != "" {
+				t.Fatalf("model switch = %#v, %v; want new model with effort reset", resolved, err)
+			}
+		})
+	}
+}
+
 func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "sonnet", IsDefault: true, Efforts: []string{"low", "high"}},
@@ -613,6 +711,50 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}, domain.ProjectConfig{})
 	if !errors.Is(err, ports.ErrUnsupportedEffort) {
 		t.Fatalf("error = %v, want ErrUnsupportedEffort", err)
+	}
+}
+
+// Open Interpreter applies effort natively (model_reasoning_effort) and its
+// catalog lists each model's supported levels, so effort is validated like
+// Codex instead of being cleared or refused as unsupported.
+func TestResolveOpenInterpreterEffortUsesNativeCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "gpt-6-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+	}}}}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOpenInterpreter,
+		AgentConfig: ports.AgentConfig{Model: "gpt-6-sol", Effort: "high"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if err != nil || resolved.Effort != "high" {
+		t.Fatalf("Open Interpreter config = %#v, %v; want effort high", resolved, err)
+	}
+	_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOpenInterpreter,
+		AgentConfig: ports.AgentConfig{Model: "gpt-6-sol", Effort: "max"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("unlisted effort error = %v, want ErrUnsupportedEffort", err)
+	}
+}
+
+func TestResolveGrokEffortIsAvailableOnlyInChat(t *testing.T) {
+	m := &Manager{}
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			resolved, err := m.resolveAgentConfig(t.Context(), ports.SpawnConfig{
+				Harness: domain.HarnessGrok, Kind: domain.KindWorker, RequestedMode: mode,
+				AgentConfig: ports.AgentConfig{Model: "grok-4.7", Effort: "xhigh"}, EffortOverride: true,
+			}, domain.ProjectConfig{})
+			if mode == domain.SessionModeTUI {
+				if !errors.Is(err, ports.ErrUnsupportedEffort) {
+					t.Fatalf("TUI effort error = %v, want unsupported", err)
+				}
+				return
+			}
+			if err != nil || resolved.Model != "grok-4.7" || resolved.Effort != "xhigh" {
+				t.Fatalf("Chat config = %#v, %v; want effort forwarded to ACP", resolved, err)
+			}
+		})
 	}
 }
 
@@ -631,7 +773,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, and hermes") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the
@@ -909,7 +1051,7 @@ func TestRunPostCreate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		command = `echo %PROJECT_TOKEN%^|%AO_SOURCE_TREE_PATH%^|%AO_WORKTREE_PATH%> out.txt`
 	}
-	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}); err != nil {
+	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}, nil); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
 	}
 	output, err := os.ReadFile(filepath.Join(workspace, "out.txt"))
@@ -920,7 +1062,7 @@ func TestRunPostCreate(t *testing.T) {
 		t.Fatalf("post-create environment = %q", output)
 	}
 	// A failing command surfaces an error.
-	if err := runPostCreate(context.Background(), workspace, source, []string{"exit 3"}, nil); err == nil {
+	if err := runPostCreate(context.Background(), workspace, source, []string{"exit 3"}, nil, nil); err == nil {
 		t.Fatal("expected error from failing post-create command")
 	}
 }
@@ -931,7 +1073,7 @@ func TestRunPostCreateReceivesAndRedactsProjectEnv(t *testing.T) {
 		command = `echo %PROJECT_TOKEN% && exit /b 3`
 	}
 	secret := "project-secret-123"
-	err := runPostCreate(context.Background(), t.TempDir(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret})
+	err := runPostCreate(context.Background(), t.TempDir(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret}, nil)
 	if err == nil || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("postCreate error did not redact project value: %v", err)
 	}
@@ -966,7 +1108,7 @@ func TestRunPostCreateFailureSaysWhatFailedAndWhereToFixIt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-only step")
 	}
-	err := runPostCreate(t.Context(), t.TempDir(), t.TempDir(), []string{"true", "echo could not reach registry; exit 3"}, nil)
+	err := runPostCreate(t.Context(), t.TempDir(), t.TempDir(), []string{"true", "echo could not reach registry; exit 3"}, nil, nil)
 	want := "The project's Setup script failed at step 2 (exit status 3), so the agent did not start. " +
 		"Fix the script in Project settings > Scripts, then try again. Output: could not reach registry"
 	if err == nil || err.Error() != want {
@@ -982,7 +1124,7 @@ func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
-	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil)
+	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil, nil)
 	var setupErr *SetupStepError
 	if !errors.As(err, &setupErr) || setupErr.Step != 2 || setupErr.TimedOut {
 		t.Fatalf("cancellation error = %v", err)
@@ -1052,7 +1194,7 @@ func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
 		write = "echo ran> out.txt"
 		slow = "ping -n 3 127.0.0.1 > NUL"
 	}
-	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + write}, nil); err != nil {
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + write}, nil, nil); err != nil {
 		t.Fatalf("a timed step failed: %v", err)
 	}
 	if output, err := os.ReadFile(filepath.Join(workspace, "out.txt")); err != nil || strings.TrimSpace(string(output)) != "ran" {
@@ -1060,12 +1202,12 @@ func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
 	}
 	// One "minute" is 100ms here: the step stops at its own limit.
 	started := time.Now()
-	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil)
+	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "The project's Setup script stopped at step 1 after 1 minute, so the agent did not start.") || time.Since(started) > 1500*time.Millisecond {
 		t.Fatalf("err = %v after %s, want the step stopped at its limit", err, time.Since(started))
 	}
 	// A long limit leaves the step running past the default one.
-	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + slow}, nil); err != nil {
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + slow}, nil, nil); err != nil {
 		t.Fatalf("a step under its own limit failed: %v", err)
 	}
 }

@@ -2,11 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareChatComposerDelivery, writeChatComposerText } from "../lib/chat-drafts";
-import type { ApprovalMode } from "../types/conversation";
+import { prepareChatComposerDelivery, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
+import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
+import type { ApprovalMode, ChatModel } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
+import type { PickerSource } from "./chat/AgentSwitchPicker";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
+import { useUiStore } from "../stores/ui-store";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 
@@ -22,17 +25,28 @@ const h = vi.hoisted(() => ({
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 	harness: "codex",
+	chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }] as ChatModel[],
+	model: "gpt-6",
 	approvalMode: "auto" as ApprovalMode,
 	approvalModes: undefined as ApprovalMode[] | undefined,
 	modelWarning: undefined as string | undefined,
 	modelWarningRetries: true,
-	offering: { ready: false, org: undefined as { id: string } | undefined, features: [] as string[] },
+	offering: { ready: false, loaded: false, org: undefined as { id: string } | undefined, features: [] as string[], maxAttachmentBytes: undefined as number | undefined },
 	workspaces: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => h.navigate,
 	useRouter: () => ({ preloadRoute: async () => undefined, history: { canGoBack: () => false, back: vi.fn() } }),
+}));
+// What the settings bar's agent and model picker is given; the picker is tested on its own.
+const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+vi.mock("./chat/AgentSwitchPicker", async (original) => ({
+	...await original<typeof import("./chat/AgentSwitchPicker")>(),
+	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+		modelPicker.current = current;
+		return null;
+	},
 }));
 vi.mock("./settings/MobileDevicesSection", () => ({ mobileDevicesQueryKey: ["mobile-devices"], fetchDevices: async () => [] }));
 vi.mock("./chat/ChatWorkspace", () => ({
@@ -59,8 +73,8 @@ vi.mock("./TaskComposer", () => ({
 		refreshModels: async () => undefined,
 		modelWarning: h.modelWarning,
 		modelWarningRetries: h.modelWarningRetries,
-		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
-		turnSettings: { model: "gpt-6", reasoningEffort: "high", approvalMode: h.approvalMode },
+		chatModels: h.chatModels,
+		turnSettings: { model: h.model, reasoningEffort: "high", approvalMode: h.approvalMode },
 		approvalModes: h.approvalModes,
 		chooseTurnSettings: vi.fn(),
 		agent: { value: h.harness },
@@ -101,11 +115,14 @@ beforeEach(() => {
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	h.harness = "codex";
+	h.chatModels = [{ id: "gpt-6", displayName: "GPT-6", default: true }];
+	h.model = "gpt-6";
+	modelPicker.current = undefined;
 	h.approvalMode = "auto";
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
 	h.modelWarningRetries = true;
-	h.offering = { ready: false, org: undefined, features: [] };
+	h.offering = { ready: false, loaded: false, org: undefined, features: [], maxAttachmentBytes: undefined };
 	h.workspaces = [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }];
 	window.localStorage.clear();
 });
@@ -201,7 +218,7 @@ describe("NewChatPage", () => {
 		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "cloud-sess-1" } })));
 	});
 
-	it("offers a Cloud scratchpad beside the local one where Cloud starts standalone agents", async () => {
+	it("offers Cloud sessions beside the local one where Cloud starts standalone agents", async () => {
 		const user = userEvent.setup();
 		// The project picker sits in the composer's tray.
 		const openPicker = async () => {
@@ -210,16 +227,53 @@ describe("NewChatPage", () => {
 			const tray = h.workspace?.composerTray;
 			cleanup();
 			render(<QueryClientProvider client={new QueryClient()}>{tray}</QueryClientProvider>);
-			await user.click(screen.getByRole("button", { name: "Project: Scratchpad" }));
+			await user.click(screen.getByRole("button", { name: "Project: Sessions" }));
 		};
 		await openPicker();
-		expect(await screen.findByRole("menuitem", { name: "Scratchpad" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: "Cloud scratchpad" })).toBeNull();
+		expect(await screen.findByRole("menuitem", { name: "Sessions" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Cloud sessions" })).toBeNull();
 
-		h.offering = { ready: true, org: { id: "org-1" }, features: ["share", "standalone_agents"] };
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["share", "standalone_agents"], maxAttachmentBytes: undefined };
 		await openPicker();
-		await user.click(await screen.findByRole("menuitem", { name: "Cloud scratchpad" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Cloud sessions" }));
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
+	});
+
+	// A Cloud standalone agent starts without files: its own project comes
+	// with its session, so a start the files did not reach would leave it behind.
+	it("offers files on a Cloud project's task where the control plane takes them, and not on a Cloud standalone agent", () => {
+		h.isCloudProject = true;
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
+		renderPage();
+		expect(h.workspace?.holdAttachments).toBe(true);
+		expect(h.workspace?.cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
+		cleanup();
+		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
+		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.cloudAttachments).toBeUndefined();
+		// A draft that brought files from another target keeps them, with why this one takes none.
+		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a standalone agent. Remove them to continue.");
+	});
+
+	// A send whose answer was lost keeps the files it went with until its
+	// outcome is known, even if the target stopped taking files meanwhile:
+	// its retry carries them under the same request, and only a new send
+	// meets the refusal.
+	it("keeps a pending send's files held, without the refusal, until its outcome is known", async () => {
+		h.isCloudProject = true;
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: [], maxAttachmentBytes: undefined };
+		const page = renderPage();
+		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a task in this Cloud project yet. Remove them to continue.");
+		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Read this", composerText: "Read this", attachments: [] });
+		h.launch.mockRejectedValue(new TypeError("Failed to fetch"));
+		await act(async () => {
+			await Promise.resolve(h.workspace?.onSend?.("Read this", [{ mimeType: "text/plain", data: "aGk=" }], "cid-1")).catch(() => undefined);
+		});
+		page.refresh();
+		expect(h.workspace?.holdAttachments).toBe(true);
+		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
 	});
 
 	it("opens a new Cloud standalone agent on the project the control plane made for it", async () => {
@@ -245,6 +299,32 @@ describe("NewChatPage", () => {
 		await act(async () => { await h.workspace?.onSend?.("What is this?", files, "cid-1"); });
 
 		expect(h.launch).toHaveBeenCalledWith("What is this?", expect.objectContaining({ clientRequestId: "cid-1", attachments: files }));
+	});
+
+	it("takes the session's top bar from the send until the page returns the brief or closes", async () => {
+		useUiStore.setState({ newChatSending: false });
+		let refuse!: (error: unknown) => void;
+		h.launch.mockReturnValueOnce(new Promise<string>((_, fail) => { refuse = fail; }));
+		renderPage();
+		expect(useUiStore.getState().newChatSending).toBe(false);
+
+		let sent!: Promise<unknown>;
+		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined); });
+		// Set before the first message paints, so it lands where the session shows it.
+		expect(useUiStore.getState().newChatSending).toBe(true);
+		await waitFor(() => expect(h.launch).toHaveBeenCalled());
+		await act(async () => {
+			refuse(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
+			await sent;
+		});
+		expect(useUiStore.getState().newChatSending).toBe(false);
+
+		// Leaving mid-send gives the bar back too.
+		h.launch.mockReturnValueOnce(new Promise<string>(() => undefined));
+		act(() => { void Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-2")).catch(() => undefined); });
+		expect(useUiStore.getState().newChatSending).toBe(true);
+		cleanup();
+		expect(useUiStore.getState().newChatSending).toBe(false);
 	});
 
 	it("returns a refused brief to the composer and restores the selectors", async () => {
@@ -445,6 +525,72 @@ describe("NewChatPage", () => {
 	});
 });
 
+describe("New chat opened from Report a problem", () => {
+	const saveSend = (projectId: string) => window.localStorage.setItem("ao.newTask.pendingLaunch.v1", JSON.stringify({
+		local: { clientMessageId: "cid-1", projectId, replay: {}, settings: {} },
+	}));
+	const renderReport = (projectId: string, report: boolean) => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const page = (id: string) => <QueryClientProvider client={queryClient}><NewChatPage projectId={id} report={report} /></QueryClientProvider>;
+		const { rerender } = render(page(projectId));
+		return { queryClient, refresh: () => rerender(page(projectId)) };
+	};
+	const picker = (queryClient: QueryClient) => {
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.composerTray}</QueryClientProvider>);
+		return screen.getByRole("button", { name: /^Project: / });
+	};
+	beforeEach(() => prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Fix the build", composerText: "Fix the build", attachments: [] }));
+
+	it.each([
+		{ report: true, heading: "What went wrong?" },
+		{ report: false, heading: undefined },
+	])("overrides the welcome heading only for report mode (report: $report)", ({ report, heading }) => {
+		renderReport(STANDALONE_WORKSPACE_ID, report);
+		expect(h.workspace?.welcomeHeading).toBe(heading);
+	});
+
+	it("stays on Scratchpad with the project picker locked", () => {
+		const { queryClient } = renderReport(STANDALONE_WORKSPACE_ID, true);
+		expect(picker(queryClient)).toBeDisabled();
+		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it("leaves the project picker open on a normal new chat", () => {
+		const { queryClient } = renderReport(STANDALONE_WORKSPACE_ID, false);
+		expect(picker(queryClient)).toBeEnabled();
+	});
+
+	it("follows a saved send to its project, still as a report", () => {
+		saveSend("proj-1");
+		renderReport(STANDALONE_WORKSPACE_ID, true);
+		expect(h.navigate).toHaveBeenCalledWith({ to: "/new", search: { project: "proj-1", host: undefined, report: true }, replace: true });
+	});
+
+	it("waits for a saved send on its project, then returns to Scratchpad", () => {
+		saveSend("proj-1");
+		const { refresh } = renderReport("proj-1", true);
+		expect(h.navigate).not.toHaveBeenCalled();
+		window.localStorage.removeItem("ao.newTask.pendingLaunch.v1");
+		refresh();
+		expect(h.navigate).toHaveBeenCalledWith({ to: "/new", search: { host: undefined, report: true }, replace: true });
+	});
+
+	it("leaves a normal new chat on its project", () => {
+		renderReport("proj-1", false);
+		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ report: false, left: "keep this" },
+		{ report: true, left: `${REPORT_PROBLEM_PROMPT}\n\nkeep this` },
+	])("takes the report prompt out only for a normal new chat (report: $report)", ({ report, left }) => {
+		window.localStorage.clear();
+		writeChatComposerText(draftScope, `${REPORT_PROBLEM_PROMPT}\n\nkeep this`);
+		renderReport(STANDALONE_WORKSPACE_ID, report);
+		expect(readChatSessionDraft(draftScope).composer.text).toBe(left);
+	});
+});
+
 describe("New Chat permission menu capabilities", () => {
 	it.each([false, true])("offers only Kimi's default with saved template %s", async (saved) => {
 		h.harness = "kimi";
@@ -473,5 +619,57 @@ describe("New Chat permission menu capabilities", () => {
 		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
 		expect(screen.queryByRole("button", { name: "Approval policy for the next turn" })).toBeNull();
 		expect(screen.queryByText("Auto-approve")).toBeNull();
+	});
+});
+
+describe("New Chat model menu", () => {
+	// This computer's Claude Code defaults to Fable, so its saved bar describes its
+	// Default row as Fable 5.2 beside a Fable 5.2 row of its own.
+	const rememberLocalClaudeBar = () => rememberChatSettingsTemplate("claude-code", undefined, { options: [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "default", choices: [
+			{ value: "default", name: "Default (recommended)", description: "Fable 5.2" },
+			{ value: "sonnet", name: "Sonnet 5.5" },
+			{ value: "fable", name: "Fable 5.2" },
+			{ value: "opus", name: "Opus 5.5" },
+		] },
+	] });
+	const catalog: ChatModel[] = [
+		{ id: "sonnet", displayName: "Sonnet 5.5", default: true },
+		{ id: "fable", displayName: "Fable 5.2", default: false },
+		{ id: "opus", displayName: "Opus 5.5", default: false },
+	];
+
+	it("lists Cloud's own models for a Cloud task, not this computer's saved Claude Code bar", () => {
+		h.harness = "claude-code";
+		h.isCloudProject = true;
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		rememberLocalClaudeBar();
+		const queryClient = renderPage();
+		// Drawn from Cloud's catalog, as the session's own bar is, not from this computer's agent.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
+			props: expect.objectContaining({ models: catalog, configOptions: undefined }),
+		}) } }));
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
+			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
+		]);
+		expect(modelPicker.current?.modelId).toBe("sonnet");
+	});
+
+	it("keeps the model this computer's agent defaults to in a local task's menu", () => {
+		h.harness = "claude-code";
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		rememberLocalClaudeBar();
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		// Drawn from the agent's saved controls, which a new task can start with.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
+			props: expect.objectContaining({ configOptions: [expect.objectContaining({ id: "model", currentValue: "sonnet" })] }),
+		}) } }));
+		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
+			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
+		]);
 	});
 });

@@ -3,12 +3,18 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
 type backgroundConversation struct {
@@ -168,15 +174,80 @@ func TestStopBackgroundTaskRefusesProvidersWithoutStopAndNeverWakesASession(t *t
 	}
 }
 
+func TestBackgroundTasksFailedReadBacksOffLongerThanTimeout(t *testing.T) {
+	conv := &backgroundConversation{fakeConversation: newFakeConversation(), err: errors.New("provider hung")}
+	h := newHarnessWithConversation(t, conv)
+	for range 3 {
+		if _, err := h.svc.BackgroundTasks(context.Background(), testSession); err == nil {
+			t.Fatal("provider failure became a reading")
+		}
+	}
+	if conv.calls != 1 {
+		t.Fatalf("failed reads in the same second made %d provider calls, want 1", conv.calls)
+	}
+	h.advance(3 * time.Second)
+	if _, err := h.svc.BackgroundTasks(context.Background(), testSession); err == nil || conv.calls != 1 {
+		t.Fatalf("failure cache expired before backoff: %v %d", err, conv.calls)
+	}
+	h.advance(2 * time.Second)
+	conv.err = nil
+	if reading, err := h.svc.BackgroundTasks(context.Background(), testSession); err != nil || reading.Availability != "ready" || conv.calls != 2 {
+		t.Fatalf("reading after the failed sample expired=%+v err=%v calls=%d", reading, err, conv.calls)
+	}
+}
+
+type backgroundSessionReader struct {
+	chatsvc.SessionReader
+	fail atomic.Bool
+}
+
+func (r *backgroundSessionReader) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	if r.fail.Load() && id == testSession {
+		return domain.SessionRecord{}, false, errors.New("lookup failed")
+	}
+	return r.SessionReader.GetSession(ctx, id)
+}
+
+func TestBackgroundTasksProjectBatchIsolatesSessionLookupFailure(t *testing.T) {
+	st := openStore(t)
+	healthyRecord, err := st.CreateSession(t.Context(), domain.SessionRecord{ProjectID: testProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy := healthyRecord.ID
+	reader := &backgroundSessionReader{SessionReader: st}
+	svc := chatsvc.New(chatsvc.Options{NewID: uuid.NewString, Store: st, Reader: fullSnapshotReader(st), Sessions: reader, Drivers: fakeRegistry{driver: fakeDriver{start: func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+		base := newFakeConversation()
+		base.providerConversationID = string(cfg.SessionID)
+		return &backgroundConversation{fakeConversation: base, tasks: []ports.ChatBackgroundTask{{ID: "live", Kind: "shell", State: "running"}}}, nil
+	}}}, Log: slog.New(slog.DiscardHandler)})
+	for _, id := range []domain.SessionID{testSession, healthy} {
+		if _, err := svc.Start(t.Context(), chatsvc.StartConfig{SessionID: id, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { reader.fail.Store(false); _ = svc.Stop(context.Background(), id) })
+	}
+	reader.fail.Store(true)
+	readings, err := svc.ListBackgroundTasks(t.Context(), testProject)
+	if err != nil || len(readings) != 1 || readings[0].SessionID != healthy || readings[0].Availability != "ready" || len(readings[0].Tasks) != 1 {
+		t.Fatalf("readings=%+v err=%v", readings, err)
+	}
+}
+
 type outputConversation struct {
 	*backgroundConversation
-	output ports.ChatBackgroundTaskOutput
-	read   []string
+	output     ports.ChatBackgroundTaskOutput
+	outputErr  error
+	read       []string
+	duringRead func()
 }
 
 func (c *outputConversation) BackgroundTaskOutput(_ context.Context, id string) (ports.ChatBackgroundTaskOutput, error) {
 	c.read = append(c.read, id)
-	return c.output, nil
+	if c.duringRead != nil {
+		c.duringRead()
+	}
+	return c.output, c.outputErr
 }
 
 func TestBackgroundTaskOutputReadsTheProviderAndNeverWakesASession(t *testing.T) {
@@ -201,6 +272,67 @@ func TestBackgroundTaskOutputIsUnavailableWithoutAReader(t *testing.T) {
 	h := newHarnessWithConversation(t, &backgroundConversation{fakeConversation: newFakeConversation()})
 	if _, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBackgroundTaskOutputProviderFailuresAreUnavailable(t *testing.T) {
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation()}}
+	h := newHarnessWithConversation(t, conv)
+	for _, err := range []error{errors.New("conversation closed"), context.DeadlineExceeded, errors.New("EACCES")} {
+		conv.outputErr = err
+		if _, got := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(got, ports.ErrBackgroundTaskOutputUnavailable) {
+			t.Fatalf("%v became %v", err, got)
+		}
+	}
+	// The caller's own cancellation is not the provider's answer.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, got := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); !errors.Is(got, context.Canceled) {
+		t.Fatalf("canceled read=%v", got)
+	}
+}
+
+func TestBackgroundTaskOutputRejectsReadsAcrossAGenerationOrHibernation(t *testing.T) {
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation()}, output: ports.ChatBackgroundTaskOutput{Text: "old controller"}}
+	h := newHarnessWithConversation(t, conv)
+	update := func(change func(*domain.SessionRecord)) {
+		rec, _, err := h.st.GetSession(context.Background(), testSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		change(&rec)
+		if err := h.st.UpdateSession(context.Background(), rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	generation := ""
+	update(func(rec *domain.SessionRecord) { generation = rec.Metadata.ControllerGeneration })
+	conv.duringRead = func() {
+		update(func(rec *domain.SessionRecord) { rec.Metadata.ControllerGeneration = "new-generation" })
+	}
+	if got, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("read across a handoff=%+v err=%v", got, err)
+	}
+	conv.duringRead = nil
+	reads := len(conv.read)
+	if _, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) || len(conv.read) != reads {
+		t.Fatalf("generation mismatch read the provider: err=%v", err)
+	}
+	update(func(rec *domain.SessionRecord) { rec.Metadata.ControllerGeneration = generation })
+	if _, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); err != nil || len(conv.read) != reads+1 {
+		t.Fatalf("current generation: err=%v", err)
+	}
+	rec, _, err := h.st.GetSession(context.Background(), testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if ok, err := h.st.SetSessionHibernated(context.Background(), testSession, rec.Revision, &now); err != nil || !ok {
+		t.Fatalf("hibernate: ok=%v err=%v", ok, err)
+	}
+	reads = len(conv.read)
+	if _, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) || len(conv.read) != reads {
+		t.Fatalf("hibernated read the provider: err=%v", err)
 	}
 }
 

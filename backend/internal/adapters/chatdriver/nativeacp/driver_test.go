@@ -3,7 +3,10 @@ package nativeacp
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
+
+	acpsdk "github.com/coder/acp-go-sdk"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -133,6 +136,28 @@ func TestBindingMapsPluginDiscoveryAndAuth(t *testing.T) {
 	})
 }
 
+func TestBindingForwardsSessionMetadata(t *testing.T) {
+	var received acpdriver.LaunchConfig
+	cfg := buildConfig(fakePlugin{}, Config{
+		Harness: domain.HarnessGrok,
+		SessionMeta: func(in acpdriver.LaunchConfig) map[string]any {
+			received = in
+			return map[string]any{"rules": in.SystemPrompt, "autoMode": in.Permissions == ports.PermissionModeAuto}
+		},
+	}, nil)
+	if cfg.SessionMeta == nil {
+		t.Fatal("native binding dropped the session metadata hook")
+	}
+	launch := acpdriver.LaunchConfig{SessionID: "grok-1", SystemPrompt: "AO system rules", Permissions: ports.PermissionModeAuto}
+	want := map[string]any{"rules": "AO system rules", "autoMode": true}
+	if got := cfg.SessionMeta(launch); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(received, launch) {
+		t.Fatalf("metadata = %#v, input = %#v; want %#v, %#v", got, received, want, launch)
+	}
+	if cfg.SessionPreamble != nil {
+		t.Fatal("session metadata must not inject a first-message preamble")
+	}
+}
+
 func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {
 	plugin := &fakeAugmentingPlugin{fakePlugin: fakePlugin{
 		binary: "/user/provider", status: ports.AgentAuthStatusAuthorized,
@@ -153,5 +178,49 @@ func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {
 	if plugin.dataDir != "/ao" || launch.Env["PROVIDER_DATA_DIR"] != "/ao/provider" ||
 		launch.Env["KEEP"] != "yes" {
 		t.Fatalf("plugin data dir/env = %q, %#v", plugin.dataDir, launch.Env)
+	}
+}
+
+func TestBindingRetainsNativeInitializeAdmission(t *testing.T) {
+	sentinel := errors.New("unqualified native version")
+	cfg := buildConfig(fakePlugin{}, Config{ValidateInitialize: func(acpsdk.InitializeResponse) error { return sentinel }}, nil)
+	if cfg.ValidateInitialize == nil || !errors.Is(cfg.ValidateInitialize(acpsdk.InitializeResponse{}), sentinel) {
+		t.Fatal("native identity admission lost")
+	}
+}
+
+func TestBindingPreflightRejectsUnavailableProviderBeforeDiscovery(t *testing.T) {
+	sentinel := errors.New("provider requires Unix")
+	cfg := buildConfig(fakePlugin{binErr: ports.ErrAgentBinaryNotFound}, Config{
+		Harness:   domain.HarnessClaudeCode,
+		Preflight: func(context.Context) error { return sentinel },
+		Configure: func(context.Context, acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+			return nil, nil, nil
+		},
+	}, nil)
+	if err := cfg.Probe(context.Background()); !errors.Is(err, ports.ErrChatDriverUnavailable) || !errors.Is(err, sentinel) {
+		t.Fatalf("Probe error = %v, want prerequisite failure before binary discovery", err)
+	}
+}
+
+func TestBindingPreservesContextualEnvironmentValidation(t *testing.T) {
+	sentinel := errors.New("native config missing")
+	driver := New(fakePlugin{}, Config{
+		ValidateEnvironment: func(_ context.Context, env map[string]string) error {
+			if env["CONFIG"] != "/project/config.yaml" {
+				return sentinel
+			}
+			return nil
+		},
+	}, nil)
+	validator, ok := driver.(ports.ChatEnvironmentValidator)
+	if !ok {
+		t.Fatal("native ACP binding lost contextual validation")
+	}
+	if err := validator.ValidateEnvironment(context.Background(), nil); !errors.Is(err, sentinel) {
+		t.Fatalf("missing config error = %v", err)
+	}
+	if err := validator.ValidateEnvironment(context.Background(), map[string]string{"CONFIG": "/project/config.yaml"}); err != nil {
+		t.Fatalf("project config rejected: %v", err)
 	}
 }

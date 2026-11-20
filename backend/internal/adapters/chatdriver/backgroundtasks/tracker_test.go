@@ -43,17 +43,18 @@ func TestReconcileRemovesMissingShellWithoutInventingOutcome(t *testing.T) {
 	}
 }
 
-func TestStartTimeIsFirstObservationAndRestartsWithANewRun(t *testing.T) {
+func TestStartTimeUsesExplicitObservationAndRestartsWithANewRun(t *testing.T) {
 	var tracker Tracker
 	now := time.Now()
-	tracker.Update(ports.ChatBackgroundTask{ID: "job", RunID: "a", Kind: "shell", State: "running"}, now)
+	tracker.Update(ports.ChatBackgroundTask{ID: "job", RunID: "a", Kind: "shell", State: "running", StartedAt: &now}, now)
 	// Polls and complete native reads repeat the task without a start time.
 	tracker.ReconcileShells([]ports.ChatBackgroundTask{{ID: "job", RunID: "a", Kind: "shell", State: "running"}}, now.Add(5*time.Second))
 	tasks := tracker.Snapshot(now.Add(5 * time.Second))
 	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(now) {
 		t.Fatalf("start time moved on a repeat reading: %+v", tasks)
 	}
-	tracker.Update(ports.ChatBackgroundTask{ID: "job", RunID: "b", Kind: "shell", State: "running"}, now.Add(9*time.Second))
+	next := now.Add(9 * time.Second)
+	tracker.Update(ports.ChatBackgroundTask{ID: "job", RunID: "b", Kind: "shell", State: "running", StartedAt: &next}, next)
 	tasks = tracker.Snapshot(now.Add(9 * time.Second))
 	if len(tasks) != 1 || !tasks[0].StartedAt.Equal(now.Add(9*time.Second)) {
 		t.Fatalf("a new run kept the old start time: %+v", tasks)
@@ -112,5 +113,30 @@ func TestSettledReplayProtectionOutlivesVisibleHistory(t *testing.T) {
 				t.Fatalf("an older settled run resurrected: %+v", tasks)
 			}
 		})
+	}
+}
+
+func TestActiveIgnoresTasksWithNoRecentEvent(t *testing.T) {
+	var tracker Tracker
+	now := time.Now()
+	tracker.Update(ports.ChatBackgroundTask{ID: "job", Kind: "shell", State: "running"}, now)
+	if !tracker.Active(now.Add(29*time.Minute), 30*time.Minute) {
+		t.Fatal("a recently reported task stopped counting as active")
+	}
+	// A completion that never arrives must not hold the provider awake forever.
+	if tracker.Active(now.Add(30*time.Minute), 30*time.Minute) {
+		t.Fatal("a task with no event for 30 minutes still counts as active")
+	}
+	tracker.Finish("job", "paused", now.Add(40*time.Minute))
+	if !tracker.Active(now.Add(41*time.Minute), 30*time.Minute) {
+		t.Fatal("a new event did not refresh the task")
+	}
+}
+
+func TestInventoryDoesNotInventStartTime(t *testing.T) {
+	var tracker Tracker
+	tracker.ReconcileShells([]ports.ChatBackgroundTask{{ID: "late", Kind: "shell", State: "running"}}, time.Now())
+	if tasks := tracker.Snapshot(time.Now()); len(tasks) != 1 || tasks[0].StartedAt != nil {
+		t.Fatal(tasks)
 	}
 }

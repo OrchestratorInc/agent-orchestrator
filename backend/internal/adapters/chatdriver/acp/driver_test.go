@@ -871,6 +871,8 @@ type fakeAgent struct {
 	cancelErr           error
 	cancelCalls         int
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
+	// agentInfo, when set, is reported as the handshake's agentInfo.
+	agentInfo           *acpsdk.Implementation
 	mode                string
 	modeNotFound        bool // SetSessionMode returns -32601
 	modeRequiresOption  SessionOption
@@ -888,6 +890,11 @@ type fakeAgent struct {
 	steerOut            string
 	steerMethodNotFound bool // HandleExtensionMethod returns -32601 for steering
 	steerExtensionErr   error
+	// extension, when set, answers every agent extension method instead of
+	// the default _session/steering handler.
+	extension func(method string, raw json.RawMessage) (any, error)
+	// initMeta, when set, replaces the initialize response's top-level _meta.
+	initMeta map[string]any
 }
 
 type legacyKimiAgent struct {
@@ -1031,6 +1038,7 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 	a.initParams = params
 	initErr := a.initErr
 	caps := a.capabilities
+	agentInfo := a.agentInfo
 	a.mu.Unlock()
 	if initErr != nil {
 		return acpsdk.InitializeResponse{}, initErr
@@ -1038,6 +1046,9 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 	meta := map[string]any(nil)
 	if a.steering {
 		meta = map[string]any{"steering": map[string]any{"supported": true}}
+	}
+	if a.initMeta != nil {
+		meta = a.initMeta
 	}
 	defaultCaps := acpsdk.AgentCapabilities{
 		SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
@@ -1049,10 +1060,17 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 		ProtocolVersion:   acpsdk.ProtocolVersionNumber,
 		Meta:              meta,
 		AgentCapabilities: defaultCaps,
+		AgentInfo:         agentInfo,
 	}, nil
 }
 
 func (a *fakeAgent) HandleExtensionMethod(_ context.Context, method string, raw json.RawMessage) (any, error) {
+	a.mu.Lock()
+	extension := a.extension
+	a.mu.Unlock()
+	if extension != nil {
+		return extension(method, raw)
+	}
 	if method != steeringMethod {
 		return nil, acpsdk.NewMethodNotFound(method)
 	}
@@ -2563,7 +2581,7 @@ func TestConversationCapabilitiesTreatLoadSessionAsResume(t *testing.T) {
 	init := acpsdk.InitializeResponse{AgentCapabilities: acpsdk.AgentCapabilities{
 		LoadSession: true,
 	}}
-	if !conversationCapabilities(configured, init)[ports.ChatCapabilityResume] {
+	if !conversationCapabilities(configured, init, steeringFor(Config{}))[ports.ChatCapabilityResume] {
 		t.Fatal("loadSession-only ACP agent was reported as non-resumable")
 	}
 }
@@ -3731,7 +3749,7 @@ func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	air, _ := jetbrains["air"].(map[string]any)
 	version, versionOK := number(air["version"])
 	capabilities, _ := air["capabilities"].([]any)
-	if !versionOK || version != 1 || len(capabilities) != 2 || capabilities[0] != "sessionFailure" || capabilities[1] != "asyncTasks" {
+	if !versionOK || version != 1 || len(capabilities) != 1 || capabilities[0] != "sessionFailure" {
 		t.Fatalf("session failure and async-task capabilities = %#v", air)
 	}
 
@@ -4023,6 +4041,46 @@ func TestDriverSuppressSessionModesDropsModeCategoryConfigOptions(t *testing.T) 
 	}
 	if kept := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil))).suppressedModeOptions(catalog); len(kept) != 3 {
 		t.Fatalf("unsuppressed catalog = %#v, want every option kept", kept)
+	}
+}
+
+func TestACPTurnSettingsPreferModelConfigOptionAlongsideLegacyModels(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "grok-4.7", "grok-4.7", "grok-4.6"),
+		selectConfigOption("reasoning_effort", "Effort", "thought_level", "high", "high", "low"),
+	}}
+	driver := New(Config{
+		Harness: domain.HarnessGrok,
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{
+				{ID: "model", Value: settings.Model},
+				{ID: "reasoning_effort", Value: settings.Effort},
+			}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	c := conv.(*conversation)
+	// Grok supplies a legacy models block as well as the modern model option.
+	// The modern catalog came through session/new above; retain the legacy
+	// fact too, without adding Grok-specific behavior to the fake wire agent.
+	c.mu.Lock()
+	c.legacyModel = true
+	c.mu.Unlock()
+	if err := c.applyTurnSettings(context.Background(), ports.ChatTurnSettings{
+		Model: "grok-4.6", Effort: "low",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["model"] != "grok-4.6" || agent.options["reasoning_effort"] != "low" {
+		t.Fatalf("config-option setters = %v, want model and effort", agent.options)
 	}
 }
 
@@ -4947,6 +5005,13 @@ func TestNormalizeMCPServersAllowsStdioWithoutCapabilities(t *testing.T) {
 		}
 		if len(servers) != 1 || servers[0].Stdio == nil {
 			t.Fatalf("servers = %#v, want one stdio server", servers)
+		}
+		encoded, err := json.Marshal(servers[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), `"args":[]`) {
+			t.Fatalf("server JSON = %s, want args [] (Claude Code skips args null)", encoded)
 		}
 	}
 }
@@ -6246,5 +6311,102 @@ func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
 				t.Fatalf("Hermes selected %q, want auto:model", agent.model)
 			}
 		})
+	}
+}
+
+func TestACPDriverHidesCommandsTheBindingNames(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		HideCommand:  HideCommands("model", "compact"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+		SessionId: acpsdk.SessionId(conv.ProviderConversationID()),
+		Update: acpsdk.SessionUpdate{AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
+			AvailableCommands: []acpsdk.AvailableCommand{
+				{Name: "goal", Description: "Keep working until a condition is met"},
+				{Name: "model", Description: "Set the AI model"},
+				{Name: "compact", Description: "Summarize the conversation"},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	skills := awaitSkillCount(t, conv.(ports.ChatSkillLister), 1)
+	if skills[0].Name != "goal" {
+		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+	// Hiding is presentation only: the agent's compaction stays usable.
+	if !conv.Capabilities().Has(ports.ChatCapabilityCompaction) {
+		t.Fatal("hiding compact from the menu also disabled compaction")
+	}
+}
+
+// Commands can arrive during session/new, before start() derives compaction.
+// Hiding compact from the menu must not turn compaction off on that path either.
+func TestACPEarlyHiddenCompactKeepsCompactionInStart(t *testing.T) {
+	agent := &fakeAgent{
+		newSessionUpdates: []acpsdk.SessionUpdate{{
+			AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
+				AvailableCommands: []acpsdk.AvailableCommand{
+					{Name: "compact", Description: "Compact history"},
+					{Name: "goal", Description: "Keep working until a condition is met"},
+				},
+			},
+		}},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		HideCommand:  HideCommands("compact"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+
+	if !opened.Capabilities().Has(ports.ChatCapabilityCompaction) {
+		t.Fatal("a compact hidden from the menu before start() disabled compaction")
+	}
+	skills := awaitSkillCount(t, opened.(ports.ChatSkillLister), 1)
+	if skills[0].Name != "goal" {
+		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+}
+
+func TestACPAsyncTasksRequiresBindingOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		agent := &fakeAgent{}
+		driver := New(Config{Harness: domain.HarnessClaudeCode, AsyncTasks: enabled, Probe: func(context.Context) error { return nil }, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent.mu.Lock()
+		air := nestedMap(nestedMap(agent.initParams.ClientCapabilities.Meta, "jetbrains"), "air")
+		capabilities, _ := air["capabilities"].([]any)
+		agent.mu.Unlock()
+		if got := len(capabilities) == 2 && capabilities[1] == "asyncTasks"; got != enabled {
+			t.Fatalf("enabled=%v capabilities=%v", enabled, capabilities)
+		}
+		_ = conv.Close()
 	}
 }

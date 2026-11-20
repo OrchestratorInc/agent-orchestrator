@@ -83,7 +83,8 @@ The daemon starts with Chat hibernation disabled; the desktop synchronizes its D
 
 ### Session background work
 
-Background task reporting covers every harness in the Chat registry. The board
+Background task reads cover the Chat registry, with unsupported providers reported
+as unavailable. The board
 uses one batch read; a Chat panel reads only its current controller. Reads never
 wake a hibernated session. OS processes remain separate, optional Diagnostics.
 
@@ -91,7 +92,7 @@ wake a hibernated session. OS processes remain separate, optional Diagnostics.
 | --- | --- | --- |
 | Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
 | Codex | Paginated `thread/backgroundTerminals/list`, command completion and collaboration events | Always partial: native shell inventory, but event-derived subagents may predate controller attachment |
-| Unreal Agent | Live provider-owned asynchronous Bash operation registry | Native inventory, including after controller reattachment |
+| Unreal Agent | No background mode in the pinned harness | Unavailable; Bash operations are foreground tool calls |
 | All other ACP bindings | Negotiated `asyncTasks` lifecycle and explicitly backgrounded tool metadata | Reported jobs; complete native inventory is not available in ACP v1 |
 
 The shared ACP path includes Cursor, OpenCode v1/v2, Droid, Kimi, Kimchi, Pi,
@@ -100,6 +101,17 @@ emits no background metadata or async-task events cannot expose hidden native
 jobs through ACP; a partial empty reading means no jobs **reported**, not none
 running. Partial readings may miss completions as well as starts. Do not infer
 jobs from foreground tool duration, an idle turn, output prose, or process trees.
+Advertising the Air `asyncTasks` capability is binding-specific and enabled only
+for the verified Claude binding. Other bindings can still report explicit
+background tool metadata. Session IDs are not task handles; native task handles
+and the launching tool-call identity distinguish executions.
+
+Codex command-start events establish elapsed time. A terminal discovered only by
+inventory after attachment has no start timestamp, so its elapsed time is hidden.
+Completion events retain outcomes even if the shell exited between list reads.
+Provider labels are one line, capped at 240 characters, and redact obvious
+credential assignments and Bearer values; this is not general secret detection.
+A task's command keeps its line breaks and length but gets the same redaction.
 
 `GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
 `ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
@@ -227,6 +239,37 @@ Observation is separated from action:
 - **Observe layer:** SCM Observer and Runtime Reaper poll external state.
 - **Lifecycle layer:** Reduces observations into durable facts.
 - **Service layer:** Computes display status from facts.
+
+Review runs follow the same split. The Runtime Reaper also probes reviewers,
+but only those serving an in-progress review run, and reports each pass to the
+review engine's run lifecycle (`internal/review/run_lifecycle.go`) instead of
+the session LCM: a reviewer has no session row. The run lifecycle reduces the
+pass into guarded `review_run` transitions (`queued`, `launching`, `running`,
+`cancelling`, then `completed`, `failed`, `cancelled` or `superseded`), applies
+the time limits (launch, first activity, idle grace, max duration, cancel), and
+force-kills a reviewer that ignores a cancel. The reaper's first pass after
+startup is the boot pass, which settles runs a previous daemon left in
+progress; until it has, other paths leave those runs alone so their
+reviewers are reaped, and the boot pass never touches a run this daemon
+created. Reviewer activity hooks, trigger, cancel and the reviews list settle
+their worker's runs directly without waiting for the next pass. Time the
+daemon did not observe (the machine slept) never counts against a run, and a
+reviewer that is still being cancelled is not given new work. The boot pass
+never waits on a worker's lock; a worker a trigger holds is settled on a later
+pass. A reviewer interrupted because its pass timed out stays supervised until
+it stops or is force-stopped. A force-stop captures the reviewer's whole
+process tree before tearing down its runtime and kills any survivor, so an
+agent that cannot react to hangup is not left running; the stop counts as
+confirmed only when none of those processes remains. A process is identified
+by pid and start time (which survives exec and changes on pid reuse), read
+together with its parent from one consistent observation, and the tree is
+walked only from roots the runtime vouches for (a live tmux pane, or a
+ConPTY host that started no later than it was spawned); a process whose
+identity cannot be read is never killed and never counted as gone, and the
+runtime is not torn down until the tree has been captured. Survivors of an
+unconfirmed attempt are carried into the retry, and still killed if a new
+launch takes over the reviewer. Suspend gaps
+are kept for a pending stop's grace as they are for active runs.
 
 ### 4. Change data capture
 
@@ -460,6 +503,40 @@ that flag, while new provider boundaries use scoped IDs.
 When Codex proves fork ancestry, replay omits copied prefixes only if their stable
 item IDs and complete content match retained ancestor rows. Those rows stay in
 their original scope. Unknown ancestry or changed content is retained in full.
+
+Side-chat tabs are launch-scoped drafts until their first accepted Send. Draft
+creation reads conversation metadata only: it does not wake the parent, read its
+full transcript, or create a provider. Separate creation keys never merge unused
+drafts through empty anchors. The daemon serializes each side's submissions and
+atomically accepts the opening turn with its frozen latest completed parent
+context, model, effort, and launch configuration. Later parent work cannot move
+that cutoff. Opening-turn IDs and timestamps travel with the side's recovery
+state; the shared chat timeline shows that opening question and its lattice
+loader while later questions remain in the queue dock.
+
+The renderer loads each saved side draft before freezing a Send or copying a
+replacement. Typing alone does not mark that draft as loaded, and autosaves wait
+for the read so they cannot erase saved files or delivery receipts. Edits made
+after Send remain in the next draft. Known opening failures are saved with the
+receipt and restore their Retry or Recreate action without automatic dispatch;
+accepted daemon turns take precedence over older local failures. Definitively
+rejected follow-ups remove their temporary bubbles, while uncertain delivery
+keeps its original identity until reconciliation.
+
+Queued follow-ups appear in the shared queue dock before daemon acknowledgement,
+then reconcile by client message ID without duplicating or remounting their row.
+A matching daemon turn also settles a recovered delivery receipt without another
+submission, preserving handoff ownership and newer draft edits. Late HTTP replies
+cannot undo that acknowledgement or release a newer send's ownership.
+
+Unused drafts restore without provider work, including JSON-null launch settings.
+A recovered pre-dispatch receipt or
+interrupted startup with unverified ownership requires visible recreation instead
+of silently capturing newer context or submitting again. Safe startup retries
+reuse the accepted turn and frozen configuration. Staged image bytes are loaded
+from daemon-owned attachment files after renderer remounts. Closing an unused
+draft requires no provider shutdown; an accepted startup retains the existing
+closing controller's cancellation, generation fencing, and cleanup ownership.
 
 Current-context side forks fence source dispatch only during copying. The
 start/stop gate is released before provider I/O; Stop cancels the copy and Kill
@@ -1005,7 +1082,15 @@ flowchart TD
     Skip --> NextSession{More sessions?}
     CDC --> NextSession
     NextSession -->|Yes| ForEach
-    NextSession -->|No| Loop
+    NextSession -->|No| Reviewers[List reviewers serving<br/>an in-progress review run]
+
+    Reviewers --> AnyReview{Any?}
+    AnyReview -->|No| Loop
+    AnyReview -->|Yes| ProbeReviewer[Probe each reviewer<br/>exact launch or Chat controller]
+    ProbeReviewer --> ReviewerBreaker[Reviewer mass-death breaker]
+    ReviewerBreaker --> ApplyReview[ApplyReviewerObservations]
+    ApplyReview --> RunLifecycle[Review run lifecycle<br/>guarded review_run transitions]
+    RunLifecycle --> Loop
 
 ```
 

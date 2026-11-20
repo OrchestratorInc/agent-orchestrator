@@ -234,15 +234,17 @@ describe("useWorkspaceQuery", () => {
 			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", statusReadiness: "ready",
 				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01T00:00:00Z", prs: [],
 				artifactFiles: [
-					{ path: "poem.html", name: "poem.html", kind: "html", size: 12, updatedAt: "2026-01-01T00:00:00Z", shareUrl },
+					{ path: "poem.html", name: "poem.html", kind: "html", size: 12, updatedAt: "2026-01-01T00:00:00Z", shareUrl, shareAccess: "anyone" },
 					{ path: "notes.md", name: "notes.md", kind: "markdown", size: 3, updatedAt: "2026-01-01T00:00:00Z" },
 				] }] } },
 		});
 		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 		const [published, unshared] = result.current.data?.[0].sessions[0].artifactFiles ?? [];
-		expect(published).toMatchObject({ path: "poem.html", shareUrl });
+		// With who it opens for, as recorded, so its mark is right before the link list is read.
+		expect(published).toMatchObject({ path: "poem.html", shareUrl, shareAccess: "anyone" });
 		expect(unshared).not.toHaveProperty("shareUrl");
+		expect(unshared).not.toHaveProperty("shareAccess");
 	});
 
 	it("rejects workspace reads while the daemon base URL is untrusted", async () => {
@@ -522,13 +524,13 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.map((workspace) => workspace.id)).toEqual(["proj-1", "__standalone__"]);
 		expect(result.current.data?.[1]).toMatchObject({
 			id: "__standalone__",
-			name: "Scratchpad",
+			name: "Sessions",
 			kind: "standalone",
 		});
 		expect(result.current.data?.[1].sessions[0]).toMatchObject({
 			id: "standalone-1",
 			workspaceId: "__standalone__",
-			workspaceName: "Scratchpad",
+			workspaceName: "Sessions",
 			title: "Research",
 			branch: undefined,
 			provisionState: "failed",
@@ -586,8 +588,8 @@ describe("useWorkspaceQuery", () => {
 			const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 			await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-			expect(result.current.data?.[0]).toMatchObject({ name: "草稿区" });
-			expect(result.current.data?.[0].sessions[0]).toMatchObject({ workspaceName: "草稿区" });
+			expect(result.current.data?.[0]).toMatchObject({ name: "会话" });
+			expect(result.current.data?.[0].sessions[0]).toMatchObject({ workspaceName: "会话" });
 		} finally {
 			await appI18n.changeLanguage("en");
 		}
@@ -775,7 +777,7 @@ describe("useWorkspaceQuery", () => {
 			path: "",
 			sessions: [],
 		});
-		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Scratchpad" });
+		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Sessions" });
 		expect(listProjectsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "exclude" });
 		expect(listStandaloneAgentsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "only" });
 	});
@@ -877,6 +879,56 @@ describe("useWorkspaceQuery", () => {
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
 		expect(listProjectsMock).not.toHaveBeenCalled();
+	});
+
+	it("redraws a component only for the fields it reads, not for every refetch", async () => {
+		respondWith({
+			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", updatedAt: "2026-01-01T00:00:00Z" }] } },
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		const shared = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		let dataRenders = 0;
+		const dataReader = renderHook(() => {
+			dataRenders += 1;
+			return useWorkspaceQuery().data;
+		}, { wrapper: shared });
+		const fetchingSeen: boolean[] = [];
+		renderHook(() => {
+			const fetching = useWorkspaceQuery().isFetching;
+			fetchingSeen.push(fetching);
+			return fetching;
+		}, { wrapper: shared });
+		await waitFor(() => expect(dataReader.result.current).toHaveLength(1));
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(false));
+		const settledRenders = dataRenders;
+
+		// Hold the refetch open: observers are notified on a later timer, so a
+		// response that settles in microtasks could end before isFetching is drawn.
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const respond = getMock.getMockImplementation()!;
+		getMock.mockImplementation(async (url: string, ...rest: unknown[]) => {
+			if (url === "/api/v1/sessions") await held;
+			return respond(url, ...rest);
+		});
+		let refetch!: Promise<void>;
+		act(() => {
+			refetch = queryClient.refetchQueries({ queryKey: workspaceQueryKey });
+		});
+		// A reader of isFetching still sees the refetch start and end.
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(true));
+		await act(async () => {
+			release();
+			await refetch;
+		});
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(false));
+
+		expect(getMock.mock.calls.filter(([url]) => url === "/api/v1/sessions")).toHaveLength(2);
+		// Same lists back: the data reader is not drawn again.
+		expect(dataRenders).toBe(settledRenders);
 	});
 
 	it("selects only attention-worthy worker sessions for the always-mounted tray", async () => {

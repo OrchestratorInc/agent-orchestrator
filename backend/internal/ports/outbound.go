@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -74,6 +75,27 @@ type ClaimOutcome struct {
 type AgentMessenger interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
 }
+
+type clientMessageIDKey struct{}
+
+// WithClientMessageID asks the AgentMessenger that receives ctx to deliver its
+// message under clientMessageID, a stable id a Chat session records with the
+// message. A caller uses it to find out later whether that exact message
+// reached the agent. Messengers that cannot carry an id ignore it.
+func WithClientMessageID(ctx context.Context, clientMessageID string) context.Context {
+	return context.WithValue(ctx, clientMessageIDKey{}, clientMessageID)
+}
+
+// ClientMessageIDFromContext returns the id set by WithClientMessageID, or "".
+func ClientMessageIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(clientMessageIDKey{}).(string)
+	return id
+}
+
+// ErrDeliveryUnconfirmed is returned by an AgentMessenger that wrote the
+// message to the agent but could not confirm the agent accepted it. The
+// message is not lost; callers must not resend it as if it never arrived.
+var ErrDeliveryUnconfirmed = errors.New("session: message delivery was not acknowledged")
 
 // ---- runtime / agent / workspace plugin ports ----
 
@@ -239,6 +261,8 @@ type RuntimeConfig struct {
 	// (user and command shells, not agents) need not pay it continuously.
 	// Runtimes that always render ignore it.
 	LazyStyledOutput bool
+	ReplayFile       string
+	OutputLines      int
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -270,6 +294,23 @@ type SupervisedProcessInspector interface {
 // simply reports no memory reading rather than zero.
 type RuntimeProcessRootInspector interface {
 	ProcessRootPIDs(ctx context.Context, handle RuntimeHandle) ([]int, error)
+}
+
+// ProcessRoot is a root of a runtime's process tree together with the latest
+// moment that root process can have started. A process found at that pid that
+// started later is not the runtime's: the pid was reused after the runtime's
+// process exited. A zero StartedBy means the runtime has just observed the
+// root alive, so it cannot have been reused.
+type ProcessRoot struct {
+	PID       int
+	StartedBy time.Time
+}
+
+// RuntimeProcessRootBoundInspector is ProcessRootPIDs with evidence that each
+// root is still the runtime's own process. A force-stop that kills a tree must
+// not walk down from a pid another process now holds.
+type RuntimeProcessRootBoundInspector interface {
+	BoundedProcessRoots(ctx context.Context, handle RuntimeHandle) ([]ProcessRoot, error)
 }
 
 // ExactSupervisedProcessInspector is the strict launch-generation probe used
@@ -567,6 +608,7 @@ type WorkspaceConfig struct {
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
 	Branch        string
+	LastBranch    string
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
 	FreshBranch      bool
@@ -585,6 +627,9 @@ type WorkspaceConfig struct {
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.
 	Path string
+	// StartPoint creates a fresh branch at this commit instead of the base
+	// branch. Session forks use it to start at the source's HEAD.
+	StartPoint string
 }
 
 // WorkspaceInfo describes a created workspace — where it lives and its branch.
@@ -624,14 +669,6 @@ type WorkspaceProjectConfig struct {
 	// import sets it; child repositories already start from their BaseRef.
 	StartRef string
 	Repos    []WorkspaceProjectRepoConfig
-	Assets   []WorkspaceProjectAssetConfig
-}
-
-// WorkspaceProjectAssetConfig describes a non-repository child directory that
-// is copied from the canonical workspace into each session workspace.
-type WorkspaceProjectAssetConfig struct {
-	RelativePath string
-	SourcePath   string
 }
 
 // WorkspaceProjectRepoConfig describes one registered child repo in a

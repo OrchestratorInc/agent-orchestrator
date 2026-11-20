@@ -28,7 +28,10 @@ export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) 
 			if (!data || !Array.isArray(data.sessions) || !data.sessions.every(isTaskReading)) {
 				throw new Error("Invalid background task inventory response");
 			}
-			return data;
+			// observedAt changes on every sample and the board does not use it.
+			// Dropping it lets structural sharing keep unchanged readings, so the
+			// board does not re-render on every poll.
+			return { ...data, sessions: data.sessions.map(({ observedAt: _observedAt, ...reading }) => reading) };
 		},
 		select: selectReadings,
 		refetchInterval: 5_000,
@@ -37,7 +40,10 @@ export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) 
 	});
 }
 
-/** Only attached providers are inspected; this read never wakes an agent. */
+/**
+ * Only attached providers are inspected; this read never wakes an agent.
+ * `fast` reads every 2 s, for the side panel's Background tasks tab.
+ */
 export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = false) {
 	return useQuery({
 		queryKey: [...backgroundTasksQueryRoot, sessionId],
@@ -48,8 +54,7 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = f
 			});
 			if (error) throw error;
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
-			// The daemon leaves out a shell task's command when it is the description.
-			return { ...data, tasks: data.tasks.map((task) => task.kind === "shell" && !task.command ? { ...task, command: task.description } : task) };
+			return data;
 		},
 		refetchInterval: fast ? 2_000 : 5_000,
 		staleTime: 1_000,
@@ -70,7 +75,7 @@ export function useStopBackgroundTask(sessionId: string) {
 			});
 			if (error && response.status !== 409) throw error;
 		},
-		onSettled: () => queryClient.invalidateQueries({ queryKey: backgroundTasksQueryRoot }),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: [...backgroundTasksQueryRoot, sessionId] }),
 	});
 }
 

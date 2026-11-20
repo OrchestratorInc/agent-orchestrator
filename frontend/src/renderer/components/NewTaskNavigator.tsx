@@ -53,7 +53,7 @@ export function NewTaskNavigator() {
 
 	useEffect(() => {
 		if (!newTaskRequest || newTaskRequest.nonce === lastNonce.current) return;
-		const { projectId, hostId } = newTaskRequest;
+		const { projectId, hostId, report } = newTaskRequest;
 		const cloudProject = hostId ? undefined : cloudProjects?.find((project) => project.id === projectId);
 		// A request for a project the lists can't place yet waits for them, so it
 		// never opens a new task in an agent (the shortcut on an agent's session
@@ -93,6 +93,7 @@ export function NewTaskNavigator() {
 			search: {
 				project: target === STANDALONE_WORKSPACE_ID ? undefined : target,
 				host: hostId,
+				report,
 			},
 			// A new task from the new chat page replaces it rather than stacking history.
 			replace: Boolean(matchRoute({ to: "/new" })),

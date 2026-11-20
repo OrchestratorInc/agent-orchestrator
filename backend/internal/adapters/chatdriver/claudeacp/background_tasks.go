@@ -61,10 +61,10 @@ func claudeBackgroundTasks(ctx context.Context, conn *acpsdk.ClientSideConnectio
 		default:
 			return nil, fmt.Errorf("background task response has invalid state %q", task.State)
 		}
-		description := domain.SanitizeControlChars(task.Description)
+		description := domain.SanitizeTaskDescription(task.Description)
 		out = append(out, ports.ChatBackgroundTask{
 			ID: task.ID, RunID: task.RunID, Kind: task.Kind, Description: description,
-			Command: domain.SanitizeControlChars(task.Command), State: task.State,
+			Command: domain.SanitizeTaskCommand(task.Command), State: task.State,
 			StartedAt: task.StartedAt, EndedAt: task.EndedAt,
 			// Only AO's patched runtime reports this, and only for a live task.
 			Stoppable: task.Stoppable && task.State == "running",
@@ -90,9 +90,8 @@ func claudeStopBackgroundTask(ctx context.Context, conn *acpsdk.ClientSideConnec
 // claudeBackgroundTaskOutput reads the tail of the output file Claude Code
 // named for a background shell, through AO's runtime extension. The runtime
 // caps the read; this side keeps the last lines and strips terminal escapes.
+// The chat service bounds the call.
 func claudeBackgroundTaskOutput(ctx context.Context, conn *acpsdk.ClientSideConnection, id acpsdk.SessionId, taskID string) (ports.ChatBackgroundTaskOutput, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
 	raw, err := conn.CallExtension(ctx, "_ao/session/background_task_output", map[string]any{
 		"sessionId": id, "taskId": taskID, "maxBytes": backgroundtasks.MaxOutputBytes,
 	})

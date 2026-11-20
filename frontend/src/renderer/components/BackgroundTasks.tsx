@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { create } from "zustand";
@@ -40,7 +40,7 @@ export function BackgroundTasksBadge({ session, reading, stale = false }: {
 	const summary = reading && reading.availability !== "unavailable" ? taskSummary(reading.tasks, t) : null;
 	if (!summary) return null;
 	return (
-		<span className="inline-flex min-w-0 max-w-full items-center gap-1 text-xs text-muted-foreground">
+		<span className="inline-flex min-w-0 max-w-full items-center gap-1 px-3 text-xs text-muted-foreground">
 			<ListTodo aria-hidden="true" className="size-3 shrink-0" />
 			<span className="truncate">{summary}{stale ? ` · ${t("backgroundTasks.stale")}` : ""}</span>
 		</span>
@@ -73,8 +73,8 @@ export function composerBackgroundTasks(reading?: BackgroundTaskReading, seenFai
 	if (!reading || reading.availability === "unavailable") return [];
 	const tasks = reading.tasks.filter((task) => task.kind !== "agent"
 		&& (isLive(task) || (task.state === "failed" && !seenFailures?.includes(failedTaskKey(task)))));
-	// Live work first; the daemon orders by state, but a failure must never lead.
-	return [...tasks.filter(isLive), ...tasks.filter((task) => !isLive(task))];
+	// Failures need attention and must remain visible above the five-row cap.
+	return [...tasks.filter((task) => !isLive(task)), ...tasks.filter(isLive)];
 }
 
 /** Seconds under a minute, minutes under an hour, then hours: "38s", "12m", "1h 5m". */
@@ -98,7 +98,7 @@ export function useNow(tasks: BackgroundTask[]): number {
 	const [now, setNow] = useState(() => Date.now());
 	const live = tasks.filter(isLive);
 	const young = live.some((task) => task.startedAt && now - Date.parse(task.startedAt) < 60_000);
-	const ticking = live.length > 0;
+	const ticking = live.some((task) => !!task.startedAt);
 	useEffect(() => {
 		if (!ticking) return;
 		const timer = window.setInterval(() => setNow(Date.now()), young ? 1_000 : 10_000);
@@ -191,7 +191,7 @@ export function SessionBackgroundTasks({ session, onOpenTask }: { session: Works
 	const query = useBackgroundTasks(session.id, enabled);
 	const seenFailures = useUiStore((state) => state.inspectorSessions[sessionUiKey(session.id, session.hostId)]?.seenFailedTasks);
 	if (!enabled) return null;
-	return <ComposerBackgroundTasks sessionId={session.id} reading={query.data} onOpenTask={onOpenTask} seenFailures={seenFailures} />;
+	return <ComposerBackgroundTasks sessionId={session.id} reading={query.isError ? undefined : query.data} onOpenTask={onOpenTask} seenFailures={seenFailures} />;
 }
 
 /** `onOpenTask` opens a task in the side panel; without it, tasks are not clickable. */
@@ -205,6 +205,8 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 	const { t } = useTranslation();
 	const listId = useId();
 	const tasks = useMemo(() => composerBackgroundTasks(reading, seenFailures), [reading, seenFailures]);
+	// Parsed once per reading, not on every elapsed-time tick.
+	const names = useMemo(() => new Map(tasks.map((task) => [task, backgroundTaskName(task, t)])), [tasks, t]);
 	const live = tasks.filter(isLive);
 	const failedCount = tasks.length - live.length;
 	const now = useNow(tasks);
@@ -217,15 +219,37 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 		setWasSeveral(several);
 		if (!several) setOpen(false);
 	}
+	const region = useRef<HTMLElement>(null);
+	const scope = useRef<HTMLElement | null>(null);
+	const focusedElement = useRef<HTMLElement | null>(null);
+	useLayoutEffect(() => {
+		if (region.current) scope.current = region.current.parentElement;
+		// A poll must not move focus that still belongs to a mounted control.
+		if (!focusedElement.current || focusedElement.current.isConnected || document.activeElement !== document.body) return;
+		focusedElement.current = null;
+		if (document.activeElement === document.body || region.current?.contains(document.activeElement)) {
+			// The next row's Stop first, so repeated keyboard stops keep going.
+			const next =
+				region.current?.querySelector<HTMLElement>("[data-task-id] [data-task-stop]:not(:disabled)") ??
+				region.current?.querySelector<HTMLElement>("[data-task-id] button:not(:disabled)") ??
+				region.current?.querySelector<HTMLElement>("button:not(:disabled)");
+			const editor = scope.current?.querySelector<HTMLElement>('[contenteditable="true"], textarea, [role="textbox"]');
+			(next ?? editor)?.focus();
+		}
+	}, [tasks]);
 	if (!tasks.length) return null;
 
-	const name = (task: BackgroundTask) => backgroundTaskName(task, t);
+	const name = (task: BackgroundTask) => names.get(task) ?? "";
 	const time = (task: BackgroundTask) => {
 		if (failed === task.id) {
-			return <span role="status" className="shrink-0 text-[11px] text-destructive">{t("backgroundTasks.stopFailed")}</span>;
+			return (
+				<span role="status" className="shrink-0 text-caption text-destructive">
+					{t("backgroundTasks.stopFailed")}
+				</span>
+			);
 		}
 		const text = elapsed(task, now);
-		return text ? <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{text}</span> : null;
+		return text ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{text}</span> : null;
 	};
 	// The end of a row: a failure's red dot sits where the stop square would, so
 	// times line up. Background work is meant to keep running (a dev server never
@@ -233,7 +257,7 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 	const trailing = (task: BackgroundTask) => {
 		if (!isLive(task)) {
 			return (
-				<span className="-mr-1 grid size-control-sm shrink-0 place-items-center">
+				<span className="grid size-control-sm shrink-0 place-items-center">
 					<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 rounded-full bg-destructive" />
 				</span>
 			);
@@ -244,8 +268,9 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 				type="button"
 				variant="quiet"
 				size="icon-xs"
-				className="-mr-1 shrink-0"
+				className="shrink-0"
 				aria-label={t("backgroundTasks.stop", { name: name(task) })}
+				data-task-stop=""
 				disabled={stopping.has(task.id)}
 				onClick={() => stop(task.id)}
 			>
@@ -264,50 +289,57 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 		</Pressable>
 	) : content;
 
-	if (!several) {
-		const [task] = tasks;
-		return (
-			<section aria-label={t("backgroundTasks.title")} className="chat-composer-tasks">
-				<div className="flex h-8 min-w-0 items-center gap-2">
-					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-					{opener(task, <>
-						<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
-						<span className="ml-auto flex shrink-0 items-center pl-2">{time(task)}</span>
-					</>)}
-					{trailing(task)}
-				</div>
-			</section>
-		);
-	}
-
 	return (
-		<section aria-label={t("backgroundTasks.title")} className="chat-composer-tasks">
-			<button
-				type="button"
-				aria-expanded={open}
-				aria-controls={open ? listId : undefined}
-				onClick={() => setOpen((value) => !value)}
-				className="flex h-8 w-full min-w-0 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-			>
-				{/* Leads the row like the queued-messages toggle above it. */}
-				<ChevronDown aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", open ? "rotate-0" : "-rotate-90")} />
-				<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-				{live.length ? <span className="shrink-0 text-xs font-medium text-foreground/90">{t("backgroundTasks.runningCount", { count: live.length })}</span> : null}
-				{failedCount ? <span className="min-w-0 truncate text-[11px] text-destructive">{t("backgroundTasks.failedCount", { count: failedCount })}</span> : null}
-			</button>
-			{open ? (
-				<ul id={listId} className="chat-composer-tasks-list">
-					{tasks.map((task) => (
-						<li key={`${task.id}:${task.runId ?? ""}`} className="flex h-8 min-w-0 items-center gap-2">
-							{opener(task, <>
-								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
-								{time(task)}
-							</>)}
-							{trailing(task)}
-						</li>
-					))}
-				</ul>
+		<section
+			ref={region}
+			aria-label={t("backgroundTasks.title")}
+			className="chat-composer-tasks"
+			onFocusCapture={(event) => {
+				focusedElement.current = event.target as HTMLElement;
+			}}
+			onBlurCapture={(event) => {
+				if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) focusedElement.current = null;
+			}}
+		>
+			{several ? (
+				<Pressable
+					aria-expanded={open}
+					aria-controls={open ? listId : undefined}
+					onClick={() => setOpen((value) => !value)}
+					className="flex h-8 w-full min-w-0 items-center gap-2 rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					{/* Leads the row like the queued-messages toggle above it. */}
+					<ChevronDown aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", open ? "rotate-0" : "-rotate-90")} />
+					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+					{live.length ? (
+						<span className="shrink-0 text-xs font-medium text-foreground/90">{t("backgroundTasks.runningCount", { count: live.length })}</span>
+					) : null}
+					{live.length > 0 && failedCount > 0 ? (
+						<span aria-hidden="true" className="text-caption text-muted-foreground">
+							·
+						</span>
+					) : null}
+					{failedCount ? (
+						<span className="min-w-0 truncate text-caption text-destructive">{t("backgroundTasks.failedCount", { count: failedCount })}</span>
+					) : null}
+				</Pressable>
 			) : null}
+			<ul key="task-rows" id={listId} role={several ? "list" : "presentation"} className={several ? "chat-composer-tasks-list" : undefined}>
+				{!several || open
+					? tasks.map((task) => (
+							<li key={`${task.id}:${task.runId ?? ""}`} data-task-id={task.id} className="flex h-8 min-w-0 items-center gap-2">
+								{!several ? <SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : null}
+								{opener(task, <>
+									<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>
+										{name(task)}
+									</span>
+									{time(task)}
+								</>)}
+								{trailing(task)}
+							</li>
+						))
+					: null}
+			</ul>
 		</section>
 	);
 }

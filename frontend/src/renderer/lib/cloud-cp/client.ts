@@ -10,8 +10,15 @@
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
+	CloudCpArtifactShareView,
+	CloudCpSharedArtifact,
 	CloudCpOffering,
 	CloudCpAgentProvider,
+	CloudCpAddAgentAccountRequest,
+	CloudCpAgentAccountResponse,
+	CloudCpAgentAccountsResponse,
+	CloudCpSessionAgentAccount,
+	CloudCpSwitchSessionAgentAccountRequest,
 	CloudCpCancelTurnResponse,
 	CloudCpChatEventsQuery,
 	CloudCpChatEventsResponse,
@@ -41,6 +48,7 @@ import type {
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
 	CloudCpOrgCoderConfigResponse,
+	CloudCpOrgMembersResponse,
 	CloudCpBillingLinkResponse,
 	CloudCpBillingSummary,
 	CloudCpPutOrgCoderConfigRequest,
@@ -64,10 +72,11 @@ import type {
 	CloudCpGitHubUserConnection,
 	CloudCpGitHubRepositoriesPage,
 	CloudCpPutAgentConnectionRequest,
-	CloudCpPutGitHubPATRequest,
 	CloudCpSendMessageRequest,
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
+	CloudCpEditQueuedMessageRequest,
+	CloudCpEditQueuedMessageResponse,
 	CloudCpComposerAnswer,
 	CloudCpSessionChatSettings,
 	CloudCpSharedSessionParticipants,
@@ -127,8 +136,6 @@ import type {
 	CloudCpTerminalTicketResponse,
 	CloudCpUpdateProjectRequest,
 	CloudCpUpdateSessionPreferencesRequest,
-	CloudCpValidateRepositoryAccessRequest,
-	CloudCpValidateRepositoryAccessResponse,
 } from "./types";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -200,6 +207,8 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCreateOrganizationResponse>;
 	listMyInvitations(options?: CloudCpRequestOptions): Promise<CloudCpInvitationsResponse>;
+	/** The organization's active members; any member may read them. */
+	listOrgMembers(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgMembersResponse>;
 
 	listProjects(
 		orgId: string,
@@ -256,6 +265,10 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpArtifactAccessResponse>;
+	/** The links other people shared with the signed-in person, by email or team. */
+	listSharedArtifacts(options?: CloudCpRequestOptions): Promise<{ artifacts: CloudCpSharedArtifact[] }>;
+	/** A link's details with a contentUrl that opens its file for the signed-in person; 404 when it does not open for them. */
+	viewArtifactShare(linkId: string, options?: CloudCpRequestOptions): Promise<CloudCpArtifactShareView>;
 	listSessionArtifacts(
 		orgId: string,
 		sessionId: string,
@@ -485,6 +498,35 @@ export interface CloudCpClient {
 		body: CloudCpSendMessageRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
+	/** Replace a queued message's text and files before the agent starts on it; 409 TURN_NOT_QUEUED once it has. */
+	editQueuedMessage(
+		orgId: string,
+		sessionId: string,
+		turnId: string,
+		body: CloudCpEditQueuedMessageRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpEditQueuedMessageResponse>;
+	/**
+	 * Steer a message still queued into the running turn (offering queued-steer). Answers the
+	 * steer request; chat.turn_steered or chat.turn_steer_failed naming the turn follows.
+	 */
+	steerQueuedMessage(
+		orgId: string,
+		sessionId: string,
+		turnId: string,
+		body: { composerEpoch?: number },
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpSteerTurnResponse>;
+	/** Take back a message still queued, never stopping a turn that left the queue; 409 TURN_NOT_QUEUED once it has (offering queued-delete). */
+	deleteQueuedMessage(
+		orgId: string,
+		sessionId: string,
+		turnId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCancelTurnResponse & {
+		/** The agent is taking the message as a steer: its answer decides (deleted, or delivered). */
+		pending?: boolean;
+	}>;
 	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
 	/** Takes a shared session's composer lease, or renews it when already held. */
 	acquireComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
@@ -577,13 +619,27 @@ export interface CloudCpClient {
 		body: CloudCpPutAgentConnectionRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpProviderConnectionResponse>;
-	putGitHubPAT(body: CloudCpPutGitHubPATRequest, options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionResponse>;
+	/** The caller's accounts for every coding agent (when /me reports agentAccounts). */
+	listAgentAccounts(options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountsResponse>;
+	/** Saves a login or key as another account; the agent's first account becomes its default. 409 AGENT_ACCOUNT_DUPLICATE: already saved. */
+	addAgentAccount(body: CloudCpAddAgentAccountRequest, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	renameAgentAccount(accountId: string, name: string, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	/** 409 AGENT_ACCOUNT_IN_USE: a live session runs on it. */
+	removeAgentAccount(accountId: string, options?: CloudCpRequestOptions): Promise<void>;
+	makeAgentAccountDefault(accountId: string, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	/** Signs an account in again: the login must be the same one, of the same kind. */
+	replaceAgentAccountCredential(accountId: string, body: CloudCpPutAgentConnectionRequest, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	getSessionAgentAccount(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionAgentAccount>;
+	/** Moves the session's agent to another of its creator's accounts: an interface transition in the session's current interface. */
+	switchSessionAgentAccount(
+		orgId: string,
+		sessionId: string,
+		body: CloudCpSwitchSessionAgentAccountRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpStartInterfaceTransitionResponse>;
+	/** Removes a GitHub token saved before Cloud reached GitHub through the App (DELETE /me/github-pat). */
 	deleteGitHubPAT(options?: CloudCpRequestOptions): Promise<void>;
 	listGitHubRepos(options?: CloudCpRequestOptions): Promise<CloudCpGitHubReposResponse>;
-	validateSavedRepositoryAccess(
-		body: CloudCpValidateRepositoryAccessRequest,
-		options?: CloudCpRequestOptions,
-	): Promise<CloudCpValidateRepositoryAccessResponse>;
 
 	// GitHub App connect flow. See the type comments in ./types for the flow.
 	startGitHubInstallation(
@@ -877,6 +933,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		me: (o) => requestJson("GET", "/me", { signal: o?.signal }),
 		createOrganization: (body, o) => requestJson("POST", "/orgs", { body, signal: o?.signal }),
 		listMyInvitations: (o) => requestJson("GET", "/invitations", { signal: o?.signal }),
+		listOrgMembers: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/members`, { signal: o?.signal }),
 
 		listProjects: (orgId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/projects`, {
@@ -946,6 +1003,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson(pinned ? "POST" : "DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pin`, { signal: o?.signal }),
 		createSessionArtifactAccess: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
+		listSharedArtifacts: (o) => requestJson("GET", "/me/shared-artifacts", { signal: o?.signal }),
+		viewArtifactShare: (linkId, o) => requestJson("POST", `/artifact-shares/${seg(linkId)}/view`, { signal: o?.signal }),
 		listSessionArtifacts: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),
 		saveSessionArtifact: (orgId, sessionId, body, o) =>
@@ -1160,6 +1219,21 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
 			}),
+		editQueuedMessage: (orgId, sessionId, turnId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/edit`, {
+				body,
+				signal: o?.signal,
+			}),
+		steerQueuedMessage: (orgId, sessionId, turnId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/steer-queued`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		deleteQueuedMessage: (orgId, sessionId, turnId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/delete`, {
+				signal: o?.signal,
+			}),
 		decideChatApproval: (orgId, sessionId, requestId, decisionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/approvals/${seg(requestId)}/decide`, {
 				body: { decisionId }, signal: o?.signal,
@@ -1267,11 +1341,21 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/providers/${seg(agent)}/models`, { signal: o?.signal }),
 		putUserAgentConnection: (agent, body, o) =>
 			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
-		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),
+		listAgentAccounts: (o) => requestJson("GET", "/me/agent-accounts", { signal: o?.signal }),
+		addAgentAccount: (body, o) => requestJson("POST", "/me/agent-accounts", { body, signal: o?.signal }),
+		renameAgentAccount: (accountId, name, o) =>
+			requestJson("PATCH", `/me/agent-accounts/${seg(accountId)}`, { body: { name }, signal: o?.signal }),
+		removeAgentAccount: (accountId, o) => requestVoid("DELETE", `/me/agent-accounts/${seg(accountId)}`, { signal: o?.signal }),
+		makeAgentAccountDefault: (accountId, o) =>
+			requestJson("POST", `/me/agent-accounts/${seg(accountId)}/default`, { signal: o?.signal }),
+		replaceAgentAccountCredential: (accountId, body, o) =>
+			requestJson("PUT", `/me/agent-accounts/${seg(accountId)}/credential`, { body, signal: o?.signal }),
+		getSessionAgentAccount: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent-account`, { signal: o?.signal }),
+		switchSessionAgentAccount: (orgId, sessionId, body, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent-account`, { body, signal: o?.signal }),
 		deleteGitHubPAT: (o) => requestVoid("DELETE", "/me/github-pat", { signal: o?.signal }),
 		listGitHubRepos: (o) => requestJson("GET", "/me/github/repos", { signal: o?.signal }),
-		validateSavedRepositoryAccess: (body, o) =>
-			requestJson("POST", "/me/github-pat/validate-saved-repository", { body, signal: o?.signal }),
 
 		startGitHubInstallation: (orgId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/github/installations/start`, { signal: o?.signal }),

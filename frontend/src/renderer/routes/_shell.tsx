@@ -22,10 +22,13 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
+import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
+import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
@@ -36,6 +39,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
 import { SwipeNavigation } from "../components/SwipeNavigation";
@@ -78,6 +82,7 @@ import {
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
+import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
@@ -96,7 +101,7 @@ import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
-import { useAppShortcut } from "../hooks/useAppShortcut";
+import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
@@ -164,6 +169,9 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so links it holds survive every route and the
+			    startup loader that replaces the shell while the daemon restarts. */}
+			<SharedArtifactLinkHost />
 		</SettingsProvider>
 	);
 }
@@ -296,6 +304,9 @@ const ShellCenter = memo(function ShellCenter({
 	startingHarness?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
+	// Once the new chat page sends, it takes the session's top bar so the first
+	// message lands where the session will show it, and nothing moves at handoff.
+	const newChatSending = useUiStore((state) => state.newChatSending);
 	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} harness={startingHarness} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
@@ -309,8 +320,8 @@ const ShellCenter = memo(function ShellCenter({
 		<CenterPanelShell
 			className={panelClassName}
 			notifications={!isHomeRoute || startingOrchestrator}
-			// The home and new chat pages have no top bar, so their panel takes the band back.
-			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute, startingOrchestrator })}
+			// The home and unsent new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute: isNewChatRoute && !newChatSending, startingOrchestrator })}
 		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
@@ -337,9 +348,10 @@ function ShellLayout() {
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
 	useWorkspacePolling();
+	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, listed: remoteHostsListed, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -356,12 +368,8 @@ function ShellLayout() {
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
-	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
-	useEffect(() => {
-		if (failedRemoteHostKey) void refreshRemoteHosts();
-	}, [failedRemoteHostKey, refreshRemoteHosts]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
@@ -386,11 +394,14 @@ function ShellLayout() {
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
-	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
+	const firstRunOnboardingOpen = useUiStore((state) => state.firstRunOnboardingOpen);
+	// While the full-window onboarding shows, the shell behind it takes no
+	// focus or clicks; Settings opened from it lifts that, as it steps aside.
+	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
@@ -638,6 +649,17 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// Launch timing: the second frame runs once the first frame that shows the
+	// workspace is on screen. A daemon failure is not a launch, and main logs the
+	// first report only, so nothing is reported while one is showing.
+	const workspaceShown = !isStartupLoading && !daemonStatus.code && workspaceQuery.data !== undefined;
+	useEffect(() => {
+		if (!workspaceShown) return;
+		let frame = requestAnimationFrame(() => {
+			frame = requestAnimationFrame(() => aoBridge.app.reportSessionsShown());
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [workspaceShown]);
 	// The startup loader renders no sidebar, so measure again once the shell
 	// mounts it. Otherwise the strip keeps the 240px default and its fill
 	// paints over the center panel's top-left corner beside a narrower sidebar.
@@ -1107,9 +1129,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[openProjectSettings],
 	);
 	const retryRemoteHosts = useCallback(() => {
-		void refreshRemoteHosts();
+		void retryRemoteHostsNow();
 		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-	}, [queryClient, refreshRemoteHosts]);
+	}, [queryClient, retryRemoteHostsNow]);
 	// A new handler on every shell render would rebuild the sidebar context and
 	// re-render every row button that reads it.
 	const handleSidebarOpenChange = useCallback((open: boolean) => {
@@ -1242,10 +1264,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// transparency").
 	const windowTranslucent = isMac && windowTranslucency;
 
-	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read. A translucent window
-	// paints no background, and the read forces a whole-document style recalc
-	// mid-switch, so it is skipped there.
+	// Match the native window background to the sidebar fill, following both the
+	// mode and the color theme. Deferred a frame so data-theme and
+	// data-style-theme have been applied before the token is read. A translucent
+	// window paints no background, and the read forces a whole-document style
+	// recalc mid-switch, so it is skipped there.
 	useEffect(() => {
 		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
@@ -1253,7 +1276,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, windowTranslucent]);
+	}, [resolvedTheme, themeStyle, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
@@ -1303,7 +1326,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// for the in-scope project, or a standalone agent when no project is in scope.
 	useEffect(
 		() =>
-			aoBridge.app.onNewSessionShortcut(() => {
+			onDedicatedShortcut("new-session", (handler) => aoBridge.app.onNewSessionShortcut(handler), () => {
 			// On the new chat page, stay with the project and host it shows.
 			if (newChatHost) {
 				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID, newChatHost);
@@ -1361,7 +1384,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
-			aoBridge.app.onNewShellTerminalShortcut(() => {
+			onDedicatedShortcut("new-shell-terminal", (handler) => aoBridge.app.onNewShellTerminalShortcut(handler), () => {
 				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
 		[requestNewShellTerminal, routeParams.sessionId],
@@ -1403,9 +1426,101 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[queryClient],
 	);
 
+	// ao-app://sessions/… deep links from external tools. The raw URL is
+	// re-read as its in-app ao:// form and resolved through the same
+	// session-links path as ao:// links, so both schemes behave alike:
+	// artifact routes open the file in the destination session, a terminated
+	// session refuses with the same toast, and a stale link focuses the app
+	// with a quiet toast instead of navigating to a wrong session.
+	//
+	// A link is handled only once its evidence can be trusted, and held until
+	// then (flushed as soon as that flips true):
+	// - the confirmed startup fetch has landed — a green query alone is not
+	//   enough, since the route loader can cache a stale [] from before the
+	//   daemon port was known (same gate the startup loader uses);
+	// - remote hosts that are on have finished loading (or failed) — a
+	//   cold-start link must not race a host's project query, whose workspaces
+	//   carry sessions only after the session query lands too. An offline host
+	//   has concluded its connect attempt, so it counts as settled and never
+	//   holds the gate open;
+	// - the remote side has concluded — useRemoteHosts' settled flag mirrors
+	//   its own enable rule (disabled or signed out never lists), so the gate
+	//   cannot drift from it; a listed host counts as settled once offline,
+	//   failed, or its project and session queries have both landed.
+	const remoteWorkspaceLoadSettled = remoteHostsSettled
+		&& (!remoteHostsListed || remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
+			|| (remoteLoadedProjectHostIds.includes(hostId) && remoteLoadedSessionHostIds.includes(hostId))
+			|| remoteFailedHostIds.includes(hostId)));
+	const sessionDeepLinksReady = workspaceQuery.isSuccess && workspaceStartupState === "ready" && remoteWorkspaceLoadSettled;
+	const pendingSessionDeepLinkRef = useRef<string | null>(null);
+	const handleSessionDeepLink = useCallback(
+		(rawUrl: string) => {
+			const link = `ao://${rawUrl.slice("ao-app://".length)}`;
+			const artifact = parseArtifactLink(link);
+			const target = parseSessionLink(link) ?? artifact;
+			const workspaces = workspacesRef.current;
+			const remoteWorkspaces = remoteWorkspacesRef.current;
+			// Resolve the session and its owning workspace from the same list:
+			// a local and a remote project can share an id, and the workspace
+			// supplies the hostId for the route and artifact requests.
+			const resolvedLocal = target ? resolveSessionLink(link, workspaces) : undefined;
+			const resolvedRemote = target ? resolveSessionLink(link, remoteWorkspaces) : undefined;
+			if (resolvedLocal && resolvedRemote) {
+				// Session ids are <project>-<n> per daemon, so a paired machine
+				// running the same repo can host a session with the same id. The
+				// URL carries no host, so honoring either side is a guess that
+				// can open the wrong session — refuse instead.
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionAmbiguous"));
+				return;
+			}
+			const resolved = resolvedLocal ?? resolvedRemote;
+			const workspace = resolvedLocal
+				? workspaces.find((entry) => entry.id === resolvedLocal.projectId)
+				: resolvedRemote
+					// Hosts merge into one list and can share an id (standalone), so
+					// the workspace must be the one holding the resolved session.
+					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId && entry.sessions.some((session) => session.id === resolvedRemote.sessionId))
+					: undefined;
+			if (!resolved || !workspace) {
+				// A failed host query settles the gate with that host's projects
+				// holding empty session lists, so a miss on such a project is
+				// "could not load", not "does not exist" (CodeRabbit round 4).
+				const missOnFailedHost = target !== undefined && remoteFailedHostIds.some((hostId) =>
+					remoteWorkspacesRef.current.some((entry) => entry.hostId === hostId && entry.id === target.projectId));
+				useUiStore.getState().showGlobalToast(t(missOnFailedHost ? "deepLink.sessionHostUnavailable" : "deepLink.sessionNotFound"));
+				return;
+			}
+			// Same refusal as in-app ao:// links; a terminated session's
+			// artifact files are still served.
+			if (resolved.isTerminated && !artifact) {
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionTerminated", { sessionId: resolved.sessionId }));
+				return;
+			}
+			if (artifact) useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
+			void navigate(sessionNavigateTarget(resolved.projectId, resolved.sessionId, workspace.hostId));
+		},
+		[navigate, remoteFailedHostIds, t],
+	);
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
-		const disposeNext = aoBridge.app.onNextSessionShortcut(() => navigateSession(1));
+		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {
+			if (!sessionDeepLinksReady) {
+				pendingSessionDeepLinkRef.current = rawUrl;
+				return;
+			}
+			handleSessionDeepLink(rawUrl);
+		});
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
+	useEffect(() => {
+		if (!sessionDeepLinksReady) return;
+		const pending = pendingSessionDeepLinkRef.current;
+		if (!pending) return;
+		pendingSessionDeepLinkRef.current = null;
+		handleSessionDeepLink(pending);
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
+
+	useEffect(() => {
+		const disposePrevious = onDedicatedShortcut("previous-session", (handler) => aoBridge.app.onPreviousSessionShortcut(handler), () => navigateSession(-1));
+		const disposeNext = onDedicatedShortcut("next-session", (handler) => aoBridge.app.onNextSessionShortcut(handler), () => navigateSession(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -1426,6 +1541,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
 			remoteHosts,
+			removeProject,
 			retryRemoteHosts,
 			validateImport,
 		}),
@@ -1437,6 +1553,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			openProjectSettings,
 			openProject,
 			remoteHosts,
+			removeProject,
 			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
@@ -1468,7 +1585,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (
@@ -1488,6 +1605,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					</div>
 				) : null}
 				<NewTaskNavigator />
+				<FirstRunOnboarding />
+				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
@@ -1518,6 +1637,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					isLinux && "platform-linux",
 					isFullScreen && "native-fullscreen",
 				)}
+				inert={onboardingCoversShell}
 			>
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on

@@ -74,6 +74,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+				},
 					dictation: {
 						start: async () => undefined,
 						stop: async () => undefined,
@@ -96,6 +99,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
 					onOpenFolderPath: () => () => undefined,
+					onOpenSessionDeepLink: () => () => undefined,
 					onNewSessionShortcut: unsubscribe,
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
@@ -110,12 +114,15 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
 					onScrollPhase: unsubscribe,
 					showPrivacyGuide: async () => undefined,
 					updatePrivacyGuide: async () => false,
 					closePrivacyGuide: async () => undefined,
+					getAppPrivacy: async () => undefined,
+					requestAppPrivacy: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -136,6 +143,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				theme: {
 					set: async () => undefined,
+					systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
@@ -157,16 +165,17 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				cloudShare: {
 					available: async () => true,
-					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
 					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
+					hostLinks: async () => [],
 					publish: async () => ({ status: "cancelled" as const }),
 					cancel: async () => undefined,
 					unpublish: async () => undefined,
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -189,7 +198,43 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 				},
 				agentLogin: { request: async () => null },
-				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+				// This emulates the main-owned protocol for renderer tests; HTTP is
+				// still intercepted by each spec's fake daemon, never assumed successful.
+				sideChats: (() => {
+					let revision = 0;
+					const epoch = "fake-daemon";
+					const entries = new Map<string, import("../../src/shared/side-close").SideCloseEntry>();
+					const listeners = new Set<(state: import("../../src/shared/side-close").SideCloseState) => void>();
+					const state = (sessionId: string | null): import("../../src/shared/side-close").SideCloseState => ({
+						protocolVersion: 1, epoch, revision, recovery: "ready", sessionId,
+						sides: [...entries.values()].filter(side => sessionId === null || side.sessionId === sessionId).map(side => ({ ...side })),
+					});
+					const publish = () => { revision++; for (const listener of listeners) listener(state(null)); };
+					return {
+						protocolVersion: 1 as const, mode: "desktop" as const,
+						capture: async () => undefined,
+						getCloseState: async (sessionId: string) => state(sessionId),
+						onCloseStateChanged: (listener: (value: import("../../src/shared/side-close").SideCloseState) => void) => {
+							listeners.add(listener); return () => { listeners.delete(listener); };
+						},
+						requestClose: async (request: import("../../src/shared/side-close").SideCloseRequest) => {
+							const prior = entries.get(request.sideId);
+							if (request.epoch !== epoch || request.expectedVersion !== (prior?.version ?? 0) ||
+								prior?.status === "closed" || prior?.status === "closing") return state(request.sessionId);
+							const entry: import("../../src/shared/side-close").SideCloseEntry = {
+								id: request.sideId, sessionId: request.sessionId, label: request.sideId,
+								version: (prior?.version ?? 0) + 1, operationId: request.requestId, status: "closing",
+							};
+							entries.set(entry.id, entry); publish();
+							try {
+								const response = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/sessions/${encodeURIComponent(request.sessionId)}/conversation/side-chats/${encodeURIComponent(request.sideId)}`,
+									{ method: "DELETE", redirect: "error", signal: AbortSignal.timeout(30_000) });
+								entry.status = response.status === 204 ? "closed" : "unconfirmed";
+							} catch { entry.status = "unconfirmed"; }
+							entry.version++; publish(); return state(request.sessionId);
+						},
+					};
+				})(),
 				editorHandoff: {
 					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
@@ -237,6 +282,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					navigate: async ({ viewId }: { viewId: string }) => navState(viewId),
 					historySuggestions: async () => [],
 					historyFavicon: async () => undefined,
+					userBrowser: async () => null,
+					openInUserBrowser: async () => ({ name: "", chrome: false }),
 					clear: async (viewId: string) => navState(viewId),
 					goBack: async (viewId: string) => navState(viewId),
 					goForward: async (viewId: string) => navState(viewId),
@@ -439,6 +486,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,
@@ -1039,6 +1089,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+				},
 					dictation: {
 						start: async () => undefined,
 						stop: async () => undefined,
@@ -1061,6 +1114,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
 					onOpenFolderPath: () => () => undefined,
+					onOpenSessionDeepLink: () => () => undefined,
 					onNewSessionShortcut: unsubscribe,
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
@@ -1075,12 +1129,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
 					onScrollPhase: unsubscribe,
 					showPrivacyGuide: async () => undefined,
 					updatePrivacyGuide: async () => false,
 					closePrivacyGuide: async () => undefined,
+					getAppPrivacy: async () => undefined,
+					requestAppPrivacy: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -1101,6 +1158,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				theme: {
 					set: async () => undefined,
+					systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
@@ -1118,16 +1176,17 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				cloudShare: {
 					available: async () => true,
-					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
 					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
+					hostLinks: async () => [],
 					publish: async () => ({ status: "cancelled" as const }),
 					cancel: async () => undefined,
 					unpublish: async () => undefined,
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -1150,7 +1209,43 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					},
 				},
 				agentLogin: { request: async () => null },
-				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+				// This emulates the main-owned protocol for renderer tests; HTTP is
+				// still intercepted by each spec's fake daemon, never assumed successful.
+				sideChats: (() => {
+					let revision = 0;
+					const epoch = "fake-daemon";
+					const entries = new Map<string, import("../../src/shared/side-close").SideCloseEntry>();
+					const listeners = new Set<(state: import("../../src/shared/side-close").SideCloseState) => void>();
+					const state = (sessionId: string | null): import("../../src/shared/side-close").SideCloseState => ({
+						protocolVersion: 1, epoch, revision, recovery: "ready", sessionId,
+						sides: [...entries.values()].filter(side => sessionId === null || side.sessionId === sessionId).map(side => ({ ...side })),
+					});
+					const publish = () => { revision++; for (const listener of listeners) listener(state(null)); };
+					return {
+						protocolVersion: 1 as const, mode: "desktop" as const,
+						capture: async () => undefined,
+						getCloseState: async (sessionId: string) => state(sessionId),
+						onCloseStateChanged: (listener: (value: import("../../src/shared/side-close").SideCloseState) => void) => {
+							listeners.add(listener); return () => { listeners.delete(listener); };
+						},
+						requestClose: async (request: import("../../src/shared/side-close").SideCloseRequest) => {
+							const prior = entries.get(request.sideId);
+							if (request.epoch !== epoch || request.expectedVersion !== (prior?.version ?? 0) ||
+								prior?.status === "closed" || prior?.status === "closing") return state(request.sessionId);
+							const entry: import("../../src/shared/side-close").SideCloseEntry = {
+								id: request.sideId, sessionId: request.sessionId, label: request.sideId,
+								version: (prior?.version ?? 0) + 1, operationId: request.requestId, status: "closing",
+							};
+							entries.set(entry.id, entry); publish();
+							try {
+								const response = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/sessions/${encodeURIComponent(request.sessionId)}/conversation/side-chats/${encodeURIComponent(request.sideId)}`,
+									{ method: "DELETE", redirect: "error", signal: AbortSignal.timeout(30_000) });
+								entry.status = response.status === 204 ? "closed" : "unconfirmed";
+							} catch { entry.status = "unconfirmed"; }
+							entry.version++; publish(); return state(request.sessionId);
+						},
+					};
+				})(),
 				editorHandoff: {
 					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
@@ -1199,6 +1294,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						state.browserError ? navState(viewId, "", state.browserError) : navState(viewId, url),
 					historySuggestions: async () => [],
 					historyFavicon: async () => undefined,
+					userBrowser: async () => null,
+					openInUserBrowser: async () => ({ name: "", chrome: false }),
 					clear: async (viewId: string) => navState(viewId),
 					goBack: async (viewId: string) => navState(viewId),
 					goForward: async (viewId: string) => navState(viewId),
@@ -1388,6 +1485,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,

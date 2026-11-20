@@ -859,6 +859,10 @@ func TestUninstallHooksRemovesPlugin(t *testing.T) {
 	if installed, err := plugin.AreHooksInstalled(ctx, workspace); err != nil || !installed {
 		t.Fatalf("AreHooksInstalled after install = (%v, %v), want (true, nil)", installed, err)
 	}
+	bugTriage := filepath.Join(SkillsDir(workspace), "bug-triage")
+	if _, err := os.Stat(filepath.Join(bugTriage, "SKILL.md")); err != nil {
+		t.Fatalf("bug-triage skill missing after install: %v", err)
+	}
 
 	if err := plugin.UninstallHooks(ctx, workspace); err != nil {
 		t.Fatal(err)
@@ -871,6 +875,9 @@ func TestUninstallHooksRemovesPlugin(t *testing.T) {
 	}
 	if _, err := os.Stat(opencodeSkillDir(workspace)); !os.IsNotExist(err) {
 		t.Fatalf("AO using-ao skill still present after uninstall: err=%v", err)
+	}
+	if _, err := os.Stat(bugTriage); !os.IsNotExist(err) {
+		t.Fatalf("AO bug-triage skill still present after uninstall: err=%v", err)
 	}
 	if _, err := os.Stat(opencodeSkillMarkerPath(workspace)); !os.IsNotExist(err) {
 		t.Fatalf("AO skill marker still present after uninstall: err=%v", err)

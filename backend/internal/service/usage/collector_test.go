@@ -2155,10 +2155,29 @@ func TestDiscoverClaudePathRejectsGlobMetadata(t *testing.T) {
 	writeUsageFixture(t, filepath.Join(root, "project", "native-session.jsonl"), "{}\n")
 	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
 
-	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "")
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "", "")
 	mustNoError(t, err)
 	if path != "" {
 		t.Fatalf("invalid Claude native ID discovered %q", path)
+	}
+}
+
+func TestDiscoverClaudePathReadsTheWorkspaceProjectDirectory(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	resolved, err := filepath.EvalSymlinks(workspace)
+	mustNoError(t, err)
+	want := filepath.Join(root, claudeProjectDirName(resolved), "native-session.jsonl")
+	writeUsageFixture(t, want, "{}\n")
+	other := filepath.Join(root, "other-project", "native-session.jsonl")
+	writeUsageFixture(t, other, "{}\n")
+	later := time.Now().Add(time.Hour)
+	mustNoError(t, os.Chtimes(other, later, later))
+	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
+
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "native-session", "", workspace)
+	mustNoError(t, err)
+	if path != want {
+		t.Fatalf("discoverPath = %q, want %q", path, want)
 	}
 }
 
@@ -2187,6 +2206,101 @@ func TestReconcileCodexRootAcceptsScalarSourceMetadata(t *testing.T) {
 	sources, err := store.ListUsageSourcesForBinding(context.Background(), binding.ID)
 	if err != nil || len(sources) != 1 {
 		t.Fatalf("sources = %+v, err=%v; want one registered rollout", sources, err)
+	}
+}
+
+func TestReconcileSettlesFinalizingBindingWhoseTranscriptNeverAppears(t *testing.T) {
+	store := collectorTestStore(t)
+	now := time.Now().UTC()
+	staleSession := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-gone", true)
+	seedCollectorUsageBinding(
+		t, store, staleSession, "native-gone", domain.UsageBindingFinalizing,
+		now.Add(-2*time.Hour), domain.UsageErrorSourceDiscoveryPending,
+	)
+	recentSession := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-late", true)
+	seedCollectorUsageBinding(
+		t, store, recentSession, "native-late", domain.UsageBindingFinalizing,
+		now.Add(-5*time.Minute), domain.UsageErrorSourceDiscoveryPending,
+	)
+
+	collector := NewCollector(store, SourceRoots{ClaudeProjects: t.TempDir()}, nil)
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile missing transcripts")
+
+	stale, ok, err := store.GetUsageBinding(context.Background(), staleSession.ID, staleSession.Harness, "native-gone")
+	if err != nil || !ok {
+		t.Fatalf("get stale binding: ok=%v err=%v", ok, err)
+	}
+	if stale.State != domain.UsageBindingPartial || stale.LastErrorCode != domain.UsageErrorArtifactMissing {
+		t.Fatalf("stale binding = %s/%s, want partial/artifact_missing", stale.State, stale.LastErrorCode)
+	}
+	recent, ok, err := store.GetUsageBinding(context.Background(), recentSession.ID, recentSession.Harness, "native-late")
+	if err != nil || !ok {
+		t.Fatalf("get recent binding: ok=%v err=%v", ok, err)
+	}
+	if recent.State != domain.UsageBindingFinalizing || recent.LastErrorCode != domain.UsageErrorSourceDiscoveryPending {
+		t.Fatalf("recent binding = %s/%s, want finalizing/source_discovery_pending", recent.State, recent.LastErrorCode)
+	}
+}
+
+func TestReconcileKeepsFinalizingBindingWithUnreadSource(t *testing.T) {
+	store := collectorTestStore(t)
+	now := time.Now().UTC()
+	session := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-unread", true)
+	binding := seedCollectorUsageBinding(
+		t, store, session, "native-unread", domain.UsageBindingFinalizing,
+		now.Add(-2*time.Hour), domain.UsageErrorSourceDiscoveryPending,
+	)
+	source, err := store.InsertUsageSource(context.Background(), domain.UsageSourceRecord{
+		BindingID:       binding.ID,
+		Kind:            domain.UsageSourceClaudeSubagent,
+		NativeSessionID: "native-unread",
+		SubagentID:      "child",
+		ArtifactPath:    filepath.Join(t.TempDir(), "subagents", "agent-child.jsonl"),
+		FileIdentity:    "dev:child",
+		State:           domain.UsageSourcePending,
+		UpdatedAt:       now,
+	})
+	mustNoError(t, err)
+	collector := NewCollector(store, SourceRoots{ClaudeProjects: t.TempDir()}, nil)
+
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile with unread child")
+	got, _, err := store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-unread")
+	mustNoError(t, err)
+	if got.State != domain.UsageBindingFinalizing {
+		t.Fatalf("binding state = %s, want finalizing while a source is unread", got.State)
+	}
+
+	_, err = store.MarkUsageSourceState(context.Background(), source.ID, domain.UsageSourceComplete, "", nil, now)
+	mustNoError(t, err)
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile after child read")
+	got, _, err = store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-unread")
+	mustNoError(t, err)
+	if got.State != domain.UsageBindingPartial || got.LastErrorCode != domain.UsageErrorArtifactMissing {
+		t.Fatalf("binding = %s/%s, want partial/artifact_missing once every source is read", got.State, got.LastErrorCode)
+	}
+}
+
+func TestResumedSessionReactivatesBindingSettledForMissingTranscript(t *testing.T) {
+	store := collectorTestStore(t)
+	now := time.Now().UTC()
+	session := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-resumed", false)
+	seedCollectorUsageBinding(
+		t, store, session, "native-resumed", domain.UsageBindingFinalizing,
+		now.Add(-2*time.Hour), domain.UsageErrorSourceDiscoveryPending,
+	)
+	collector := NewCollector(store, SourceRoots{ClaudeProjects: t.TempDir()}, nil)
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile missing transcript")
+	settled, _, err := store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-resumed")
+	mustNoError(t, err)
+	if settled.State != domain.UsageBindingPartial {
+		t.Fatalf("binding state = %s, want partial before resume", settled.State)
+	}
+
+	mustNoError(t, collector.ReactivateSession(context.Background(), session.ID, session.Metadata.RuntimeLaunchID), "resume")
+	resumed, _, err := store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-resumed")
+	mustNoError(t, err)
+	if resumed.State != domain.UsageBindingActive || resumed.LastErrorCode != "" {
+		t.Fatalf("resumed binding = %s/%s, want active with no error", resumed.State, resumed.LastErrorCode)
 	}
 }
 

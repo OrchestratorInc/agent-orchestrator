@@ -98,7 +98,7 @@ func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 				LookPath: func(string) (string, error) {
 					return "", errors.New("not on PATH")
 				},
-				RunInteractiveCommand: func(_ context.Context, name string, args []string, _ io.Reader, _, _ io.Writer) error {
+				RunInteractiveCommand: func(_ context.Context, name, dir string, args []string, _ io.Reader, _, _ io.Writer) error {
 					gotName = name
 					gotArgs = append([]string(nil), args...)
 					return nil
@@ -139,7 +139,7 @@ func setupTokenDeps(t *testing.T, token string, output io.Writer) Deps {
 	return Deps{
 		In: strings.NewReader("4\n"), Out: output, Err: io.Discard,
 		ReadSecret: func(io.Reader) ([]byte, error) { return []byte(token), nil },
-		RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+		RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
 			t.Fatal("setup token must not be sent to the Claude CLI")
 			return nil
 		},
@@ -189,7 +189,7 @@ func TestClaudeLoginSucceedsWhenRecordingTheSignInFails(t *testing.T) {
 		LookPath: func(string) (string, error) {
 			return "", errors.New("not on PATH")
 		},
-		RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+		RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
 			return nil
 		},
 	})

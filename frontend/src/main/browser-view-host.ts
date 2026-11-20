@@ -60,6 +60,8 @@ import { trustPreviewCertificate } from "./preview-certificate";
 import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
+import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
+import type { UserBrowser } from "./user-browser";
 import type {
 	BrowserLiveSink,
 	BrowserLiveState,
@@ -136,6 +138,8 @@ export type BrowserNavState = {
   canGoForward: boolean;
   isLoading: boolean;
   error?: string;
+  /** The page's site refuses this browser (see browser-site-block.ts). */
+  siteBlock?: BrowserSiteBlock;
 };
 
 export type BrowserTabState = {
@@ -314,7 +318,7 @@ export function shouldHandleAppShortcutInBrowserContext(
   chord: ShortcutChord,
   isMac: boolean,
 ): boolean {
-  if (id === "find-in-chat") return false;
+  if (id === "find-in-chat" || id === "add-selection-to-chat") return false;
   if (id === "new-shell-terminal" || id === "close-shell-terminal" || id === "split-shell-terminal" || id === "split-shell-terminal-down")
     return false;
   // Dictation types into the chat composer, never a page.
@@ -369,6 +373,8 @@ type BrowserWebContents = Pick<
   closeDevTools?: () => void;
   close?: () => void;
   isFocused?: () => boolean;
+  setBackgroundThrottling?: (allowed: boolean) => void;
+  isCurrentlyAudible?: () => boolean;
   session?: Pick<
     Session,
     | "on"
@@ -509,6 +515,10 @@ export type BrowserViewHostOptions = {
   browserHistoryStore?: BrowserHistoryStore;
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
+  /** Open a page in the person's own browser (Chrome when installed). */
+  openInUserBrowser?: (url: string) => Promise<UserBrowser>;
+  /** Which browser openInUserBrowser would use, to name the action. */
+  describeUserBrowser?: () => Promise<UserBrowser>;
   // Configures a browser partition's session before its first page exists.
   prepareBrowserPartition?: (partition: string) => void;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
@@ -636,6 +646,12 @@ type BrowserEntry = {
   navigationGeneration: number;
   blockedNavigationGeneration: number;
   networkCapture?: BrowserNetworkCapture;
+  /** The site refuses this browser; offered to continue in the person's browser. */
+  siteBlock?: BrowserSiteBlock;
+  /** A Cloudflare challenge this tab is on, which may still pass by itself. */
+  challenge?: { host: string; at: number; count: number; timer?: ReturnType<typeof setTimeout> };
+  /** Chromium may throttle this tab's timers and frames (see syncBackgroundThrottling). */
+  backgroundThrottled?: boolean;
   favicon?: string;
   // URL of the favicon currently applied to `favicon` (fetch succeeded).
   faviconSourceUrl?: string;
@@ -728,7 +744,7 @@ type BrowserLogEntry = {
 // Text only — never a request/response body, matching the existing on-demand
 // network capture's privacy stance (see MAX_NETWORK_REQUESTS below).
 type BrowserSignalEntry = {
-  kind: "console-error" | "network-failure";
+  kind: "console-error" | "network-failure" | "site-blocked";
   message: string;
   timestamp: string;
 };
@@ -819,6 +835,10 @@ const UNTRUSTED_END = "<<<END UNTRUSTED EXTERNAL CONTENT>>>";
 // preview origin instead.
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const TEMPORARY_BROWSER_PARTITION_PREFIX = "persist:ao-browser-temporary-";
+// A Cloudflare check usually passes by itself within a few seconds. Offer to
+// continue elsewhere only when it is still up after this long, or repeats.
+const SITE_CHALLENGE_GRACE_MS = 10_000;
+const SITE_CHALLENGE_LOOP_MS = 60_000;
 // A confirmed profile switch refuses new agent commands and waits for the
 // in-flight ones (and stopped page loads) to finish. Agent commands can run for
 // up to 60s, so without a cap the switch would hang and block every other agent
@@ -1009,6 +1029,32 @@ export function createBrowserViewHost(
     if (isBrowserIdle(session))
       session.idleWaiters.splice(0).forEach((wake) => wake());
   };
+  // Tabs start unthrottled so agents can drive pages nobody is looking at. A
+  // session whose panel is hidden and that nothing is using keeps every page's
+  // timers, animations and polling at full speed for as long as it stays open,
+  // so let Chromium throttle it then (and, after five hidden minutes, apply
+  // its intensive throttling). Agent commands, browser operations, the mobile
+  // stream, network capture, DevTools and audible tabs keep pages unthrottled.
+  const syncBackgroundThrottling = (session: BrowserSessionEntry): void => {
+    const throttle =
+      !session.visible &&
+      !session.live &&
+      !session.devtools &&
+      isBrowserIdle(session) &&
+      ![...session.tabs.values()].some((entry) => entry.networkCapture?.active);
+    for (const entry of session.tabs.values()) {
+      const contents = entry.view.webContents;
+      if (!contents?.setBackgroundThrottling) continue;
+      try {
+        const allowed = throttle && contents.isCurrentlyAudible?.() !== true;
+        if ((entry.backgroundThrottled ?? false) === allowed) continue;
+        contents.setBackgroundThrottling(allowed);
+        entry.backgroundThrottled = allowed;
+      } catch {
+        // The page is being torn down; its throttling no longer matters.
+      }
+    }
+  };
   const waitForBrowserIdle = (
     session: BrowserSessionEntry,
     timeoutMs: number,
@@ -1045,6 +1091,7 @@ export function createBrowserViewHost(
       0,
       session.agentBrowserCommands + (active ? 1 : -1),
     );
+    syncBackgroundThrottling(session);
     if (!active) wakeIfIdle(session);
     shellWebContents.send("browser:agentActivity", {
       viewId: session.viewId,
@@ -1131,6 +1178,7 @@ export function createBrowserViewHost(
     const devtools = session.devtools;
     if (!devtools) return;
     session.devtools = undefined;
+    syncBackgroundThrottling(session);
     try {
       devtools.contents.closeDevTools?.();
     } catch {
@@ -1292,6 +1340,7 @@ export function createBrowserViewHost(
         return;
       }
       session.devtools = undefined;
+      syncBackgroundThrottling(session);
       pushDevToolsState(session);
     });
     // Always-on: level 0-2 are verbose/info/warning, 3 is error. This is a
@@ -1479,6 +1528,10 @@ export function createBrowserViewHost(
       activateTab(session, tabId, false);
       if (syncNativeOnActivate) queueNativeActiveTabSync(session);
     }
+    // A tab can join a session nothing is using (a page's popup while its
+    // panel is hidden), and a page that starts playing audio must keep going.
+    view.webContents.on("audio-state-changed", () => syncBackgroundThrottling(session));
+    syncBackgroundThrottling(session);
     return entry;
   };
 
@@ -1602,10 +1655,12 @@ export function createBrowserViewHost(
     operation: () => Promise<T>,
   ): Promise<T> => {
     session.browserOperations += 1;
+    syncBackgroundThrottling(session);
     try {
       return await operation();
     } finally {
       session.browserOperations = Math.max(0, session.browserOperations - 1);
+      syncBackgroundThrottling(session);
       wakeIfIdle(session);
     }
   };
@@ -1648,6 +1703,12 @@ export function createBrowserViewHost(
     };
     const filter = { urls: ["*://*/*"] };
     electronSession.webRequest.onCompleted(filter, (details) => {
+      if (details.resourceType === "mainFrame") {
+        const owner = ownerFor(details.webContentsId);
+        const tab = typeof details.webContentsId === "number" ? tabsByWebContentsId.get(details.webContentsId) : undefined;
+        if (owner && tab) observeSiteResponse(owner, tab, details);
+        return;
+      }
       if (details.resourceType !== "xhr" || details.statusCode < 400) return;
       const owner = ownerFor(details.webContentsId);
       if (!owner) return;
@@ -1695,6 +1756,61 @@ export function createBrowserViewHost(
     });
     if (entries.length > MAX_BROWSER_SIGNALS)
       entries.splice(0, entries.length - MAX_BROWSER_SIGNALS);
+  };
+
+  const setSiteBlock = (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    block: BrowserSiteBlock | undefined,
+  ): void => {
+    const current = entry.siteBlock;
+    if (current?.reason === block?.reason && current?.host === block?.host) return;
+    entry.siteBlock = block;
+    if (block) {
+      recordBrowserSignal(session, {
+        kind: "site-blocked",
+        message: `site-blocked: ${block.host} refuses this browser (${block.reason})`,
+      });
+    }
+    if (session.activeTabId === entry.tabId) pushNavState(options, entry);
+  };
+
+  const clearSiteChallenge = (entry: BrowserEntry): void => {
+    if (entry.challenge?.timer) clearTimeout(entry.challenge.timer);
+    entry.challenge = undefined;
+  };
+
+  // Each finished top-level response says whether the site accepts this
+  // browser. Hard refusals show at once; a Cloudflare check gets a grace
+  // period, since it normally passes by itself and reloads the real page.
+  const observeSiteResponse = (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    details: { url: string; statusCode: number; responseHeaders?: Record<string, string[]> },
+  ): void => {
+    const response = classifySiteResponse({ url: details.url, statusCode: details.statusCode, headers: details.responseHeaders });
+    if (!response) return;
+    if (response.kind !== "challenge") {
+      clearSiteChallenge(entry);
+      setSiteBlock(session, entry, response.kind === "blocked" ? response.block : undefined);
+      return;
+    }
+    const now = Date.now();
+    const previous = entry.challenge;
+    const count = previous && previous.host === response.host && now - previous.at < SITE_CHALLENGE_LOOP_MS ? previous.count + 1 : 1;
+    clearSiteChallenge(entry);
+    const challenge: NonNullable<BrowserEntry["challenge"]> = { host: response.host, at: now, count };
+    entry.challenge = challenge;
+    const block: BrowserSiteBlock = { reason: "verification", host: response.host };
+    if (count >= 2) {
+      setSiteBlock(session, entry, block);
+      return;
+    }
+    challenge.timer = setTimeout(() => {
+      if (entry.challenge !== challenge || entries.get(session.viewId) !== session || session.tabs.get(entry.tabId) !== entry) return;
+      setSiteBlock(session, entry, block);
+    }, SITE_CHALLENGE_GRACE_MS);
+    challenge.timer.unref?.();
   };
 
   const ensureNativeActiveTab = async (
@@ -2220,23 +2336,19 @@ export function createBrowserViewHost(
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
-      if (!session.tabs.size) {
-        // Connecting agent-browser to zero targets bootstraps its own page
-        // before tab-new runs. Create the first user tab directly so one
-        // request cannot produce both a bootstrap page and a requested page.
-        await openTab(session, url, true);
-        session.nativeActiveTabId = undefined;
-        session.snapshotDeltaBaseline = undefined;
-        return listTabs(session);
-      }
-      await options.agentBrowserRuntime!.runAction(
-        session.sessionId,
-        "tab-new",
-        { url },
-        agentBrowserTargets(session),
-      );
-      session.nativeActiveTabId = session.activeTabId;
+      // A tab the person opens (a link clicked in chat, the + button) is made
+      // here, not through agent-browser's `tab new`. That ran the CLI twice and,
+      // the first time, started its daemon, all before the page began to load,
+      // so the first link took seconds to appear. The bridge's createTarget
+      // ends in this same openTab call anyway. agent-browser hears about the
+      // tab from the bridge, and its next command selects the person's tab by
+      // CDP identity first (ensureNativeActiveTab), as after a person closes a
+      // tab. Creating it directly also keeps a first tab from racing the
+      // bootstrap page agent-browser makes when it connects to zero targets.
+      await openTab(session, url, true);
+      session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
+      options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
       return listTabs(session);
     });
   };
@@ -2594,6 +2706,7 @@ export function createBrowserViewHost(
         retargetQueue: Promise.resolve(),
         revealRequested: false,
       };
+      syncBackgroundThrottling(session);
     }
     return retargetDevTools(session, entry.tabId, true);
   };
@@ -2761,6 +2874,7 @@ export function createBrowserViewHost(
       session.visible = false;
       if (!session.profileSwitching && session.tabs.size > 0)
         applySessionBounds(session, activeEntry(session));
+      syncBackgroundThrottling(session);
       // Hiding the native surface (blank tab, transient measure) must not drop
       // the browser shortcut target — the panel chrome is still the context.
       forgetNativeFocus(viewId);
@@ -2775,6 +2889,7 @@ export function createBrowserViewHost(
       options.mainWindow.getContentBounds(),
     );
     session.visible = true;
+    syncBackgroundThrottling(session);
     if (session.bounds.width > 0 && session.bounds.height > 0) {
       session.lastVisibleSize = {
         width: session.bounds.width,
@@ -2998,6 +3113,8 @@ export function createBrowserViewHost(
   const destroy = (viewId: string): void => {
     const session = entries.get(viewId);
     if (!session) return;
+    // Every teardown path below, including a window that already closed.
+    for (const entry of session.tabs.values()) clearSiteChallenge(entry);
 		const live = session.live;
 		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
 		session.live = undefined;
@@ -3037,6 +3154,7 @@ export function createBrowserViewHost(
   };
 
   const destroyTabView = (entry: BrowserEntry): void => {
+    clearSiteChallenge(entry);
     applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
     options.mainWindow.contentView.removeChildView?.(entry.view);
     if (entry.view.webContents.debugger?.isAttached()) {
@@ -3733,6 +3851,17 @@ export function createBrowserViewHost(
       ? invokeNav(viewId, "stop", true)
       : emptyNavState(viewId),
   );
+  handle("browser:userBrowser", async () => (await options.describeUserBrowser?.()) ?? null);
+  // The page comes from the tab itself, never from the renderer.
+  handle("browser:openInUserBrowser", async (event, viewId: string): Promise<UserBrowser> => {
+    const session = isRendererOwned(event, viewId) ? entries.get(viewId) : undefined;
+    const entry = session?.tabs.size ? activeEntry(session) : undefined;
+    const url = entry ? readNavState(entry).url : "";
+    if (!options.openInUserBrowser || !canOpenInUserBrowser(url, { agentTab: entry?.agentTab !== undefined })) {
+      throw browserError("BROWSER_URL_FORBIDDEN", "This page cannot be opened in another browser");
+    }
+    return options.openInUserBrowser(url);
+  });
   handle("browser:find", (event, input: BrowserFindInput) => {
     const session =
       typeof input?.viewId === "string" ? entries.get(input.viewId) : undefined;
@@ -4120,6 +4249,7 @@ export function createBrowserViewHost(
 		const session = await ensureSessionReady(sessionId);
 		if (session.live) await stopLiveCapture(session);
 		session.live = { streamId, sink };
+		syncBackgroundThrottling(session);
 		// Report an empty browser immediately, even before a hidden renderer
 		// finishes preparing capture. The phone must not wait for a blank frame.
 		try {
@@ -4128,6 +4258,7 @@ export function createBrowserViewHost(
 			return emitLiveState(session);
 		} catch (error) {
 			session.live = undefined;
+			syncBackgroundThrottling(session);
 			if (!session.visible) applySessionBounds(session, activeEntry(session));
 			throw error;
 		}
@@ -4140,6 +4271,7 @@ export function createBrowserViewHost(
 		live.tabId = undefined;
 		const screencast = live.screencast;
 		live.screencast = undefined;
+		syncBackgroundThrottling(session);
 		if (!session.visible) applySessionBounds(session, activeEntry(session));
 		return screencast?.stop();
 	}
@@ -4316,7 +4448,9 @@ export function createBrowserViewHost(
       if (!session.tabs.size && action === "tabs") return agentTabsResult(session);
       const commandId = randomUUID();
       setAgentBrowserActivity(session, action, true, commandId, "started");
-      try {
+      // Branches return pending work (runNative, network capture setup). The
+      // command stays active, and its pages unthrottled, until that settles.
+      const run = async (): Promise<unknown> => {
         if (!session.tabs.size) {
           if (action === "tab-new") {
             const url = typeof args.url === "string" && args.url.trim()
@@ -4919,6 +5053,7 @@ export function createBrowserViewHost(
               session,
               entry,
               networkDurationArg(args.durationSeconds),
+              () => syncBackgroundThrottling(session),
             );
           case "network-status":
             return networkCaptureStatus(networkEntryFor(session));
@@ -4946,6 +5081,9 @@ export function createBrowserViewHost(
               `Unsupported browser action: ${action}`,
             );
         }
+      };
+      try {
+        return await run();
       } finally {
         setAgentBrowserActivity(session, action, false, commandId, "finished");
       }
@@ -6104,7 +6242,17 @@ function readNavState(entry: BrowserEntry): BrowserNavState {
     // the panel renders its "enter a URL" empty state and the address bar is
     // blank rather than showing "about:blank".
     url: page.url === "about:blank" ? "" : page.url,
+    // Only while the tab is still on the refusing site.
+    ...(entry.siteBlock && hostOf(page.url) === entry.siteBlock.host ? { siteBlock: entry.siteBlock } : {}),
   };
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
 }
 
 function wireAutomationEvents(
@@ -6158,6 +6306,9 @@ async function startNetworkCapture(
   session: BrowserSessionEntry,
   entry: BrowserEntry,
   durationSeconds: number,
+  // Expiry ends capture outside any command, so whoever tracks its state
+  // (background throttling) must hear about it.
+  onExpired?: () => void,
 ): Promise<unknown> {
   const existing = networkEntryFor(session);
   if (existing.networkCapture?.active) {
@@ -6179,7 +6330,7 @@ async function startNetworkCapture(
     byRequestId: new Map(),
   };
   capture.timer = setTimeout(() => {
-    void stopNetworkCapture(entry, "expired");
+    void stopNetworkCapture(entry, "expired").finally(() => onExpired?.());
   }, durationSeconds * 1_000);
   entry.networkCapture = capture;
   session.networkTabId = entry.tabId;
@@ -6530,7 +6681,11 @@ function browserSignalMessages(
     level: "error",
     message: markUntrusted(externalText(entry.message)),
     source:
-      entry.kind === "console-error" ? "browser-console" : "browser-network",
+      entry.kind === "console-error"
+        ? "browser-console"
+        : entry.kind === "site-blocked"
+          ? "browser-site"
+          : "browser-network",
     timestamp: entry.timestamp,
   }));
 }

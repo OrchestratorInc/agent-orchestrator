@@ -66,6 +66,9 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { LinkFavicon } from "../LinkPreviewCard";
+import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
+import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
@@ -106,6 +109,18 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 // How long a settled reply keeps its fade spans, so the last characters (and the final
 // flush of buffered text) finish fading in before they are dropped.
 const FADE_SHED_MS = 450;
+// How long a character's `stream-char` fade lasts (styles.css).
+const CHAR_FADE_MS = 300;
+
+// The text's length CHAR_FADE_MS ago, from the lengths seen on earlier renders.
+// Characters before it have finished fading, so they render plain.
+function fadedLength(seen: { at: number; length: number }[], length: number): number {
+	const now = performance.now();
+	if (seen.at(-1)?.length !== length) seen.push({ at: now, length });
+	const cutoff = now - CHAR_FADE_MS;
+	while (seen.length > 1 && seen[1].at <= cutoff) seen.shift();
+	return seen[0].at <= cutoff ? seen[0].length : 0;
+}
 
 /**
  * Whether the prose is still arriving, for the fences inside it.
@@ -259,7 +274,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	const [openedOffset] = useState(() => (chatOpening.current ? text.length : 0));
 	const hiddenOffset = useRef(0);
 	if (pageHidden()) hiddenOffset.current = text.length;
-	const settledOffset = Math.max(openedOffset, hiddenOffset.current);
+	const seenLengths = useRef<{ at: number; length: number }[]>([]);
+	const settledOffset = Math.max(openedOffset, hiddenOffset.current, fadedLength(seenLengths.current, text.length));
 	const renderMath = useUiStore((state) => state.renderMath);
 	const plugins = useMemo(() => {
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;
@@ -301,7 +317,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 						repairInline={block.repairInline}
 						streaming={streaming && index === blocks.blocks.length - 1}
 						fading={animate && index === blocks.blocks.length - 1}
-						settledOffset={Math.max(0, settledOffset - block.start)}
+						// Only the fading chunk reads it; it changes on every render.
+						settledOffset={index === blocks.blocks.length - 1 ? Math.max(0, settledOffset - block.start) : 0}
 						remarkPlugins={plugins}
 						rehypePlugins={rehypePlugins}
 					/>
@@ -398,7 +415,7 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 					<CopyButton text={code} label="Copy code" />
 				</div>
 			</div>
-			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
+			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
 				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
@@ -434,7 +451,26 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string };
+// Renders a `stream-text` wrapper from rehypeStreamFade: its settled text plain,
+// then each later character in a `stream-char` span keyed by its source offset,
+// so a character keeps its element, and fades in only once, as the text grows.
+function StreamText({ node }: { node?: HastElement }) {
+	const child = node?.children[0];
+	const text = child?.type === "text" ? child.value : "";
+	const kept = Number(node?.properties.dataKept ?? 0);
+	let offset = Number(node?.properties.dataStart ?? 0) + kept;
+	const fading: ReactNode[] = [];
+	for (const { segment } of GRAPHEME_SEGMENTER.segment(text.slice(kept))) {
+		// compactEmoji must see emoji as plain strings.
+		fading.push(EMOJI_GRAPHEME.test(segment)
+			? <Fragment key={offset}>{compactEmoji(segment)}</Fragment>
+			: <span key={offset} className="stream-char">{segment}</span>);
+		offset += segment.length;
+	}
+	return <>{compactEmoji(text.slice(0, kept))}{fading}</>;
+}
+
+type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement };
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
@@ -462,7 +498,42 @@ function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 		: <MarkdownLinkTarget {...props} />;
 }
 
-function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLinkProps) {
+/** Whether a markdown link wraps a picture, which marks itself. */
+function linksImage(node: HastElement | undefined): boolean {
+	return node?.children.some((child) => child.type === "element" && child.tagName === "img") ?? false;
+}
+
+/**
+ * A web link's site icon before its text, behind a shimmering globe until it
+ * arrives and a still one when none does. Asked for as soon as the link
+ * renders (its site root only, once per site). A fixed 14px slot, so the text
+ * never moves when the icon arrives or fails.
+ */
+function InlineLinkFavicon({ href }: { href: string }) {
+	const cachedState = useCachedLinkFavicons(href);
+	const favicons = cachedState === "failed" ? undefined : cachedState;
+	const cached = Boolean(favicons);
+	const loadable = useMemo(() => canLoadLinkFavicon(href), [href]);
+	useEffect(() => {
+		if (!cached && loadable) preloadLinkFavicon(href);
+	}, [cached, href, loadable]);
+	return (
+		<span
+			aria-hidden="true"
+			data-link-favicon=""
+			className="me-1 inline-flex size-3.5 select-none align-[-0.15em] text-muted-foreground"
+		>
+			<LinkFavicon
+				faviconUrl={favicons?.faviconUrl}
+				faviconDarkUrl={favicons?.faviconDarkUrl}
+				pending={cachedState === undefined && loadable}
+				className="size-3.5 shrink-0"
+			/>
+		</span>
+	);
+}
+
+function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -522,6 +593,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 			rel="noreferrer noopener"
 			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
+			{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}
 			<ChatImageLinkScope>
 				<InsideMarkdownLink.Provider value>
 					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
@@ -709,7 +781,9 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 }
 
 const COMPONENTS: Components = {
-	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
+	span: ({ children, node, ...props }) => props.className === "stream-text"
+		? <StreamText node={node} />
+		: <span {...props}>{compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children, node: _node, ...props }) => (
@@ -786,7 +860,7 @@ const COMPONENTS: Components = {
 	// Wide tables scroll inside their own container so the conversation column
 	// never scrolls sideways.
 	table: ({ children }) => (
-		<div className="my-2.5 overflow-x-auto rounded-lg border border-border">
+		<div data-no-swipe-nav="" className="my-2.5 overflow-x-auto rounded-lg border border-border">
 			<table className="w-full border-collapse text-xs">{children}</table>
 		</div>
 	),

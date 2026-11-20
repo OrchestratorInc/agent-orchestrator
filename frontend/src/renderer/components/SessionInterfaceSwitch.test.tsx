@@ -647,3 +647,28 @@ describe("account moves", () => {
 		expect(screen.queryByRole("button", { name: "Cancel request and switch" })).not.toBeInTheDocument();
 	});
 });
+
+describe("an agent switch", () => {
+	const agentSwitch = (phase: SessionInterfaceTransition["phase"], extra: Partial<SessionInterfaceTransition> = {}) =>
+		({ ...transition(phase), sourceMode: "chat", targetMode: "chat", ...extra, ...{ sourceHarness: "codex", targetHarness: "claude-code" } }) as SessionInterfaceTransition;
+
+	it("names the agent it switches to while it runs", () => {
+		render(
+			<TooltipProvider>
+				<SessionInterfaceSwitchButton target="tui" supported transition={agentSwitch("target_starting")} onClick={vi.fn()} onCancel={vi.fn()} />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("status", { name: "Starting the new agent… Switching to Claude Code." })).toBeInTheDocument();
+	});
+
+	it("says the agent switch failed and why", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={agentSwitch("failed", { errorCode: "TARGET_PREFLIGHT_FAILED", errorDetail: "cursor could not be installed in this sandbox" })}
+				onDismiss={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Agent switch failed")).toBeInTheDocument();
+		expect(screen.getByText("cursor could not be installed in this sandbox")).toBeInTheDocument();
+	});
+});

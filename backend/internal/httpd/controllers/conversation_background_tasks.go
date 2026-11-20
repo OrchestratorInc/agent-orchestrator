@@ -96,7 +96,7 @@ func (c *ConversationsController) backgroundTaskOutput(w http.ResponseWriter, r 
 		writeConversationError(w, r, err)
 		return
 	default:
-		out.Output, out.Truncated = output.Text, output.Truncated
+		out.Output, out.Truncated, out.Stale = output.Text, output.Truncated, output.Stale
 	}
 	envelope.WriteJSON(w, http.StatusOK, out)
 }
@@ -125,12 +125,8 @@ func backgroundTaskResponse(reading chatsvc.BackgroundTaskSnapshot) BackgroundTa
 		Tasks: make([]BackgroundTaskResponse, 0, len(reading.Tasks)),
 	}
 	for _, task := range reading.Tasks {
-		command := task.Command
-		if command == task.Description {
-			command = "" // Already sent as the description; polls need not repeat it.
-		}
 		out.Tasks = append(out.Tasks, BackgroundTaskResponse{
-			ID: task.ID, RunID: task.RunID, Kind: task.Kind, Description: task.Description, Command: command, State: task.State,
+			ID: task.ID, RunID: task.RunID, Kind: task.Kind, Description: task.Description, Command: task.Command, State: task.State,
 			StartedAt: task.StartedAt, EndedAt: task.EndedAt, Stoppable: task.Stoppable,
 		})
 	}

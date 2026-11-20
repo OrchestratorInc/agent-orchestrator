@@ -10,6 +10,12 @@ describe("atTail", () => {
 		expect(atTail(metrics(2200 - TAIL_SLOP))).toBe(false);
 		expect(atTail(metrics(0))).toBe(false);
 	});
+
+	// The keyboard's room below the content moves the end further down.
+	it("measures from the end the list has made room to", () => {
+		expect(atTail(metrics(2200), 300)).toBe(false);
+		expect(atTail(metrics(2500), 300)).toBe(true);
+	});
 });
 
 describe("openingRow", () => {

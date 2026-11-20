@@ -75,10 +75,13 @@ type conversation struct {
 	pending       map[string]*parkedRequest
 	pendingInputs map[string]*parkedInput
 	closed        bool
-	// backgroundRuns maps each listed background terminal to its exec item,
-	// the key of its buffered output, so a settled terminal's output stays
-	// readable after it leaves the 30-second inventory. Listed terminals are
-	// always kept; of the settled ones, the oldest goes first.
+	// backgroundStopping holds the terminals AO asked the app-server to
+	// terminate, so their completion reads as stopped, not failed.
+	backgroundStopping map[string]bool
+	// Command starts are observational until the native background list or a process ID confirms background work.
+	backgroundCommands map[string]ports.ChatBackgroundTask
+	// backgroundRuns maps a terminal's process ID to the exec item its output
+	// streams on, oldest first in backgroundRunOrder.
 	backgroundRuns     map[string]string
 	backgroundRunOrder []string
 
@@ -142,6 +145,7 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 		pumpDone:        make(chan struct{}),
 		providerScopeID: providerScopeID,
 	}
+	c.backgroundOutput.MaxDeltas = codexMaxOutputDeltas
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
 	return c
 }

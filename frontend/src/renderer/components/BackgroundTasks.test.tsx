@@ -118,12 +118,12 @@ describe("composer tab", () => {
 		await userEvent.click(toggle);
 		expect(toggle).toHaveAttribute("aria-expanded", "true");
 		const rows = within(screen.getByRole("list")).getAllByRole("listitem");
-		// Live work leads; the failure ends the list without a stop.
-		expect(rows.map((row) => row.textContent)).toEqual(["Start the renderer dev server12m", "Watch the composer tests9m", "Run the Go linter2m"]);
+		// Failures stay above the five-row cap, without a stop.
+		expect(rows.map((row) => row.textContent)).toEqual(["Run the Go linter2m", "Start the renderer dev server12m", "Watch the composer tests9m"]);
 		// The red dot ends the row, in the stop square's place, after the time.
-		expect(rows[2].lastElementChild).toContainElement(within(rows[2]).getByRole("img", { name: "Failed" }));
-		expect(within(rows[2]).queryByRole("button")).toBeNull();
-		await userEvent.click(within(rows[1]).getByRole("button", { name: "Stop Watch the composer tests" }));
+		expect(rows[0].lastElementChild).toContainElement(within(rows[0]).getByRole("img", { name: "Failed" }));
+		expect(within(rows[0]).queryByRole("button")).toBeNull();
+		await userEvent.click(within(rows[2]).getByRole("button", { name: "Stop Watch the composer tests" }));
 		expect(mutateMock).toHaveBeenCalledWith("watch");
 	});
 
@@ -220,6 +220,73 @@ it.each(["codex", "claude-code", "opencode", "opencode-v2", "droid", "kimi", "ki
 	queryMock.mockReturnValue({ data: readingOf([shell("shell", "Dev server", { stoppable: false })], "partial") });
 	render(<SessionBackgroundTasks session={{ ...session, provider } as WorkspaceSession} />);
 	expect(screen.getByRole("region", { name: "Background tasks" })).toHaveTextContent("Dev server");
+});
+
+it("hides cached controls after a reading fails", () => {
+	const view = render(<SessionBackgroundTasks session={session} />);
+	expect(screen.getByRole("button", { name: "Stop Dev server" })).toBeVisible();
+	queryMock.mockReturnValue({ data: reading, isError: true });
+	view.rerender(<SessionBackgroundTasks session={session} />);
+	expect(screen.queryByRole("region", { name: "Background tasks" })).toBeNull();
+});
+it("shows no spinner on a live task", () => {
+	const { container } = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+	expect(container.querySelector(".animate-spin")).toBeNull();
+});
+it("keeps the remaining Stop node and focus when two tasks become one", async () => {
+	const a = shell("a", "Server"),
+		b = shell("b", "Watcher");
+	const view = render(<ComposerBackgroundTasks sessionId="s" reading={readingOf([a, b])} />);
+	await userEvent.click(screen.getByRole("button", { name: /2 running/ }));
+	const remaining = screen.getByRole("button", { name: "Stop Watcher" });
+	remaining.focus();
+	view.rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf([b])} />);
+	expect(screen.getByRole("button", { name: "Stop Watcher" })).toBe(remaining);
+	expect(remaining).toHaveFocus();
+});
+it("moves focus to the next task, then the composer when focused tasks disappear", async () => {
+	const a = shell("a", "Server"),
+		b = shell("b", "Watcher");
+	const renderTasks = (tasks: BackgroundTask[]) => (
+		<div>
+			<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />
+			<textarea aria-label="Message" />
+		</div>
+	);
+	const view = render(renderTasks([a, b]));
+	await userEvent.click(screen.getByRole("button", { name: /2 running/ }));
+	screen.getByRole("button", { name: "Stop Server" }).focus();
+	view.rerender(renderTasks([b]));
+	expect(screen.getByRole("button", { name: "Stop Watcher" })).toHaveFocus();
+	view.rerender(renderTasks([]));
+	expect(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+});
+it("does not steal focus from another input when a task disappears", () => {
+	const view = render(
+		<div>
+			<ComposerBackgroundTasks sessionId="s" reading={reading} />
+			<input aria-label="Other" />
+		</div>,
+	);
+	screen.getByRole("button", { name: "Stop Dev server" }).focus();
+	screen.getByRole("textbox", { name: "Other" }).focus();
+	view.rerender(
+		<div>
+			<ComposerBackgroundTasks sessionId="s" reading={readingOf([])} />
+			<input aria-label="Other" />
+		</div>,
+	);
+	expect(screen.getByRole("textbox", { name: "Other" })).toHaveFocus();
+});
+
+it("does not move disclosure focus when a poll refreshes expanded rows", async () => {
+	const tasks = [shell("a", "Server"), shell("b", "Watcher")];
+	const view = render(<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />);
+	const toggle = screen.getByRole("button", { name: /2 running/ });
+	await userEvent.click(toggle);
+	expect(toggle).toHaveFocus();
+	view.rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks.map((task) => ({ ...task })))} />);
+	expect(toggle).toHaveFocus();
 });
 
 describe("opening a task in the side panel", () => {

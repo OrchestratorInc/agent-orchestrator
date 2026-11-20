@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -341,6 +341,9 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 		cfg.BaseRef, seedRef = refs.baseRef, refs.seedRef
+		if cfg.StartPoint != "" {
+			seedRef = cfg.StartPoint
+		}
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -373,6 +376,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if cfg.FreshBranch {
 		baseSHA = seedSHA
 	}
+	w.deleteOrphanedFileSnapshots(ctx, repo)
 	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 }
 
@@ -545,8 +549,12 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if cfg.FreshBranch {
 			return w.rollbackWorkspaceProjectPreparation(ctx, out, touched, cause)
 		}
+		// A cancelled or expired start must still remove what it created, or a
+		// retry would treat the half-built root as existing on the next attempt.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 		for i := len(created) - 1; i >= 0; i-- {
-			_ = w.forceDestroyPath(ctx, created[i].repoPath, created[i].outputPath)
+			_ = w.forceDestroyPath(cleanupCtx, created[i].repoPath, created[i].outputPath)
 		}
 		return ports.WorkspaceProjectInfo{}, cause
 	}
@@ -597,14 +605,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 				rootSHA = creationSHA
 			}
 			out.Root = ports.WorkspaceInfo{Path: repo.outputPath, Branch: branch, BaseSHA: rootSHA, BaseRef: repo.baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}
-		}
-		if repoIndex == 0 {
-			_, rootAlreadyExisted := existing[repoIndex]
-			if !rootAlreadyExisted {
-				if err := copyWorkspaceAssets(rootRepo, rootPath, cfg.Assets); err != nil {
-					return fail(err)
-				}
-			}
 		}
 	}
 	return out, nil
@@ -680,136 +680,6 @@ func (w *Workspace) repairWorkspaceRootDefault(ctx context.Context, repo string)
 	return worktreeRefs{seedRef: ref, baseRef: ref}, nil
 }
 
-func copyWorkspaceAssets(sourceRoot, destinationRoot string, assets []ports.WorkspaceProjectAssetConfig) error {
-	for _, asset := range assets {
-		rel, err := cleanRelativePath(asset.RelativePath)
-		if err != nil || hasWorkspaceManagedComponent(rel) {
-			return fmt.Errorf("gitworktree: workspace asset %q: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		source, err := physicalAbs(asset.SourcePath)
-		if err != nil || !assetPathWithin(sourceRoot, source) {
-			return fmt.Errorf("gitworktree: workspace asset %q source: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		destination := filepath.Join(destinationRoot, filepath.FromSlash(rel))
-		if !assetPathWithin(destinationRoot, destination) {
-			return fmt.Errorf("gitworktree: workspace asset %q destination: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		if err := copyWorkspaceAssetTree(sourceRoot, source, destination); err != nil {
-			return fmt.Errorf("gitworktree: copy workspace asset %q: %w", asset.RelativePath, err)
-		}
-	}
-	return nil
-}
-
-func copyWorkspaceAssetTree(sourceRoot, source, destination string) error {
-	info, err := os.Lstat(source)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(source)
-		if err != nil {
-			return err
-		}
-		if filepath.IsAbs(target) {
-			return fmt.Errorf("absolute symlink %q: %w", source, ErrUnsafePath)
-		}
-		resolved := filepath.Clean(filepath.Join(filepath.Dir(source), target))
-		if !assetPathWithin(sourceRoot, resolved) || hasWorkspaceManagedComponent(relativeOrEmpty(sourceRoot, resolved)) {
-			return fmt.Errorf("symlink %q escapes or targets managed data: %w", source, ErrUnsafePath)
-		}
-		physicalTarget, err := filepath.EvalSymlinks(resolved)
-		if err != nil || !assetPathWithin(sourceRoot, physicalTarget) {
-			return fmt.Errorf("symlink %q has an unsafe or unresolved target: %w", source, ErrUnsafePath)
-		}
-		if existing, err := os.Lstat(destination); err == nil {
-			if existing.IsDir() {
-				return fmt.Errorf("cannot overlay symlink on directory %q", destination)
-			}
-			if err := os.Remove(destination); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return os.Symlink(target, destination)
-	}
-	if info.IsDir() {
-		if existing, err := os.Lstat(destination); err == nil {
-			if !existing.IsDir() || existing.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("cannot overlay directory on non-directory %q", destination)
-			}
-		} else if errors.Is(err, os.ErrNotExist) {
-			if err := os.Mkdir(destination, info.Mode().Perm()); err != nil {
-				return err
-			}
-		} else {
-			return err
-		}
-		entries, err := os.ReadDir(source)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if entry.Name() == ".git" || entry.Name() == ".ao" {
-				continue
-			}
-			if err := copyWorkspaceAssetTree(sourceRoot, filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("unsupported file type at %q", source)
-	}
-	if existing, err := os.Lstat(destination); err == nil {
-		if !existing.Mode().IsRegular() {
-			return fmt.Errorf("cannot overlay file on non-regular path %q", destination)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if err := out.Chmod(info.Mode().Perm()); err != nil {
-		_ = out.Close()
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
-func assetPathWithin(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func relativeOrEmpty(root, path string) string {
-	rel, _ := filepath.Rel(root, path)
-	return rel
-}
-
-func hasWorkspaceManagedComponent(path string) bool {
-	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
-		if component == ".git" || component == ".ao" {
-			return true
-		}
-	}
-	return false
-}
-
 // DestroyWorkspaceProject removes worktrees children first, preserving any
 // uncommitted changes even when a start is cancelled after publication.
 func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.WorkspaceProjectInfo) error {
@@ -844,7 +714,7 @@ func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.Work
 // Destroy removes the session's worktree and prunes it from the repo, refusing
 // (rather than force-deleting) if git still has the path registered afterwards.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
-	_, err := w.destroy(ctx, info)
+	_, err := w.DestroyReclaim(ctx, info)
 	return err
 }
 
@@ -855,7 +725,48 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 // success without any disk having been released. Callers that count reclaimed
 // workspaces need that told apart from a real removal.
 func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
-	return w.destroy(ctx, info)
+	reclaim, err := w.destroy(ctx, info)
+	if err == nil {
+		w.deleteFileSnapshots(ctx, info)
+	}
+	return reclaim, err
+}
+
+// deleteFileSnapshots drops the Chat rollback snapshots of a session whose
+// worktree is gone, since nothing can restore them any more, and then those of
+// any other session in the repository whose worktree went without a Destroy. A
+// failure only leaves unreachable refs behind, so it is logged rather than
+// failing teardown.
+func (w *Workspace) deleteFileSnapshots(ctx context.Context, info ports.WorkspaceInfo) {
+	if info.SessionID == "" {
+		return
+	}
+	repo, err := w.repoPathForInfo(info)
+	if err == nil {
+		err = filesnapshot.DeleteAll(ctx, repo, filesnapshot.SessionPrefix(info.SessionID))
+	}
+	if err != nil {
+		w.logf("gitworktree: delete file snapshots for session %s: %v", info.SessionID, err)
+		return
+	}
+	w.deleteOrphanedFileSnapshots(ctx, repo)
+}
+
+// deleteOrphanedFileSnapshots drops the Chat rollback snapshots of every session
+// whose worktree is no longer registered in repo, however that session ended. A
+// failure only leaves unreachable refs behind, so it is logged.
+func (w *Workspace) deleteOrphanedFileSnapshots(ctx context.Context, repo string) {
+	records, err := w.listRecords(ctx, repo)
+	if err == nil {
+		paths := make([]string, len(records))
+		for i, record := range records {
+			paths[i] = record.Path
+		}
+		err = filesnapshot.DeleteOrphans(ctx, repo, paths)
+	}
+	if err != nil {
+		w.logf("gitworktree: delete orphaned file snapshots in %s: %v", repo, err)
+	}
 }
 
 // DeletePreparedBranch is called only after a speculative worktree is gone.
@@ -1474,6 +1385,14 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 		// until then.
 		if rec.Branch != "" {
 			recreateBranch = rec.Branch
+		}
+	} else if cfg.LastBranch != "" && cfg.LastBranch != cfg.Branch {
+		exists, err := w.refExists(ctx, repo, "refs/heads/"+cfg.LastBranch)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+		if _, elsewhere := findWorktreeByBranch(records, cfg.LastBranch); exists && !elsewhere {
+			recreateBranch = cfg.LastBranch
 		}
 	}
 	if nonEmpty, err := pathExistsNonEmpty(path); err != nil {

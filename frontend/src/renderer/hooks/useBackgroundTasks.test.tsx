@@ -51,6 +51,22 @@ describe("background task queries", () => {
 		client.clear();
 	});
 
+	it("never presents a shell task's description as its command", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "s", availability: "ready", controllerGeneration: "g", tasks: [
+			{ id: "claude", kind: "shell", description: "Start the dev server", state: "running" },
+			{ id: "codex", kind: "shell", description: "npm run dev", command: "npm run dev", state: "running" },
+		] } });
+		function Commands() {
+			const { data } = useBackgroundTasks("s", true);
+			return <span>{data ? data.tasks.map((task) => `${task.id}:${task.command ?? "none"}`).join(",") : "loading"}</span>;
+		}
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Commands /></QueryClientProvider>);
+		expect(await screen.findByText("claude:none,codex:npm run dev")).toBeVisible();
+		view.unmount();
+		client.clear();
+	});
+
 	it.each([
 		["session", { status: "ok" }],
 		["session", { sessionId: "s", availability: "ready", tasks: null }],
@@ -79,7 +95,7 @@ describe("background task queries", () => {
 
 describe("stopping a background task", () => {
 	beforeEach(() => vi.clearAllMocks());
-	it("posts the stop, treats a settled task as done, and rereads every task view", async () => {
+	it("posts the stop, treats a settled task as done, and rereads only the stopped session", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		const invalidate = vi.spyOn(client, "invalidateQueries");
 		const outcomes: string[] = [];
@@ -99,7 +115,7 @@ describe("stopping a background task", () => {
 		expect(outcomes).toEqual(["ok:a", "ok:b", "error:c"]);
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", { params: { path: { sessionId: "s", taskId: "a" } } });
 		await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3));
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["background-tasks"] });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["background-tasks", "s"] });
 		view.unmount();
 		client.clear();
 	});

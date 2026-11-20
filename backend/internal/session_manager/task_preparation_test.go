@@ -569,7 +569,7 @@ func TestCancelWorkspaceProjectPreparationRemovesEachBranch(t *testing.T) {
 	if err := os.MkdirAll(assetPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(assetPath, "note.txt"), []byte("copied by AO\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(assetPath, "note.txt"), []byte("local only\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("api/\nlocal-assets/\n"), 0o644); err != nil {
@@ -593,8 +593,8 @@ func TestCancelWorkspaceProjectPreparationRemovesEachBranch(t *testing.T) {
 		t.Fatalf("prepare workspace project: %v", prep.err)
 	}
 	branch := st.sessions["mer-1"].Metadata.Branch
-	if _, err := os.Stat(filepath.Join(st.sessions["mer-1"].Metadata.WorkspacePath, "local-assets", "note.txt")); err != nil {
-		t.Fatalf("prepared workspace missing copied asset: %v", err)
+	if _, err := os.Stat(filepath.Join(st.sessions["mer-1"].Metadata.WorkspacePath, "local-assets")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected legacy plain directory to be absent: %v", err)
 	}
 	if err := m.CancelTaskPreparation(context.Background(), token); err != nil {
 		t.Fatal(err)

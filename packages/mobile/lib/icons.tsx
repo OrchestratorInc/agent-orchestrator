@@ -10,6 +10,7 @@ import Archive from "lucide-react-native/icons/archive";
 import ArrowDown from "lucide-react-native/icons/arrow-down";
 import ArrowUp from "lucide-react-native/icons/arrow-up";
 import ArrowUpFromLine from "lucide-react-native/icons/arrow-up-from-line";
+import ArrowRight from "lucide-react-native/icons/arrow-right";
 import ClipboardCheck from "lucide-react-native/icons/clipboard-check";
 import Check from "lucide-react-native/icons/check";
 import CircleCheck from "lucide-react-native/icons/circle-check";
@@ -97,6 +98,7 @@ export const glyphs = {
 	"arrow-down": ArrowDown,
 	"arrow-up": ArrowUp,
 	"arrow-up-from-line": ArrowUpFromLine,
+	"arrow-right": ArrowRight,
 	"bar-chart": ChartBar,
 	"check": Check,
 	"check-circle": CircleCheck,

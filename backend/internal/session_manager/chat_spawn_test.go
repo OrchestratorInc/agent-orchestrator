@@ -314,12 +314,57 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	}
 }
 
-func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
-	if got := backgroundTaskPermissions(domain.HarnessKimi); got != ports.PermissionModeDefault {
-		t.Fatalf("Kimi permissions = %q, want default", got)
+func TestBackgroundTaskPermissionsKeepNativeDriversCompatible(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessKimi, domain.HarnessGrok} {
+		if got := backgroundTaskPermissions(harness); got != ports.PermissionModeDefault {
+			t.Fatalf("%s permissions = %q, want default", harness, got)
+		}
 	}
 	if got := backgroundTaskPermissions(domain.HarnessCodex); got != ports.PermissionModeAcceptEdits {
 		t.Fatalf("Codex permissions = %q, want accept-edits", got)
+	}
+}
+
+func TestGrokChatSpawnUsesOnlyExplicitEffort(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		roleEffort string
+		requested  ports.AgentConfig
+		override   bool
+		want       string
+	}{
+		{name: "project effort"},
+		{name: "matching role effort", roleEffort: "xhigh"},
+		{name: "unflagged request effort", requested: ports.AgentConfig{Effort: "max"}},
+		{name: "model change", requested: ports.AgentConfig{Model: "grok-4.5"}},
+		{name: "explicit effort", requested: ports.AgentConfig{Effort: "low"}, override: true, want: "low"},
+		{name: "explicit effort stays subject to ACP validation", requested: ports.AgentConfig{Effort: "max"}, override: true, want: "max"},
+		{name: "explicit provider default", roleEffort: "xhigh", override: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig.Effort = "max"
+			project.Config.Worker = domain.RoleOverride{
+				Harness: domain.HarnessGrok, AgentConfig: domain.AgentConfig{Effort: tt.roleEffort},
+			}
+			st.projects[string(chatTestProject)] = project
+
+			rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessGrok,
+				RequestedMode: domain.SessionModeChat, AgentConfig: tt.requested, EffortOverride: tt.override,
+			})
+			if err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if len(launcher.started) != 1 {
+				t.Fatalf("Chat starts = %d, want 1", len(launcher.started))
+			}
+			if rec.Metadata.Effort != tt.want || launcher.started[0].Effort != tt.want {
+				t.Fatalf("effort metadata/start = %q/%q, want %q", rec.Metadata.Effort, launcher.started[0].Effort, tt.want)
+			}
+		})
 	}
 }
 
@@ -1169,6 +1214,56 @@ func TestChatSpawnRejectedBeforeDurableStateWhenUnsupported(t *testing.T) {
 	}
 }
 
+type environmentPreflightLauncher struct {
+	recordingLauncher
+	validate func(map[string]string) error
+}
+
+func (l *environmentPreflightLauncher) PreflightChatWithEnv(ctx context.Context, harness domain.AgentHarness, permissions ports.PermissionMode, env map[string]string) error {
+	if err := l.validate(env); err != nil {
+		return err
+	}
+	return l.PreflightChat(ctx, harness, permissions)
+}
+
+func TestChatSpawnValidatesProjectEnvironmentBeforeDurableState(t *testing.T) {
+	sentinel := fmt.Errorf("%w: native config missing", ports.ErrChatDriverUnavailable)
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprintf("configured=%v", configured), func(t *testing.T) {
+			launcher := &environmentPreflightLauncher{validate: func(env map[string]string) error {
+				if _, ok := env["AO_DOCKER_AGENT_CONFIG"]; ok {
+					t.Fatal("reserved project key reached Chat admission")
+				}
+				if env["NATIVE_CONFIG"] != "/project/native.yaml" {
+					return sentinel
+				}
+				return nil
+			}}
+			mgr, store, runtime := newChatManager(launcher)
+			project := store.projects[string(chatTestProject)]
+			project.Config.Env = map[string]string{"AO_DOCKER_AGENT_CONFIG": "/project/redirect.yaml"}
+			if configured {
+				project.Config.Env["NATIVE_CONFIG"] = "/project/native.yaml"
+			}
+			store.projects[string(chatTestProject)] = project
+			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+				RequestedMode: domain.SessionModeChat,
+			})
+			if configured {
+				if err != nil || len(launcher.started) != 1 {
+					t.Fatalf("valid project config: started=%d err=%v", len(launcher.started), err)
+				}
+				return
+			}
+			workspace := mgr.workspace.(*fakeWorkspace)
+			if !errors.Is(err, sentinel) || len(store.sessions) != 0 || workspace.createCount != 0 || runtime.created != 0 || len(launcher.started) != 0 {
+				t.Fatalf("config failure left state: sessions=%d workspaces=%d runtimes=%d controllers=%d err=%v", len(store.sessions), workspace.createCount, runtime.created, len(launcher.started), err)
+			}
+		})
+	}
+}
+
 // Chat mode with no launcher wired must fail, never silently become a TUI session
 // in a terminal the user did not ask for.
 func TestChatSpawnWithoutLauncherIsRefusedNotDowngraded(t *testing.T) {
@@ -1786,6 +1881,15 @@ func TestSendRoutesIntoTheChatConversation(t *testing.T) {
 		}
 	}
 
+	// A lifecycle notice names its delivery attempt so it can later read
+	// whether that exact message reached the agent.
+	if err := mgr.SendWithClientMessageID(ctx, rec.ID, "AO review done: approved", "review-done:run-1:0"); err != nil {
+		t.Fatalf("SendWithClientMessageID: %v", err)
+	}
+	last := len(launcher.relayed) - 1
+	if launcher.relayed[last] != "AO review done: approved" || launcher.relayIDs[last] != "review-done:run-1:0" {
+		t.Fatalf("relay = %q under %q, want the notice under its attempt id", launcher.relayed[last], launcher.relayIDs[last])
+	}
 }
 
 // A terminated chat session cannot receive a message, matching the terminal path.
@@ -2028,6 +2132,62 @@ func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 	for _, want := range []string{"SessionStart", "ao hooks command-code session-start"} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("settings.json missing %q; standing instructions have no delivery hook:\n%s", want, raw)
+		}
+	}
+}
+
+func TestDockerAgentDefaultsToChatAndNeverFallsBackToTerminal(t *testing.T) {
+	for _, requested := range []domain.SessionMode{"", domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(requested), func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			mgr, st, runtime := newChatManager(launcher)
+			mgr.defaults = fixedSessionModeDefaults(domain.SessionModeTUI)
+			rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent, RequestedMode: requested})
+			if requested == domain.SessionModeTUI {
+				if !errors.Is(err, ErrTerminalUnsupported) || errors.Is(err, ports.ErrChatUnsupported) {
+					t.Fatalf("TUI error=%v", err)
+				}
+				if len(st.sessions) != 0 {
+					t.Fatal("TUI rejection created durable session")
+				}
+			} else if err != nil || rec.Mode != domain.SessionModeChat {
+				t.Fatalf("rec=%+v err=%v", rec, err)
+			}
+			if runtime.created != 0 {
+				t.Fatal("Docker Agent created terminal runtime")
+			}
+		})
+	}
+	launcher := &recordingLauncher{preflightErr: ports.ErrChatDriverUnavailable}
+	mgr, st, runtime := newChatManager(launcher)
+	if _, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent}); !errors.Is(err, ports.ErrChatDriverUnavailable) {
+		t.Fatal(err)
+	}
+	if runtime.created != 0 || len(st.sessions) != 0 {
+		t.Fatal("unavailable Chat fell back or created durable state")
+	}
+}
+
+func TestDockerAgentRejectsOnlyExplicitEffortBeforeSessionAllocation(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		mgr, st, runtime := newChatManager(&recordingLauncher{})
+		rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+			ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent,
+			AgentConfig: ports.AgentConfig{Effort: "high"}, EffortOverride: override,
+		})
+		if !override {
+			// Inherited or unflagged effort clears silently, like every other
+			// harness without an effort setting.
+			if err != nil || rec.Metadata.Effort != "" {
+				t.Fatalf("inherited effort: rec=%+v err=%v", rec, err)
+			}
+			continue
+		}
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("override error=%v", err)
+		}
+		if len(st.sessions) != 0 || runtime.created != 0 {
+			t.Fatal("unsupported effort allocated session or terminal runtime")
 		}
 	}
 }

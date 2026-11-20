@@ -50,7 +50,14 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 	// Shared across board/detail polling and scoped to this exact controller.
 	controller.backgroundMu.Lock()
 	defer controller.backgroundMu.Unlock()
-	if controller.backgroundSampledAt.IsZero() || s.now().Sub(controller.backgroundSampledAt) >= time.Second {
+	cacheFor := time.Second
+	if controller.backgroundErr != nil {
+		cacheFor = 5 * time.Second
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	if controller.backgroundSampledAt.IsZero() || s.now().Sub(controller.backgroundSampledAt) >= cacheFor {
 		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		tasks, readErr := inspector.BackgroundTasks(readCtx)
 		cancel()
@@ -58,14 +65,25 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 			return out, nil
 		}
 		if readErr != nil && !errors.Is(readErr, ports.ErrBackgroundTasksPartial) {
+			// Keep a failed sample longer than the read timeout, so concurrent and
+			// repeated readers share this attempt instead of queueing for their
+			// own. A caller's own cancellation is not the provider's failure.
+			if ctx.Err() == nil {
+				controller.backgroundErr = readErr
+				controller.backgroundSampledAt = s.now()
+			}
 			return out, readErr
 		}
+		controller.backgroundErr = nil
 		controller.backgroundPartial = errors.Is(readErr, ports.ErrBackgroundTasksPartial)
 		controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), tasks...)
 		for _, task := range tasks {
 			controller.rememberBackgroundCommand(task)
 		}
 		controller.backgroundSampledAt = s.now()
+	}
+	if controller.backgroundErr != nil {
+		return out, controller.backgroundErr
 	}
 	// Provider I/O can cross termination, a handoff, or a provider replacement.
 	fresh, found, err := s.sessions.GetSession(ctx, id)
@@ -87,6 +105,8 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 		if task.State != "running" && task.State != "paused" && (task.EndedAt == nil || s.now().Sub(*task.EndedAt) >= 30*time.Second) {
 			continue
 		}
+		task.Description = domain.SanitizeTaskDescription(task.Description)
+		task.Command = domain.SanitizeTaskCommand(task.Command)
 		out.Tasks = append(out.Tasks, task)
 	}
 	sort.SliceStable(out.Tasks, func(i, j int) bool {
@@ -101,18 +121,11 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 // StopBackgroundTask stops one provider-owned background task. Like a reading,
 // it never starts a controller or wakes a hibernated session.
 func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, taskID string) error {
-	rec, found, err := s.sessions.GetSession(ctx, id)
+	controller, err := s.attachedChatController(ctx, id)
 	if err != nil {
 		return err
 	}
-	if !found {
-		return ports.ErrSessionNotFound
-	}
-	if rec.IsTerminated || rec.Mode != domain.SessionModeChat || rec.HibernatedAt != nil {
-		return ports.ErrBackgroundTaskNotStoppable
-	}
-	controller, err := s.Controller(id)
-	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
+	if controller == nil {
 		return ports.ErrBackgroundTaskNotStoppable
 	}
 	stopper, ok := controller.conv.(ports.ChatBackgroundTaskStopper)
@@ -134,20 +147,13 @@ func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, t
 
 // BackgroundTaskOutput reads one task's recent output. Like a reading, it
 // never starts a controller or wakes a hibernated session; output that cannot
-// be read without one is unavailable.
+// be read without one, or that the provider failed to return, is unavailable.
 func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID, taskID string) (ports.ChatBackgroundTaskOutput, error) {
-	rec, found, err := s.sessions.GetSession(ctx, id)
+	controller, err := s.attachedChatController(ctx, id)
 	if err != nil {
 		return ports.ChatBackgroundTaskOutput{}, err
 	}
-	if !found {
-		return ports.ChatBackgroundTaskOutput{}, ports.ErrSessionNotFound
-	}
-	if rec.IsTerminated || rec.Mode != domain.SessionModeChat || rec.HibernatedAt != nil {
-		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
-	}
-	controller, err := s.Controller(id)
-	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
+	if controller == nil {
 		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
 	output, err := ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
@@ -156,20 +162,57 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 		output, err = reader.BackgroundTaskOutput(readCtx, taskID)
 		cancel()
 	}
-	if err != nil && !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
-		return output, err
+	if err := ctx.Err(); err != nil {
+		return ports.ChatBackgroundTaskOutput{}, err
 	}
-	logged, ok := controller.redirectedBackgroundOutput(taskID)
-	if !ok {
-		return output, err
+	if err != nil {
+		// A panel polls this: a controller closing mid-read, a timeout or a
+		// provider error is a moment without output, not a server failure.
+		if !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+			s.log.Debug("background task output unavailable", "session", id, "task", taskID, "error", err)
+		}
+		output, err = ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
 	// A command that writes a log file prints little of its own: the log is its
 	// output. Whatever the task did print follows it, such as stderr the command
 	// left alone or Claude Code's "[killed]" once the task is stopped.
-	if own := strings.Trim(output.Text, "\n"); own != "" {
-		return backgroundtasks.TailOutput(logged.Text+"\n"+own, logged.Truncated || output.Truncated), nil
+	if logged, ok := controller.redirectedBackgroundOutput(taskID); ok {
+		if own := strings.Trim(output.Text, "\n"); own != "" {
+			output = backgroundtasks.TailOutput(logged.Text+"\n"+own, logged.Truncated || output.Truncated)
+		} else {
+			output = logged
+		}
+		err = nil
 	}
-	return logged, nil
+	if err != nil {
+		return ports.ChatBackgroundTaskOutput{}, err
+	}
+	// The read can cross termination, a handoff, or a provider replacement.
+	if current, err := s.attachedChatController(ctx, id); err != nil || current != controller {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	return output, nil
+}
+
+// attachedChatController returns the session's live controller for its
+// current generation, never starting or waking one. It returns nil without an
+// error when the session has none, and ErrSessionNotFound for an unknown session.
+func (s *Service) attachedChatController(ctx context.Context, id domain.SessionID) (*Controller, error) {
+	rec, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ports.ErrSessionNotFound
+	}
+	if rec.IsTerminated || rec.Mode != domain.SessionModeChat || rec.HibernatedAt != nil {
+		return nil, nil
+	}
+	controller, err := s.Controller(id)
+	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
+		return nil, nil //nolint:nilerr // No attached controller is an answer, not a failure.
+	}
+	return controller, nil
 }
 
 // redirectedBackgroundOutput reads the log file a background task's command
@@ -187,7 +230,7 @@ func (c *Controller) redirectedBackgroundOutput(taskID string) (ports.ChatBackgr
 	if entry.settled {
 		return entry.finalLog, entry.hasLog
 	}
-	return backgroundtasks.RedirectedOutput(entry.task.Command, c.workDir, entry.task.StartedAt)
+	return backgroundtasks.RedirectedOutput(entry.task.Command, c.workspacePath, entry.task.StartedAt)
 }
 
 // backgroundCommand is what a task's readings leave for its output: its
@@ -225,7 +268,7 @@ func (c *Controller) rememberBackgroundCommand(task ports.ChatBackgroundTask) {
 		// Keep this run's final tail: a restart that reuses the log path must
 		// not show its output under the run that ended.
 		entry.settled = true
-		entry.finalLog, entry.hasLog = backgroundtasks.RedirectedOutput(task.Command, c.workDir, task.StartedAt)
+		entry.finalLog, entry.hasLog = backgroundtasks.RedirectedOutput(task.Command, c.workspacePath, task.StartedAt)
 	}
 	c.backgroundCommands[task.ID] = entry
 }
@@ -248,7 +291,8 @@ func (s *Service) ListBackgroundTasks(ctx context.Context, projectID domain.Proj
 			if projectID != "" {
 				rec, found, err := s.sessions.GetSession(readCtx, id)
 				if err != nil {
-					return err
+					// Without a verified project association, omit only this session.
+					return nil //nolint:nilerr // One failed session lookup must not cancel unrelated reads.
 				}
 				if !found || rec.ProjectID != projectID {
 					return nil

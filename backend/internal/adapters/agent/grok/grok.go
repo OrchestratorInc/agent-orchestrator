@@ -156,19 +156,27 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
+// grokTrustDialogMarker is the heading of Grok's folder-trust dialog, where
+// "n" means "No, quit". Its screen also shows the "Grok Build" footer.
+const grokTrustDialogMarker = "Do you trust the contents of this directory?"
+
 // PromptReadinessHints waits for Grok's interactive UI before AO injects the
-// worker's first task. Timeout falls back to delivery so a changed startup
-// banner cannot permanently block spawning.
+// worker's first task. Grok draws on the alternate screen, so the "Grok Build"
+// footer is only visible in the rendered viewport. Timeout falls back to
+// delivery so a changed startup banner cannot permanently block spawning, but
+// never while the trust dialog is still waiting for an answer.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
 	}
 	return ports.PromptReadinessHints{
-		InitialDelay: 750 * time.Millisecond,
-		Patterns:     []string{"Grok Build"},
-		PollInterval: 200 * time.Millisecond,
-		Timeout:      8 * time.Second,
-		Lines:        80,
+		InitialDelay:     750 * time.Millisecond,
+		Patterns:         []string{"Grok Build"},
+		PollInterval:     200 * time.Millisecond,
+		Timeout:          8 * time.Second,
+		Lines:            80,
+		RenderedScreen:   true,
+		BlockingPatterns: []string{grokTrustDialogMarker},
 	}, nil
 }
 

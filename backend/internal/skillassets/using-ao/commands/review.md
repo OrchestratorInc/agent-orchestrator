@@ -8,9 +8,15 @@ the review commands default to the calling session (`AO_SESSION_ID`), so
 `ao review trigger` reviews your own implementation PR. An orchestrator passes
 the implementation worker's session id.
 
-For a requested review of someone else's PR, spawn or use a normal review-only
-worker without claiming or attaching the target PR. That worker submits the
-requested provider review and comments directly. Do not run `ao review trigger`,
+For a requested review of someone else's PR, spawn a normal worker for that
+review alone with `ao spawn --claim-pr <pr-ref> --no-takeover --review`.
+A review claim is a normal claim made with the session's automatic CI and
+review-comment fixing and native auto-review turned off first, so Orchestrator
+never sends it the PR's CI failures, merge conflicts, or review comments, and
+never starts its native reviewer on it. The PR is not the user's: the worker
+submits the requested provider review and comments directly and changes nothing
+else unless the user asks. To take the PR over later, the worker runs
+`ao session claim-pr <pr-ref> --review=false`. Do not run `ao review trigger`,
 create an ownership-only placeholder, or require an implementation owner just
 to review the PR.
 
@@ -25,6 +31,10 @@ ao review <subcommand> [args] [flags]
 ```
 
 The review loop can be inspected, submitted, cancelled, or triggered again.
+
+Automatic review pauses while a PR is a draft. After Orchestrator observes that it is
+ready, its head becomes eligible on a later sweep once the worker meets the idle
+gate. Explicit review triggers can still review drafts.
 
 ## Subcommands
 
@@ -132,7 +142,7 @@ ao review trigger [worker-session-id] [flags]
 |---|---|---|
 | `--session string` | Worker session id (or pass it positionally) | The calling Orchestrator-managed session |
 | `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if Orchestrator does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
-| `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
+| `--agent string` | Reviewer agent for this pass only (alias `--harness`); the temporary reviewer retires when its pass ends | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |
 | `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running | - |
@@ -149,10 +159,8 @@ again: the command exits 1 with `REVIEW_ALREADY_RUNNING` or
 just pushed and it still says already reviewed, wait a few seconds and retry. The same reviewer agent never runs twice on one head at the same time.
 
 By default the command turns on the worker session's review auto-inject. The
-reviewer posts an inline GitHub comment for each change it requires, and Orchestrator
-forwards those comments to the worker like any other review comments. An
-approval adds no comments, so check the verdict with `ao review ls`. If a run
-shows `failed` or `cancelled`, trigger again; nothing else reports it.
+reviewer posts an inline GitHub comment for each change it requires, and AO
+forwards those comments to the worker like any other review comments. For reviews requested by a worker or orchestrator, Orchestrator sends the final verdict to the requesting session when review feedback delivery is enabled. Trigger failures appear in the command result. Human-triggered and scheduled reviews are available in the UI and through `ao review ls`. For a posted GitHub review, the notice waits up to three minutes for Orchestrator to observe the review. It includes the review link and observed inline-comment count, or says the count is unknown if the wait expires. Inline findings go to the worker that owns the PR.
 
 **Examples:**
 

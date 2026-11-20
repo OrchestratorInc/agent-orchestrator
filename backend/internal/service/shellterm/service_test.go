@@ -203,6 +203,9 @@ type fakeShellTerminalStore struct {
 	records           []ShellTerminalRecord
 	insertErr         error
 	deleteErrByHandle map[string]error
+	markEndedErr      error
+	adoptErr          error
+	staleRestorable   []ShellTerminalRecord
 }
 
 func (f *fakeShellTerminalStore) InsertShellTerminal(_ context.Context, rec ShellTerminalRecord) error {
@@ -2081,6 +2084,142 @@ func TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 	}
 }
 
+// fakeTerminalInputForgetter records which terminals the service told the
+// terminal mux to forget.
+type fakeTerminalInputForgetter struct {
+	forgotten []string
+	err       error
+}
+
+func (f *fakeTerminalInputForgetter) ForgetTerminalInput(_ context.Context, terminalID string) error {
+	f.forgotten = append(f.forgotten, terminalID)
+	return f.err
+}
+
+// TestCloseShellTerminalForgetsInputTimestampOnceDestroyed pins #5691 for
+// shell tabs: shellterm destroys its own runtimes, so Session Manager's
+// forgetter never runs for them, and every tab gets a fresh random id. Without
+// a forget here each closed tab leaves one terminal-mux input entry forever.
+func TestCloseShellTerminalForgetsInputTimestampOnceDestroyed(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
+// A destroy that errors but leaves the runtime confirmed dead is still a
+// confirmed destroy, so the entry goes.
+func TestCloseShellTerminalForgetsInputTimestampWhenDestroyErrorsButRuntimeIsGone(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	rt.destroyErr = errors.New("tmux: no such session")
+	delete(rt.aliveByHandle, term.HandleID)
+
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
+// A forget that gives up (its context ended on the write fence) only leaves a
+// stale timestamp behind: the shell is confirmed dead, so its row still goes.
+func TestCloseShellTerminalDeletesRowWhenForgettingInputFails(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{err: context.DeadlineExceeded}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+	if len(st.records) != 0 {
+		t.Fatalf("records = %v, want the row deleted", st.records)
+	}
+}
+
+// A shell that survives Destroy keeps its row, and so keeps its input
+// timestamp: the runtime (and any draft typed into it) is still live.
+func TestCloseShellTerminalKeepsInputTimestampWhenRuntimeStaysAlive(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	rt.destroyErr = errors.New("tmux: kill-session refused")
+
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err == nil {
+		t.Fatal("CloseShellTerminal succeeded, want a conflict for a live runtime")
+	}
+	if len(forgetter.forgotten) != 0 {
+		t.Fatalf("forgotten = %v, want nothing while the runtime is alive", forgetter.forgotten)
+	}
+}
+
+// Session teardown drains scoped shells through the same confirmed-destroy
+// path, so their entries go too.
+func TestBeginSessionTeardownForgetsDestroyedShellInputTimestamps(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"portfolio-3": {projectID: "portfolio"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, projects, sessions)
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	release, err := svc.BeginSessionTeardown(ctx, "portfolio-3")
+	if err != nil {
+		t.Fatalf("BeginSessionTeardown: %v", err)
+	}
+	release()
+
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
 // TestCloseShellTerminalBlocksUntilSessionTeardownReleases is the regression
 // for the bug where CloseShellTerminal never took the session gate at all: it
 // deleted a session-scoped shell's row directly, so a BeginSessionTeardown
@@ -2428,6 +2567,9 @@ func TestDesktopRelaunchPreservesUserShells(t *testing.T) {
 }
 
 func (f *fakeShellTerminalStore) SelectRestorableShellTerminals(_ context.Context, appRunID string) ([]ShellTerminalRecord, error) {
+	if f.staleRestorable != nil {
+		return f.staleRestorable, nil
+	}
 	var out []ShellTerminalRecord
 	for _, rec := range f.records {
 		if !rec.Transient || rec.AppRunID == appRunID {
@@ -2532,11 +2674,16 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 			if tc.childProbeErr != nil && len(rt.destroyed) != 0 {
 				t.Fatalf("inconclusive child probe destroyed runtime: %v", rt.destroyed)
 			}
+			if listed[0].EndedAt != nil || st.records[0].EndedAt != nil {
+				t.Fatalf("uncertain shell marked ended: %+v", st.records)
+			}
 			// A later conclusive retry must finish cleanup without losing the
 			// handle needed to stop the host retained by the failed attempt.
+			// The shell is a previous launch's whose recovery had not finished,
+			// so it is kept as an ended tab to restore, not pruned.
 			rt.childProbeErr, rt.destroyErr, rt.aliveErr = nil, nil, nil
 			listed, err = svc.ListShellTerminalsForCurrentAppRun(context.Background())
-			if err != nil || len(listed) != 0 || len(st.records) != 0 || rt.aliveByHandle[handleID] {
+			if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || len(st.records) != 1 || rt.aliveByHandle[handleID] {
 				t.Fatalf("retry list = %v, %v; rows = %v", listed, err, st.records)
 			}
 		})
