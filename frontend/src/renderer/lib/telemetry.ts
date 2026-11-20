@@ -1516,6 +1516,8 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 		session_recording: {
 			maskAllInputs: true,
 			maskTextSelector: "*",
+			// Replay has its own attribute policy, separate from autocapture.
+			maskAllElementAttributes: true,
 			recordHeaders: false,
 			recordBody: false,
 			recordCrossOriginIframes: false,

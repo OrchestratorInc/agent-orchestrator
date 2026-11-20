@@ -340,6 +340,7 @@ describe("telemetry sanitizers", () => {
 		expect(config.session_recording).toMatchObject({
 			maskAllInputs: true,
 			maskTextSelector: "*",
+			maskAllElementAttributes: true,
 			recordHeaders: false,
 			recordBody: false,
 			recordCrossOriginIframes: false,
@@ -362,7 +363,7 @@ describe("telemetry sanitizers", () => {
 			e: new MouseEvent("click"),
 			maskAllElementAttributes: config.mask_all_element_attributes!,
 			maskAllText: config.mask_all_text!,
-			elementsChainAsString: true,
+			elementsChainAsString: true, disableCaptureUrlHashes: true,
 		});
 		const send = config.before_send as (event: unknown) => { properties: Record<string, unknown> };
 		const captured = send({ event: "$autocapture", properties: props });
@@ -378,7 +379,7 @@ describe("telemetry sanitizers", () => {
 		title.textContent = "private-session-title";
 		card.append(title);
 		const { props } = autocapturePropertiesForElement(title, {
-			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true,
+			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true, disableCaptureUrlHashes: true,
 		});
 		const send = buildPostHogConfig("ins_test").before_send as (event: unknown) => { properties: Record<string, unknown> };
 		expect(send({ event: "$autocapture", properties: props }).properties.ao_action).toBe("open_worker_session");
@@ -392,7 +393,7 @@ describe("telemetry sanitizers", () => {
 		button.append(icon);
 		card.append(button);
 		const { props } = autocapturePropertiesForElement(icon, {
-			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true,
+			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true, disableCaptureUrlHashes: true,
 		});
 		const send = buildPostHogConfig("ins_test").before_send as (event: unknown) => { properties: Record<string, unknown> };
 		expect(send({ event: "$autocapture", properties: props }).properties.ao_action).toBeUndefined();
