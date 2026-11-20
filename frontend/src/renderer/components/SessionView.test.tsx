@@ -5331,6 +5331,9 @@ describe("SessionView", () => {
 		});
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 		expect(screen.getByTestId("inspector-resize-handle")).toBeInTheDocument();
+		// Last in the rail, so its no-drag punches through the inspector header's
+		// macOS drag region (Electron applies regions in document order).
+		expect(screen.getByTestId("panel-inspector").lastElementChild).toBe(screen.getByTestId("inspector-resize-handle"));
 	});
 
 	it("keeps the inspector closed when a session opens, then opens it on Summary", () => {

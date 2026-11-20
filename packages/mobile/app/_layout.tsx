@@ -216,6 +216,7 @@ function Shell() {
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="shared-artifact" options={{ title: "Shared artifact", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version", ...GLASS_HEADER_OPTIONS }} />
 				{/* The conversation's "⋯", a bottom sheet over the chat. iOS opens it
 				    at full height, where every action fits: at three quarters
@@ -304,23 +305,6 @@ function Shell() {
 						}}
 					/>
 				))}
-				{/* The composer's skill and file picker searches in a native bar on
-				    iOS, under the title the page sets ("Skills", "Worktree files").
-				    Android searches in the sheet's body. */}
-				<Stack.Screen
-					name="sheets/composer-picker"
-					options={{
-						presentation: "formSheet",
-						sheetAllowedDetents: [0.6, 0.95],
-						sheetInitialDetentIndex: 0,
-						sheetGrabberVisible: true,
-						sheetCornerRadius,
-						headerShown: Platform.OS === "ios",
-						title: "Insert",
-						headerStyle: { backgroundColor: t.bgSurface },
-						contentStyle: { backgroundColor: t.bgSurface },
-					}}
-				/>
 				{/* A new Orchestrator Cloud project: on iOS a form sheet with a native
 				    bar, Cancel and Create in it, as the machine-name sheet has. On
 				    Android a page under the stack's top app bar, as manual connect

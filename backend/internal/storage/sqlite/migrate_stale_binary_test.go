@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -53,5 +55,31 @@ func TestMigrateSessionStaleBinaryRoundTrip(t *testing.T) {
 	}
 	if err := goose.UpTo(db, "migrations", 214); err != nil {
 		t.Fatalf("migrate up again: %v", err)
+	}
+}
+
+// A stop between 0213's last ALTER and its trigger leaves every column and no
+// trigger. Startup must restore the trigger even though no column is missing.
+func TestReconcileSchemaRestoresMissingStaleBinaryTrigger(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	if err := migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TRIGGER sessions_stale_binary_cdc_update`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := reconcileSchema(db); err != nil {
+			t.Fatalf("reconcileSchema: %v", err)
+		}
+		var triggers int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'sessions_stale_binary_cdc_update'`).Scan(&triggers); err != nil || triggers != 1 {
+			t.Fatalf("stale-binary trigger count = %d, %v; want 1", triggers, err)
+		}
 	}
 }

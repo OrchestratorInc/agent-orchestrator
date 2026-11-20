@@ -124,6 +124,20 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/hermes.png" alt="Hermes Agent" width="24" height="24" align="middle" /> &nbsp; <b>Hermes Agent</b></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/tau.png" alt="Tau" width="24" height="24" align="middle" /> &nbsp; <b>Tau</b></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/mastra-code.svg" alt="Mastra Code" width="24" height="24" align="middle" /> &nbsp; <b>Mastra Code</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/open-interpreter-dark.svg" /><img src="frontend/src/renderer/assets/agents/open-interpreter.svg" alt="Open Interpreter" width="24" height="24" align="middle" /></picture> &nbsp; <b>Open Interpreter</b></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/minimax-code.svg" alt="MiniMax Code" width="24" height="24" align="middle" /> &nbsp; <b>MiniMax Code</b></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/memcode.png" alt="memcode" width="24" height="24" align="middle" /> &nbsp; <b>memcode</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/docker-agent-dark.svg" /><img src="frontend/src/renderer/assets/agents/docker-agent-light.svg" alt="Docker Agent" width="24" height="24" align="middle" /></picture> &nbsp; <b>Docker Agent</b></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/stakpak.png" alt="Stakpak" width="24" height="24" align="middle" /> &nbsp; <b>Stakpak</b></td>
+  </tr>
 </table>
 
 <br />

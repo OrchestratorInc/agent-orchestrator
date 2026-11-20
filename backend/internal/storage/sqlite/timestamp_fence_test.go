@@ -117,7 +117,9 @@ func TestTimestampRepairTriggerInventory(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	const reviewed = "c7f5ef4ed4f969ae196480114367fc1dd84d006c7824da6dc5b01efc913ed664"
+	// review_run_worker_notice_pending only fires on status updates. Timestamp
+	// repair preserves notice state (TestTimestampRepairPreservesReviewDoneNotices).
+	const reviewed = "2950d2c69446158666dea383760aca5175ce76f90753523751da938910061ba6"
 	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != reviewed {
 		t.Fatalf("timestamp trigger inventory changed; review preservation logic before updating fingerprint: %s", got)
 	}

@@ -1,4 +1,4 @@
-import type React from "react";
+import { createElement, type default as React } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +11,7 @@ const fixtures = vi.hoisted(() => ({
 
 vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.setOptions }) }));
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 80 }));
-vi.mock("./frost", () => ({ Frost: "Frost", FROST_TAIL: 32, frostStops: (height: number) => [[0, height]] }));
+vi.mock("./frost", () => ({ Frost: "Frost", FROST_TAIL: 32, BAR_SEAM: 16, frostStops: (height: number, tail?: number) => (tail === undefined ? [[0, height]] : [[0, height], [1, tail]]) }));
 vi.mock("react-native", () => ({
 	Platform: { get OS() { return fixtures.platform; } },
 	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 0.5 },
@@ -89,7 +89,7 @@ describe("useLargeTitle", () => {
 		fixtures.platform = "ios";
 		const onScroll = vi.fn();
 		const result = renderHook(onScroll);
-		expect(result.current).toEqual({ header: null, edge: null, onScroll, topInset: 0 });
+		expect(result.current).toEqual({ header: null, edge: null, onScroll, topInset: 0, accessory: null });
 		expect(fixtures.setOptions).not.toHaveBeenCalled();
 	});
 
@@ -97,7 +97,7 @@ describe("useLargeTitle", () => {
 		const result = renderHook();
 		expect(result.current.topInset).toBe(80);
 		const header = mount(<>{result.current.header}</>);
-		expect(header.root.findByType("View" as never).props.style).toEqual({ height: 80 });
+		expect(header.root.findAll((node) => (node.type as unknown) === "View" && node.props.style?.height === 80)).toHaveLength(1);
 		expect(fixtures.setOptions).toHaveBeenCalledOnce();
 		expect(fixtures.setOptions.mock.calls[0][0]).toMatchObject({ headerTransparent: true, headerStyle: { backgroundColor: "transparent" } });
 		const BarTitle = fixtures.setOptions.mock.calls[0][0].headerTitle;
@@ -125,5 +125,85 @@ describe("useLargeTitle", () => {
 		expect(frost.props).toMatchObject({ from: "top", stops: [[0, 80]] });
 		expect(Object.assign({}, ...frost.props.style).height).toBe(80 + 32);
 		expect(edge.root.findAllByType("AnimatedView" as never)).toHaveLength(0);
+	});
+});
+
+describe("the title's accessory", () => {
+	function renderWith(accessory: React.ReactNode): { current: Result } {
+		const ref = { current: undefined as unknown as Result };
+		function Probe() {
+			ref.current = useLargeTitle("Workers", undefined, { accessory });
+			return null;
+		}
+		act(() => { renderer = create(<Probe />); });
+		return ref;
+	}
+	// The edge draws the frost and the pinned box side by side, so it is mounted under one host.
+	const mountEdge = (edge: React.ReactElement) => mount(createElement("Edge", null, edge));
+	const pinnedBox = (edge: React.ReactElement) => mountEdge(edge).root.find((node) => (node.type as unknown) === "View" && node.props.pointerEvents === "box-none");
+
+	// In the page it sat in the frost's fade and read washed out; pinned under
+	// the bar it draws over the frost. The frost keeps to the bar: grown to back
+	// the line, its fade moved down onto the page's first row.
+	it("pins it under the Android bar, over the frost, and grows the inset by its height", () => {
+		const hook = renderWith("Can't reach Lab");
+		const pinned = pinnedBox(hook.current.edge!);
+		expect(pinned.props.style).toContainEqual({ top: 80 });
+		expect(pinned.props.pointerEvents).toBe("box-none");
+		expect([pinned.props.children].flat()).toContain("Can't reach Lab");
+		expect(hook.current.accessory).toBeNull();
+		expect(hook.current.topInset).toBe(80);
+
+		// Its twin in the header makes room for it in the same layout pass.
+		const header = mount(hook.current.header!);
+		const twin = header.root.find((node) => (node.type as unknown) === "View" && typeof node.props.onLayout === "function");
+		act(() => twin.props.onLayout({ nativeEvent: { layout: { height: 24.4 } } }));
+		expect(hook.current.topInset).toBe(104);
+
+		const edge = mountEdge(hook.current.edge!);
+		const frosts = edge.root.findAllByType("Frost" as never);
+		const bar = frosts.find((frost) => JSON.stringify(frost.props.stops) === JSON.stringify([[0, 80]]))!;
+		expect(bar.props.style).toContainEqual({ height: 80 + 32 });
+		// The line's own backing: its height plus a short seam, so rows scrolling
+		// under it don't show through its text.
+		const backing = frosts.find((frost) => frost !== bar)!;
+		expect(backing.props.stops).toEqual([[0, 24], [1, 16]]);
+		expect(backing.props.style).toContainEqual({ height: 24 + 16 });
+
+		// Drawing nothing (a live machine) measures 0, and the page closes up.
+		const remeasured = mount(hook.current.header!).root.find((node) => (node.type as unknown) === "View" && typeof node.props.onLayout === "function");
+		act(() => remeasured.props.onLayout({ nativeEvent: { layout: { height: 0 } } }));
+		expect(hook.current.topInset).toBe(80);
+	});
+
+	// TalkBack reads overlays after a full-screen list, so the pinned line is a
+	// picture; its invisible twin, first in the list's header right under the
+	// bar, is what TalkBack reaches, before the rows.
+	it("leaves TalkBack to the line's invisible twin in the header", () => {
+		const hook = renderWith("Can't reach Lab");
+		const pinned = pinnedBox(hook.current.edge!);
+		expect(pinned.props).toMatchObject({ collapsable: false, accessibilityElementsHidden: true, importantForAccessibility: "no-hide-descendants" });
+		const header = mount(hook.current.header!);
+		const [spacer, twin] = header.root.findByType("View" as never).children as ReturnType<typeof header.root.findByType>[];
+		expect(spacer.props.style).toEqual({ height: 80 });
+		expect(twin.props.style).toEqual({ opacity: 0.01 });
+		expect(twin.props.collapsable).toBe(false);
+		expect(twin.props.importantForAccessibility).toBeUndefined();
+		expect([twin.props.children].flat()).toContain("Can't reach Lab");
+	});
+
+	it("leaves the inset alone with no accessory", () => {
+		const hook = renderWith(null);
+		expect(hook.current.topInset).toBe(80);
+		expect(mountEdge(hook.current.edge!).root.findAll((node) => node.props.pointerEvents === "box-none")).toHaveLength(0);
+		expect(mount(hook.current.header!).root.findAll((node) => typeof node.props.onLayout === "function")).toHaveLength(0);
+	});
+
+	it("hands it back to the page on iOS, where it goes under the large title", () => {
+		fixtures.platform = "ios";
+		const hook = renderWith("Can't reach Lab");
+		expect(hook.current.accessory).toBe("Can't reach Lab");
+		expect(hook.current.edge).toBeNull();
+		expect(hook.current.topInset).toBe(0);
 	});
 });
