@@ -3,6 +3,7 @@ package claudecode
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
 )
 
 func TestResolveClaudeBinaryFindsLocalAppDataNPMShimOnWindows(t *testing.T) {
@@ -142,7 +144,7 @@ func TestGetLaunchCommandBypassWithPrompt(t *testing.T) {
 
 	want := []string{
 		"claude",
-		"--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard,
+		"--permission-mode", "bypassPermissions", "--settings", bypassLaunchSettings,
 		"--", "-add a health check",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -734,7 +736,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
 	// The hook-captured native id wins over the derived fallback.
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", "claude-native-1", "--", "continue from AO"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassLaunchSettings, "--resume", "claude-native-1", "--", "continue from AO"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -753,7 +755,7 @@ func TestGetRestoreCommandAppendsConfiguredModelAndEffort(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--model", "claude-opus-4-5", "--effort", "high", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassLaunchSettings, "--model", "claude-opus-4-5", "--effort", "high", "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -771,7 +773,7 @@ func TestGetRestoreCommandOmitsBlankConfiguredModel(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassLaunchSettings, "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -791,7 +793,7 @@ func TestGetRestoreCommandReappendsSystemPrompt(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--append-system-prompt", "You are an orchestrator.", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassLaunchSettings, "--append-system-prompt", "You are an orchestrator.", "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -817,7 +819,7 @@ func TestGetRestoreCommandReappendsSystemPromptFromFile(t *testing.T) {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
 	want := []string{
-		"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard,
+		"claude", "--permission-mode", "bypassPermissions", "--settings", bypassLaunchSettings,
 		"--append-system-prompt-file", promptFile,
 		"--resume", "claude-native-1",
 		"--", "continue from AO",
@@ -849,7 +851,7 @@ func TestGetRestoreCommandFallsBackToDerivedUUID(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", claudeSessionUUID("sess-r")}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassLaunchSettings, "--resume", claudeSessionUUID("sess-r")}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -1361,9 +1363,11 @@ func containsSubsequence(values, needle []string) bool {
 	return false
 }
 
-// bypassNudgeGuard is the per-session flag-settings defaultMode that keeps
-// Claude's auto-mode default dialog out of a bypassPermissions launch.
-const bypassNudgeGuard = `{"permissions":{"defaultMode":"bypassPermissions"}}`
+// bypassLaunchSettings is the per-session flag settings of a
+// bypassPermissions launch: the defaultMode that keeps Claude's auto-mode
+// default dialog out, and the acceptance that skips its bypass-permissions
+// confirmation.
+const bypassLaunchSettings = `{"permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true}`
 
 // An explicit AO permission mode also rides as the flag-settings defaultMode,
 // which suppresses Claude's "Make auto mode your default permission mode?"
@@ -1373,12 +1377,13 @@ func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
 	tests := []struct {
 		permission ports.PermissionMode
 		mode       string
+		settings   string
 	}{
-		{ports.PermissionModeAcceptEdits, "acceptEdits"},
-		{ports.PermissionModeAuto, "auto"},
-		{ports.PermissionModeBypassPermissions, "bypassPermissions"},
-		{ports.PermissionModeDefault, ""},
-		{"", ""},
+		{ports.PermissionModeAcceptEdits, "acceptEdits", `{"permissions":{"defaultMode":"acceptEdits"}}`},
+		{ports.PermissionModeAuto, "auto", `{"permissions":{"defaultMode":"auto"}}`},
+		{ports.PermissionModeBypassPermissions, "bypassPermissions", bypassLaunchSettings},
+		{ports.PermissionModeDefault, "", ""},
+		{"", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.permission), func(t *testing.T) {
@@ -1403,9 +1408,8 @@ func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
 					}
 					continue
 				}
-				guard := `{"permissions":{"defaultMode":"` + tt.mode + `"}}`
-				if !containsSubsequence(cmd, []string{"--permission-mode", tt.mode, "--settings", guard}) {
-					t.Fatalf("%s %#v: missing --permission-mode %s with --settings %s", name, cmd, tt.mode, guard)
+				if !containsSubsequence(cmd, []string{"--permission-mode", tt.mode, "--settings", tt.settings}) {
+					t.Fatalf("%s %#v: missing --permission-mode %s with --settings %s", name, cmd, tt.mode, tt.settings)
 				}
 			}
 		})
@@ -1429,9 +1433,51 @@ func TestLaunchSettingsShareOneSettingsFlagWithTheNudgeGuard(t *testing.T) {
 			flags++
 		}
 	}
-	want := `{"autoCompactEnabled":true,"autoCompactWindow":1000000,"permissions":{"defaultMode":"bypassPermissions"},"ultracode":true}`
+	want := `{"autoCompactEnabled":true,"autoCompactWindow":1000000,"permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true,"ultracode":true}`
 	if flags != 1 || !containsSubsequence(cmd, []string{"--settings", want}) {
 		t.Fatalf("launch %#v: want one --settings %s", cmd, want)
+	}
+}
+
+// Claude Code asks for confirmation before every interactive bypassPermissions
+// session until skipDangerousModePermissionPrompt is set, and nothing in an AO
+// pane answers it (#6484). Only a bypassPermissions launch carries the key, in
+// its own --settings, so the user's settings files are left alone; other modes
+// never see that dialog and must not opt into bypass acceptance.
+func TestClaudeLaunchSettingsSkipBypassConfirmationOnlyInBypassMode(t *testing.T) {
+	tests := []struct {
+		policy agentruntime.PermissionPolicy
+		skip   bool
+	}{
+		{agentruntime.PermissionBypassPermissions, true},
+		{agentruntime.PermissionDefault, false},
+		{agentruntime.PermissionAcceptEdits, false},
+		{agentruntime.PermissionAuto, false},
+		{"plan", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		for _, options := range []domain.AgentLaunchOptions{{}, {Ultracode: true}} {
+			t.Run(fmt.Sprintf("%s/ultracode=%v", tt.policy, options.Ultracode), func(t *testing.T) {
+				args := claudeLaunchSettingsArgs(options, tt.policy)
+				settings := map[string]any{}
+				if len(args) > 0 {
+					if len(args) != 2 || args[0] != "--settings" {
+						t.Fatalf("args = %#v, want one --settings flag", args)
+					}
+					if err := json.Unmarshal([]byte(args[1]), &settings); err != nil {
+						t.Fatal(err)
+					}
+				}
+				skip, ok := settings["skipDangerousModePermissionPrompt"]
+				if tt.skip && skip != true {
+					t.Fatalf("settings %v: bypass launch must set skipDangerousModePermissionPrompt", settings)
+				}
+				if !tt.skip && ok {
+					t.Fatalf("settings %v: %q launch must not set skipDangerousModePermissionPrompt", settings, tt.policy)
+				}
+			})
+		}
 	}
 }
 
