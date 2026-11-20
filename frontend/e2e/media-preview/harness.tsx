@@ -9,7 +9,7 @@ import { TooltipProvider } from "../../src/renderer/components/ui/tooltip";
 import "../../src/renderer/styles.css";
 
 const samples = {
-	image: { path: "logo.png", url: "/src/renderer/assets/ao-logo.png" },
+	image: { path: "logo.png", url: "/src/renderer/assets/ao-qr-logo.png" },
 	video: { path: "clip.webm", url: "/e2e/media-preview/clip.webm" },
 	audio: { path: "notification.mp3", url: "/src/renderer/assets/notification.mp3" },
 };

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
-const png = readFileSync("src/renderer/assets/ao-logo.png");
+const png = readFileSync("src/renderer/assets/ao-qr-logo.png");
 
 for (const mixed of [false, true]) {
 	for (const width of [650, 400]) {
