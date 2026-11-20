@@ -7,7 +7,27 @@ test("@P0 artifacts decode images in the viewer", async ({ page }) => {
 	await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0);
 });
 
-for (const type of ["video", "audio"] as const) {
+test("@P0 artifacts play and seek video with the app's controls", async ({ page }) => {
+	await page.goto("/e2e/media-preview/harness.html?type=video");
+	const video = page.locator("video");
+	await expect(video).not.toHaveAttribute("controls");
+	await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.duration)).toBeGreaterThan(0);
+	await expect(video).toHaveJSProperty("paused", true);
+	await page.getByRole("button", { name: "Mute", exact: true }).click();
+	await expect(video).toHaveJSProperty("muted", true);
+	await page.getByRole("button", { name: "Play", exact: true }).click();
+	await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(0);
+	await page.getByRole("button", { name: "Pause", exact: true }).click();
+	await expect(video).toHaveJSProperty("paused", true);
+	// The clip is shorter than one 5 s skip, so the arrows clamp to either end.
+	await page.getByRole("slider", { name: "Seek" }).focus();
+	await page.keyboard.press("ArrowRight");
+	await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.duration - element.currentTime)).toBeLessThan(0.1);
+	await page.keyboard.press("ArrowLeft");
+	await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeLessThan(0.1);
+});
+
+for (const type of ["audio"] as const) {
 	test(`@P0 artifacts play and seek ${type} with native controls`, async ({ page }) => {
 		await page.goto(`/e2e/media-preview/harness.html?type=${type}`);
 		const media = page.locator(type);
