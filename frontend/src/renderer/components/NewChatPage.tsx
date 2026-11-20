@@ -144,20 +144,19 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
-	// the first message of its Chat session, up to the size one upload may be.
-	// A Cloud standalone agent starts without them (createCloudTask).
+	// the first message of its Chat session, in a project or of its own
+	// (createCloudTask), up to the size one upload may be.
 	const cloudOffering = useCloudOffering(task.isCloudProject);
-	const cloudTaskTakesFiles = task.isCloudProject && projectId !== CLOUD_STANDALONE_WORKSPACE_ID;
-	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
+	const cloudFiles = useMemo(() => task.isCloudProject && cloudOffering.maxAttachmentBytes !== undefined
 		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
-	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
+	[cloudOffering.maxAttachmentBytes, task.isCloudProject]);
 	// A draft keeps the files it brought from a target that takes them; here
 	// they stay with why this target takes none, until they are removed.
-	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
-		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
-		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
-			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
-			: undefined;
+	const attachmentsRefusal = task.isCloudProject && cloudOffering.loaded && !cloudFiles
+		? projectId === CLOUD_STANDALONE_WORKSPACE_ID
+			? t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." })
+			: t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
+		: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);

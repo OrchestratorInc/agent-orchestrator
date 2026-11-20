@@ -4513,11 +4513,44 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect((outcome as { status?: number }).status).toBeUndefined();
 	});
 
-	// Its own project comes with its session, so a start the files did not
-	// reach would leave that project behind: it starts without them.
-	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {
+	// A Cloud session of its own starts with files as a project's task does:
+	// created without a prompt, the files uploaded to it, the brief sent with them.
+	it("starts a Cloud session with files in Chat, the brief carrying them", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		const project = { id: "agent-f5", displayName: "Look at this", standaloneAgent: true };
+		h.cloudCreateStandaloneAgent.mockResolvedValue({ project, session: { id: "s-f5", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockResolvedValue({ id: "file-1" });
+		h.cloudSendSessionMessage.mockResolvedValue({});
+		let standalone!: ReturnType<typeof useTaskLaunch>;
+		function StandaloneLauncher() {
+			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
+			return <p>{standalone.canSubmit ? "ready" : "loading"}</p>;
+		}
+		render(<Wrap queryClient={queryClient}><StandaloneLauncher /></Wrap>);
+		await screen.findByText("ready");
+		let sessionId!: string;
+		await act(async () => {
+			sessionId = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] });
+		});
+		expect(sessionId).toBe("s-f5");
+		expect(h.cloudCreateStandaloneAgent).toHaveBeenCalledWith("org-1",
+			expect.objectContaining({ prompt: "", interfaceMode: "chat" }),
+			{ idempotencyKey: expect.stringMatching(/^req-f5:files:/) });
+		expect(h.cloudUpload).toHaveBeenCalledWith(h.cloudBaseUrl, "org-1", "s-f5", { name: "shot.png", data: "aGk=" }, { signal: expect.any(AbortSignal) });
+		expect(h.cloudSendSessionMessage).toHaveBeenCalledWith("org-1", "s-f5",
+			expect.objectContaining({ text: "Look at this", attachmentIds: ["file-1"] }),
+			{ idempotencyKey: expect.stringMatching(/^req-f5:files:.*:brief$/) });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(h.seedCreatedStandaloneAgent).toHaveBeenCalledWith(expect.anything(), h.cloudBaseUrl, "org-1", project);
+		expect(standaloneAgentProjectId("s-f5")).toBe("agent-f5");
+	});
+
+	it("deletes a Cloud session whose files did not upload, and returns the task as final", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateStandaloneAgent.mockResolvedValue({ project: { id: "agent-f6", standaloneAgent: true }, session: { id: "s-f6", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("This file type is not allowed."));
 		let standalone!: ReturnType<typeof useTaskLaunch>;
 		function StandaloneLauncher() {
 			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
@@ -4527,13 +4560,12 @@ describe("useTaskLaunch Cloud start on send", () => {
 		await screen.findByText("ready");
 		let outcome: unknown;
 		await act(async () => {
-			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f6", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
 				.catch((error: unknown) => error);
 		});
-		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
-		expect(h.cloudCreateStandaloneAgent).not.toHaveBeenCalled();
-		expect(h.cloudCreateSession).not.toHaveBeenCalled();
-		expect(h.cloudUpload).not.toHaveBeenCalled();
+		expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "s-f6");
+		expect(h.cloudSendSessionMessage).not.toHaveBeenCalled();
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_TASK_FILES_UNDELIVERED", message: "This file type is not allowed." });
 	});
 
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {
