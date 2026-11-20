@@ -106,7 +106,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			if !target.cli {
 				binary = ""
 			}
-			if err := agy.ValidateImportedACP(ctx, cfg.DataDir, root, cfg.ProviderConversationID, cfg.WorkspacePath, binary); err != nil {
+			if err := agy.ValidateImportedACP(ctx, root, cfg.ProviderConversationID, cfg.WorkspacePath, binary); err != nil {
 				return acpdriver.Launch{}, err
 			}
 			if target.cli {

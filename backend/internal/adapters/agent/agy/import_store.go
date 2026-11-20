@@ -26,6 +26,7 @@ const maxImportDB = 256 << 20
 const maxImportText = 32 << 20
 
 var importID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var errImportSourceChanged = errors.New("agy: source changed while reading; scan again")
 
 // ImportArchive is the visible projection of Agy 1.5.13's schema-1 native DB.
 // Preparation copies the selected database, including tool history, separately.
@@ -52,6 +53,10 @@ func importPath(root, path string) (string, string, error) {
 		return "", "", errors.New("agy: native database must be a regular file")
 	}
 	path, err = filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", "", err
+	}
+	path, err = filepath.Abs(path)
 	if err != nil {
 		return "", "", err
 	}
@@ -147,7 +152,7 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 		return a, err
 	}
 	if after != fingerprint {
-		return a, errors.New("agy: source changed while reading; scan again")
+		return a, errImportSourceChanged
 	}
 	a.Fingerprint = fingerprint
 	return a, nil
@@ -188,12 +193,13 @@ func readImportArchive(ctx context.Context, root, path string, immutable bool) (
 	if version != 1 {
 		return a, errors.New("agy: unsupported native schema version")
 	}
-	// Unknown tables may contain state outside the audited conversation layout.
-	var totalTables, knownTables int
-	if err := db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(name IN ('trajectory_meta','steps','gen_metadata','executor_metadata','parent_references','trajectory_metadata_blob','battle_mode_infos')),0) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'`).Scan(&totalTables, &knownTables); err != nil {
+	// Native tables and the two native indexes are the audited schema. In
+	// particular, a trigger must never run when the PRIVATE metadata is remapped.
+	var totalObjects, knownTables int
+	if err := db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(type='table' AND name IN ('trajectory_meta','steps','gen_metadata','executor_metadata','parent_references','trajectory_metadata_blob','battle_mode_infos')),0) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' AND NOT(type='index' AND name IN ('idx_steps_status','idx_steps_step_type'))`).Scan(&totalObjects, &knownTables); err != nil {
 		return a, err
 	}
-	if totalTables != 7 || knownTables != 7 {
+	if totalObjects != 7 || knownTables != 7 {
 		return a, errors.New("agy: unsupported or incomplete native table layout")
 	}
 	var count int

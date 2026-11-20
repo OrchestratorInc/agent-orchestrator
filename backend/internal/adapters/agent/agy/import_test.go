@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -108,6 +109,8 @@ func TestImportArchiveRefusesUnsupportedAndActiveSources(t *testing.T) {
 		{"subtrajectory", "UPDATE steps SET has_subtrajectory=1", false},
 		{"empty", "DELETE FROM steps", false},
 		{"unknown table", "CREATE TABLE sqliteXunexpected(secret TEXT)", false},
+		{"trigger", "CREATE TRIGGER unexpected AFTER UPDATE ON trajectory_metadata_blob BEGIN DELETE FROM gen_metadata; END", false},
+		{"view", "CREATE VIEW unexpected AS SELECT idx FROM steps", false},
 		{"wal", "", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -201,8 +204,78 @@ func TestPrepareImportedSessionRefusesUnknownBinaryAndChangedSelection(t *testin
 		t.Fatal("unknown binary accepted")
 	}
 	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
-	if _, err := p.PrepareImportedSession(ctx, r); err == nil {
-		t.Fatal("changed selection accepted")
+	if _, err := p.PrepareImportedSession(ctx, r); err == nil || !strings.Contains(err.Error(), "terminate this import") {
+		t.Fatalf("changed selection recovery = %v", err)
+	}
+}
+
+func TestPrivateImportReopenReadsCommittedWAL(t *testing.T) {
+	ctx := context.Background()
+	root, path, cwd := importFixture(t)
+	fingerprint, err := ImportFingerprint(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
+	launch, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := p.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: launch, DataDir: t.TempDir(), SourceFingerprint: fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", ref.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	for _, q := range []string{"PRAGMA journal_mode=WAL", "PRAGMA wal_autocheckpoint=0"} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO steps(idx,step_type,status,has_subtrajectory,step_payload,step_format) VALUES(2,14,3,0,?,0)", importField(19, importField(2, []byte("committed after import")))); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(ref.TranscriptPath + "-wal"); err != nil || info.Size() == 0 {
+		t.Fatalf("fixture needs a committed WAL: %v", err)
+	}
+	if available, err := p.ProbeNativeSession(ctx, ref); err != nil || available != ports.NativeSessionAvailabilityAvailable {
+		t.Fatalf("private WAL probe = %v,%v", available, err)
+	}
+	if err := p.PrepareRuntimeLaunch(ctx, ports.WorkspaceHookConfig{ImportConfigDir: ref.ConfigDir, NativeSessionID: ref.NativeSessionID, WorkspacePath: launch, Env: map[string]string{"GEMINI_HOME": ref.ConfigDir}}); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := readImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath, false)
+	if err != nil || len(archive.Messages) != 3 || archive.Messages[2].Text != "committed after import" {
+		t.Fatalf("WAL history = %+v,%v", archive, err)
+	}
+	if after, err := ImportFingerprint(ctx, root, path); err != nil || after != fingerprint {
+		t.Fatalf("source changed: %v", err)
+	}
+}
+
+func TestPreparedImportEscapesSQLiteURI(t *testing.T) {
+	if filepath.Separator == '\\' {
+		t.Skip("question marks are not valid Windows path components")
+	}
+	ctx := context.Background()
+	root, path, cwd := importFixture(t)
+	fingerprint, err := ImportFingerprint(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
+	ref, err := p.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: filepath.Join(t.TempDir(), "ao?work# space"), Chat: true, SourceFingerprint: fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,8 @@ import (
 // actual run_command output. Unknown releases must not resume a prepared copy.
 const supportedImportVersion = "1.5.13"
 const importProofName = ".ao-import.json"
+
+var errImportSelectionChanged = errors.New("agy: selected source changed after import; terminate this import, then import the conversation again")
 
 var _ ports.AgentImportedSessionPreparer = (*Plugin)(nil)
 var _ ports.AgentNativeSessionProber = (*Plugin)(nil)
@@ -65,6 +68,7 @@ func importBinaryVersion(ctx context.Context, binary string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(ctx, binary, "--version")
+	cmd.WaitDelay = time.Second
 	out := &importVersionOutput{}
 	cmd.Stdout = out
 	cmd.Stderr = io.Discard
@@ -115,10 +119,13 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	}
 	archive, err := ReadImportArchive(ctx, r.ConfigDir, r.TranscriptPath)
 	if err != nil {
+		if errors.Is(err, errImportSourceChanged) {
+			return ports.NativeSessionRef{}, errImportSelectionChanged
+		}
 		return ports.NativeSessionRef{}, err
 	}
 	if archive.ID != r.NativeSessionID || archive.CWD != filepath.Clean(r.SourceCWD) || archive.Fingerprint != r.SourceFingerprint {
-		return ports.NativeSessionRef{}, errors.New("agy: selected source changed; scan again before importing")
+		return ports.NativeSessionRef{}, errImportSelectionChanged
 	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -189,7 +196,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 			return ports.NativeSessionRef{}, err
 		}
 		if fingerprint != r.SourceFingerprint {
-			return ports.NativeSessionRef{}, errors.New("agy: source changed while copying; scan again")
+			return ports.NativeSessionRef{}, errImportSelectionChanged
 		}
 	}
 	if err := remapImportDB(ctx, staged, launch); err != nil {
@@ -208,7 +215,8 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 }
 
 func remapImportDB(ctx context.Context, path, cwd string) error {
-	db, err := sql.Open("sqlite", path)
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	db, err := sql.Open("sqlite", u.String()+"?mode=rw")
 	if err != nil {
 		return err
 	}
@@ -231,26 +239,53 @@ func remapImportDB(ctx context.Context, path, cwd string) error {
 	return err
 }
 
-func validatePreparedImport(ctx context.Context, ref ports.NativeSessionRef, cwd string, expected *agyImportProof) error {
-	root, err := os.OpenRoot(ref.ConfigDir)
+func readImportProof(configDir string) (agyImportProof, error) {
+	var proof agyImportProof
+	root, err := os.OpenRoot(configDir)
 	if err != nil {
-		return importUnavailable(err)
+		return proof, importUnavailable(err)
 	}
 	defer func() { _ = root.Close() }()
 	info, err := root.Lstat(importProofName)
 	if err != nil {
-		return importUnavailable(err)
+		return proof, importUnavailable(err)
 	}
 	if !info.Mode().IsRegular() || info.Size() > 8192 {
-		return errors.New("agy: invalid import preparation proof")
+		return proof, errors.New("agy: invalid import preparation proof")
 	}
 	data, err := root.ReadFile(importProofName)
 	if err != nil {
-		return importUnavailable(err)
+		return proof, importUnavailable(err)
 	}
-	var proof agyImportProof
 	if err := json.Unmarshal(data, &proof); err != nil {
-		return importUnavailable(err)
+		return proof, importUnavailable(err)
+	}
+	return proof, nil
+}
+
+func preparedImportNamespace(root string) bool {
+	return filepath.Base(filepath.Dir(root)) == "agy" && filepath.Base(filepath.Dir(filepath.Dir(root))) == "native-imports"
+}
+
+func preparedImportRootMatches(root string, proof agyImportProof) bool {
+	if !preparedImportNamespace(root) {
+		return false
+	}
+	encoded, err := json.Marshal(proof)
+	if err != nil {
+		return false
+	}
+	hash := sha256.Sum256(encoded)
+	return filepath.Base(root) == hex.EncodeToString(hash[:16])
+}
+
+func validatePreparedImport(ctx context.Context, ref ports.NativeSessionRef, cwd string, expected *agyImportProof) error {
+	proof, err := readImportProof(ref.ConfigDir)
+	if err != nil {
+		return err
+	}
+	if expected == nil && !preparedImportRootMatches(ref.ConfigDir, proof) {
+		return errors.New("agy: native preparation proof is not bound to this private root")
 	}
 	if proof.ID != ref.NativeSessionID || proof.CWD != cwd || proof.Version != supportedImportVersion || proof.Fingerprint == "" || (expected != nil && proof != *expected) {
 		return errors.New("agy: prepared native identity/workspace proof mismatch")
@@ -276,17 +311,34 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	if !importID.MatchString(ref.NativeSessionID) || ref.ConfigDir == "" {
 		return "", false, nil
 	}
+	proof, proofErr := readImportProof(ref.ConfigDir)
+	prepared := proofErr == nil
+	if proofErr != nil && (preparedImportNamespace(ref.ConfigDir) || !errors.Is(proofErr, os.ErrNotExist)) {
+		return "", false, proofErr
+	}
+	if prepared && (!preparedImportRootMatches(ref.ConfigDir, proof) || proof.ID != ref.NativeSessionID || proof.Version != supportedImportVersion || !filepath.IsAbs(proof.CWD) || proof.Fingerprint == "") {
+		return "", false, errors.New("agy: invalid private native history proof")
+	}
 	paths := []string{ref.TranscriptPath}
 	if ref.TranscriptPath == "" {
 		paths = []string{filepath.Join(ref.ConfigDir, ACPStorageDir, "conversations", ref.NativeSessionID+".db"), filepath.Join(ref.ConfigDir, CLIStorageDir, "conversations", ref.NativeSessionID+".db")}
 	}
 	for _, path := range paths {
-		a, err := ReadImportArchive(ctx, ref.ConfigDir, path)
+		var a ImportArchive
+		var err error
+		if prepared {
+			a, err = readImportArchive(ctx, ref.ConfigDir, path, false)
+		} else {
+			a, err = ReadImportArchive(ctx, ref.ConfigDir, path)
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return "", false, err
+		}
+		if prepared && a.CWD != proof.CWD {
+			return "", false, errors.New("agy: private native workspace differs from its preparation proof")
 		}
 		if a.ID != ref.NativeSessionID {
 			return "", false, errors.New("agy: native ID mismatch")
@@ -314,19 +366,8 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 // ValidateImportedACP fences every private-profile ACP reopen, including a
 // missing proof/database and an upgrade to an unverified native binary. Normal
 // Agy launches outside this adapter's private import directory are unaffected.
-func ValidateImportedACP(ctx context.Context, dataDir, root, id, cwd, binary string) error {
-	if dataDir == "" {
-		return nil
-	}
-	base := filepath.Join(dataDir, "native-imports", "agy")
-	if !strings.EqualFold(filepath.VolumeName(base), filepath.VolumeName(root)) {
-		return nil
-	}
-	rel, err := filepath.Rel(base, root)
-	if err != nil {
-		return err
-	}
-	if !filepath.IsLocal(rel) || filepath.Dir(rel) != "." {
+func ValidateImportedACP(ctx context.Context, root, id, cwd, binary string) error {
+	if !preparedImportNamespace(root) {
 		return nil
 	}
 	if binary == "" {

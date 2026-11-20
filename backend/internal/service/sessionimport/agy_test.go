@@ -52,6 +52,19 @@ func TestAgyScanUsesEligibleCWDAndNativeIdentity(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	t.Chdir(filepath.Dir(root))
+	relative := filepath.Base(root)
+	t.Setenv("GEMINI_HOME", relative)
+	if configured := agyRoot(""); configured != root {
+		t.Fatalf("configured root = %q, want %q", configured, root)
+	}
+	files, err := discoverAgy(context.Background(), relative)
+	if err != nil || len(files) != 1 || files[0].root != root || !filepath.IsAbs(files[0].paths[0]) {
+		t.Fatalf("relative discovery = %+v,%v", files, err)
+	}
+	if got, err := readAgyTranscript(context.Background(), relative, filepath.Join(relative, agy.CLIStorageDir, "conversations", id+".db")); err != nil || got.root != root {
+		t.Fatalf("relative read = %+v,%v", got, err)
+	}
 	store := &importStore{projects: []domain.ProjectRecord{{ID: "agy-project", Path: cwd}}}
 	svc := New(store, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessAgy: root}
@@ -61,6 +74,20 @@ func TestAgyScanUsesEligibleCWDAndNativeIdentity(t *testing.T) {
 	}
 	if preview.Candidates[0].Harness != domain.HarnessAgy || preview.Candidates[0].Title != "continue my Agy chat" {
 		t.Fatalf("candidate = %+v", preview.Candidates[0])
+	}
+	if err := os.WriteFile(path+"-wal", []byte("active source journal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	active, err := svc.Scan(context.Background())
+	if err != nil || len(active.Candidates) != 0 {
+		t.Fatalf("reused active-source cache: %+v,%v", active, err)
+	}
+	if err := os.Remove(path + "-wal"); err != nil {
+		t.Fatal(err)
+	}
+	preview, err = svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("closed-source cache = %+v,%v", preview, err)
 	}
 	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
 	if err != nil || len(results) != 1 || results[0].Status != "created" {
