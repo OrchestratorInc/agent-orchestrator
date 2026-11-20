@@ -365,7 +365,7 @@ function InstallRow({
 	const unsupported = job?.status === "unsupported";
 	// Download attempts and retry backoff first; otherwise what is running on this machine (brew, sudo, npm…), in full.
 	const runningDetail =
-		(job?.status !== "verifying" ? installerProgress(job?.output) : undefined) ??
+		installerProgress(job?.progress, t) ??
 		(job?.command ? t("startup.installingCommand", { command: job.command }) : undefined);
 
 	let action: React.ReactNode;
@@ -450,7 +450,7 @@ export function InstallAction({
 		return (
 			<div className="flex flex-col gap-1.5">
 				<p className="text-caption text-settings-muted" role="status">
-					{(job?.status !== "verifying" ? installerProgress(job?.output) : undefined) ?? (job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis"))}
+					{installerProgress(job?.progress, t) ?? (job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis"))}
 				</p>
 				<div className="ao-install-progress" aria-hidden="true">
 					<div className="ao-install-progress__bar" />

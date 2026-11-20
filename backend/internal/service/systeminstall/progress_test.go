@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func trackOutput(chunks ...string) *Progress {
@@ -116,8 +118,8 @@ func TestProgressTrackerLetsVendorOutputDriveThePhaseAfterBootstrapLines(t *test
 		"[installer] Retrying download in 1s (attempt 2/3).\n" +
 		"[installer] Downloading installer (attempt 2/3).\n" +
 		"[installer] Installing harness.\n"
-	if progress := trackOutput(bootstrap); progress.Phase != "" || progress.Detail != "[installer] Installing harness." {
-		t.Fatalf("after bootstrap lines = %+v, want no phase with the latest detail", progress)
+	if progress := trackOutput(bootstrap); progress != nil {
+		t.Fatalf("after bootstrap lines = %+v, want no progress from log lines", progress)
 	}
 	// Captured from https://install.openhands.dev/install.sh without a TTY.
 	if progress := trackOutput(bootstrap, "[INFO] Downloading OpenHands CLI v1.14.0...\n"); progress.Phase != ProgressDownloading {
@@ -127,6 +129,27 @@ func TestProgressTrackerLetsVendorOutputDriveThePhaseAfterBootstrapLines(t *test
 		"[SUCCESS] OpenHands CLI v1.14.0 installed successfully!\n")
 	if progress.Phase != ProgressInstalling {
 		t.Fatalf("after the vendor success line phase = %q, want installing", progress.Phase)
+	}
+}
+
+func TestProgressTrackerReportsScriptDownloadAsData(t *testing.T) {
+	tracker := newProgressTracker(io.Discard)
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 1, MaxAttempts: 3})
+	if got := tracker.Snapshot(); got == nil || got.DownloadAttempt != 1 || got.DownloadAttempts != 3 || got.RetryInSeconds != 0 || got.Phase != "" {
+		t.Fatalf("first attempt = %+v", got)
+	}
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: 1500 * time.Millisecond})
+	if got := tracker.Snapshot(); got.DownloadAttempt != 2 || got.RetryInSeconds != 2 {
+		t.Fatalf("retry wait = %+v, want attempt 2 retrying in 2s (rounded up)", got)
+	}
+	// Once the script downloads, the vendor's own output takes over.
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{})
+	if got := tracker.Snapshot(); got != nil {
+		t.Fatalf("after download = %+v, want no progress until the vendor prints", got)
+	}
+	_, _ = tracker.Write([]byte("[INFO] Downloading OpenHands CLI v1.14.0...\n"))
+	if got := tracker.Snapshot(); got.Phase != ProgressDownloading || got.DownloadAttempt != 0 {
+		t.Fatalf("vendor download = %+v", got)
 	}
 }
 

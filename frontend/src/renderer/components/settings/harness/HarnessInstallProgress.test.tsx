@@ -40,14 +40,17 @@ describe("install stage", () => {
 });
 
 describe("HarnessInstallProgress", () => {
-	it("shows retry progress and lets later vendor output take over", () => {
+	it("shows localised download attempts and retries, then lets vendor output take over", () => {
+		// The English log lines stay diagnostics; the card reads the structured fields.
 		const output = "download attempt 1/3 elapsed=10s: TLS handshake timeout\n[installer] Retrying download in 1s (attempt 2/3).\n";
-		const { rerender } = render(<HarnessInstallProgress job={job({ output })} stage="downloading" label="Downloading" />);
-		expect(screen.getByText("Retrying download in 1s (attempt 2/3).")).toBeInTheDocument();
+		const { rerender } = render(<HarnessInstallProgress job={job({ output, progress: { downloadAttempt: 2, downloadAttempts: 3, retryInSeconds: 1 } })} stage={undefined} label="Installing" />);
+		expect(screen.getByText("Retrying download in 1s (attempt 2 of 3)…")).toBeInTheDocument();
 		expect(screen.queryByText(/TLS handshake timeout/)).not.toBeInTheDocument();
+		rerender(<HarnessInstallProgress job={job({ output, progress: { downloadAttempt: 2, downloadAttempts: 3 } })} stage={undefined} label="Installing" />);
+		expect(screen.getByText("Downloading installer (attempt 2 of 3)…")).toBeInTheDocument();
 		rerender(<HarnessInstallProgress job={job({ output: output + "Installing package\n", progress: { detail: "Installing package" } })} stage="installing" label="Installing" />);
 		expect(screen.getByText("Installing package")).toBeInTheDocument();
-		expect(screen.queryByText(/Retrying download/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/download/i)).not.toBeInTheDocument();
 	});
 
 	it("fills the bar to the downloaded percentage and shows the installer's line", () => {

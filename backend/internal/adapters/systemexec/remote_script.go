@@ -172,10 +172,12 @@ func (a Adapter) downloadInstallScript(ctx context.Context, source string, stdou
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		reportDownload(stdout, ports.InstallScriptDownload{Attempt: attempt, MaxAttempts: remoteScriptDownloadAttempts})
 		_, _ = fmt.Fprintf(stdout, "[installer] Downloading installer (attempt %d/%d).\n", attempt, remoteScriptDownloadAttempts)
 		started := time.Now()
 		body, retry, retryAfter, err := downloadInstallScriptAttempt(ctx, &client, source)
 		if err == nil {
+			reportDownload(stdout, ports.InstallScriptDownload{})
 			return body, nil
 		}
 		_, _ = fmt.Fprintf(stderr, "download attempt %d/%d elapsed=%s source=%s: %v\n", attempt, remoteScriptDownloadAttempts, time.Since(started).Round(time.Millisecond), source, err)
@@ -186,6 +188,7 @@ func (a Adapter) downloadInstallScript(ctx context.Context, source string, stdou
 			return nil, &installerDownloadError{attempts: attempt, cause: err}
 		}
 		delay := max(time.Second<<(attempt-1), retryAfter)
+		reportDownload(stdout, ports.InstallScriptDownload{Attempt: attempt + 1, MaxAttempts: remoteScriptDownloadAttempts, RetryIn: delay})
 		_, _ = fmt.Fprintf(stdout, "[installer] Retrying download in %s (attempt %d/%d).\n", delay, attempt+1, remoteScriptDownloadAttempts)
 		timer := time.NewTimer(delay)
 		select {
@@ -196,6 +199,14 @@ func (a Adapter) downloadInstallScript(ctx context.Context, source string, stdou
 		}
 	}
 	panic("unreachable: installer download attempts exhausted")
+}
+
+// reportDownload hands download progress to a writer that takes it as data;
+// the "[installer]" lines stay in the output as diagnostics either way.
+func reportDownload(stdout io.Writer, download ports.InstallScriptDownload) {
+	if reporter, ok := stdout.(ports.InstallScriptDownloadReporter); ok {
+		reporter.ReportInstallScriptDownload(download)
+	}
 }
 
 // installerDownloadError keeps technical causes available to errors.Is/As while

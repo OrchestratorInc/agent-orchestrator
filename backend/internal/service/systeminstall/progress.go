@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // Live install progress.
@@ -36,6 +38,10 @@ type Progress struct {
 	Phase   ProgressPhase `json:"phase,omitempty" enum:"downloading,installing" description:"Installer phase the output names. Absent until a line names one."`
 	Percent *int          `json:"percent,omitempty" minimum:"0" maximum:"100" description:"Progress through the current phase, present only when the installer's output states sizes or counts."`
 	Detail  string        `json:"detail,omitempty" description:"The installer's latest output line."`
+	// Set only while AO downloads a vendor install script, before it runs.
+	DownloadAttempt  int `json:"downloadAttempt,omitempty" minimum:"1" description:"Current installer download attempt, before it runs."`
+	DownloadAttempts int `json:"downloadAttempts,omitempty" minimum:"1" description:"Maximum installer download attempts."`
+	RetryInSeconds   int `json:"retryInSeconds,omitempty" minimum:"1" description:"Seconds until the next installer download attempt."`
 }
 
 // progressPublishInterval is how often a running install's captured output
@@ -97,10 +103,19 @@ type progressTracker struct {
 	brewSteps     int
 	brewStarted   int
 	brewInstalled bool
+	// The script runner's own download, reported as data.
+	download ports.InstallScriptDownload
 }
 
 func newProgressTracker(dst io.Writer) *progressTracker {
 	return &progressTracker{dst: dst, percent: -1}
+}
+
+// ReportInstallScriptDownload implements ports.InstallScriptDownloadReporter.
+func (t *progressTracker) ReportInstallScriptDownload(download ports.InstallScriptDownload) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.download = download
 }
 
 func (t *progressTracker) Write(p []byte) (int, error) {
@@ -135,10 +150,17 @@ func (t *progressTracker) Write(p []byte) (int, error) {
 func (t *progressTracker) Snapshot() *Progress {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.phase == "" && t.detail == "" && t.percent < 0 {
+	if t.phase == "" && t.detail == "" && t.percent < 0 && t.download.Attempt == 0 {
 		return nil
 	}
 	progress := &Progress{Phase: t.phase, Detail: t.detail}
+	if t.download.Attempt > 0 {
+		progress.DownloadAttempt = t.download.Attempt
+		progress.DownloadAttempts = t.download.MaxAttempts
+		if t.download.RetryIn > 0 {
+			progress.RetryInSeconds = int((t.download.RetryIn + time.Second - 1) / time.Second)
+		}
+	}
 	if t.percent >= 0 {
 		percent := t.percent
 		progress.Percent = &percent
@@ -151,13 +173,14 @@ func (t *progressTracker) observe(raw string) {
 	if line == "" {
 		return
 	}
-	t.detail = truncateRunes(line, maxProgressDetailRunes)
 	// Shared bootstrap lines (script download attempts, retries, the execution
-	// boundary) describe AO's own staging, not the vendor's. They update the
-	// detail only, so the vendor script's output still drives the phase.
+	// boundary) describe AO's own staging, not the vendor's: that arrives as
+	// data through ReportInstallScriptDownload. They stay in the output as
+	// diagnostics but drive neither the detail nor the vendor's phase.
 	if strings.HasPrefix(line, installerBootstrapPrefix) {
 		return
 	}
+	t.detail = truncateRunes(line, maxProgressDetailRunes)
 
 	if match := uvDownloading.FindStringSubmatch(line); match != nil {
 		if t.uvSizes == nil {

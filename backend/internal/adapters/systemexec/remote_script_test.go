@@ -469,6 +469,41 @@ func TestInstallerDownloadBackoff(t *testing.T) {
 	})
 }
 
+type downloadReports struct {
+	io.Writer
+	reports []ports.InstallScriptDownload
+}
+
+func (r *downloadReports) ReportInstallScriptDownload(download ports.InstallScriptDownload) {
+	r.reports = append(r.reports, download)
+}
+
+func TestInstallerDownloadReportsAttemptsAsData(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		attempts := 0
+		client := &http.Client{Transport: installerRoundTripper(func(*http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503 Service Unavailable", Body: io.NopCloser(strings.NewReader(""))}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("printf ok"))}, nil
+		})}
+		stdout := &downloadReports{Writer: io.Discard}
+		if _, err := newAdapter(t.TempDir(), client).downloadInstallScript(context.Background(), "https://installer.invalid/install.sh", stdout, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		want := []ports.InstallScriptDownload{
+			{Attempt: 1, MaxAttempts: 3},
+			{Attempt: 2, MaxAttempts: 3, RetryIn: time.Second},
+			{Attempt: 2, MaxAttempts: 3},
+			{},
+		}
+		if !slices.Equal(stdout.reports, want) {
+			t.Fatalf("reports = %+v, want %+v", stdout.reports, want)
+		}
+	})
+}
+
 func TestInstallerDownloadHonoursRetryAfter(t *testing.T) {
 	for _, test := range []struct {
 		name         string
