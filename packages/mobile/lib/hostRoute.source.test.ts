@@ -51,7 +51,7 @@ describe("retained-stack host routes", () => {
 	it("reloads or mounts the app preview with its credential only on a verified connection", () => {
 		const preview = source("../app/preview/[id].tsx");
 		expect(preview).toContain("const appWaits = showingApp && !config && !appMounted.current;");
-		expect(preview).toContain(": appWaits ? <View style={styles.center}><EmptyState busy title=\"Connecting to this machine…\" /></View> : <View style={styles.appPane}>");
+		expect(preview).toContain(": appWaits ? <View style={styles.center}>{machine === \"rejected\" ? <MachineRejectedState /> : <EmptyState busy title=\"Connecting to this machine…\" />}</View> : <View style={styles.appPane}>");
 		const reload = between(preview, "const reloadApp = useCallback", "}, [config]);");
 		expectBefore(reload, "if (!currentConfig.current) {", "web.current?.reload();");
 		expect(reload).toContain("if (!config || !reloadWhenVerified.current) return;");
@@ -128,21 +128,49 @@ describe("retained-stack host routes", () => {
 		expect(source("./PRCard.tsx")).toContain("reviewRouteForPR(session.id, pr, hostId)");
 	});
 
-	// The app closes the connection on purpose every time it goes to the background.
-	it("says a machine is offline only by the shared rule, never for a connection an app switch closed", () => {
-		for (const path of [
-			"../app/preview/[id].tsx",
-			"../app/artifact/[sessionId].tsx",
-			"../app/artifacts/[sessionId].tsx",
-			"../app/files/[sessionId]/index.tsx",
-			"../app/files/[sessionId]/folder.tsx",
-			"../app/files/[sessionId]/file.tsx",
-			"../app/shell/[handleId].tsx",
-		]) {
+	// The app closes the connection on purpose every time it goes to the
+	// background; a machine that refused this phone has stopped polling, so a
+	// screen that waited on it spun for good.
+	it("says a machine is offline or refused this phone only by the shared rule, never for a connection an app switch closed", () => {
+		const screens: [path: string, gate: string, state: string][] = [
+			["../app/preview/[id].tsx", "const machine = !config ? machineState(app) : \"ok\";", "machine"],
+			["../app/artifact/[sessionId].tsx", "const machine = !backend && !cloud ? machineState(app) : \"ok\";", "machine"],
+			["../app/artifacts/[sessionId].tsx", "const machine = !backend && !cloud ? machineState(app) : \"ok\";", "machine"],
+			["../app/files/[sessionId]/index.tsx", "const machine = !backend ? machineState(app) : \"ok\";", "machine"],
+			["../app/files/[sessionId]/folder.tsx", "const machine = !backend ? machineState(app) : \"ok\";", "machine"],
+			["../app/files/[sessionId]/file.tsx", "const machine = !backend ? machineState(app) : \"ok\";", "machine"],
+			["../app/shell/[handleId].tsx", "const state = !config && !opened ? machineState(app) : \"ok\";", "state"],
+		];
+		for (const [path, gate, state] of screens) {
 			const screen = source(path);
 			expect(screen, path).not.toContain('connection === "closed"');
-			expect(screen, path).toMatch(/machineOffline\(\{ unreachable(: machineUnreachable)?, paired \}\)/);
+			expect(screen, path).not.toContain("machineOffline");
+			expect(screen, path).toContain("const app = useApp();");
+			expect(screen, path).toContain(gate);
+			// The refusal gets the board's copy and repair, before "Machine offline".
+			expectBefore(screen, `${state} === "rejected"`, `${state} === "offline"`);
+			expect(between(screen, `${state} === "rejected"`, `${state} === "offline"`), path).toContain("<MachineRejectedState />");
 		}
+		// Preview's held app page, not yet mounted, waits for a verified connection;
+		// not for one that refused this phone.
+		expect(source("../app/preview/[id].tsx")).toContain("appWaits ? <View style={styles.center}>{machine === \"rejected\" ? <MachineRejectedState /> : <EmptyState busy title=\"Connecting to this machine…\" />}</View>");
+		// The live browser pane, kept on screen through an app switch.
+		const pane = source("./preview/BrowserLivePane.tsx");
+		expect(pane).toContain("const state = config ? \"ok\" : machineState(app);");
+		expect(pane).toContain("rejectedMachineLine(app.errorStatus)");
+	});
+
+	// The board's copy and the repair Settings offers; never a Retry, which would
+	// only spend another attempt toward the daemon's lockout.
+	it("words a refusal as the board does, offering only a new code", () => {
+		const state = source("./MachineRejectedState.tsx");
+		expect(state).toContain("const copy = rejectedMachineCopy(errorStatus, config?.host);");
+		expect(state).toContain("router.push({ pathname: \"/pair\", params: { repairHostId: currentHostId } })");
+		expect(state.match(/<Button /g)).toEqual(["<Button "]);
+		expect(state).not.toMatch(/refresh\(|reload/);
+		const route = source("../app/session/[id].tsx");
+		expect(between(route, "case \"rejected\":", "case \"ended\":")).toContain("<MachineRejectedState action={<Button key=\"board\" title=\"Open board\"");
+		expect(route).toContain("sessionRouteView({ listed, paired, unreachable, connection, error, errorStatus, loading,");
 	});
 
 	// Each machine's projects keep their rows through an app switch, so a bare
@@ -150,7 +178,7 @@ describe("retained-stack host routes", () => {
 	it("marks a machine's projects offline by the shared rule, never for a closed connection", () => {
 		expect(source("./hostedRows.ts")).not.toContain('connection === "closed"');
 		const projects = source("../app/(tabs)/(projects)/projects.tsx");
-		expect(projects).toContain("offline: spawnHostOffline(host, phoneNetwork, now)");
+		expect(projects).toContain("offline: spawnHostState(host, phoneNetwork, now) !== \"ok\"");
 		expect(projects).toContain("hostedProjectSections(cloud ? [...hosts, cloud] : hosts)");
 	});
 });

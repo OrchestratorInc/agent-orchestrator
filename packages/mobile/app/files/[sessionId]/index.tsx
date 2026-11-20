@@ -3,7 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "reac
 import { RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "../../../lib/AppSymbol";
-import { hostRouteMatches, machineOffline } from "../../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../../lib/hostRoute";
+import { MachineRejectedState } from "../../../lib/MachineRejectedState";
 import { refreshControlColors } from "../../../lib/refreshControlColors";
 import { Spinner } from "../../../lib/Spinner";
 import { HostScope, useApp } from "../../../lib/store";
@@ -59,7 +60,8 @@ function SessionFilesContent() {
 	const id = String(sessionId ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { currentHostId, unreachable: machineUnreachable, paired, loading: appLoading, sessions } = useApp();
+	const app = useApp();
+	const { currentHostId, loading: appLoading, sessions } = app;
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
 	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
@@ -136,8 +138,11 @@ function SessionFilesContent() {
 	if (signedOut) return <View style={styles.center}><EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this session's files." /></View>;
 	if (unreachable) return <View style={styles.center}><EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
 	if (!backend && (appLoading || cloud)) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	// Not for a connection an app switch closed: that one reconnects (see machineOffline).
-	if (!backend && machineOffline({ unreachable: machineUnreachable, paired })) return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const machine = !backend ? machineState(app) : "ok";
+	if (machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
+	if (machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
 
 	const summary = list.summary;
 	const viewing = selection.branch.kind !== "checked_out";

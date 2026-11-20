@@ -8,7 +8,8 @@ import { AppSymbol } from "../../lib/AppSymbol";
 import { authHeaders } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { rowDividerWidth } from "../../lib/divider";
-import { heldPreview, hostRouteMatches, machineOffline } from "../../lib/hostRoute";
+import { heldPreview, hostRouteMatches, machineState } from "../../lib/hostRoute";
+import { MachineRejectedState } from "../../lib/MachineRejectedState";
 import { BrowserLivePane } from "../../lib/preview/BrowserLivePane";
 import { LoadingBar } from "../../lib/preview/LoadingBar";
 import { previewModeMenu, type PreviewMode } from "../../lib/preview/previewModeMenu";
@@ -31,7 +32,8 @@ function SessionPreviewContent() {
 	const sessionID = String(rawID ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { config, currentHostId, unreachable, paired } = useApp();
+	const app = useApp();
+	const { config, currentHostId } = app;
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const t = useTheme();
 	const { scheme } = useThemeState();
@@ -177,13 +179,16 @@ function SessionPreviewContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
 	// Only with nothing to show yet: a page already open stays while the app
 	// reconnects. An app switch closes the connection on purpose, so only a
-	// machine that is really gone says so (see machineOffline).
-	if (!config && !preview && machineOffline({ unreachable, paired })) return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
+	// machine that is really gone says so, and one that refused this phone says
+	// that rather than spinning (see machineState).
+	const machine = !config ? machineState(app) : "ok";
+	if (!preview && machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
+	if (!preview && machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
 	if (!config && !preview) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
 
 	return <View style={[styles.screen, { paddingTop: glassInset }]}>
 		{headerItems}
-		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : appWaits ? <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View> : <View style={styles.appPane}>
+		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : appWaits ? <View style={styles.center}>{machine === "rejected" ? <MachineRejectedState /> : <EmptyState busy title="Connecting to this machine…" />}</View> : <View style={styles.appPane}>
 			<WebView
 				ref={web}
 				source={appSource ?? { uri: preview.url }}

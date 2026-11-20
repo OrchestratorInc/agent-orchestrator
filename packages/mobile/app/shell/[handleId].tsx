@@ -1,7 +1,8 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useRef } from "react";
 import { View } from "react-native";
-import { hostRouteMatches, machineOffline } from "../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../lib/hostRoute";
+import { MachineRejectedState } from "../../lib/MachineRejectedState";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
 import { Spinner } from "../../lib/Spinner";
 import { HostScope, useApp } from "../../lib/store";
@@ -21,7 +22,8 @@ export default function ShellRoute() {
 
 function ShellRouteContent() {
 	const { hostId: routeHostId } = useLocalSearchParams<{ hostId?: string }>();
-	const { config, currentHostId, unreachable, paired, loading, machine } = useApp();
+	const app = useApp();
+	const { config, currentHostId, loading, machine } = app;
 	const router = useRouter();
 	// Once the shell has opened, it stays through an app switch: the terminal
 	// reconnects by itself, as a terminal session's does. Unmounted, it was
@@ -46,8 +48,13 @@ function ShellRouteContent() {
 			</View>
 		);
 	}
-	// Not for a connection an app switch closed: that one reconnects (see machineOffline).
-	if (!config && !opened && machineOffline({ unreachable, paired })) {
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const state = !config && !opened ? machineState(app) : "ok";
+	if (state === "rejected") {
+		return <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bgBase }}><MachineRejectedState /></View>;
+	}
+	if (state === "offline") {
 		return <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bgBase }}><EmptyState icon="wifi-off" title="Machine offline" message="This shell opens once the app reconnects." /></View>;
 	}
 	return <View style={{ flex: 1, paddingTop: glassInset, backgroundColor: t.bgBase }}><TerminalSessionScreen /></View>;

@@ -3,7 +3,7 @@
 // the same split as orchestratorView.ts / projectFilter.ts.
 import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
-import { hostRouteMatches, machineOffline } from "../hostRoute";
+import { hostRouteMatches, machineState } from "../hostRoute";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
@@ -23,6 +23,7 @@ export type SessionRouteView =
 	| { kind: "wrongHost" }
 	| { kind: "unpaired" }
 	| { kind: "offline" }
+	| { kind: "rejected" }
 	| { kind: "ended" }
 	| { kind: "missing" }
 	| { kind: "failed" };
@@ -137,14 +138,20 @@ export function sessionLookupDue(args: {
  * Nor is a closed connection read as offline: the app closes it on purpose every
  * time it goes to the background, so a session the lists do not hold (opened
  * from a notification, say) flashed "offline" during every reconnect. The
- * machine is offline only by the shared rule (`machineOffline`, over the
- * store's `unreachable`); until then the route waits.
+ * machine is offline, or has refused this phone, only by the shared rule
+ * (`machineState`, over the store's `unreachable` and the poll's `error` and
+ * `errorStatus`); until then the route waits. A refused poll (a rejected
+ * pairing, the lockout) stops for good, so waiting on it would spin forever:
+ * the route shows the board's own copy for it instead (`rejected`).
  */
 export function sessionRouteView(args: {
 	listed: RouteSession | undefined;
 	paired: boolean | null;
 	unreachable: boolean;
 	connection: ConnStatus;
+	/** The board poll's last failure and its HTTP status (the store's). */
+	error: string | null;
+	errorStatus: number | null;
 	loading: boolean;
 	lookup: SessionLookup;
 	routeHostId: string | undefined;
@@ -152,8 +159,8 @@ export function sessionRouteView(args: {
 }): SessionRouteView {
 	if (args.paired === null && args.loading) return { kind: "loading" };
 	if (!hostRouteMatches(args.routeHostId, args.currentHostId)) return { kind: "wrongHost" };
-	const offline = machineOffline({ unreachable: args.unreachable, paired: args.paired });
-	if (args.paired === null) return offline ? { kind: "offline" } : { kind: "loading" };
+	const machine = machineState(args);
+	if (args.paired === null) return machine === "ok" ? { kind: "loading" } : { kind: machine };
 	if (!args.paired) return { kind: "unpaired" };
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;
@@ -163,12 +170,15 @@ export function sessionRouteView(args: {
 			: { kind: "screen", session: lookup.session };
 	}
 	if (lookup.state === "failed" && isSessionGone(lookup.status)) return { kind: "missing" };
+	// The board's own poll was refused (a rejected pairing, the lockout), so it
+	// has stopped and no reconnect is coming: say so, as the board does.
+	if (machine === "rejected") return { kind: "rejected" };
 	// A rejected lookup (401/403/429) is the daemon's own answer, not an app
 	// switch: it is handed to the board, with no Retry, connected or not. Waiting
 	// instead would spin for good, since the board's poll stops on the same
 	// rejection and nothing asks again until it is open.
 	if (lookup.state === "failed" && !shouldKeepPolling(lookup.status)) return { kind: "offline" };
-	if (args.connection !== "open") return offline ? { kind: "offline" } : { kind: "loading" };
+	if (args.connection !== "open") return machine === "offline" ? { kind: "offline" } : { kind: "loading" };
 	if (lookup.state === "pending") return { kind: "loading" };
 	return { kind: "failed" };
 }

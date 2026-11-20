@@ -16,7 +16,7 @@ import { ProjectCard } from "../../../lib/project-card";
 import { refreshControlColors } from "../../../lib/refreshControlColors";
 import { Spinner } from "../../../lib/Spinner";
 import { StaleBanner } from "../../../lib/StaleBanner";
-import { spawnHostOffline } from "../../../lib/spawnNotices";
+import { spawnHostState } from "../../../lib/spawnNotices";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
@@ -85,10 +85,11 @@ export default function ProjectsScreen() {
 	// attention still come first.
 	// Orchestrator Cloud's projects sit beside each machine's, marked by the cloud environment.
 	// A machine is "(offline)" by the rule every screen uses, not for a connection
-	// the app closed on going to the background (see spawnHostOffline).
+	// the app closed on going to the background (see spawnHostState). One that
+	// refused this phone is too: its poll has stopped, and its rows are stale.
 	const rows = useMemo(() => {
 		const now = Date.now();
-		const hosts = hostStates.map((host) => ({ ...host, offline: spawnHostOffline(host, phoneNetwork, now) }));
+		const hosts = hostStates.map((host) => ({ ...host, offline: spawnHostState(host, phoneNetwork, now) !== "ok" }));
 		return hostedProjectSections(cloud ? [...hosts, cloud] : hosts).flatMap((section) => section.data);
 	}, [cloud, hostStates, phoneNetwork]);
 	const failure = useBoardFailure();
