@@ -169,6 +169,9 @@ export class BrowserProfileStore {
 	private readonly profileOperationsPending = new Set<string>();
 	private readonly profileOperationsInProgress = new Set<string>();
 	private loadPromise: Promise<void> | null = null;
+	// Only a mutation writes the registry, so a file that already existed means
+	// the user has made profile choices; first run is settled for them.
+	private registryExisted = false;
 
 	constructor(options: BrowserProfileStoreOptions) {
 		this.file = path.join(options.stateDir, BROWSER_PROFILE_REGISTRY_FILE_NAME);
@@ -189,6 +192,7 @@ export class BrowserProfileStore {
 		let raw: string;
 		try {
 			raw = await readFile(this.file, "utf8");
+			this.registryExisted = true;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 			this.loadError = {
@@ -342,9 +346,10 @@ export class BrowserProfileStore {
 		if (!name) throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile name is invalid.");
 		return this.enqueueMutation((current) => {
 			if (current.defaultProfileCreated) return { registry: current, result: current.defaultProfileId };
-			// Existing profiles already settle first run. Record that, so deleting
-			// them all later stays a choice of Temporary.
-			if (current.profiles.length > 0) {
+			// Existing profiles, or a registry saved before this marker existed (even
+			// one with no profiles left), already settle first run. Record that, so
+			// a user who deleted every profile keeps Temporary after upgrading.
+			if (current.profiles.length > 0 || this.registryExisted) {
 				current.defaultProfileCreated = true;
 				return { registry: current, result: current.defaultProfileId };
 			}
