@@ -127,6 +127,13 @@ type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
 }
 
+// taskPreparationRenewer keeps a held task preparation alive while the new
+// chat page uses its worktree. Optional so focused service fakes need not
+// implement it.
+type taskPreparationRenewer interface {
+	RenewTaskPreparation(domain.TaskPreparationToken)
+}
+
 // agentAccountCommander keeps account moves optional for focused service fakes.
 type agentAccountCommander interface {
 	StartAccountTransition(context.Context, domain.SessionID, string, domain.SessionInterfaceTransitionPolicy) (domain.SessionInterfaceTransition, error)
@@ -292,6 +299,17 @@ type Service struct {
 	// githubRepos lets ClaimPR accept a PR on the repository a github.com
 	// origin was renamed or transferred to. Nil keeps exact origin matching.
 	githubRepos ports.GitHubRepositoryResolver
+}
+
+// renewTaskPreparation extends a hidden preparation's expiry when its files
+// are read or staged, which only the page holding it does.
+func (s *Service) renewTaskPreparation(rec domain.SessionRecord) {
+	if !rec.IsTaskPreparation {
+		return
+	}
+	if renewer, ok := s.manager.(taskPreparationRenewer); ok {
+		renewer.RenewTaskPreparation(domain.TaskPreparationToken(rec.ID))
+	}
 }
 
 // SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow

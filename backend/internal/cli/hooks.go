@@ -977,6 +977,16 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// Copilot's stop hook names its event log instead of carrying the answer.
 		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
 	}
+	if domain.AgentHarness(agent) == domain.HarnessMastraCode && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Mastra's TUI Stop hook omits the answer. The daemon reads it from
+		// native history; the hook only forwards a reply the payload carries.
+		var reply struct {
+			AssistantMessage string `json:"assistant_message"`
+		}
+		if json.Unmarshal(payload, &reply) == nil {
+			conversation.FinalAssistantMessage = capHookText(strings.TrimSpace(reply.AssistantMessage), maxHookInteractionLen)
+		}
+	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{
 		ObservedAt:                   observedAt,

@@ -20557,6 +20557,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -21344,6 +21345,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -25738,6 +25740,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes

@@ -1001,6 +1001,24 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 	});
 }
 
+/** Whether the project list already loaded for this host (the local daemon's,
+ * or a remote host's) has this project. It reads the cache only and never
+ * fetches, so it is false until something else has loaded that list. Cloud
+ * projects are never in these lists. */
+export function useCachedProjectListed(projectId?: string, hostId?: string): boolean {
+	const select = useCallback(
+		(projects: { id: string }[]) => projects.some((project) => project.id === projectId),
+		[projectId],
+	);
+	// Same options as the queries that own these lists: TanStack copies the
+	// options of whichever observer rendered last onto the shared query, so a
+	// bare observer here would drop their retry rules for the next refetch.
+	const listed = useQuery<{ id: string }[], Error, boolean>(hostId
+		? { queryKey: remoteProjectsQueryKey(hostId), queryFn: () => fetchRemoteProjects(hostId), retry: 1, select, enabled: false }
+		: { ...workspaceQueryOptions, select, enabled: false });
+	return Boolean(projectId) && listed.data === true;
+}
+
 /** Every project on one remote host, from the same cache as the board's
  * project query. The archive modal reads it, only while it is open. */
 export function useRemoteHostWorkspacesQuery(hostId: string, options: WorkspaceSubscriptionOptions = {}) {
