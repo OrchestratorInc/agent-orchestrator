@@ -16,6 +16,27 @@ import (
 
 const fxImportID = "synthetic521"
 
+func TestFXExpandedHomeDiscovery(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "profiles", "fx")
+	writeFXImport(t, root, t.TempDir(), true)
+	t.Chdir(home)
+	t.Setenv("FX_STATE", filepath.Join(home, "profiles"))
+	for _, override := range []string{"~/profiles/fx", "$FX_STATE/fx", "profiles/fx"} {
+		t.Run(override, func(t *testing.T) {
+			t.Setenv("FX_HOME", override)
+			got := fxRoot(home)
+			if !filepath.IsAbs(got) || canonical(got) != canonical(root) {
+				t.Fatalf("root = %q, want %q", got, root)
+			}
+			files, err := discoverFX(t.Context(), got)
+			if err != nil || len(files) != 1 || files[0].key != fxImportID {
+				t.Fatalf("discover = %#v, %v", files, err)
+			}
+		})
+	}
+}
+
 func writeFXImport(t *testing.T, root, cwd string, v2 bool) string {
 	t.Helper()
 	dir := filepath.Join(root, "sessions", fxImportID)
@@ -300,12 +321,13 @@ func TestFXImportRejectsSymlinksAndMismatchedID(t *testing.T) {
 }
 
 func TestFXRootOverrideAndOversizeToolResult(t *testing.T) {
-	t.Setenv("FX_HOME", "/synthetic/fx")
-	if fxRoot("/home/test") != "/synthetic/fx" {
+	home, override := t.TempDir(), t.TempDir()
+	t.Setenv("FX_HOME", override)
+	if fxRoot(home) != override {
 		t.Fatal("FX_HOME ignored")
 	}
 	t.Setenv("FX_HOME", "")
-	if fxRoot("/home/test") != filepath.Join("/home/test", ".fx") {
+	if fxRoot(home) != filepath.Join(home, ".fx") {
 		t.Fatal("wrong default root")
 	}
 	old := maxRecordBytes

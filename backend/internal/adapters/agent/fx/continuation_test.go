@@ -54,6 +54,7 @@ func TestFXNativeProbeUnknownAndCancellation(t *testing.T) {
 }
 
 func TestFXNativeConfigDirHonorsHomeOverride(t *testing.T) {
+	t.Setenv("FX_HOME", "")
 	home, override := t.TempDir(), t.TempDir()
 	for _, tc := range []struct {
 		name string

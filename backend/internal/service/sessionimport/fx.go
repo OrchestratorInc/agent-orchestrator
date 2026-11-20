@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -22,10 +23,9 @@ var fxIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 var fxBlobPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func fxRoot(home string) string {
-	if root := strings.TrimSpace(os.Getenv("FX_HOME")); root != "" {
-		return root
-	}
-	return filepath.Join(home, ".fx")
+	// Root callbacks cannot return errors; an invalid override offers no chats.
+	root, _ := nativeconfig.FXHome(nil, home)
+	return root
 }
 
 // FX v1 has session.json + events.jsonl per id; v2 has an append-only log.
