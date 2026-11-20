@@ -34,7 +34,7 @@ export function getUpdateScreen(): UpdateScreenState {
 
 /**
  * How long the restarting screen stays up before the reload: exactly Ruto's
- * finale (lift, downstroke, freeze, bow, fade), so the reload follows the bow.
+ * finale (a sheen, a nod, a fade), so the reload follows the nod.
  */
 export const RESTART_HOLD_MS = FINALE_MS;
 

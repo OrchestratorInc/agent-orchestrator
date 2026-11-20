@@ -1,46 +1,43 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {
 	cancelAnimation,
 	Easing,
+	useAnimatedProps,
 	useAnimatedStyle,
 	useSharedValue,
 	withRepeat,
 	withTiming,
-	type SharedValue,
 } from "react-native-reanimated";
-import Svg, { Ellipse, Path, Rect, SvgXml } from "react-native-svg";
+import Svg, { ClipPath, Defs, G, LinearGradient, Path, Rect, Stop, SvgXml } from "react-native-svg";
 
 import { haptics } from "./haptics";
-import { RUTO_BATON, RUTO_BODY, RUTO_DEFS } from "./rutoArt";
+import { RUTO_BATON, RUTO_BODY, RUTO_DEFS, RUTO_OUTLINE } from "./rutoArt";
 import {
 	batonAt,
-	BEAT_MS,
-	BEATS_PER_BAR,
 	blinkAt,
-	bobAt,
 	breathAt,
-	BURST_NOTES,
-	burstNoteAt,
-	FINALE_ICTUS,
 	FINALE_MS,
+	FINALE_NOD,
 	finaleAt,
+	glowAt,
 	LOOP_MS,
-	noteAt,
 	POKE_MS,
 	pokeAt,
 	RUTO_PIVOT,
 	RUTO_TIP,
-	tipAt,
+	SHEEN_FROM,
+	SHEEN_TO,
+	sheenAt,
 } from "./updateMascotPose";
 import { useReducedMotion } from "./useReducedMotion";
 
 // Ruto from the brand source (rutoArt.ts, copied from assets/brand/ruto.svg), in
 // two layers so the baton can move on its own: the baton behind, the body over
-// it, as the source draws them. The performance itself — conducting, the poke,
-// the finale — is in updateMascotPose.ts. Coordinates are the brand file's 1024
-// grid; the frame is cropped to Ruto and padded above for the notes.
-const VB = { x: 150, y: 20, w: 800, h: 780 };
+// it, as the source draws them. A sheen clipped to Ruto's outline passes over
+// the body. The performance itself is in updateMascotPose.ts. Coordinates are
+// the brand file's 1024 grid; the frame is cropped to Ruto.
+const VB = { x: 150, y: 140, w: 800, h: 680 };
 const VIEWBOX = `${VB.x} ${VB.y} ${VB.w} ${VB.h}`;
 const svg = (inner: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${VIEWBOX}">${inner}</svg>`;
 const BODY_XML = svg(RUTO_DEFS + RUTO_BODY);
@@ -60,28 +57,23 @@ const EYE_H = 68;
 const LID_EDGE = 7;
 const PUPIL = "#111213";
 const GLOW = "#FFE58A";
-/** Body dip on each beat and its breathing, in grid units and scale. */
-const BOB = 7;
-const BREATH = 0.012;
-const NOTE = { w: 58, h: 76 };
+const BREATH = 0.015;
+const SHEEN_W = 150;
+
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 export type UpdateMascotProps = {
 	size?: number;
 	shadowColor: string;
-	/** Two note colours, alternated. */
-	noteColors: readonly [string, string];
 	/** Play the finale (the restart has begun). */
 	finale: boolean;
 };
 
-export function UpdateMascot({ size = 240, shadowColor, noteColors, finale }: UpdateMascotProps) {
+export function UpdateMascot({ size = 260, shadowColor, finale }: UpdateMascotProps) {
 	const reduceMotion = useReducedMotion();
 	const clock = useSharedValue(0);
 	const poke = useSharedValue(0);
-	const pokeFrom = useSharedValue(0);
 	const fin = useSharedValue(0);
-	const finFrom = useSharedValue(0);
-	const finaleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	useEffect(() => {
 		if (reduceMotion) {
@@ -96,22 +88,17 @@ export function UpdateMascot({ size = 240, shadowColor, noteColors, finale }: Up
 
 	useEffect(() => {
 		if (!finale) return;
-		finFrom.value = reduceMotion ? 0 : batonAt(clock.value) + pokeAt(poke.value).spin;
-		cancelAnimation(clock);
 		fin.value = 0;
 		fin.value = withTiming(1, { duration: FINALE_MS, easing: Easing.linear });
-		// The downstroke lands: the one strong haptic of the screen.
-		finaleTimer.current = setTimeout(() => haptics.success(), reduceMotion ? 0 : FINALE_MS * FINALE_ICTUS);
-		return () => {
-			if (finaleTimer.current) clearTimeout(finaleTimer.current);
-		};
-	}, [finale, reduceMotion, clock, fin, finFrom, poke]);
+		// The nod: the one haptic of the screen.
+		const timer = setTimeout(() => haptics.success(), reduceMotion ? 0 : FINALE_MS * FINALE_NOD);
+		return () => clearTimeout(timer);
+	}, [finale, reduceMotion, fin]);
 
 	const onPoke = () => {
 		if (finale) return;
 		haptics.tap();
 		if (reduceMotion) return;
-		pokeFrom.value = batonAt(clock.value);
 		poke.value = 0;
 		poke.value = withTiming(1, { duration: POKE_MS, easing: Easing.linear });
 	};
@@ -122,56 +109,39 @@ export function UpdateMascot({ size = 240, shadowColor, noteColors, finale }: Up
 	const height = VB.h * k;
 	const still = reduceMotion;
 
-	const stageStyle = useAnimatedStyle(() => ({ opacity: fin.value > 0 ? finaleAt(fin.value, finFrom.value).opacity : 1 }));
+	const stageStyle = useAnimatedStyle(() => ({ opacity: fin.value > 0 ? finaleAt(fin.value).opacity : 1 }));
 	const bodyStyle = useAnimatedStyle(() => {
+		if (still) return { transform: [] };
 		if (fin.value > 0) {
-			const f = finaleAt(fin.value, finFrom.value);
-			return still
-				? { transform: [] }
-				: { transform: [{ translateY: f.lift * k }, { scaleX: 1 + (1 - f.scaleY) * 0.5 }, { scaleY: f.scaleY }] };
+			const f = finaleAt(fin.value);
+			return { transform: [{ translateY: f.dip * k }, { scaleY: f.scaleY }] };
 		}
-		const bob = bobAt(clock.value);
 		const p = pokeAt(poke.value);
-		const breath = 1 + BREATH * breathAt(clock.value);
-		return {
-			transform: [
-				{ translateY: bob * BOB * k },
-				{ scaleX: p.scaleX * (1 + 0.015 * bob) },
-				{ scaleY: p.scaleY * breath * (1 - 0.025 * bob) },
-			],
-		};
+		return { transform: [{ scaleX: p.scaleX }, { scaleY: p.scaleY * (1 + BREATH * breathAt(clock.value)) }] };
 	});
-	const shadowStyle = useAnimatedStyle(() => {
-		const lift = fin.value > 0 ? finaleAt(fin.value, finFrom.value).lift : -bobAt(clock.value) * BOB;
-		return { transform: [{ scaleX: 1 + lift * 0.004 }] };
-	});
-	const batonStyle = useAnimatedStyle(() => {
-		if (still) return { transform: [{ rotate: "0deg" }] };
-		const angle = fin.value > 0 ? finaleAt(fin.value, finFrom.value).angle : batonAt(clock.value) + pokeAt(poke.value).spin;
-		return { transform: [{ rotate: `${angle}deg` }] };
-	});
+	const batonStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${still ? 0 : batonAt(clock.value)}deg` }] }));
 	const lidStyle = useAnimatedStyle(() => {
-		const shut = still
-			? 0
-			: fin.value > 0
-				? finaleAt(fin.value, finFrom.value).shut
-				: Math.max(blinkAt(clock.value), pokeAt(poke.value).squint);
+		const shut = still ? 0 : fin.value > 0 ? finaleAt(fin.value).shut : blinkAt(clock.value);
 		return { transform: [{ scaleY: shut }] };
 	});
 	const glowStyle = useAnimatedStyle(() => {
-		// Brightest as each beat lands; held bright through the finale's freeze.
-		const sinceBeat = (clock.value % BEAT_MS) / BEAT_MS;
-		let g = 0.35 + 0.65 * (1 - sinceBeat) * (1 - sinceBeat);
-		if (fin.value > 0) g = fin.value < FINALE_ICTUS ? 0.4 : 1 - 0.6 * Math.max(0, (fin.value - 0.52) / 0.3);
-		return { opacity: still ? 0.3 : 0.12 + 0.35 * g, transform: [{ scale: 0.7 + 0.6 * g }] };
+		const g = still ? 0.4 : Math.min(1, glowAt(clock.value) + (fin.value > 0 ? finaleAt(fin.value).glow : 0));
+		return { opacity: 0.12 + 0.3 * g, transform: [{ scale: 0.8 + 0.35 * g }] };
+	});
+	const sheenProps = useAnimatedProps(() => {
+		const s = still ? -1 : fin.value > 0 ? finaleAt(fin.value).sheen : sheenAt(clock.value);
+		return {
+			x: s < 0 ? SHEEN_FROM : SHEEN_FROM + (SHEEN_TO - SHEEN_FROM) * s,
+			opacity: s < 0 ? 0 : fin.value > 0 ? 1 : 0.75,
+		};
 	});
 
-	const glowSize = 90 * k;
+	const glowSize = 80 * k;
 
 	return (
 		<Pressable onPress={onPoke} accessibilityRole="image" accessibilityLabel="Orchestrator mascot">
 			<Animated.View style={[{ width: size, height }, stageStyle]}>
-				<Animated.View
+				<View
 					style={[
 						styles.abs,
 						{
@@ -182,7 +152,6 @@ export function UpdateMascot({ size = 240, shadowColor, noteColors, finale }: Up
 							borderRadius: 12 * k,
 							backgroundColor: shadowColor,
 						},
-						shadowStyle,
 					]}
 				/>
 				<Animated.View style={[StyleSheet.absoluteFill, { transformOrigin: [px(FEET.x), py(FEET.y), 0] }, bodyStyle]}>
@@ -206,6 +175,29 @@ export function UpdateMascot({ size = 240, shadowColor, noteColors, finale }: Up
 						/>
 					</Animated.View>
 					<SvgXml xml={BODY_XML} width={size} height={height} style={StyleSheet.absoluteFill} />
+					{/* The sheen, clipped to Ruto's outline so it only ever lights Ruto. */}
+					<Svg width={size} height={height} viewBox={VIEWBOX} style={StyleSheet.absoluteFill} pointerEvents="none">
+						<Defs>
+							<ClipPath id="rutoSheenClip">
+								<Path d={RUTO_OUTLINE} fillRule="evenodd" />
+							</ClipPath>
+							<LinearGradient id="rutoSheen" x1="0" y1="0" x2="1" y2="0">
+								<Stop offset="0" stopColor="#FFFFFF" stopOpacity={0} />
+								<Stop offset="0.5" stopColor="#FFFFFF" stopOpacity={0.55} />
+								<Stop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
+							</LinearGradient>
+						</Defs>
+						<G clipPath="url(#rutoSheenClip)">
+							<AnimatedRect
+								y={300}
+								width={SHEEN_W}
+								height={520}
+								fill="url(#rutoSheen)"
+								transform="skewX(-18)"
+								animatedProps={sheenProps}
+							/>
+						</G>
+					</Svg>
 					{EYES.map((eye) => (
 						<Animated.View
 							key={eye.x}
@@ -220,99 +212,13 @@ export function UpdateMascot({ size = 240, shadowColor, noteColors, finale }: Up
 						</Animated.View>
 					))}
 				</Animated.View>
-				{still
-					? null
-					: Array.from({ length: BEATS_PER_BAR }, (_, beat) => (
-							<BeatNote key={`beat${beat}`} beat={beat} clock={clock} k={k} color={noteColors[beat % 2]} />
-						))}
-				{still
-					? null
-					: Array.from({ length: BURST_NOTES }, (_, i) => (
-							<BurstNote key={`poke${i}`} i={i} progress={poke} origin={pokeFrom} mode="poke" k={k} color={noteColors[i % 2]} />
-						))}
-				{still
-					? null
-					: Array.from({ length: BURST_NOTES }, (_, i) => (
-							<BurstNote key={`fin${i}`} i={i} progress={fin} origin={finFrom} mode="finale" k={k} color={noteColors[(i + 1) % 2]} />
-						))}
 			</Animated.View>
 		</Pressable>
 	);
 }
 
-function NoteGlyph({ color, scale }: { color: string; scale: number }) {
-	return (
-		<Svg width={NOTE.w * scale} height={NOTE.h * scale} viewBox="0 0 24 32">
-			<Ellipse cx={8.5} cy={25} rx={6.2} ry={4.6} fill={color} transform="rotate(-22 8.5 25)" />
-			<Rect x={13} y={4} width={2.4} height={21.5} rx={1.2} fill={color} />
-			<Path d="M15 4 C18.5 7.5 23 9.5 20.5 17.5 C20 13.5 17.5 12 15 11.5 Z" fill={color} />
-		</Svg>
-	);
-}
-
-/** The note that leaves the baton tip on one beat of every bar. */
-function BeatNote({ beat, clock, k, color }: { beat: number; clock: SharedValue<number>; k: number; color: string }) {
-	const style = useAnimatedStyle(() => {
-		const n = noteAt(clock.value, beat);
-		return {
-			opacity: n.opacity,
-			transform: [
-				{ translateX: (n.from.x - VB.x + n.x) * k - (NOTE.w * k) / 2 },
-				{ translateY: (n.from.y - VB.y + n.y) * k - NOTE.h * k },
-				{ rotate: `${n.rotate}deg` },
-				{ scale: n.scale },
-			],
-		};
-	});
-	return (
-		<Animated.View style={[styles.abs, styles.origin, style]} pointerEvents="none">
-			<NoteGlyph color={color} scale={k} />
-		</Animated.View>
-	);
-}
-
-/** One note of a burst from the tip: the poke's, or the finale's downstroke. */
-function BurstNote({
-	i,
-	progress,
-	origin,
-	mode,
-	k,
-	color,
-}: {
-	i: number;
-	progress: SharedValue<number>;
-	origin: SharedValue<number>;
-	mode: "poke" | "finale";
-	k: number;
-	color: string;
-}) {
-	const style = useAnimatedStyle(() => {
-		const p = mode === "poke" ? pokeAt(progress.value).burst : finaleAt(progress.value, origin.value).burst;
-		const n = burstNoteAt(p, i);
-		// The poke bursts from where the tip was when tapped; the finale from the
-		// downstroke's landing.
-		const from = tipAt(mode === "poke" ? origin.value : 30);
-		return {
-			opacity: n.opacity,
-			transform: [
-				{ translateX: (from.x - VB.x + n.x) * k - (NOTE.w * k) / 2 },
-				{ translateY: (from.y - VB.y + n.y) * k - NOTE.h * k },
-				{ rotate: `${n.rotate}deg` },
-				{ scale: n.scale },
-			],
-		};
-	});
-	return (
-		<Animated.View style={[styles.abs, styles.origin, style]} pointerEvents="none">
-			<NoteGlyph color={color} scale={k} />
-		</Animated.View>
-	);
-}
-
 const styles = StyleSheet.create({
 	abs: { position: "absolute" },
-	origin: { left: 0, top: 0 },
 	// Closes from the top down; the pupil-dark edge rides at its bottom.
 	lid: { transformOrigin: "top", justifyContent: "flex-end" },
 });

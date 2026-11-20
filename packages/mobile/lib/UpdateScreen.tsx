@@ -5,6 +5,7 @@ import Animated, {
 	Easing,
 	useAnimatedStyle,
 	useSharedValue,
+	withDelay,
 	withRepeat,
 	withTiming,
 } from "react-native-reanimated";
@@ -14,6 +15,7 @@ import { useTheme, useThemeState } from "./ThemeProvider";
 import { space, type } from "./tokens";
 import { Button } from "./ui";
 import { UpdateMascot } from "./UpdateMascot";
+import { FINALE_MS } from "./updateMascotPose";
 import {
 	applyUpdate,
 	dismissUpdateScreen,
@@ -25,16 +27,14 @@ import { reloadIntoUpdate } from "./updateResumeStore";
 import { useReducedMotion } from "./useReducedMotion";
 
 const BAR_W = 168;
-// Gold and Ruto's own blue; deeper on a light background so the notes still read.
-const NOTE_COLORS_DARK = ["#FFE08A", "#8FD8FF"] as const;
-const NOTE_COLORS_LIGHT = ["#D99A00", "#1C9BE0"] as const;
 const SEGMENT_W = 48;
 
 /**
  * Full-screen "update ready" moment: once an over-the-air update has downloaded,
- * Ruto conducts over a Restart button (tap Ruto and it reacts). The app restarts
- * only on that tap, after Ruto's finale; Not now (or Android back) returns to
- * the app. Mounted once in the root layout; raised through updateScreenState.ts.
+ * Ruto stands over a Restart button, breathing, blinking, a sheen passing over
+ * it (tap Ruto and it squishes). The app restarts only on that tap, after Ruto
+ * nods; Not now (or Android back) returns to the app. Mounted once in the root
+ * layout; raised through updateScreenState.ts.
  *
  * A Modal rather than an absolute overlay: Settings is a native form sheet, and
  * a view in the root hierarchy would sit underneath it.
@@ -61,6 +61,13 @@ function UpdateScreenBody({ phase }: { phase: UpdateScreenPhase }) {
 	const { width } = useWindowDimensions();
 	const insets = useSafeAreaInsets();
 	const restarting = phase === "restarting";
+	// The words fade out with Ruto (the last 40% of the finale), so nothing is
+	// left on screen alone before the reload.
+	const copy = useSharedValue(1);
+	useEffect(() => {
+		if (restarting) copy.value = withDelay(FINALE_MS * 0.6, withTiming(0, { duration: FINALE_MS * 0.4 }));
+	}, [restarting, copy]);
+	const copyStyle = useAnimatedStyle(() => ({ opacity: copy.value }));
 
 	return (
 		<View
@@ -71,27 +78,28 @@ function UpdateScreenBody({ phase }: { phase: UpdateScreenPhase }) {
 				<UpdateMascot
 					size={Math.min(280, width * 0.68)}
 					shadowColor={scheme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(10,11,13,0.10)"}
-					noteColors={scheme === "dark" ? NOTE_COLORS_DARK : NOTE_COLORS_LIGHT}
 					finale={restarting}
 				/>
-				<Text style={[styles.title, { color: t.textPrimary }]} accessibilityRole="header">
-					Update ready
-				</Text>
-				{/* Both blocks below stay laid out in either phase and only swap
-				    visibility, so nothing moves when the buttons give way to the
-				    progress line. */}
-				<View
-					style={!restarting && styles.hidden}
-					accessibilityElementsHidden={!restarting}
-					importantForAccessibility={restarting ? "auto" : "no-hide-descendants"}
-				>
-					<View style={[styles.track, { backgroundColor: t.bgSubtle }]}>
-						{restarting ? <Segment color={t.textSecondary} /> : null}
-					</View>
-					<Text style={[styles.status, { color: t.textSecondary }]} accessibilityLiveRegion="polite">
-						{restarting ? "Restarting…" : " "}
+				<Animated.View style={[styles.copy, copyStyle]}>
+					<Text style={[styles.title, { color: t.textPrimary }]} accessibilityRole="header">
+						Update ready
 					</Text>
-				</View>
+					{/* Both blocks below stay laid out in either phase and only swap
+					    visibility, so nothing moves when the buttons give way to the
+					    progress line. */}
+					<View
+						style={!restarting && styles.hidden}
+						accessibilityElementsHidden={!restarting}
+						importantForAccessibility={restarting ? "auto" : "no-hide-descendants"}
+					>
+						<View style={[styles.track, { backgroundColor: t.bgSubtle }]}>
+							{restarting ? <Segment color={t.textSecondary} /> : null}
+						</View>
+						<Text style={[styles.status, { color: t.textSecondary }]} accessibilityLiveRegion="polite">
+							{restarting ? "Restarting…" : " "}
+						</Text>
+					</View>
+				</Animated.View>
 			</View>
 			<View
 				style={[styles.actions, restarting && styles.hidden]}
@@ -126,6 +134,7 @@ function Segment({ color }: { color: string }) {
 const styles = StyleSheet.create({
 	root: { flex: 1, paddingHorizontal: space.xxl },
 	stage: { flex: 1, alignItems: "center", justifyContent: "center" },
+	copy: { alignItems: "center" },
 	title: { ...type.title2, marginTop: space.xxl, textAlign: "center" },
 	track: { width: BAR_W, height: 3, borderRadius: 1.5, overflow: "hidden", marginTop: space.lg },
 	fill: { height: 3, borderRadius: 1.5 },
