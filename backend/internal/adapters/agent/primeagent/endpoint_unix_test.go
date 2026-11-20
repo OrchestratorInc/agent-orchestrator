@@ -35,10 +35,11 @@ func TestProviderOverridesSurviveShellStartup(t *testing.T) {
 					p := &Plugin{resolvedBinary: binary, extensionFlag: map[string]bool{binary: false}, daemonSocketFlag: map[string]bool{binary: true}}
 					env := map[string]string{}
 					want := "https://shell.example/v1|shell-credential"
-					if mode == "project" {
+					switch mode {
+					case "project":
 						env[provider.endpoint], env[provider.key] = "https://project.example/v1", "synthetic-project-credential"
 						want = env[provider.endpoint] + "|" + env[provider.key]
-					} else if mode == "clear" {
+					case "clear":
 						env[provider.endpoint], env[provider.key] = "", ""
 						want = "__unset__|__unset__"
 					}
