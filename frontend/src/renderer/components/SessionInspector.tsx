@@ -43,7 +43,7 @@ import {
 	Loader2,
 	X,
 } from "@/components/app-icons";
-import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
+import { InfoRowLabelButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
 import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
@@ -73,7 +73,7 @@ import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
-import { PRDescriptionPreview } from "./PRDescriptionPreview";
+import { PRDescriptionDrawer } from "./PRDescriptionDrawer";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
@@ -1172,6 +1172,8 @@ function PRViewSummaryCard({
 		) : undefined,
 	};
 	const activeTabUrl = usePRTabs(sessionUiKey(sessionId, hostId)).active;
+	const [descriptionOpen, setDescriptionOpen] = useState(false);
+	const sectionRef = useRef<HTMLElement>(null);
 	const cardView = (
 		<InspectorPullRequestCardView
 			compact
@@ -1179,7 +1181,6 @@ function PRViewSummaryCard({
 			headerless={layout === "focus"}
 			// The commits row under this card states the same diff: say it once, there.
 			hideDiffCounts={layout === "focus" && Boolean(work?.diff && work.diff.additions === pr.additions && work.diff.deletions === pr.deletions)}
-			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} detailsFailed={detailsFailed} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
@@ -1254,33 +1255,47 @@ function PRViewSummaryCard({
 			icon={pr.provider === "github" ? <GitHubIcon className="size-icon-sm shrink-0 text-passive" /> : undefined}
 		/>
 	);
+	// The card leaves the description out: a few lines of a long body told too
+	// little for the room they took. The title opens all of it in a drawer, or,
+	// while the PR's tab is showing, its Summary, where the description already is.
+	const titleOpensDrawer = !tabShowing;
 	return (
-		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
-			{opensTab ? (
-				<InfoRowButton
-					action={providerLink}
-					icon={state.icon}
-					iconClassName={state.className}
-					label={titleLabel}
-					onClick={() => openTab()}
-					title={pr.title}
-					trailing={tabShowing ? undefined : (
-						<span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors group-hover:text-foreground">
-							<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
-							{t("pr.openTab")}
-						</span>
-					)}
-				/>
-			) : (
-				<InfoRow
-					action={providerLink}
-					icon={state.icon}
-					iconClassName={state.className}
-					label={titleLabel}
-					title={pr.title}
-				/>
-			)}
+		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus" ref={sectionRef}>
+			<InfoRowLabelButton
+				action={(
+					<>
+						{opensTab && !tabShowing ? (
+							<Pressable className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => openTab()}>
+								<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
+								{t("pr.openTab")}
+							</Pressable>
+						) : null}
+						{providerLink}
+					</>
+				)}
+				aria-expanded={titleOpensDrawer ? descriptionOpen : undefined}
+				aria-haspopup={titleOpensDrawer ? "dialog" : undefined}
+				icon={state.icon}
+				iconClassName={state.className}
+				label={(
+					<>
+						{titleLabel}
+						{titleOpensDrawer ? <span className="sr-only">, {t("pr.description.show")}</span> : null}
+					</>
+				)}
+				onClick={() => titleOpensDrawer ? setDescriptionOpen(true) : openTab()}
+				title={pr.title}
+			/>
 			{cardView}
+			<PRDescriptionDrawer
+				anchor={sectionRef}
+				cloud={Boolean(cloudOrgId)}
+				detailsFailed={detailsFailed}
+				onOpenChange={setDescriptionOpen}
+				open={descriptionOpen}
+				pr={pr}
+				title={titleLabel}
+			/>
 
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
