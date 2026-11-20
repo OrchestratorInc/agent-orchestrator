@@ -410,7 +410,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.identityProblem = domain.AgentAccountProblemOtherOrg
 		r.identityErr = fmt.Sprintf("the folder is now signed in to %s, not %s", orgLabel(identity.OrgName, identity.OrgID), orgLabel(known.name, known.id))
 	default:
-		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
+		if limits, limitsErr := provider.Limits(ctx, account.Home); errors.Is(limitsErr, ports.ErrAgentAuthRequired) {
+			r.identity.SignedIn, r.identity.LoggedIn = false, false
+			r.limitsErr = "signed out"
+		} else if limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
 			r.limitsProblem = problemKind(limitsErr)
 			s.mu.Lock()

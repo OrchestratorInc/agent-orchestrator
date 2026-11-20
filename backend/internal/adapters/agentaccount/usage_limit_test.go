@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,8 +150,57 @@ func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nread -r _\necho '"+reply+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
-	if _, err := c.Limits(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "could not fetch") {
-		t.Fatalf("Limits error = %v, want could not fetch", err)
+	now := time.Now().UnixMilli()
+	for _, tc := range []struct {
+		name          string
+		credentials   string
+		settings      string
+		status        int
+		wantSignedOut bool
+		wantProbe     bool
+		wantHost      string
+	}{
+		{"accepted login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), "", http.StatusOK, false, true, "api.anthropic.com"},
+		{"rejected login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-dead","refreshToken":"r","expiresAt":%d}}`, now+3600_000), "", http.StatusUnauthorized, true, true, "api.anthropic.com"},
+		{"expired login the CLI renews", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","refreshToken":"r","expiresAt":%d}}`, now-60_000), "", http.StatusUnauthorized, false, false, ""},
+		{"no stored login", "", "", http.StatusUnauthorized, false, false, ""},
+		{"login routed elsewhere by settings", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), `{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example"}}`, http.StatusUnauthorized, false, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ANTHROPIC_BASE_URL", "https://ambient.example")
+			home := t.TempDir()
+			t.Setenv("TMPDIR", t.TempDir())
+			if tc.credentials != "" {
+				write(t, filepath.Join(home, ".credentials.json"), tc.credentials)
+			}
+			if tc.settings != "" {
+				write(t, filepath.Join(home, "settings.json"), tc.settings)
+			}
+			probed, host := false, ""
+			c := &Claude{
+				Binary: func(context.Context) (string, error) { return bin, nil },
+				HTTPClient: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+					probed, host = true, r.URL.Host
+					return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: http.Header{}}, nil
+				})},
+			}
+			_, err := c.Limits(context.Background(), home)
+			if err == nil || errors.Is(err, ports.ErrAgentAuthRequired) != tc.wantSignedOut {
+				t.Fatalf("Limits error = %v, want signed out %v", err, tc.wantSignedOut)
+			}
+			if !tc.wantSignedOut && !strings.Contains(err.Error(), "could not fetch") {
+				t.Fatalf("Limits error = %v, want could not fetch", err)
+			}
+			if probed != tc.wantProbe {
+				t.Fatalf("probed = %v, want %v", probed, tc.wantProbe)
+			}
+			if host != tc.wantHost {
+				t.Fatalf("probed %q, want %q", host, tc.wantHost)
+			}
+		})
 	}
 }
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

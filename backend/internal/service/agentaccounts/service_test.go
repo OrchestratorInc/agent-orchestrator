@@ -853,6 +853,28 @@ func TestAReadingThatReachesTheProviderConfirmsTheLogin(t *testing.T) {
 	}
 }
 
+func TestRejectedLoginReadsAsSignedOut(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 40}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+
+	claude.limitsErr = fmt.Errorf("claude get_usage: %w", ports.ErrAgentAuthRequired)
+	views, err := svc.List(ctx, true)
+	if err != nil || len(views) == 0 {
+		t.Fatalf("List = %v, %v", views, err)
+	}
+	if view := views[0]; view.SignedIn || view.LoggedIn || view.LimitsProblem != "" || view.Limits != nil {
+		t.Fatalf("rejected login = %+v, want signed out with no limits problem", view)
+	}
+}
+
 func TestFailedLimitsRefreshKeepsTheLastReading(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{
