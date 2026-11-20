@@ -1644,7 +1644,7 @@ export function CloudSessionChatSurface({
 		// switch keeps the worker generation, so the agent keys it too.
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.provider, session.terminalGeneration ?? ""],
 		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true &&
-			(session.provider === "codex" || session.provider === "claude-code")),
+			(session.provider === "codex" || session.provider === "claude-code" || session.provider === "cursor")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
 		refetchOnMount: "always",
