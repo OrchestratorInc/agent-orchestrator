@@ -19,7 +19,7 @@ func TestLaunchCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1", "/opt/codewhale", "--workspace", "/work/tree", "--skip-onboarding", "--model", "openai/gpt-5", "--approval-policy", "auto", "--fresh"}
+	want := []string{"/opt/codewhale", "--workspace", "/work/tree", "--skip-onboarding", "--model", "openai/gpt-5", "--approval-policy", "auto", "--fresh"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("command = %#v, want %#v", cmd, want)
 	}
