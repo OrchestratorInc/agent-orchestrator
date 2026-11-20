@@ -152,9 +152,11 @@ export function readSubagent(
 		.filter((step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId)
 		.at(-1);
 	const steps = allSteps.filter((step) => step !== handback);
-	// Work the child began after its latest report means it is on another turn.
+	// A step the child itself took after its latest report means it is on another
+	// turn, which will end in a report of its own. A nested child's steps say nothing
+	// about this one: it can keep working after its parent reported.
 	const resumed = handback !== undefined &&
-		allSteps.slice(allSteps.indexOf(handback) + 1).some((step) => step.status === "running" || step.status === "pending");
+		allSteps.slice(allSteps.indexOf(handback) + 1).some((step) => step.detail?.parentProviderItemId === launch.providerItemId);
 	const result = launchResultText(launch);
 	// A background launch settles as soon as the child starts. Codex's driver says so
 	// in the detail; Claude says it in the result note.

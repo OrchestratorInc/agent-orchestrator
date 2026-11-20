@@ -177,14 +177,14 @@ func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.
 		return []ports.ChatEvent{ev}
 	}
 	_, waiting := r.held[thread]
-	if _, ok := r.launchOf[thread]; ok {
+	if r.settled(thread) {
 		if waiting {
 			// Keep the child's order: what it did first goes out first.
 			return append(r.release(), r.adopt(thread, ev)...)
 		}
 		return r.adopt(thread, ev)
 	}
-	if len(r.inflight) == 0 && !waiting {
+	if _, placed := r.launchOf[thread]; !placed && len(r.inflight) == 0 && !waiting {
 		// No spawn could claim this thread, such as a provider-internal one.
 		return []ports.ChatEvent{ev}
 	}
@@ -199,17 +199,43 @@ func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.
 	return nil
 }
 
-// release returns held events whose spawn has now named their thread, filed
-// under it. Once no spawn is in flight, nothing can claim the rest, so they go
-// out as they were.
+// settled reports whether a thread's events can be filed now: a spawn named the
+// thread, and its launch's chain reaches the root, so its steps get the root turn.
+// A nested launch whose own thread is not placed yet waits for its ancestor, while
+// any spawn that could place it is still in flight.
+func (r *subagentRouter) settled(thread string) bool {
+	launch, placed := r.launchOf[thread]
+	if !placed {
+		return false
+	}
+	if len(r.inflight) == 0 {
+		return true
+	}
+	seen := map[string]bool{}
+	for !seen[launch] {
+		seen[launch] = true
+		from := r.origin[launch]
+		if from.thread == r.root {
+			return true
+		}
+		parent, nested := r.launchOf[from.thread]
+		if !nested {
+			return false
+		}
+		launch = parent
+	}
+	return false
+}
+
+// release returns held events whose launch is now settled, filed under it. Once
+// no spawn is in flight, nothing can claim the rest, so they go out as they were.
 func (r *subagentRouter) release() []ports.ChatEvent {
 	var out []ports.ChatEvent
 	kept := r.heldOrder[:0]
 	for _, thread := range r.heldOrder {
 		events := r.held[thread]
-		_, placed := r.launchOf[thread]
 		switch {
-		case placed:
+		case r.settled(thread):
 			for _, ev := range events {
 				out = append(out, r.adopt(thread, ev)...)
 			}

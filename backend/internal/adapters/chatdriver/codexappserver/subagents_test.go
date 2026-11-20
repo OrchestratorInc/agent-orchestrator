@@ -220,12 +220,24 @@ func TestNestedLaunchJoinsRootTurnWhenItsThreadIsPlacedLater(t *testing.T) {
 	observe("item/started", spawnStartedParams)
 	observe("item/started", `{"threadId":"child-1","turnId":"child-turn","item":{"type":"collabAgentToolCall","id":"call-inner","tool":"spawnAgent","status":"inProgress","receiverThreadIds":[]}}`)
 	observe("item/completed", `{"threadId":"child-1","turnId":"child-turn","item":{"type":"collabAgentToolCall","id":"call-inner","tool":"spawnAgent","status":"completed","receiverThreadIds":["grandchild-1"]}}`)
-	observe("item/completed", spawnCompletedParams)
 
-	out := r.route("thread-1", "grandchild-1", ports.ChatEvent{
-		Kind: ports.ChatEventActivityStarted, ProviderTurnID: "grandchild-turn", ProviderItemID: "gc-cmd",
-	})
+	// The grandchild is named, but its chain does not reach the root yet: the step
+	// waits rather than go out on the child's own turn.
+	step := ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: "grandchild-turn", ProviderItemID: "gc-cmd"}
+	if out := r.route("thread-1", "grandchild-1", step); out != nil {
+		t.Fatalf("grandchild step went out before its chain reached the root: %+v", out)
+	}
+	observe("item/completed", spawnCompletedParams)
+	out := r.release()
 	if len(out) != 1 || out[0].ProviderTurnID != "root-turn" || decodeDetail(t, out[0]).ParentProviderItemID != "call-inner" {
-		t.Fatalf("grandchild step = %+v", out)
+		t.Fatalf("released grandchild step = %+v", out)
+	}
+
+	// Once the chain is complete, a later step goes straight out.
+	out = r.route("thread-1", "grandchild-1", ports.ChatEvent{
+		Kind: ports.ChatEventActivityStarted, ProviderTurnID: "grandchild-turn", ProviderItemID: "gc-cmd-2",
+	})
+	if len(out) != 1 || out[0].ProviderTurnID != "root-turn" {
+		t.Fatalf("grandchild step after placement = %+v", out)
 	}
 }
