@@ -1,5 +1,8 @@
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { useDictationUpgrade } from "./DictationUpgradeDialog";
+import { ProgressRing } from "../ui/progress-ring";
+import { refreshDictationStatus, useDictationInstall } from "../../lib/dictation-install";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
@@ -55,7 +58,6 @@ import {
 } from "react";
 import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
 import { DictationMeter } from "./DictationMeter";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
@@ -610,7 +612,18 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const editor = useRef<ComposerEditorHandle>(null);
 	const formRef = useRef<HTMLFormElement>(null);
+	const dictationUpgrade = useDictationUpgrade(attachmentScopeKey);
 	const dictation = useDictation({
+		ownerKey: attachmentScopeKey,
+		onSubmit: (event) => {
+			// Enter belongs to whatever else has it: an open dialog or menu, or a control outside this composer.
+			if (isDialogOrMenuOpen()) return false;
+			const origin = event.target;
+			if (origin instanceof Element && origin !== document.body && !formRef.current?.contains(origin)) return false;
+			if (event.shiftKey || (!enterSends && !event.metaKey && !event.ctrlKey)) return false;
+			void submit(undefined, enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft);
+			return true;
+		},
 		onText: (text) => editor.current?.dictate(text),
 		onEnd: (keep) => editor.current?.endDictation(keep),
 	});
@@ -621,8 +634,17 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (typingLocked) detachDictation();
 	}, [detachDictation, typingLocked]);
-	// Dictation is in preview: macOS only, behind Developer mode.
-	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
+	// Dictation remains in preview while native platform coverage expands.
+	const canDictate = useUiStore((state) => state.developerMode);
+	// A model download carries on in the background: the mic button shows how far along it is.
+	const dictationInstall = useDictationInstall();
+	useEffect(() => {
+		if (canDictate) void refreshDictationStatus();
+	}, [canDictate]);
+	const downloadingModel = canDictate && dictationInstall.model !== "" && !dictating;
+	// After the download the model still loads for a few seconds; dictating then works, its first result just waits.
+	const loadingModel = canDictate && !downloadingModel && dictationInstall.preparing && !dictating;
+	const downloadPercent = Math.round(dictationInstall.fraction * 100);
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
@@ -1688,15 +1710,17 @@ export const ChatComposer = memo(function ChatComposer({
 		submitAccepted.current = false;
 		editorClearsAtSubmit.current = editorClears.current;
 		lastSubmitAt.current = Date.now();
-		// Sending keeps what was dictated so far and stops listening.
-		dictation.detach();
+		// Sending waits for dictation to finish, so the message carries the final words.
+		const dictationCompletion = dictation.finish();
 		// Sending a recalled message makes it the message, not a history position.
 		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
 			typeof document !== "undefined" &&
 			document.activeElement?.getAttribute("aria-label") === "Message the agent";
 		setSubmitting(true);
-		const pending = performSubmit(forceSteer);
+		const pending = dictationCompletion
+			? dictationCompletion.then((completed) => completed ? performSubmit(forceSteer) : undefined)
+			: performSubmit(forceSteer);
 		submitInFlight.current = pending;
 		const release = () => {
 			if (submitInFlight.current !== pending) return;
@@ -2628,9 +2652,10 @@ export const ChatComposer = memo(function ChatComposer({
 				<ComposerEditor
 					ref={editor}
 					dictating={dictating}
+					finishing={dictation.phase === "finishing"}
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
-					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
+					disabled={Boolean(dictating || disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					readOnly={typingLocked}
 					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
@@ -2783,26 +2808,44 @@ export const ChatComposer = memo(function ChatComposer({
 											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
 											onClick={() => {
+												// A download blocks dictation; Settings has its percentage and Cancel.
+												if (downloadingModel) return useUiStore.getState().openGlobalSettings("dictation");
 												editor.current?.focus();
-												dictation.toggle();
+												if (dictating) dictation.toggle();
+												else void dictationUpgrade.requestStart(dictation.toggle);
 											}}
 											data-shortcut-target="dictate"
-											aria-label={dictating ? "Finish dictation" : "Dictate"}
+											aria-label={
+												dictating
+													? "Finish dictation"
+													: downloadingModel
+														? `Downloading dictation model, ${downloadPercent}%. Open Dictation settings`
+														: loadingModel
+															? "Dictate, the model is still loading"
+															: "Dictate"
+											}
 											aria-pressed={dictating}
 											className={cn(
-												"mr-1 h-7 overflow-hidden p-0 transition-[width,background-color,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+												"relative mr-1 h-7 overflow-hidden p-0 transition-[width,background-color,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
 												dictating ? "w-[76px]" : "w-7",
 											)}
 										>
 											{dictating ? (
-												<DictationMeter listening={dictation.phase === "listening"} />
+												<DictationMeter listening={dictation.phase === "listening"} working={dictation.phase !== "listening"} />
 											) : (
 												<Mic aria-hidden="true" className="size-3.5" />
 											)}
+											{/* The download's progress, drawn along the button's own border. */}
+											{downloadingModel || loadingModel ? (
+												<ProgressRing
+													className="pointer-events-none absolute inset-0 size-full text-logo-accent"
+													percent={loadingModel ? 100 : dictationInstall.fraction * 100}
+												/>
+											) : null}
 										</Button>
 									</span>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">{dictating ? "Finish dictation" : "Dictate"}</TooltipContent>
+								<TooltipContent side="bottom">{dictation.phase === "starting" ? "Starting local dictation…" : dictation.phase === "finishing" ? "Finishing dictation…" : dictating ? "Finish dictation" : downloadingModel ? `Downloading dictation model… ${downloadPercent}%. Click for details.` : loadingModel ? "Getting the model ready. You can dictate now; the first result may take a few seconds." : "Dictate"}</TooltipContent>
 							</Tooltip>
 						) : null}
 						<Tooltip>
@@ -2835,6 +2878,7 @@ export const ChatComposer = memo(function ChatComposer({
 						</Tooltip>
 					</div>
 				</div>
+			{dictationUpgrade.dialog}
 			</form>,
 	);
 });

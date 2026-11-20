@@ -1,68 +1,88 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { aoBridge } from "../../lib/bridge";
+import { dictationClient } from "../../lib/dictation-client";
+import { playDictationSound } from "../../lib/dictation-sound";
 import type { DictationEvent } from "../../../shared/dictation";
 
 export type DictationPhase = "idle" | "starting" | "listening" | "finishing";
 
+/** How long a recording that is finishing may hold up the next composer's start. */
+const HANDOFF_TIMEOUT_MS = 8000;
+
+type Owner = { end(keep: boolean): void; finish(): Promise<boolean> | null };
+
 /** The composer whose dictation is running. Starting another one finishes it first. */
-let owner: { end(keep: boolean): void } | null = null;
+let owner: Owner | null = null;
 
 type DictationTarget = {
-	/** Shows the transcript so far in place of the previous one. */
+	ownerKey?: string;
+	onSubmit?(event: KeyboardEvent): boolean;
+	/** Shows the finished transcript; interim words are never shown. */
 	onText(text: string): void;
 	/** Ends the dictated run: kept as typed text, or removed. */
 	onEnd(keep: boolean): void;
 };
 
 /**
- * Native macOS dictation for one composer. The transcript streams into the
- * composer while the user speaks; microphone levels go straight to the meter
- * (see DictationMeter) so they never re-render the composer.
+ * Local dictation for one composer. The transcript lands in the composer once,
+ * when the user finishes; microphone levels go straight to the meter (see
+ * DictationMeter) so they never re-render the composer. A short click marks
+ * dictation opening and closing (see dictation-sound).
  */
 export function useDictation(target: DictationTarget) {
 	const [phase, setPhase] = useState<DictationPhase>("idle");
 	const [error, setError] = useState<string>();
 	const targetRef = useRef(target);
 	targetRef.current = target;
-	const self = useRef<{ end(keep: boolean): void }>(null!);
+	const self = useRef<Owner>(null!);
+	/** The handoff this composer is waiting on, while it waits for another one's recording to deliver its words. */
+	const handoff = useRef<{ timer?: number } | null>(null);
 	const owns = () => owner === self.current;
 	// Listening only while this composer owns a dictation.
 	const unsubscribe = useRef<(() => void) | null>(null);
+	const waiting = useRef(new Set<(completed: boolean) => void>());
+	const stopRequested = useRef(false);
+	const generation = useRef(0);
 
-	const end = useCallback((keep: boolean) => {
+	const end = useCallback((keep: boolean, completed = false) => {
+		generation.current += 1;
 		if (owner === self.current) owner = null;
 		unsubscribe.current?.();
 		unsubscribe.current = null;
 		setPhase("idle");
 		targetRef.current.onEnd(keep);
+		for (const resolve of waiting.current) resolve(completed);
+		waiting.current.clear();
 	}, []);
-	self.current ??= { end };
+	self.current ??= { end, finish: () => null };
 
-	const onEvent = useCallback((event: DictationEvent) => {
-		switch (event.type) {
-			case "listening":
-				setPhase("listening");
-				break;
-			case "finishing":
-				setPhase("finishing");
-				break;
-			case "text":
-				targetRef.current.onText(event.text);
-				break;
-			case "end":
-				targetRef.current.onText(event.text);
-				end(true);
-				break;
-			case "error":
-				setError(event.message);
-				end(true);
-				break;
-			case "exit":
-				setError("Dictation stopped unexpectedly.");
-				end(true);
-				break;
-		}
-	}, [end]);
+	const onEvent = useCallback(
+		(event: DictationEvent) => {
+			switch (event.type) {
+				case "listening":
+					setPhase("listening");
+					break;
+				case "finishing":
+					setPhase("finishing");
+					break;
+				case "text":
+					// Interim words are not shown: the finished text arrives once, with "end".
+					break;
+				case "end":
+					targetRef.current.onText(event.text);
+					end(true, true);
+					break;
+				case "error":
+					setError(event.message);
+					end(true);
+					break;
+				case "exit":
+					setError("Dictation stopped unexpectedly.");
+					end(true);
+					break;
+			}
+		},
+		[end],
+	);
 
 	useEffect(() => {
 		if (!error) return;
@@ -70,59 +90,147 @@ export function useDictation(target: DictationTarget) {
 		return () => window.clearTimeout(timer);
 	}, [error]);
 
-	/** Stops listening at once, keeping or dropping the dictated text. */
-	const halt = useCallback((keep: boolean) => {
-		if (!owns()) return;
-		end(keep);
-		void aoBridge.dictation.cancel();
-	}, [end]);
-
-	useEffect(() => () => {
-		if (!owns()) return;
-		owner = null;
-		unsubscribe.current?.();
-		void aoBridge.dictation.cancel();
+	/** Cancels a start that is still waiting for another composer's recording to finish. */
+	const cancelPendingStart = useCallback(() => {
+		if (!handoff.current) return false;
+		window.clearTimeout(handoff.current.timer);
+		handoff.current = null;
+		setPhase("idle");
+		return true;
 	}, []);
 
-	const start = useCallback(() => {
-		// The main process replaces the running helper; the composer it belonged to keeps its words.
-		owner?.end(true);
+	/** Stops listening at once, keeping or dropping the dictated text. */
+	const halt = useCallback(
+		(keep: boolean) => {
+			if (cancelPendingStart()) return;
+			if (!owns()) return;
+			end(keep);
+			void dictationClient.cancel();
+			playDictationSound("off");
+		},
+		[end, cancelPendingStart],
+	);
+
+	useEffect(() => {
+		setPhase("idle");
+		const onEnd = targetRef.current.onEnd;
+		return () => {
+			window.clearTimeout(handoff.current?.timer);
+			handoff.current = null;
+			if (!owns()) return;
+			generation.current += 1;
+			for (const resolve of waiting.current) resolve(false);
+			waiting.current.clear();
+			owner = null;
+			unsubscribe.current?.();
+			onEnd(true);
+			void dictationClient.cancel();
+		};
+	}, [target.ownerKey]);
+
+	const begin = useCallback(() => {
 		owner = self.current;
-		unsubscribe.current = aoBridge.dictation.onEvent(onEvent);
+		stopRequested.current = false;
+		const started = ++generation.current;
+		unsubscribe.current = dictationClient.onEvent(onEvent);
 		setError(undefined);
 		setPhase("starting");
-		void aoBridge.dictation.start();
-	}, [onEvent]);
+		// Played before the microphone opens, so it can never reach the recording.
+		playDictationSound("on");
+		void dictationClient.start().catch((error: unknown) => {
+			if (generation.current !== started) return;
+			setError(error instanceof Error ? error.message : "Could not start dictation.");
+			end(true);
+		});
+	}, [onEvent, end]);
+
+	const start = useCallback(() => {
+		if (handoff.current) return;
+		const previous = owner;
+		if (previous && previous !== self.current) {
+			// Another composer is still recording or finishing. Let it deliver its words first, so
+			// they are not lost, then take over.
+			const done = previous.finish();
+			if (done) {
+				// Each handoff has its own identity, so a callback from one that was cancelled can never act
+				// on a newer one.
+				const mine: { timer?: number } = {};
+				handoff.current = mine;
+				setPhase("starting");
+				const proceed = () => {
+					if (handoff.current !== mine) return;
+					window.clearTimeout(mine.timer);
+					handoff.current = null;
+					if (owner === previous) previous.end(true);
+					begin();
+				};
+				mine.timer = window.setTimeout(proceed, HANDOFF_TIMEOUT_MS);
+				void done.then(proceed);
+				return;
+			}
+			previous.end(true);
+		}
+		begin();
+	}, [begin]);
 
 	/** Ends the audio and waits for the recognizer's final wording. */
 	const stop = useCallback(() => {
-		if (!owns()) return;
+		if (!owns() || stopRequested.current) return;
+		stopRequested.current = true;
+		const stopped = generation.current;
 		setPhase("finishing");
-		void aoBridge.dictation.stop();
-	}, []);
+		void dictationClient.stop().then(
+			// Resolves once the microphone is released, so the click is never recorded.
+			() => {
+				if (generation.current === stopped) playDictationSound("off");
+			},
+			() => {
+				if (generation.current !== stopped) return;
+				setError("Could not finish dictation.");
+				end(true);
+				void dictationClient.cancel();
+			},
+		);
+	}, [end]);
+
+	const finish = useCallback((): Promise<boolean> | null => {
+		if (!owns()) return null;
+		const completion = new Promise<boolean>((resolve) => waiting.current.add(resolve));
+		stop();
+		return completion;
+	}, [stop]);
+
+	self.current.finish = finish;
 
 	useEffect(() => {
 		if (phase === "idle") return;
 		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Enter" && !event.isComposing && targetRef.current.onSubmit?.(event)) {
+				event.preventDefault();
+				event.stopPropagation();
+				return;
+			}
 			if (event.key !== "Escape") return;
 			// Escape belongs to dictation while it runs, not to menus or the page behind.
 			event.preventDefault();
 			event.stopPropagation();
-			stop();
+			halt(false);
 		};
 		window.addEventListener("keydown", onKeyDown, true);
 		return () => window.removeEventListener("keydown", onKeyDown, true);
-	}, [phase, stop]);
+	}, [phase, halt]);
 
 	const toggle = useCallback(() => {
+		if (cancelPendingStart()) return;
 		if (!owns()) start();
 		else if (phase !== "finishing") stop();
-	}, [phase, start, stop]);
+	}, [phase, start, stop, cancelPendingStart]);
 
 	return {
 		phase,
 		error,
 		toggle,
+		finish,
 		detach: useCallback(() => halt(true), [halt]),
 	};
 }

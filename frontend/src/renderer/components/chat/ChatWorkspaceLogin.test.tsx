@@ -19,6 +19,7 @@ import { renderChat as render } from "../../test/render-chat";
 import { useUiStore } from "../../stores/ui-store";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
+import { dictationChooserKey } from "../../lib/dictation-install";
 
 const CLI_ADVICE = "Not logged in · Please run /login";
 
@@ -427,6 +428,21 @@ describe("ChatWorkspace refused login", () => {
 			};
 		});
 		const cancel = vi.spyOn(aoBridge.dictation, "cancel");
+		// A returning user: the first-use chooser was answered and macOS dictation is selected, so Dictate starts at once.
+		localStorage.setItem(dictationChooserKey, "seen");
+		const status = vi.spyOn(apiClient, "GET").mockResolvedValue({
+			data: {
+				selected: "native-macos",
+				installing: "",
+				stage: "",
+				error: "",
+				recording: false,
+				preparing: false,
+				progressDone: 0,
+				progressTotal: 0,
+				models: [{ id: "native-macos", name: "macOS", installed: true, available: true, downloadBytes: 0 }],
+			},
+		} as never);
 		act(() => useUiStore.setState({ developerMode: true }));
 		try {
 			const signedOut = signedOutSnapshot({ didWork: false });
@@ -438,7 +454,7 @@ describe("ChatWorkspace refused login", () => {
 			};
 			const { rerender } = render(<ChatWorkspace snapshot={answered} retryControl={{ retry: vi.fn() }} />);
 			await userEvent.click(screen.getByRole("button", { name: "Dictate" }));
-			expect(emit).toBeDefined();
+			await waitFor(() => expect(emit).toBeDefined());
 
 			rerender(<ChatWorkspace snapshot={signedOut} retryControl={{ retry: vi.fn() }} />);
 			// Locked while the user spoke: it stops listening, so no later words reach the box.
@@ -448,6 +464,8 @@ describe("ChatWorkspace refused login", () => {
 		} finally {
 			onEvent.mockRestore();
 			cancel.mockRestore();
+			status.mockRestore();
+			localStorage.removeItem(dictationChooserKey);
 			act(() => useUiStore.setState({ developerMode: false }));
 			if (platform) Object.defineProperty(window.navigator, "platform", platform);
 			else Reflect.deleteProperty(window.navigator, "platform");

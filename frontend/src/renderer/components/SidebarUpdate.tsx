@@ -9,6 +9,7 @@ import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { ProgressRing } from "./ui/progress-ring";
 
 /** Collapsed footer icon-rail control: same growing highlight in the square. */
 export const FOOTER_RAIL_BUTTON_CLASS = cn(
@@ -123,28 +124,6 @@ function displayVersion(version: string | undefined): string | undefined {
 function shortVersion(version: string | undefined): string | null {
 	const bare = displayVersion(version?.replace(/^v/i, ""));
 	return bare ? `v${bare}` : null;
-}
-
-function ProgressRing({ percent, className }: { percent?: number; className?: string }) {
-	// A hairline ring, about as heavy as the 1.25px icon strokes beside it.
-	const radius = 6.75;
-	const circumference = 2 * Math.PI * radius;
-	return (
-		<svg aria-hidden="true" className={cn("-rotate-90", className)} viewBox="0 0 16 16">
-			<circle cx="8" cy="8" r={radius} fill="none" stroke="currentColor" strokeOpacity={0.25} strokeWidth={1.25} />
-			<circle
-				cx="8"
-				cy="8"
-				r={radius}
-				fill="none"
-				stroke="currentColor"
-				className="transition-[stroke-dasharray] duration-normal ease-out motion-reduce:transition-none"
-				strokeLinecap="round"
-				strokeWidth={1.25}
-				style={{ strokeDasharray: `${(circumference * (percent ?? 0)) / 100} ${circumference}` }}
-			/>
-		</svg>
-	);
 }
 
 function recover(recovery: UpdateRecovery, onRequestInstall: () => void): void {

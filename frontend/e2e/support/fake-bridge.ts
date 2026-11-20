@@ -81,6 +81,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						start: async () => undefined,
 						stop: async () => undefined,
 						cancel: async () => undefined,
+						authorize: async () => ({ granted: true }),
 						onEvent: unsubscribe,
 					},
 					app: {
@@ -1098,6 +1099,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						start: async () => undefined,
 						stop: async () => undefined,
 						cancel: async () => undefined,
+						authorize: async () => ({ granted: true }),
 						onEvent: unsubscribe,
 					},
 					app: {
