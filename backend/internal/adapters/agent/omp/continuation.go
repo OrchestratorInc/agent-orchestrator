@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,17 +41,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 // still exists under the recorded config dir. A missing config dir is Unknown
 // rather than Unavailable, mirroring the other continuation adapters.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if strings.TrimSpace(ref.ConfigDir) == "" {
-		return ports.NativeSessionAvailabilityUnknown, nil
-	}
-	_, ok, err := p.LocateTranscript(ctx, ref)
-	if err != nil {
-		return ports.NativeSessionAvailabilityUnknown, err
-	}
-	if ok {
-		return ports.NativeSessionAvailabilityAvailable, nil
-	}
-	return ports.NativeSessionAvailabilityUnavailable, nil
+	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
 // LocateTranscript finds OMP's rollout JSONL by native id. OMP writes one
@@ -72,36 +61,13 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 		return "", false, nil
 	}
 	suffix := "_" + id + ".jsonl"
-	sessionsDir := filepath.Join(configDir, "sessions")
-	var found string
-	walkErr := filepath.WalkDir(sessionsDir, func(path string, entry fs.DirEntry, err error) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if err != nil {
-			// As in discovery, an unreadable sibling is ineligible; errors
-			// on the sessions root still prevent an authoritative lookup.
-			if path != sessionsDir && errors.Is(err, fs.ErrPermission) {
-				if entry != nil && entry.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			return err
-		}
-		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), suffix) {
-			found = path
-			return fs.SkipAll
-		}
-		return nil
+	path, found, err := nativeconfig.FindFile(ctx, filepath.Join(configDir, "sessions"), func(name string) bool {
+		return strings.HasSuffix(name, suffix)
 	})
-	if errors.Is(walkErr, os.ErrNotExist) {
-		return "", false, nil
+	if err != nil {
+		return "", false, fmt.Errorf("omp: scan transcripts: %w", err)
 	}
-	if walkErr != nil {
-		return "", false, fmt.Errorf("omp: scan transcripts: %w", walkErr)
-	}
-	return found, found != "", nil
+	return path, found, nil
 }
 
 func validateOMPNativeSessionID(value string) (string, error) {
@@ -114,8 +80,7 @@ func validateOMPNativeSessionID(value string) (string, error) {
 
 // ompSessionDir encodes the folder OMP derives from a working directory, so AO
 // can place an imported transcript where OMP will look when launched in the AO
-// worktree. Pinned empirically against omp 18.14.0 (the binary ships no source):
-// the folder is built from the RESOLVED path. A path under $HOME has the home
+// worktree. The folder is built from the RESOLVED path. A path under $HOME has the home
 // prefix stripped and each "/" turned into "-" (e.g. ~/.ao/data/wt/x =>
 // "-.ao-data-wt-x"); any other path is wrapped, "--" + path without its leading
 // "/" and "/"->"-" + "--" (e.g. /private/tmp/a/b => "--private-tmp-a-b--").
@@ -194,6 +159,5 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 		}
 		return nil
 	}
-	_, err = importcopy.CopyOnce(src, dst, rewrite, check)
-	return err
+	return importcopy.CopyOnce(src, dst, rewrite, check)
 }

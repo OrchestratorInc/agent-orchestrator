@@ -1,21 +1,27 @@
-import { ArrowUpRight, X } from "lucide-react";
+import { ArrowUpRight, ExternalLink, MessageSquarePlus } from "@/components/app-icons";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
+import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
+import { LOCAL_HOST } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
+import { useStartSessionFromArtifact } from "../hooks/useStartSessionFromArtifact";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ShareArtifactButton, useArtifactShareFile } from "./ShareArtifactPopover";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
+import { SharedArtifactFrame } from "./SharedArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -32,11 +38,18 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const id = artifact ? artifactKey(artifact) : "";
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
+	const share = useArtifactShareFile(artifact);
+	const startSession = useStartSessionFromArtifact();
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
-		requestWorkspaceFileOpen(artifact.sessionId, artifact.path, undefined, "artifact");
-		navigateToSession(artifact.projectId, artifact.sessionId);
+		// A kept file has no session to open; a new one can start from it.
+		if (artifact.kept) {
+			void startSession(artifact);
+			return;
+		}
+		requestWorkspaceFileOpen(artifact.sessionId, artifact.path, artifact.hostId, "artifact");
+		navigateToSession(artifact.projectId, artifact.sessionId, artifact.hostId ?? LOCAL_HOST);
 	};
 	return (
 		<Dialog open={Boolean(artifact)} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -50,16 +63,39 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 					}}
 					showCloseButton={false}
 				>
-					<header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
-						<div className="min-w-0 flex-1">
-							<DialogTitle className="truncate text-heading-sm outline-none" ref={titleRef} tabIndex={-1}>{artifact.name}</DialogTitle>
-							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
+					<header className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-2">
+						<div className="flex min-w-0 flex-1 items-baseline gap-2">
+							<DialogTitle className="min-w-0 truncate text-control outline-none" ref={titleRef} tabIndex={-1}>{artifact.name}</DialogTitle>
+							<DialogDescription className="min-w-0 shrink-[2] truncate text-caption">{artifact.shared ? projectName : `${projectName} · ${artifact.sessionTitle}`}</DialogDescription>
 						</div>
-						<div className="relative z-10 flex shrink-0 items-center gap-1">
+						{artifact.shared ? (
+							// Someone else's link: view only, with its viewer page a click away.
+							<div className="relative z-10 flex shrink-0 items-center gap-0.5">
+								{artifact.shared.viewerUrl ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button asChild aria-label={t("artifacts.openInBrowser")} className="shrink-0" size="icon-sm" variant="quiet">
+												<a href={artifact.shared.viewerUrl} rel="noreferrer" target="_blank">
+													<ExternalLink aria-hidden="true" className="size-icon-sm" />
+												</a>
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">{t("artifacts.openInBrowser")}</TooltipContent>
+									</Tooltip>
+								) : null}
+								<DialogClose asChild>
+									<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />
+								</DialogClose>
+							</div>
+						) : <div className="relative z-10 flex shrink-0 items-center gap-0.5">
+							{share ? <ShareArtifactButton className="transition-none" file={share} iconOnly name={artifact.name} published={Boolean(artifact.shareUrl)} revision={artifact.updatedAt} /> : null}
 							<ArtifactActionsMenu
 								artifact={artifact}
+								hostId={artifact.hostId}
 								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
 								iconOnly
+								verticalDots
+								share={share}
 								pinInMenu
 								pinned={pinned}
 								onTogglePin={() => togglePinnedArtifact(id)}
@@ -67,24 +103,23 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 								errorClassName="bottom-auto top-full mb-0 mt-2"
 								className="transition-none"
 							/>
-						</div>
-						<Button className="shrink-0 transition-none" onClick={openInSession} size="sm" variant="secondary">
-							{t("artifacts.openInSession")}
-							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
-						</Button>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<DialogClose asChild>
-									<Button aria-label={t("common.close")} className="shrink-0 transition-none" size="icon-sm" variant="ghost">
-										<X aria-hidden="true" className="size-icon-sm" />
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button aria-label={t(artifact.kept ? "artifacts.startSession" : "artifacts.openInSession")} className="shrink-0" onClick={openInSession} size="icon-sm" type="button" variant="quiet">
+										{artifact.kept ? <MessageSquarePlus aria-hidden="true" className="size-icon-sm" /> : <ArrowUpRight aria-hidden="true" className="size-icon-sm" />}
 									</Button>
-								</DialogClose>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("common.close")}</TooltipContent>
-						</Tooltip>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t(artifact.kept ? "artifacts.startSession" : "artifacts.openInSession")}</TooltipContent>
+							</Tooltip>
+							<DialogClose asChild>
+								<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />
+							</DialogClose>
+						</div>}
 					</header>
-					<div className="min-h-0 flex-1 overflow-hidden bg-background">
-						<ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />
+					<div className="min-h-0 flex-1 overflow-hidden">
+						{artifact.shared
+							? <SharedArtifactFrame key={artifactKey(artifact)} linkId={artifact.shared.linkId} title={artifact.name} />
+							: <ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />}
 					</div>
 				</DialogContent>
 			) : null}
@@ -100,6 +135,10 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 	const { client: cloudClient } = useCloudCp(cloud);
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const contentUrl = artifactContentUrl(artifact.sessionId, artifact.path, artifact.rawUrl);
+	// A file the agent rewrites while it is open shows the new content. The
+	// change stream is this computer's daemon's, so a remote host's file is
+	// not followed.
+	useArtifactFileChanges({ id: artifact.sessionId, cloud: artifact.cloud }, !artifact.hostId);
 	if (artifact.cloud) {
 		const orgId = artifact.cloud.orgId;
 		if (access.isError) return <PanelMessage action={<RetryButton onClick={() => { void access.refetch(); }} />}>{t("artifacts.accessError")}</PanelMessage>;
@@ -109,11 +148,15 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 			void access.refetch();
 		};
 		if (artifact.kind === "html") return <CloudArtifactFrame onAccessRefused={accessRefused} title={artifact.name} url={pinned.url} />;
-		return <ArtifactFileView artifactName={artifact.name} artifactRoot={pinned.root} cloud onAccessRefused={accessRefused} path={artifact.path} rawUrl={pinned.url} readOnly sendMessage={async (message) => { await cloudClient.sendSessionMessage(orgId, artifact.sessionId, { text: message }); }} sessionId={artifact.sessionId} />;
+		return <ArtifactFileView artifactName={artifact.name} artifactRoot={pinned.root} cloud noFeedback={artifact.archived} onAccessRefused={accessRefused} path={artifact.path} rawUrl={pinned.url} readOnly sendMessage={async (message) => { await cloudClient.sendSessionMessage(orgId, artifact.sessionId, { text: message }); }} sessionId={artifact.sessionId} />;
+	}
+	// Another host's page has no inline origin here: it is framed, sandboxed, from its proxy's artifact origin.
+	if (artifact.kind === "html" && artifact.hostId && artifact.hostId !== LOCAL_HOST && artifact.rawUrl) {
+		return <CloudArtifactFrame key={`${artifact.rawUrl}:${artifact.updatedAt}`} source="host" title={artifact.name} url={artifact.rawUrl} />;
 	}
 	if (page) {
-		return <iframe className="h-full w-full border-0 bg-background" sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
+		return <iframe className="h-full w-full border-0 bg-background" key={`${page}:${artifact.updatedAt}`} sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
 	}
 	if (!contentUrl) return <PanelMessage>{t("artifactLink.noPreview")}</PanelMessage>;
-	return <ArtifactFileView artifactName={artifact.name} path={artifact.path} rawUrl={artifact.rawUrl} readOnly sessionId={artifact.sessionId} />;
+	return <ArtifactFileView artifactName={artifact.name} hostId={artifact.hostId} path={artifact.path} rawUrl={artifact.rawUrl} noFeedback={artifact.archived} readOnly sessionId={artifact.sessionId} />;
 }

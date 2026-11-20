@@ -108,10 +108,12 @@ export class MuxClient {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private pingTimer: ReturnType<typeof setInterval> | null = null;
 	private backoff = 1000;
-	// Terminals we want open, so we can re-open them after a reconnect. Maps the
-	// session id -> its projectId so the re-open carries projectId too (the server
-	// may need it to locate the right session across projects).
-	private openTerminals = new Map<string, string | undefined>();
+	// Terminals we want open, so we can re-open them after a reconnect. Keeps the
+	// projectId (the server may need it to locate the right session across
+	// projects) and the last grid this client asked for: the daemon sizes a
+	// fresh attach from the open frame, and anything sent before the socket is
+	// open is dropped, so a resize sent meanwhile would never arrive.
+	private openTerminals = new Map<string, { projectId?: string; cols?: number; rows?: number }>();
 	private subscribed = false;
 
 	constructor(cfg: ServerConfig, handlers: Handlers) {
@@ -149,10 +151,9 @@ export class MuxClient {
 			this.backoff = 1000;
 			this.handlers.onStatus?.("open");
 			if (this.subscribed) this.send({ ch: "subscribe", topics: ["sessions", "notifications"] });
-			// Re-open any terminals that were active before a reconnect (with projectId).
-			for (const [id, projectId] of this.openTerminals) {
-				this.send({ ch: "terminal", id, type: "open", projectId, role: "secondary" });
-			}
+			// Open every terminal wanted on this socket: ones asked for while it
+			// was still connecting, and ones active before a reconnect.
+			for (const [id, wanted] of this.openTerminals) this.sendOpen(id, wanted);
 			this.pingTimer = setInterval(() => {
 				this.send({ ch: "system", type: "ping" });
 			}, 20000);
@@ -258,13 +259,19 @@ export class MuxClient {
 		this.send({ ch: "subscribe", topics: ["sessions", "notifications"] });
 	}
 
-	openTerminal(id: string, projectId?: string) {
-		this.openTerminals.set(id, projectId);
+	/** Opens a terminal, now or as soon as the socket is open, at `size` when known. */
+	openTerminal(id: string, projectId?: string, size?: { cols: number; rows: number }) {
+		const wanted = { projectId, cols: size?.cols, rows: size?.rows };
+		this.openTerminals.set(id, wanted);
+		this.sendOpen(id, wanted);
+	}
+
+	private sendOpen(id: string, { projectId, cols, rows }: { projectId?: string; cols?: number; rows?: number }) {
 		// The phone is always a follower: it announces role "secondary" so a
 		// co-attached desktop drives the shared PTY grid (and the phone renders that
 		// grid scaled). When the phone is the only client the daemon falls back to
-		// its size, so "secondary" is safe even solo.
-		this.send({ ch: "terminal", id, type: "open", projectId, role: "secondary" });
+		// its size, so "secondary" is safe even solo, given the size travels here.
+		this.send({ ch: "terminal", id, type: "open", projectId, role: "secondary", cols, rows });
 	}
 
 	sendInput(id: string, data: string, projectId?: string) {
@@ -273,6 +280,9 @@ export class MuxClient {
 	}
 
 	resize(id: string, cols: number, rows: number, projectId?: string) {
+		// Remembered for the next open: a reconnect re-attaches at this size.
+		const wanted = this.openTerminals.get(id);
+		if (wanted) this.openTerminals.set(id, { ...wanted, cols, rows });
 		this.send({ ch: "terminal", id, type: "resize", cols, rows, projectId });
 	}
 

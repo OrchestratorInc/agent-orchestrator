@@ -79,7 +79,7 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 		}
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(2000)")
+	db, err := sql.Open("sqlite", ReadOnlyDSN(dbPath, 2000))
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}

@@ -22,6 +22,8 @@ import (
 // https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.70.0/docs/session-failure-extension.md
 const claudeTimedQuotaResponse = `{"stopReason":"end_turn","_meta":{"jetbrains":{"air":{"version":1,"sessionFailure":{"id":"native-prompt:error","revision":1,"category":"limit","severity":"error","title":"You've hit your session limit · resets 3:31pm (Asia/Calcutta)","actions":[]}}}}}`
 
+const claudeWeeklyQuotaResponse = `{"stopReason":"end_turn","_meta":{"jetbrains":{"air":{"version":1,"sessionFailure":{"id":"native-prompt:error","revision":1,"category":"limit","severity":"error","title":"You've hit your weekly limit · resets Nov 14, 5am (Asia/Calcutta)","actions":[]}}}}}`
+
 const claudeUnknownQuotaResponse = `{"stopReason":"end_turn","_meta":{"jetbrains":{"air":{"version":1,"sessionFailure":{"id":"native-prompt:error","revision":1,"category":"limit","severity":"error","title":"You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit","actions":[]}}}}}`
 
 func TestClaudeNativeQuotaMetadata(t *testing.T) {
@@ -65,12 +67,14 @@ func (p quotaFixtureClaudePlugin) ResolveBinary(context.Context) (string, error)
 }
 
 func TestClaudeDriverNativeQuotaWireAndRecovery(t *testing.T) {
+	weeklyReset := time.Now().Add(72 * time.Hour).Truncate(time.Second).UTC()
 	for _, tc := range []struct {
-		name, response string
-		knownReset     bool
+		name, response, rateLimit string
+		reset                     time.Time
 	}{
-		{"known reset", claudeTimedQuotaResponse, true},
-		{"unknown reset", claudeUnknownQuotaResponse, false},
+		{"known reset", claudeTimedQuotaResponse, "", time.Date(2026, 10, 17, 10, 1, 0, 0, time.UTC)},
+		{"unknown reset", claudeUnknownQuotaResponse, "", time.Time{}},
+		{"structured reset", claudeWeeklyQuotaResponse, fmt.Sprintf(`{"status":"rejected","rateLimitType":"seven_day","resetsAt":%d,"overageStatus":"rejected","isUsingOverage":false}`, weeklyReset.Unix()), weeklyReset},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			executable, err := os.Executable()
@@ -79,6 +83,7 @@ func TestClaudeDriverNativeQuotaWireAndRecovery(t *testing.T) {
 			}
 			t.Setenv("AO_CLAUDE_ACP_COMMAND", executable)
 			t.Setenv("AO_TEST_CLAUDE_USAGE_LIMIT_RESPONSE", tc.response)
+			t.Setenv("AO_TEST_CLAUDE_USAGE_LIMIT_RATE_LIMIT", tc.rateLimit)
 			// Avoid model discovery or any call to the installed Claude executable.
 			t.Setenv("CLAUDE_MODEL_CONFIG", `{"availableModels":["fixture-model"]}`)
 			var authRejected atomic.Int32
@@ -128,11 +133,18 @@ func TestClaudeDriverNativeQuotaWireAndRecovery(t *testing.T) {
 								}
 								failedAt := time.Date(2026, 10, 17, 9, 30, 0, 0, time.UTC)
 								limit := domain.ParseConversationUsageLimit(event.Err.Error(), &failedAt)
-								if limit == nil || (limit.ResetsAt != nil) != tc.knownReset {
-									t.Fatalf("native quota lost its reset semantics: %+v, %v", limit, event.Err)
+								if limit == nil {
+									t.Fatalf("native quota was not recognised: %v", event.Err)
 								}
-								if tc.knownReset && !limit.ResetsAt.Equal(time.Date(2026, 10, 17, 10, 1, 0, 0, time.UTC)) {
-									t.Fatalf("reset = %v, want 10:01 UTC", limit.ResetsAt)
+								reset := event.UsageLimitResetsAt
+								if reset.IsZero() && limit.ResetsAt != nil {
+									reset = *limit.ResetsAt
+								}
+								if !reset.Equal(tc.reset) {
+									t.Fatalf("reset = %v, want %v; error = %q", reset, tc.reset, event.Err)
+								}
+								if tc.rateLimit != "" && event.Err.Error() != "You've hit your weekly limit · resets Nov 14, 5am (Asia/Calcutta)" {
+									t.Fatalf("provider text was changed: %q", event.Err)
 								}
 							} else if event.TurnState != domain.TurnStateCompleted || event.Err != nil {
 								t.Fatalf("follow-up retained quota failure: %+v", event)
@@ -191,6 +203,12 @@ func serveClaudeUsageLimitFixture(firstResponse string) error {
 			result = `{"stopReason":"end_turn"}`
 			if prompts == 1 {
 				result = firstResponse
+				if rateLimit := os.Getenv("AO_TEST_CLAUDE_USAGE_LIMIT_RATE_LIMIT"); rateLimit != "" {
+					update := fmt.Sprintf(`{"sessionId":"native-claude-session","update":{"sessionUpdate":"usage_update","used":1,"size":200000,"_meta":{"_claude/rateLimit":%s}}}`, rateLimit)
+					if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": json.RawMessage(update)}); err != nil {
+						return err
+					}
+				}
 			}
 		case "session/close":
 		default:

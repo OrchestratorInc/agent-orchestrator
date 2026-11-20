@@ -1,0 +1,462 @@
+import * as Dialog from "@radix-ui/react-dialog";
+import { ChevronLeft, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
+import { motion, useReducedMotion } from "motion/react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
+import aoMascot from "../../../assets/ao-mascot.svg";
+import { useCloseShellTerminal } from "../hooks/useShellTerminals";
+import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
+import type { TerminalSessionState } from "../hooks/useTerminalSession";
+import {
+	completeOnboardingStepIfViewed,
+	finishOnboardingAction,
+	onboardingActionAttempt,
+	onboardingInProgress,
+	reportOnboardingStep,
+	skipOnboardingStep,
+	startOnboardingAction,
+	useOnboardingStep,
+} from "../lib/onboarding-telemetry";
+import { agentLabel } from "../lib/agent-options";
+import { type ImportCandidate, sessionImportPreviewQuery, useImportableAgents, useImportOfferShown } from "../lib/session-import";
+import { useShellMaybe } from "../lib/shell-context";
+import { useResolvedTheme } from "../stores/ui-store";
+import { TerminalPane } from "./TerminalPane";
+import { GitHubRepoPicker, preloadGitHubRepos } from "./GitHubRepoPicker";
+import { GitHubIcon } from "./GitHubIcon";
+import { AgentAvatar } from "./AgentAvatar";
+import { InstallAction, useInstallRunner } from "./InstallDependencyDialog";
+import { FolderImport } from "./SessionImportDialog";
+import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
+import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
+
+/** Header shared by the steps after the welcome screen: back, title and subtext, close. */
+function FirstRunHeader({ onBack, onClose, disabled, title, description }: { onBack: () => void; onClose: () => void; disabled?: boolean; title: string; description: string }) {
+	const { t } = useTranslation();
+	return (
+		<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
+			<Button type="button" variant="secondary" size="icon" aria-label={t("createProject.cloneBack")} disabled={disabled} onClick={onBack}>
+				<ChevronLeft className="size-4" aria-hidden="true" />
+			</Button>
+			<div className="min-w-0 flex-1 pr-8">
+				<Dialog.Title className="text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">{title}</Dialog.Title>
+				<Dialog.Description className="mt-1 text-[13px] leading-5 text-muted-foreground">{description}</Dialog.Description>
+			</div>
+			<CloseButton aria-label={t("createProject.cloneClose")} disabled={disabled} onClick={onClose} />
+		</div>
+	);
+}
+
+/** First screen of the first-run prompt. */
+export function FirstRunWelcome({ disabled, onNext }: { disabled?: boolean; onNext: () => void }) {
+	const { t } = useTranslation();
+	// Warm the repository list and avatars while the welcome screen is up.
+	useEffect(() => {
+		void preloadGitHubRepos();
+	}, []);
+	return (
+		<div className="flex flex-col items-center px-6 pb-6 pt-8 text-center">
+			<img alt="" className="size-16" draggable={false} src={aoMascot} />
+			<Dialog.Title className="mt-5 text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.welcomeTitle")}</Dialog.Title>
+			<Dialog.Description className="mt-2 max-w-[34ch] text-pretty text-[13px] leading-5 text-muted-foreground">{t("firstRun.welcomeBody")}</Dialog.Description>
+			<Button type="button" variant="primary" className="mt-6 w-full" autoFocus disabled={disabled} onClick={onNext}>{t("firstRun.getStarted")}</Button>
+		</div>
+	);
+}
+
+export type GitHubState = {
+	/** False until both the CLI and sign-in checks have answered. */
+	known: boolean;
+	/** The CLI is installed and signed in, so the user's repositories can be listed. */
+	hasGitHub: boolean;
+	/**
+	 * The CLI is known to be missing or signed out, so a git-related action should
+	 * first offer to install it or sign in. A probe that failed or timed out is
+	 * not a reason to block anyone, so unknown never counts as needing setup.
+	 */
+	needsSetup: boolean;
+};
+
+export const NO_GITHUB_STATE: GitHubState = { known: true, hasGitHub: false, needsSetup: false };
+
+/** Reads the GitHub CLI state for first-run children; the checks run only while this is mounted. */
+export function WithGitHubState({ children }: { children: (state: GitHubState) => ReactNode }) {
+	const { query, requirements } = useSystemRequirementsGate();
+	const auth = useGitHubAuthRequirement();
+	// A probe that errors, never starts (preview builds) or hangs must not leave
+	// the source step on its placeholder: after a short wait, treat GitHub as unavailable.
+	const [gaveUp, setGaveUp] = useState(false);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setGaveUp(true), 4000);
+		return () => window.clearTimeout(timer);
+	}, []);
+	const answered = (query.isSuccess || query.isError) && (auth.isSuccess || auth.isError);
+	const known = answered || gaveUp;
+	const installed = requirements.find((requirement) => requirement.id === "gh")?.satisfied !== false;
+	const hasGitHub = known && installed && auth.data?.satisfied === true;
+	useEffect(() => {
+		if (hasGitHub) completeOnboardingStepIfViewed("github_auth");
+	}, [hasGitHub]);
+	const needsSetup = !installed || auth.data?.satisfied === false;
+	return <>{children({ known, hasGitHub, needsSetup })}</>;
+}
+
+/** Install the GitHub CLI if it is missing, then sign in. Calls `onReady` once both are done. */
+export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onSkip?: () => void }) {
+	const { t } = useTranslation();
+	const { query, requirements } = useSystemRequirementsGate();
+	const cliMissing = requirements.find((requirement) => requirement.id === "gh")?.satisfied === false;
+	const [terminalState, setTerminalState] = useState<TerminalSessionState>("idle");
+	const loginRunning = terminalState === "connecting" || terminalState === "attached" || terminalState === "reattaching";
+	const auth = useGitHubAuthRequirement(loginRunning);
+	const startLogin = useStartGitHubAuthTerminal();
+	const terminalQuery = useGitHubAuthTerminal();
+	const terminal = terminalQuery.data;
+	const { mutate: closeTerminal } = useCloseShellTerminal();
+	const theme = useResolvedTheme();
+	const shell = useShellMaybe();
+	const authRefetch = useRef(auth.refetch);
+	authRefetch.current = auth.refetch;
+	const readyRef = useRef(onReady);
+	readyRef.current = onReady;
+	// This panel also serves the clone dialog long after onboarding; it reports
+	// to the funnel only while onboarding (the first-run window or the tour) shows.
+	const install = useInstallRunner(() => {
+		void Promise.resolve(query.refetch())
+			.then(() => authRefetch.current())
+			.then((result) => {
+				if (result.data?.satisfied) readyRef.current();
+			});
+	}, () => (onboardingInProgress() ? { action: "gh_install", step: "github_auth" } : undefined));
+	const { inspect } = install;
+	useEffect(() => {
+		if (cliMissing) void inspect("gh");
+	}, [cliMissing, inspect]);
+
+	// The onboarding funnel's GitHub step: viewed while setup is actually
+	// needed, abandoned if the window goes away first, completed once signed in.
+	const needsSetup = cliMissing || auth.data?.satisfied === false;
+	useEffect(() => {
+		if (!needsSetup || !onboardingInProgress()) return;
+		reportOnboardingStep("github_auth", "viewed");
+		const onHide = () => reportOnboardingStep("github_auth", "abandoned");
+		window.addEventListener("pagehide", onHide);
+		return () => window.removeEventListener("pagehide", onHide);
+	}, [needsSetup]);
+
+	// Signed in, from the login terminal or from outside the app: nothing left to do.
+	const signedIn = auth.data?.satisfied === true;
+	useEffect(() => {
+		if (!signedIn) return;
+		finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh" });
+		completeOnboardingStepIfViewed("github_auth");
+		if (terminal) closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
+		readyRef.current();
+	}, [signedIn, terminal, closeTerminal, terminalQuery.clear]);
+	useEffect(() => {
+		if (startLogin.isError) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
+	}, [startLogin.isError]);
+	// The login process ending usually means it finished; confirm with a fresh check.
+	useEffect(() => {
+		if (terminalState !== "exited" && terminalState !== "error") return;
+		// The attempt this login belonged to, so a retry started before the check answers is left alone.
+		const attempt = onboardingActionAttempt("gh_sign_in", "gh");
+		void authRefetch.current().then((result) => {
+			if (attempt !== undefined && result.data && !result.data.satisfied) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in", attempt });
+		});
+	}, [terminalState]);
+	const signIn = () => {
+		if (onboardingInProgress()) startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		startLogin.mutate();
+	};
+
+	const loginEnded = terminalState === "exited" || terminalState === "error";
+	return (
+		<div className="flex flex-col gap-3">
+			<GitHubIcon className="mx-auto my-10 size-10 text-foreground" />
+			{cliMissing ? (
+				<InstallAction
+					primaryLabel={t("startup.installGh")}
+					disabled={install.running}
+					job={install.jobFor("gh")}
+					planChecked={install.inspectionFinished("gh")}
+					error={install.target === "gh" ? install.startError : undefined}
+					onInstall={() => void install.start("gh")}
+					t={t}
+				/>
+			) : (
+				<>
+					<Button
+						type="button"
+						variant="primary"
+						className="w-full"
+						disabled={startLogin.isPending || (loginRunning && !loginEnded)}
+						onClick={() => {
+							if (loginEnded && terminal) closeTerminal(terminal.handleId, { onSuccess: () => { terminalQuery.clear(); setTerminalState("idle"); signIn(); } });
+							else signIn();
+						}}
+					>
+						{startLogin.isPending ? t("startup.githubLoginStarting") : loginEnded ? t("startup.githubLoginTryAgain") : t("startup.githubLogin")}
+					</Button>
+					{startLogin.isError ? <p className="text-xs text-destructive" role="alert">{startLogin.error.message}</p> : null}
+					{terminal ? (
+						<div className="overflow-hidden rounded-lg border border-[var(--color-border-import-modal)] bg-terminal" data-testid="github-auth-terminal">
+							<div className="h-[220px] min-h-0">
+								<TerminalPane daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={terminalState === "attached"} fontSize={12} onTerminalStateChange={setTerminalState} terminalTarget={{ kind: "shell", handleId: terminal.handleId, generation: terminal.createdAt, title: terminal.title }} theme={theme} />
+							</div>
+						</div>
+					) : null}
+				</>
+			)}
+			{onSkip ? <Button type="button" variant="quiet" className="w-full" disabled={install.running} onClick={onSkip}>{t("firstRun.ghContinue")}</Button> : null}
+		</div>
+	);
+}
+
+/** First-run step: GitHub setup for a clone. The user can continue without it, since public repos clone over plain git. */
+export function FirstRunGitHubStep({ onDone, onBack, onClose }: { onDone: () => void; onBack: () => void; onClose: () => void }) {
+	const { t } = useTranslation();
+	const { requirements } = useSystemRequirementsGate();
+	const cliMissing = requirements.find((requirement) => requirement.id === "gh")?.satisfied === false;
+	return (
+		<div>
+			<FirstRunHeader
+				onBack={onBack}
+				onClose={onClose}
+				title={t(cliMissing ? "firstRun.ghTitle" : "firstRun.ghLoginTitle")}
+				description={t(cliMissing ? "firstRun.ghBody" : "firstRun.ghLoginBody")}
+			/>
+			<div className="px-4 pb-4 pt-4">
+				<GitHubSetupPanel onReady={onDone} onSkip={onDone} />
+			</div>
+		</div>
+	);
+}
+
+/**
+ * Whether first run offers the import step: an agent whose chats can be imported
+ * is installed, and the scan of this computer has not come back empty. The scan
+ * starts here, so the folder list is usually ready when the step opens. A scan
+ * still running is not waited for: the step shows it reading, and moves on by
+ * itself if the scan then finds nothing (see `onNothingToImport`).
+ */
+export function WithImportOffer({ children }: { children: (offer: boolean) => ReactNode }) {
+	const agents = useImportableAgents(true);
+	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000, enabled: agents.length > 0 });
+	const nothingToImport = preview.isError || (preview.isSuccess && !preview.data.candidates.some(importableFromFolder));
+	return <>{children(agents.length > 0 && !nothingToImport)}</>;
+}
+
+/** A chat the folder import can bring in: not imported yet, and tied to a folder. */
+function importableFromFolder(chat: ImportCandidate): boolean {
+	return !chat.sessionId && Boolean(chat.projectId || chat.folder);
+}
+
+/**
+ * Importing earlier chats is a one-time, optional step for a new user, so it sits
+ * in first run, between the welcome screen and setting up a project. It opens as
+ * a short summary of what was found; the folder list only expands when the user
+ * asks for it, and Skip moves on. Each picked folder becomes a project, so a
+ * finished import ends the first-run prompt.
+ */
+export function FirstRunImport({
+	onBack,
+	onClose,
+	onSkip,
+	onNothingToImport,
+	onImported,
+}: {
+	onBack: () => void;
+	onClose: () => void;
+	onSkip: () => void;
+	/** The scan finished after the step opened and found nothing, or failed. */
+	onNothingToImport: () => void;
+	onImported: () => void;
+}) {
+	const { t, i18n } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const [importing, setImporting] = useState(false);
+	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
+	useImportOfferShown("onboarding", true);
+	const chats = (preview.data?.candidates ?? []).filter(importableFromFolder);
+	const nothingToImport = !expanded && (preview.isError || (preview.isSuccess && !chats.length));
+	// The onboarding funnel's import step, viewed once the scan has found chats
+	// to offer (so the view carries how many): Skip and Choose folders report
+	// themselves; the folder count is on ao.session_imports.completed.
+	const completeImport = useOnboardingStep("import_chats", preview.isSuccess && chats.length > 0, {
+		autoComplete: false,
+		viewed: { chats_found: chats.length },
+	});
+	const skip = () => {
+		skipOnboardingStep("import_chats", "user");
+		onSkip();
+	};
+	const imported = () => {
+		completeImport();
+		onImported();
+	};
+	const nothingRef = useRef(onNothingToImport);
+	nothingRef.current = onNothingToImport;
+	useEffect(() => {
+		if (!nothingToImport) return;
+		// Only a scan that answered says there is nothing to do; a failed one moves on unreported.
+		if (preview.isSuccess) skipOnboardingStep("import_chats", "already_done");
+		nothingRef.current();
+	}, [nothingToImport]);
+	const agents = [...new Set(chats.map((chat) => chat.harness))];
+	const header = (
+		<FirstRunHeader
+			onBack={expanded ? () => setExpanded(false) : onBack}
+			onClose={onClose}
+			disabled={importing}
+			title={t("sessionImport.offerTitle")}
+			description={t(expanded ? "sessionImport.foldersDescription" : "firstRun.importDescription")}
+		/>
+	);
+	if (!expanded) {
+		return (
+			<div>
+				{header}
+				<div className="px-4 pt-4">
+					<div className="flex items-center gap-3 rounded-lg bg-interactive-hover p-4">
+						{agents.length ? (
+							<span className="flex shrink-0 items-center gap-1">
+								{agents.slice(0, 4).map((agent) => (
+									<AgentAvatar key={agent} className="size-5" decorative provider={agent} />
+								))}
+							</span>
+						) : null}
+						<p className="min-w-0 text-pretty text-[13px] leading-5 text-foreground">
+							{preview.isPending
+								? t("sessionImport.reading")
+								: t("firstRun.importFound", { count: chats.length, agents: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(agents.map(agentLabel)) })}
+						</p>
+					</div>
+				</div>
+				<div className="flex items-center justify-end gap-3 p-4">
+					<Button type="button" variant="secondary" onClick={skip}>{t("firstRun.skip")}</Button>
+					<Button type="button" variant="primary" disabled={!chats.length} onClick={() => setExpanded(true)}>{t("firstRun.importChoose")}</Button>
+				</div>
+			</div>
+		);
+	}
+	return (
+		<div>
+			{header}
+			<FolderImport
+				source="onboarding"
+				cancelLabel={t("firstRun.skip")}
+				onCancel={skip}
+				onImported={imported}
+				onImporting={setImporting}
+				bodyClassName="flex max-h-[min(360px,calc(100svh-240px))] min-h-0 flex-col gap-4 overflow-y-auto px-4 pt-4 settings-thin-scrollbar"
+				footerClassName="flex items-center justify-end gap-3 p-4"
+			/>
+		</div>
+	);
+}
+
+/** The "what do you want to start with" step. Same borderless tiles as the Add Project modal. */
+export function FirstRunSources({
+	disabled,
+	gh,
+	onBack,
+	onClose,
+	onPickRepo,
+	onSubmitUrl,
+	onOpenLocalFolder,
+	onStartStandaloneAgent,
+}: {
+	disabled?: boolean;
+	gh: GitHubState;
+	onBack: () => void;
+	onClose: () => void;
+	onPickRepo: (remoteUrl: string) => void;
+	onSubmitUrl: (remoteUrl: string) => void;
+	onOpenLocalFolder?: () => void;
+	onStartStandaloneAgent?: () => void;
+}) {
+	const { t } = useTranslation();
+	const [url, setUrl] = useState("");
+	const tile = (icon: ReactNode, label: string, hint: string, onClick?: () => void) => (
+		<Pressable
+			className="group flex flex-col items-start gap-5 rounded-lg bg-interactive-hover p-4 hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
+			aria-label={label}
+			disabled={disabled}
+			onClick={onClick}
+		>
+			<span className="flex shrink-0 text-muted-foreground group-hover:text-foreground">{icon}</span>
+			<span className="min-w-0">
+				<span className="block text-[14px] font-medium text-foreground">{label}</span>
+				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
+			</span>
+		</Pressable>
+	);
+	return (
+		<div>
+			<FirstRunHeader onBack={onBack} onClose={onClose} disabled={disabled} title={t("firstRun.startProject")} description={t("firstRun.description")} />
+			<div className="space-y-2 px-4 pb-4 pt-4">
+				<p className="text-[13px] font-semibold text-[var(--color-text-import-title)]">{t(gh.hasGitHub ? "firstRun.pickRepo" : "createProject.cloneRepositoryUrl")}</p>
+				{gh.hasGitHub ? (
+					<GitHubRepoPicker disabled={disabled} value="" onChange={onPickRepo} />
+				) : !gh.known ? (
+					<div className="h-control-form rounded-md bg-[var(--color-bg-import-card)]" aria-hidden="true" />
+				) : (
+					<form
+						className="flex gap-2"
+						onSubmit={(event) => {
+							event.preventDefault();
+							if (url.trim()) onSubmitUrl(url.trim());
+						}}
+					>
+						<Input
+							autoCapitalize="none"
+							autoComplete="off"
+							className="bg-[var(--color-bg-import-card)] text-[13px]"
+							disabled={disabled}
+							placeholder={t("createProject.cloneRepositoryUrlPlaceholder")}
+							spellCheck={false}
+							value={url}
+							onChange={(event) => setUrl(event.target.value)}
+						/>
+						<Button type="submit" variant="primary" disabled={disabled || !url.trim()}>{t("createProject.cloneContinue")}</Button>
+					</form>
+				)}
+			</div>
+			<p className="px-4 pb-2 text-[13px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.orStart")}</p>
+			<div className="grid grid-cols-2 gap-3 px-4 pb-4 max-[520px]:grid-cols-1">
+				{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
+				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
+			</div>
+		</div>
+	);
+}
+
+/** Springs the modal to each step's height. The content swaps instantly; only the size animates.
+ * A step taller than the dialog's height limit (a short window, or high zoom with the
+ * source tiles stacked) scrolls inside it instead of being cut off. */
+export function AnimatedStepBody({ children }: { children: ReactNode }) {
+	const reduceMotion = useReducedMotion();
+	const bodyRef = useRef<HTMLDivElement>(null);
+	const [height, setHeight] = useState<number | "auto">("auto");
+	useLayoutEffect(() => {
+		const body = bodyRef.current;
+		if (!body || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => setHeight(body.offsetHeight));
+		observer.observe(body);
+		return () => observer.disconnect();
+	}, []);
+	return (
+		<motion.div
+			className="relative min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
+			initial={false}
+			animate={{ height }}
+			transition={reduceMotion ? { duration: 0 } : { type: "spring", duration: 0.25, bounce: 0 }}
+		>
+			<div ref={bodyRef} className="flow-root">{children}</div>
+		</motion.div>
+	);
+}

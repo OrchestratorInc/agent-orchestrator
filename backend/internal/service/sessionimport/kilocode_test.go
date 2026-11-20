@@ -9,9 +9,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func TestKiloCodeAdmissionRemainsDeferred(t *testing.T) {
-	if _, enabled := harnessImporters[domain.HarnessKilocode]; enabled {
-		t.Fatal("deferred native export must not admit new Kilo imports")
+func TestKiloCodeAdmissionEnabled(t *testing.T) {
+	if importer, enabled := harnessImporters[domain.HarnessKilocode]; !enabled || importer.mode != domain.SessionModeTUI {
+		t.Fatal("Kilo native import must be admitted in Terminal mode")
 	}
 }
 

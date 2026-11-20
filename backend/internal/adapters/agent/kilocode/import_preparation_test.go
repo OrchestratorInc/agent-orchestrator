@@ -16,7 +16,7 @@ import (
 )
 
 func TestKiloNativeImportPreparation(t *testing.T) {
-	for _, mode := range []string{"native import", "import failure", "missing row", "wrong directory", "missing history"} {
+	for _, mode := range []string{"native import", "import failure", "missing row", "wrong directory", "missing history", "export changes source", "import changes source", "unknown version"} {
 		t.Run(mode, func(t *testing.T) {
 			dataRoot := t.TempDir()
 			t.Setenv("AO_DATA_DIR", dataRoot)
@@ -36,7 +36,7 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 				`CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, workspace_id TEXT)`,
 				`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT)`,
 				`CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT, message_id TEXT)`,
-				`CREATE TABLE session_message (id TEXT PRIMARY KEY)`,
+				`CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT)`,
 			} {
 				if _, err := db.Exec(schema); err != nil {
 					t.Fatal(err)
@@ -53,14 +53,33 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 			calls := 0
 			run := func(_ context.Context, directory, config string, args ...string) ([]byte, error) {
 				calls++
-				if directory != cwd || config != root || len(args) != 2 {
+				if directory != cwd || config != root {
 					t.Fatalf("native command location/config/args = %q, %q, %v", directory, config, args)
 				}
+				if args[0] == "--version" {
+					if mode == "unknown version" {
+						return []byte("8.0.0"), nil
+					}
+					return []byte("7.8.25\n"), nil
+				}
+				if len(args) != 2 {
+					t.Fatalf("unexpected args: %v", args)
+				}
 				if args[0] == "export" && args[1] == sourceID {
+					if mode == "export changes source" {
+						if _, err := db.Exec(`UPDATE session SET directory = '/changed' WHERE id = ?`, sourceID); err != nil {
+							t.Fatal(err)
+						}
+					}
 					return export, nil
 				}
 				if args[0] != "import" {
 					t.Fatalf("unexpected native command: %v", args)
+				}
+				if mode == "import changes source" {
+					if _, err := db.Exec(`INSERT INTO session_message VALUES ('canonical-change', ?)`, sourceID); err != nil {
+						t.Fatal(err)
+					}
 				}
 				info, err := os.Stat(args[1])
 				if err != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
@@ -124,11 +143,18 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 			} else if err == nil || ref.NativeSessionID != "" {
 				t.Fatalf("failed import published identity: %#v, %v", ref, err)
 			}
-			if calls != 2 {
+			wantCalls := 3
+			if mode == "unknown version" {
+				wantCalls = 1
+			}
+			if mode == "export changes source" {
+				wantCalls = 2
+			}
+			if calls != wantCalls {
 				t.Fatalf("native command calls = %d", calls)
 			}
 			var sourceDirectory, sourceWorkspace string
-			if err := db.QueryRow(`SELECT directory, workspace_id FROM session WHERE id = ?`, sourceID).Scan(&sourceDirectory, &sourceWorkspace); err != nil || sourceDirectory != "/source" || sourceWorkspace != "wrk_source" {
+			if err := db.QueryRow(`SELECT directory, workspace_id FROM session WHERE id = ?`, sourceID).Scan(&sourceDirectory, &sourceWorkspace); err != nil || (sourceDirectory != "/source" && mode != "export changes source") || sourceWorkspace != "wrk_source" {
 				t.Fatalf("original row changed: %q, %q, %v", sourceDirectory, sourceWorkspace, err)
 			}
 			entries, err := os.ReadDir(filepath.Join(dataRoot, "tmp", "native-import"))
@@ -153,8 +179,13 @@ func TestKiloNativeOutputLimitCancelsCopy(t *testing.T) {
 	}
 }
 
-func TestKiloSourceMutatingExportRemainsDeferred(t *testing.T) {
-	if _, err := New().runKiloImportCommand(t.Context(), "", "", "export", "ses_source"); err == nil || !strings.Contains(err.Error(), "source store") {
-		t.Fatalf("source-mutating export was not refused before binary resolution: %v", err)
+func TestKiloImportRejectsWorkspaceOverrideBeforeNativeCommand(t *testing.T) {
+	t.Setenv("KILO_WORKSPACE_ID", "")
+	_, err := New().prepareKiloImport(t.Context(), ports.ImportedSessionRelocation{NativeSessionID: "ses_source", Env: map[string]string{"KILO_WORKSPACE_ID": "override"}, ConfigDir: filepath.Join(t.TempDir(), "kilo"), LaunchCWD: t.TempDir()}, func(context.Context, string, string, ...string) ([]byte, error) {
+		t.Fatal("native command ran with workspace override")
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "workspace") {
+		t.Fatalf("workspace override = %v", err)
 	}
 }

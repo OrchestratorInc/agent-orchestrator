@@ -111,11 +111,18 @@ type ImportedSessionRelocation struct {
 	// LaunchCWD is the directory AO starts the provider in. Adapters apply the
 	// provider's own path normalization, such as resolving symlinks.
 	LaunchCWD string
+	// Chat is true when the import resumes through the provider's Chat (ACP)
+	// driver rather than its terminal CLI. A provider whose two front ends keep
+	// chats in different places prepares the copy where that resume looks.
+	Chat bool
 	// SourceFingerprint is optional immutable selection evidence. An adapter
 	// that sets a discovery fingerprint must compare it with the exact native
 	// inputs it snapshots before copying, including sidecars such as a WAL.
 	// A mismatch is an error; a verified private copy may be reused on retry.
 	SourceFingerprint string
+	// DataDir is AO's durable data directory. Adapters that stage native data
+	// keep it privately under this directory, never the OS temporary directory.
+	DataDir string
 	// Env is a read-only clone of resolved launch overrides, including the
 	// selected account and project values. Present empty values clear inherited
 	// variables; missing keys inherit the daemon environment. Adapters must not
@@ -153,13 +160,4 @@ type AgentImportedSessionRelocator interface {
 // without a new state root can keep AgentImportedSessionRelocator instead.
 type AgentImportedSessionPreparer interface {
 	PrepareImportedSession(context.Context, ImportedSessionRelocation) (NativeSessionRef, error)
-}
-
-// NativeRestoreIdentityTakeover opts an interactive first-open plan into a
-// provider-generated native fork. SourceNativeSessionID must match the exact
-// resume target supplied by AO. Restored must prove the fork's history and
-// worktree execution before TargetID returns its nonempty, observed new id.
-// Ordinary restores and plans without this capability cannot change identity.
-type NativeRestoreIdentityTakeover interface {
-	SourceNativeSessionID() string
 }

@@ -138,6 +138,18 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(`There are merge conflicts on ${PR}. Rebase onto the base branch and resolve them.\nPR: ${URL}`)).toEqual({ kind: "mergeConflict", pr });
 	});
 
+	it("reads when the reviewer wrote the comment or review from the end of the first line", () => {
+		const posted = reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n");
+		expect(readAutomation(posted)).toMatchObject({ kind: "reviewComments", at: "2026-11-16T07:54:42Z", comments: [{ author: "illegalcall" }] });
+		expect(readAutomation(reviewComment)).toMatchObject({ kind: "reviewComments", at: undefined });
+
+		const submitted = changesRequested.replace(`is on ${PR}.`, `is on ${PR}. Submitted at 2026-11-16T07:54:41Z.`);
+		expect(readAutomation(submitted)).toMatchObject({ kind: "changesRequested", body: "The migration IDs collide with shipped migrations.", at: "2026-11-16T07:54:41Z" });
+
+		const titled = changesRequested.replace('"feat: link this computer"', '"x Submitted at 2020-01-01T00:00:00Z."');
+		expect(readAutomation(titled)).toMatchObject({ kind: "changesRequested", at: undefined });
+	});
+
 	it("keeps the card for comments that do not number as announced", () => {
 		expect(readAutomation(reviewComment.replace("The following 1 ", "The following 2 "))).toBeNull();
 	});

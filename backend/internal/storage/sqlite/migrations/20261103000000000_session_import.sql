@@ -1,10 +1,12 @@
 -- +goose Up
 ALTER TABLE sessions ADD COLUMN import_source TEXT NOT NULL DEFAULT '';
--- FindImportedSession repeats these expressions exactly so it can search the index.
+-- A terminated session no longer holds its imported conversation, so the same
+-- chat can be imported again. FindImportedSession repeats these expressions and
+-- this predicate exactly so it can search the index.
 CREATE UNIQUE INDEX sessions_import_identity ON sessions(
     CAST(json_extract(NULLIF(import_source, ''), '$.configDir') AS TEXT),
     CAST(json_extract(NULLIF(import_source, ''), '$.nativeId') AS TEXT)
-) WHERE import_source <> '';
+) WHERE import_source <> '' AND is_terminated = 0;
 CREATE TABLE session_import_messages (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     sequence INTEGER NOT NULL,

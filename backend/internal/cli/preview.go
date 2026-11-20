@@ -47,8 +47,9 @@ func newPreviewCommand(ctx *commandContext) *cobra.Command {
 		Long: "Open a URL in the desktop browser panel for the current session.\n\n" +
 			"With no argument it opens the workspace's static entry point, falling\n" +
 			"back to this session's existing preview target when no entry point exists.\n" +
-			"A workspace-root-relative Markdown or HTML path opens through AO's isolated\n" +
-			"file preview. Use `ao preview start` for a configured dev server and\n" +
+			"A workspace-root-relative Markdown or HTML path opens through Orchestrator's\n" +
+			"isolated file preview. An absolute path in this session's artifact directory\n" +
+			"opens the same way. Use `ao preview start` for a configured dev server and\n" +
 			"`ao preview clear` to empty the panel.",
 		Example: `  ao preview
   ao preview README.md
@@ -150,7 +151,7 @@ func (c *commandContext) clearPreview(ctx context.Context) error {
 func sessionPreviewPath() (string, error) {
 	sessionID := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 	if sessionID == "" {
-		return "", usageError{errors.New("ao preview must run inside an AO session (AO_SESSION_ID is not set)")}
+		return "", usageError{errors.New("ao preview must run inside an Orchestrator-managed session (AO_SESSION_ID is not set)")}
 	}
 	// PathEscape: session ids are already "-"/digit safe, but keep the URL
 	// well-formed regardless.
