@@ -174,10 +174,10 @@ describe("ModelMenuChoices", () => {
 		renderRows(generateModels(30), undefined, 3);
 		const pane = document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
 		const height = "calc((var(--line-height-row) + var(--space-1_5) * 2) * 3 + 1px * 3)";
-		// Starts at the rows' height whatever it lists, and never below it: a pane sized by its
-		// content is a single line once nothing matches, and the menu drops out from under the pointer.
-		expect(pane.style.flexBasis).toBe("0px");
-		expect(pane.style.minHeight).toBe(height);
+		// Its basis, not its content: a pane sized by its content is a single line once nothing
+		// matches, and the menu drops out from under the pointer.
+		expect(pane.style.getPropertyValue("--model-list-rows")).toBe(height);
+		expect(pane).toHaveClass("basis-(--model-list-rows)");
 		// Every row still renders; the list scrolls under the cap.
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(30);
 	});
@@ -209,10 +209,10 @@ describe("ModelMenuChoices", () => {
 		);
 		const pane = () => document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
 		expect(screen.getByTestId("rail")).toBeInTheDocument();
-		expect(pane().style.minHeight).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 4 + 1px * 4)");
+		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 4 + 1px * 4)");
 		await user.type(screen.getByRole("searchbox"), "Model 1");
 		expect(screen.queryByTestId("rail")).not.toBeInTheDocument();
-		expect(pane().style.minHeight).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 5 + 1px * 5)");
+		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 5 + 1px * 5)");
 		await user.clear(screen.getByRole("searchbox"));
 		expect(screen.getByTestId("rail")).toBeInTheDocument();
 	});
@@ -233,7 +233,9 @@ describe("ModelMenuChoices", () => {
 
 	it("takes the pane's own max height when no row cap is asked for", () => {
 		renderRows(generateModels(30));
-		expect(document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!.style.minHeight).toBe("");
+		const pane = document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
+		expect(pane.style.getPropertyValue("--model-list-rows")).toBe("");
+		expect(pane).toHaveClass("flex-1");
 	});
 
 	it("holds the tallest height it reached while open, so shorter settings rows leave the room to the list", () => {

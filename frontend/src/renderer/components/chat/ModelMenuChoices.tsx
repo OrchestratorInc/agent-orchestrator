@@ -1,5 +1,5 @@
 import { Search } from "@/components/app-icons";
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -44,7 +44,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	 * Hidden while a search is typed; a capped list gets a row more in its place.
 	 */
 	header?: (controls: { clearSearch: () => void }) => ReactNode;
-	/** Rows under the list, kept in view while it scrolls, and hidden while searching. */
+	/** Rows under the list, kept in view while it scrolls. Hidden while searching, unless `rows` caps the list. */
 	footer?: ReactNode;
 	className?: string;
 	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string, query?: string) => ReactNode;
@@ -101,17 +101,16 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const headerRef = useRef<HTMLDivElement>(null);
 	const footerRef = useRef<HTMLDivElement>(null);
-	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
-	// The pane starts at that height whatever it lists: a search with no matches drops to a single
-	// line, and the menu must not shrink under the pointer while it is typed in. It only grows into
-	// room the held height below leaves it.
 	// A search hides the header, and the list takes its room as one more row.
 	const showHeader = Boolean(header) && !normalizedQuery;
 	const listRows = rows === undefined ? undefined : rows + (header && normalizedQuery ? 1 : 0);
-	const rowsHeight = listRows === undefined ? undefined : `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${listRows} + 1px * ${listRows})`;
-	// A 0px basis rather than flex-1's 0%: a percentage of the menu's undetermined height counts as
-	// the list's full content, which would stretch the menu to every model.
-	const rowCap = rowsHeight === undefined ? undefined : { flexGrow: 1, flexShrink: 1, flexBasis: "0px", minHeight: rowsHeight };
+	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
+	// The pane's basis is that height whatever it lists, so a search with no matches never shrinks the
+	// menu under the pointer. It grows into room the held height below leaves it, and shrinks only
+	// when the menu has no room for it (many favourites in a short window), scrolling as it does.
+	const rowCap = listRows === undefined
+		? undefined
+		: ({ "--model-list-rows": `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${listRows} + 1px * ${listRows})` } as CSSProperties);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const holdsHeight = rows !== undefined;
 	// While open, the menu never gets shorter: when the rows under the list shrink (another agent
@@ -140,12 +139,15 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		return Boolean(target);
 	};
 	// Into the list on its checked row, else its first enabled one; a list with none goes on to
-	// the footer's first enabled row. A disabled row is never the landing spot.
+	// the footer's first enabled row. A disabled row is never the landing spot. With nothing below
+	// at all (a terminal's rail before another agent is picked), the search takes focus instead.
 	const focusList = () => {
 		const scroller = scrollRef.current;
-		(scroller?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]:not([data-disabled])')
+		const target = scroller?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]:not([data-disabled])')
 			?? scroller?.querySelector<HTMLElement>('[role^="menuitem"]:not([data-disabled])')
-			?? footerRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([data-disabled])'))?.focus();
+			?? footerRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([data-disabled])')
+			?? searchRef.current;
+		target?.focus();
 	};
 	const typeIntoSearch = (event: KeyboardEvent) => {
 		if (!searchRef.current) return false;
@@ -270,7 +272,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					{header({ clearSearch })}
 				</div>
 			) : null}
-			<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden" style={rowCap}>
+			<div
+				className={cn("relative grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden", rowCap ? "shrink grow basis-(--model-list-rows)" : "flex-1")}
+				style={rowCap}
+			>
 				<div
 					ref={scrollRef}
 					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
