@@ -26,10 +26,12 @@ func IsImportedHome(home, dataDir string) bool {
 }
 
 type kimiImportProvider struct {
-	Type      string `toml:"type"`
-	BaseURL   string `toml:"base_url"`
-	APIKey    string `toml:"api_key"`
-	APIKeyEnv string `toml:"api_key_env"`
+	Type          string            `toml:"type"`
+	BaseURL       string            `toml:"base_url"`
+	APIKey        string            `toml:"api_key"`
+	APIKeyEnv     string            `toml:"api_key_env"`
+	CustomHeaders map[string]string `toml:"custom_headers"`
+	Env           map[string]string `toml:"env"`
 }
 
 type kimiImportConfig struct {
@@ -70,7 +72,11 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 	if err != nil {
 		return nil, true, err
 	}
-	if current.CWD != proof.CWD || filepath.Clean(workspace) != proof.CWD {
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return fail()
+	}
+	if current.CWD != proof.CWD || canonicalWorkspace != proof.CWD {
 		return fail()
 	}
 	source, err := os.OpenRoot(proof.Source)
@@ -104,7 +110,7 @@ func ImportedRuntimeEnv(ctx context.Context, home, dataDir, id, workspace, model
 		return fail()
 	}
 	provider, ok := config.Providers[providerID]
-	if !ok || provider.Type == "" {
+	if !ok || provider.Type == "" || len(provider.CustomHeaders) != 0 || len(provider.Env) != 0 {
 		return fail()
 	}
 	endpoint, err := url.Parse(provider.BaseURL)

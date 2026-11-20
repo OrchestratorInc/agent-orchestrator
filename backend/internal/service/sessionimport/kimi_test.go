@@ -2,7 +2,10 @@ package sessionimport
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,6 +29,9 @@ func kimiFixture(t *testing.T, root, workdir, sessionID, state, wire string) str
 		if _, ok := d["version"]; !ok {
 			d["version"] = 2
 		}
+		if d["cwd"] == "/work/repo" {
+			d["cwd"] = filepath.Join(root, "project")
+		}
 		d["agents"] = map[string]any{"main": map[string]any{"homedir": filepath.Join(base, "agents", "main"), "type": "main"}}
 		b, _ := json.Marshal(d)
 		state = string(b)
@@ -34,8 +40,18 @@ func kimiFixture(t *testing.T, root, workdir, sessionID, state, wire string) str
 		wire = `{"type":"metadata","protocol_version":"1.5","created_at":1700000000000}` + "\n" + wire
 	}
 	if !strings.Contains(wire, `"type":"runtime.set_binding"`) {
+		var metadata struct {
+			CWD string `json:"cwd"`
+		}
+		if err := json.Unmarshal([]byte(state), &metadata); err != nil {
+			t.Fatal(err)
+		}
+		normalized := strings.TrimRight(strings.ReplaceAll(metadata.CWD, `\`, "/"), "/")
+		hash := sha256.Sum256([]byte(normalized))
+		name := strings.Trim(strings.ToLower(filepath.Base(normalized)), " -")
+		binding, _ := json.Marshal(map[string]string{"type": "runtime.set_binding", "agentId": "main", "runtimeId": "local", "workspaceId": fmt.Sprintf("wd_%s_%x", name, hash[:6])})
 		lines := strings.SplitN(wire, "\n", 2)
-		wire = lines[0] + "\n" + `{"type":"runtime.set_binding","agentId":"main","runtimeId":"local","workspaceId":"wd_repo_ddc5e473a09b"}` + "\n" + lines[1]
+		wire = lines[0] + "\n" + string(binding) + "\n" + lines[1]
 	}
 	if state != "" {
 		writeFile(t, filepath.Join(base, "state.json"), state)
@@ -90,7 +106,7 @@ func TestKimiDiscoverAndParse(t *testing.T) {
 		"user: now run tests",
 		"assistant: Tests pass.",
 	)
-	if got.title != "Add a README" || got.cwd != "/work/repo" || got.nativeID != kimiSession {
+	if got.title != "Add a README" || got.cwd != filepath.Join(root, "project") || got.nativeID != kimiSession {
 		t.Fatalf("title=%q cwd=%q id=%q", got.title, got.cwd, got.nativeID)
 	}
 }
@@ -119,7 +135,7 @@ func TestKimiTitleFallsBackToPromptWithoutTitle(t *testing.T) {
 	if got.title != "add a readme" {
 		t.Fatalf("title = %q, want first prompt", got.title)
 	}
-	if got.cwd != "/work/repo" {
+	if got.cwd != filepath.Join(root, "project") {
 		t.Fatalf("cwd = %q, want native cwd", got.cwd)
 	}
 }
@@ -325,5 +341,52 @@ func TestKimiSelectedSnapshotFingerprintChangesWithStateAndWire(t *testing.T) {
 	}
 	if harnessImporters[domain.HarnessKimi].mode != domain.SessionModeChat {
 		t.Fatal("Kimi import must stay on isolated ACP path")
+	}
+}
+
+func TestKimiProviderRootAlias(t *testing.T) {
+	physical := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "profile")
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Skip(err)
+	}
+	path := kimiFixture(t, alias, "wd_repo_abc123def456", kimiSession, kimiStateJSON, kimiWire)
+	got, err := readKimiTranscript(t.Context(), alias, path)
+	if err != nil || len(got.messages) == 0 {
+		t.Fatalf("aliased native root: %v", err)
+	}
+}
+
+func TestKimiWorkingDirectoryTrailingSpaceIsPreserved(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "project ")
+	state := map[string]any{"id": kimiSession, "version": 2, "cwd": cwd}
+	b, _ := json.Marshal(state)
+	path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, string(b), kimiWire)
+	got, err := readKimiTranscript(t.Context(), root, path)
+	if err != nil || got.cwd != cwd {
+		t.Fatalf("exact native cwd: %q %v", got.cwd, err)
+	}
+}
+
+func TestKimiPreviewBudgetKeepsReadablePrompt(t *testing.T) {
+	root := t.TempDir()
+	wire := `{"type":"context.append_message","message":{"role":"user","content":[{"type":"image_url","image_url":{"url":"image.png"}}],"origin":{"kind":"user"}},"time":1700000001000}` + "\n" +
+		`{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"image reply"}},"time":1700000002000}` + "\n" +
+		`{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"readable prompt"}],"origin":{"kind":"user"}},"time":1700000003000}` + "\n"
+	reply, _ := json.Marshal(map[string]any{"type": "context.append_loop_event", "event": map[string]any{"type": "content.part", "part": map[string]string{"type": "text", "text": strings.Repeat("x", maxVisibleBytes+128)}}, "time": 1700000004000})
+	path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, "", wire+string(reply)+"\n")
+	got, err := readKimiTranscript(t.Context(), root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range got.messages {
+		if m.Role == domain.MessageRoleUser && m.Text == "readable prompt" {
+			found = true
+		}
+	}
+	if !found || !got.shortened {
+		t.Fatal("preview trimming lost its readable user prompt")
 	}
 }

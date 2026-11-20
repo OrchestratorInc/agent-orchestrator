@@ -25,14 +25,17 @@ func writeKimiTranscript(t *testing.T, configDir, workdir, sessionID string) str
 
 func TestKimiNativeSessionConfigDir(t *testing.T) {
 	p := New()
+	home := t.TempDir()
+	custom := filepath.Join(t.TempDir(), "custom")
+	t.Setenv("KIMI_CODE_HOME", filepath.Join(t.TempDir(), "ambient"))
 	// An explicit KIMI_CODE_HOME wins over the default.
-	got, err := p.NativeSessionConfigDir(context.Background(), map[string]string{"KIMI_CODE_HOME": "/custom/kimi"})
-	if err != nil || got != "/custom/kimi" {
+	got, err := p.NativeSessionConfigDir(context.Background(), map[string]string{"KIMI_CODE_HOME": custom})
+	if err != nil || got != custom {
 		t.Fatalf("NativeSessionConfigDir = %q, %v", got, err)
 	}
 	// Without the env var it falls back to ~/.kimi-code under HOME.
-	got, err = p.NativeSessionConfigDir(context.Background(), map[string]string{"HOME": "/home/alice"})
-	if err != nil || got != filepath.Join("/home/alice", ".kimi-code") {
+	got, err = p.NativeSessionConfigDir(context.Background(), map[string]string{"HOME": home, "KIMI_CODE_HOME": ""})
+	if err != nil || got != filepath.Join(home, ".kimi-code") {
 		t.Fatalf("default NativeSessionConfigDir = %q, %v", got, err)
 	}
 }

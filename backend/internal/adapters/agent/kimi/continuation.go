@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -92,8 +91,8 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 			if info.Mode().IsRegular() {
 				return path, true, nil
 			}
-		case errors.Is(err, os.ErrNotExist) || errors.Is(err, fs.ErrPermission):
-			// A missing or unreadable session folder is simply not a match.
+		case errors.Is(err, os.ErrNotExist):
+			// A missing session folder is not a match; access errors stay unknown.
 		default:
 			return "", false, fmt.Errorf("kimi: stat transcript: %w", err)
 		}

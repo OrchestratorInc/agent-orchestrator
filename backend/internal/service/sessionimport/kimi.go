@@ -1,10 +1,11 @@
 package sessionimport
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -28,8 +29,6 @@ const (
 	kimiMainAgent   = "main"
 	kimiWireFile    = "wire.jsonl"
 	kimiStateFile   = "state.json"
-	// kimiStateBudget caps the metadata sidecar read; it holds only scalars.
-	kimiStateBudget = 1 << 20
 )
 
 // kimiNativeID matches a Kimi session directory name: `session_<uuid>`.
@@ -146,22 +145,22 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 	if err != nil {
 		return t, err
 	}
-	if filepath.Clean(snapshot.Path) != filepath.Clean(wirePath) {
+	selectedPath, selectedErr := filepath.EvalSymlinks(wirePath)
+	expectedPath, expectedErr := filepath.EvalSymlinks(snapshot.Path)
+	if selectedErr != nil || expectedErr != nil || selectedPath != expectedPath {
 		return t, errors.New("kimi transcript selection changed")
 	}
 	t.fingerprint = snapshot.Fingerprint
-	providerRoot, err := os.OpenRoot(root)
-	if err != nil {
+	t.path, t.paths = snapshot.Path, []string{snapshot.Path}
+	var state kimiState
+	if err := json.Unmarshal(snapshot.State, &state); err != nil {
 		return t, err
 	}
-	defer func() { _ = providerRoot.Close() }()
-
-	state := readKimiState(providerRoot, root, wirePath)
-	if state.ID != "" && state.ID != t.nativeID {
-		return t, errors.New("native identity mismatch")
+	if state.Title == "" {
+		state.Title = state.Custom.Title
 	}
-	t.cwd = strings.TrimSpace(state.CWD)
-	if last := kimiTime(state.UpdatedAt); last.After(t.last) {
+	t.cwd = snapshot.CWD
+	if last := kimiTime(state.UpdatedAt); last.After(t.last) && last.Before(time.Now().Add(time.Hour)) {
 		t.last = last
 	}
 
@@ -269,7 +268,14 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		}
 		return nil
 	}
-	if err := readOne(providerRoot, root, wirePath, handle); err != nil {
+	scanner := bufio.NewScanner(bytes.NewReader(snapshot.Wire))
+	scanner.Buffer(make([]byte, 4096), len(snapshot.Wire)+1)
+	for scanner.Scan() {
+		if err := handle(scanner.Bytes()); err != nil {
+			return t, err
+		}
+	}
+	if err := scanner.Err(); err != nil {
 		return t, err
 	}
 	flushAssistant()
@@ -282,8 +288,16 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		}
 		display = append(display, tagged{Message: item.msg})
 	}
+	firstUser := slices.IndexFunc(display, func(item tagged) bool { return item.Role == domain.MessageRoleUser })
+	if firstUser < 0 {
+		return t, errors.New("no readable native conversation")
+	}
 	n := len(display)
-	display = trimVisible(display)
+	trimmed := trimVisible(slices.Clone(display))
+	if !slices.ContainsFunc(trimmed, func(item tagged) bool { return item.Role == domain.MessageRoleUser }) {
+		trimmed = trimVisible(display[firstUser:])
+	}
+	display = trimmed
 	t.shortened = t.shortened || len(display) < n
 	for _, item := range display {
 		t.messages = append(t.messages, item.Message)
@@ -316,31 +330,6 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		return t, errors.New("kimi source changed during transcript read")
 	}
 	return t, nil
-}
-
-// readKimiState reads the session's state.json sidecar. A missing or malformed
-// sidecar is not fatal: the wire.jsonl still yields messages, title and cwd.
-func readKimiState(providerRoot *os.Root, root, wirePath string) kimiState {
-	var state kimiState
-	statePath := filepath.Join(kimiSessionDir(wirePath), kimiStateFile)
-	rel, err := filepath.Rel(root, statePath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return state
-	}
-	f, err := providerRoot.Open(rel)
-	if err != nil {
-		return state
-	}
-	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, kimiStateBudget))
-	if err != nil {
-		return state
-	}
-	_ = json.Unmarshal(data, &state)
-	if state.Title == "" {
-		state.Title = state.Custom.Title
-	}
-	return state
 }
 
 // kimiItem is one parsed wire.jsonl event. A displayed item carries msg; hidden

@@ -57,7 +57,14 @@ func readKimiFile(ctx context.Context, root *os.Root, name string, limit int64) 
 			return nil, errors.New("kimi: linked native state is unsupported")
 		}
 	}
-	f, err := root.Open(name)
+	leaf, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !leaf.Mode().IsRegular() {
+		return nil, errors.New("kimi: native state is not a regular file")
+	}
+	f, err := openKimiNativeFile(root, name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +98,14 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 		return result, err
 	}
 	defer func() { _ = root.Close() }()
-	dir, err := root.Open("sessions")
+	status, err := root.Lstat("sessions")
+	if err != nil {
+		return result, err
+	}
+	if !status.IsDir() || status.Mode()&os.ModeSymlink != 0 {
+		return result, errors.New("kimi: sessions is not a native directory")
+	}
+	dir, err := openKimiNativeFile(root, "sessions", true)
 	if err != nil {
 		return result, err
 	}
@@ -130,7 +144,9 @@ func ReadImportedSession(ctx context.Context, home, id string) (ImportedSession,
 	if json.Unmarshal(state, &metadata) != nil || metadata.ID != id || metadata.Version != 2 || metadata.Archived || !filepath.IsAbs(metadata.CWD) || len(metadata.Agents) != 1 || metadata.Agents["main"].Type != "main" {
 		return result, errors.New("kimi: unsupported native state (requires v2, unarchived main-agent conversation)")
 	}
-	if filepath.Clean(metadata.Agents["main"].Home) != filepath.Join(home, base, "agents", "main") {
+	recordedHome, recordedErr := filepath.EvalSymlinks(metadata.Agents["main"].Home)
+	expectedHome, expectedErr := filepath.EvalSymlinks(filepath.Join(home, base, "agents", "main"))
+	if recordedErr != nil || expectedErr != nil || recordedHome != expectedHome {
 		return result, errors.New("kimi: native main-agent path does not match selection")
 	}
 	wire, err := readKimiFile(ctx, root, filepath.Join(base, "agents", "main", "wire.jsonl"), kimiImportBudget)
