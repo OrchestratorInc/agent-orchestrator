@@ -529,6 +529,7 @@ describe("native WorkOS authentication", () => {
 
     beforeEach(() => {
       warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      mocks.decryptString.mockImplementation((value: Buffer) => value.toString("utf8"));
     });
 
     // A fresh copy of the module: what the app holds in memory is gone, the
@@ -649,6 +650,72 @@ describe("native WorkOS authentication", () => {
       await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
       await expect((await restart()).getCloudSession(dataDir)).resolves.toBeNull();
       expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(signedInAs("person@example.com"));
+    });
+
+    it("does not tell the renderers the account signed out when a token is asked for during the outage", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+
+      await expect(auth.getCloudAccessToken(dataDir)).resolves.toBeNull();
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(true);
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(null);
+    });
+
+    it("shows the saved sign-in again when the app is focused once storage is back", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+
+      auth.recheckSavedSignIn(dataDir);
+      await Promise.resolve();
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(signedInAs("person@example.com"));
+
+      storageBack();
+      auth.recheckSavedSignIn(dataDir);
+      await vi.waitFor(() => expect(mocks.notifyRenderers).toHaveBeenCalledWith(signedInAs("person@example.com")));
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(false);
+    });
+
+    it("keeps a saved sign-in that does not decrypt, without asking the keychain again, until the next launch", async () => {
+      await signIn(await restart());
+      const saved = await readFile(storeFile());
+      const auth = await restart();
+      mocks.decryptString.mockImplementation(() => {
+        throw new Error("keychain access denied");
+      });
+      mocks.decryptString.mockClear();
+
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      expect(mocks.decryptString).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(true);
+      await expect(auth.getCloudAccessToken(dataDir)).resolves.toBeNull();
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(null);
+      // Starting a sign-in does not write over the file it could not read.
+      await auth.beginCloudSignIn(dataDir);
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+
+      mocks.decryptString.mockImplementation((value: Buffer) => value.toString("utf8"));
+      await expect((await restart()).getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+    });
+
+    it("saves a new sign-in over a saved one that does not decrypt", async () => {
+      await signIn(await restart());
+      const auth = await restart();
+      mocks.decryptString.mockImplementationOnce(() => {
+        throw new Error("keychain access denied");
+      });
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+
+      mocks.authenticateWithCode.mockResolvedValueOnce({ accessToken: ACCESS_TOKEN, refreshToken: "refresh_456", user: OTHER });
+      await signIn(auth, "code_456");
+
+      expect(await fileStore()).toMatchObject({ session: { refreshToken: "refresh_456" }, pkce: null });
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(false);
+      await expect((await restart()).getCloudSession(dataDir)).resolves.toEqual(signedInAs("other@example.com"));
     });
   });
 

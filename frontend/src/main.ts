@@ -184,7 +184,9 @@ import {
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
 	protectedStorageAvailable,
+	isSavedSignInHidden,
 	readAuthStore,
+	recheckSavedSignIn,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
@@ -3635,7 +3637,8 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 	const cloudUserId = stored?.session?.authProvider === "workos" ? stored.session.user.id : null;
 	// No stored sign-in but a binding left behind: a sign-out the daemon never
 	// heard (it was down, then the app quit). Retire it before anything exports.
-	if (stored && !stored.session) await telemetryIdentity.retireSignedOutBinding();
+	// A sign-in hidden by a secure storage outage is not a sign-out.
+	if (stored && !stored.session && !isSavedSignInHidden(cloudDataDir())) await telemetryIdentity.retireSignedOutBinding();
 	if (cloudUserId && cloudUserId === await boundCloudUserId(desktopDataDir)) bootstrap.cloudUserId = cloudUserId;
 	return bootstrap;
 });
@@ -4686,6 +4689,10 @@ app.whenReady().then(async () => {
 	});
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
+	// Nothing says when secure storage comes back (a keychain unlocked, say), so
+	// a Cloud sign-in waiting on it is checked again when the person returns.
+	powerMonitor.on("unlock-screen", () => recheckSavedSignIn(cloudDataDir()));
+	app.on("browser-window-focus", () => recheckSavedSignIn(cloudDataDir()));
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
@@ -4808,8 +4815,12 @@ app.whenReady().then(async () => {
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.
+	// A sign-in hidden by a secure storage outage is not a lost one: leave the
+	// previews, and let the session notice that shows it again bind them.
 	void getCloudSessionCached(cloudDataDir()).then(
-		(account) => bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null),
+		(account) => {
+			if (account || !isSavedSignInHidden(cloudDataDir())) bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
+		},
 		() => bindArtifactSnapshotsToCloudAccount(null),
 	);
 	applyRuntimeAppIcon();
