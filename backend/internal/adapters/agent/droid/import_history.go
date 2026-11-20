@@ -1,12 +1,14 @@
 package droid
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -25,6 +27,31 @@ func NativeHistoryFingerprint(body []byte) string {
 // ReadNativeHistory reads only a regular conversation JSONL confined to the
 // selected Factory sessions root. Discovery and preparation share this boundary.
 func ReadNativeHistory(ctx context.Context, configDir, path string) ([]byte, error) {
+	f, err := openDroidHistory(ctx, configDir, path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxDroidHistoryBytes {
+		return nil, errors.New("droid: conversation exceeds import limit")
+	}
+	body, err := io.ReadAll(io.LimitReader(f, maxDroidHistoryBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxDroidHistoryBytes {
+		return nil, errors.New("droid: conversation exceeds import limit")
+	}
+	return body, ctx.Err()
+}
+
+// The prepared conversation can grow after import. Share confinement and file
+// checks with the source reader without applying its total import-size cap.
+func openDroidHistory(ctx context.Context, configDir, path string) (*os.File, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -41,22 +68,19 @@ func ReadNativeHistory(ctx context.Context, configDir, path string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxDroidHistoryBytes {
+	if !info.Mode().IsRegular() {
 		return nil, errors.New("droid: conversation is not a supported regular file")
 	}
 	f, err := root.Open(rel)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	body, err := io.ReadAll(io.LimitReader(f, maxDroidHistoryBytes+1))
-	if err != nil {
-		return nil, err
+	info, err = f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errors.New("droid: conversation is not a supported regular file")
 	}
-	if len(body) > maxDroidHistoryBytes {
-		return nil, errors.New("droid: conversation exceeds import limit")
-	}
-	return body, ctx.Err()
+	return f, nil
 }
 
 func droidTranscriptName(rel string) bool {
@@ -76,9 +100,35 @@ func droidTranscriptName(rel string) bool {
 // validateDroidHistory checks native identity/schema and a real prompt, while
 // preserving tool payloads, compaction state and message ancestry verbatim.
 func validateDroidHistory(body []byte, id, cwd string) error {
+	return validateDroidHistoryReader(context.Background(), bytes.NewReader(body), id, cwd)
+}
+
+// Preserve line delimiters for the receipt's byte-exact prefix hash. Bound
+// individual records, not the total length of a conversation that keeps growing.
+func droidHistoryScanner(reader io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64<<10), maxDroidHistoryBytes+1)
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			return i + 1, data[:i+1], nil
+		}
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	return scanner
+}
+
+func validateDroidHistoryReader(ctx context.Context, reader io.Reader, id, cwd string) error {
 	starts, messages := 0, 0
 	prompted := false
-	for line := range bytes.SplitSeq(body, []byte("\n")) {
+	scanner := droidHistoryScanner(reader)
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		line := scanner.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
@@ -121,6 +171,12 @@ func validateDroidHistory(body []byte, id, cwd string) error {
 				}
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("droid: read native history record: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if starts != 1 || messages == 0 || !prompted {
 		return errors.New("droid: no continuable native history")

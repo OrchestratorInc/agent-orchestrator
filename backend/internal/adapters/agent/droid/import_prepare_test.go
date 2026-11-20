@@ -1,6 +1,8 @@
 package droid
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -337,5 +339,88 @@ func TestImportedDroidRestoreRefusesMissingHistoryWrongWorkspaceAndProfile(t *te
 				t.Fatal("unsafe reopen accepted")
 			}
 		})
+	}
+}
+
+func TestImportedDroidRestoreAllowsHistoryToGrowBeyondSourceLimit(t *testing.T) {
+	p, r, source := importFixture(t)
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(ref.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(ref.TranscriptPath, os.O_RDWR|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := bufio.NewWriter(f)
+	record := []byte(`{"type":"message","id":"later","message":{"role":"assistant","content":"` + strings.Repeat("x", 16<<10) + "\"}}\n")
+	for size := len(original); size <= maxDroidHistoryBytes; size += len(record) {
+		if _, err := writer.Write(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(ref.TranscriptPath)
+	if err != nil || info.Size() <= maxDroidHistoryBytes {
+		t.Fatalf("fixture did not cross source limit: %v %v", info, err)
+	}
+	if _, err := ReadNativeHistory(context.Background(), ref.ConfigDir, ref.TranscriptPath); err == nil {
+		t.Fatal("source import size cap was removed")
+	}
+	cfg := ports.RestoreConfig{DataDir: r.DataDir, Env: r.Env, Session: ports.SessionRef{WorkspacePath: r.LaunchCWD, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: ref.NativeSessionID, ports.MetadataKeyImportConfigDir: ref.ConfigDir}}}
+	if _, ok, err := p.GetRestoreCommand(context.Background(), cfg); err != nil || !ok {
+		t.Fatalf("grown history could not reopen: %v %v", ok, err)
+	}
+	exists, err := p.NativeConversationExists(context.Background(), ports.SessionRef{DataDir: r.DataDir, WorkspacePath: r.LaunchCWD, Metadata: cfg.Session.Metadata}, ref.NativeSessionID, r.Env)
+	if err != nil || !exists {
+		t.Fatalf("grown history failed preflight: %v %v", exists, err)
+	}
+	for _, kind := range []string{"header", "prefix", "appended record"} {
+		t.Run(kind, func(t *testing.T) {
+			f, err := os.OpenFile(ref.TranscriptPath, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = f.Close() }()
+			defer func() {
+				if _, err := f.WriteAt(original, 0); err != nil {
+					t.Error(err)
+				}
+				if err := f.Truncate(info.Size()); err != nil {
+					t.Error(err)
+				}
+			}()
+			var offset int64
+			change := []byte("!")
+			switch kind {
+			case "header":
+				offset = int64(bytes.Index(original, []byte(`"version":2`)) + len(`"version":`))
+				change = []byte("3")
+			case "prefix":
+				offset = int64(bytes.Index(original, []byte("remember marker")))
+			case "appended record":
+				offset = info.Size()
+				change = []byte("{broken\n")
+			}
+			if _, err := f.WriteAt(change, offset); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := p.GetRestoreCommand(context.Background(), cfg); err == nil {
+				t.Fatal("invalid grown history accepted")
+			}
+		})
+	}
+	got, err := os.ReadFile(r.TranscriptPath)
+	if err != nil || !bytes.Equal(got, source) {
+		t.Fatalf("source changed: %v", err)
 	}
 }

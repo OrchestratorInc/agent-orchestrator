@@ -3,9 +3,12 @@ package droid
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,10 +271,11 @@ func readDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (dro
 	if json.Unmarshal(body, &r) != nil || r.TargetID != id || r.ConfigDir != config || r.CWD != cwd || r.PrefixBytes <= 0 || r.PrefixBytes > maxDroidHistoryBytes {
 		return r, errors.New("droid: prepared import binding mismatch")
 	}
-	data, err := ReadNativeHistory(ctx, config, r.Path)
+	f, err := openDroidHistory(ctx, config, r.Path)
 	if err != nil {
 		return r, err
 	}
+	defer func() { _ = f.Close() }()
 	resolved, found, err := New().LocateTranscript(ctx, ports.NativeSessionRef{ConfigDir: config, NativeSessionID: id})
 	if err != nil {
 		return r, err
@@ -279,11 +283,30 @@ func readDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (dro
 	if !found || resolved != r.Path {
 		return r, errors.New("droid: native resolver differs from prepared conversation")
 	}
-	start := bytes.IndexByte(data, '\n') + 1
-	if start == 0 || len(data)-start < r.PrefixBytes || NativeHistoryFingerprint(data[start:start+r.PrefixBytes]) != r.PrefixHash {
+	header := droidHistoryScanner(f)
+	if !header.Scan() {
+		if err := header.Err(); err != nil {
+			return r, err
+		}
+		return r, errors.New("droid: incomplete native history")
+	}
+	line := header.Bytes()
+	if len(line) == 0 || line[len(line)-1] != '\n' {
+		return r, errors.New("droid: incomplete native history")
+	}
+	// Only the imported payload is pinned. Hash it in bounded chunks, then
+	// validate every record, including later turns, without a total-size cap.
+	hash := sha256.New()
+	if _, err := io.CopyN(hash, io.NewSectionReader(f, int64(len(line)), int64(r.PrefixBytes)), int64(r.PrefixBytes)); err != nil {
+		return r, fmt.Errorf("droid: incomplete prepared native history: %w", err)
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != r.PrefixHash {
 		return r, errors.New("droid: prepared native history changed or is incomplete")
 	}
-	if err := validateDroidHistory(data, id, cwd); err != nil {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return r, err
+	}
+	if err := validateDroidHistoryReader(ctx, f, id, cwd); err != nil {
 		return r, err
 	}
 	return r, nil
