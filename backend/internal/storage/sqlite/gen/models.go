@@ -836,6 +836,7 @@ type Session struct {
 	DisplayNameExplicit              bool
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string
+	CardSummary                      string
 }
 
 type SessionAgentAccount struct {

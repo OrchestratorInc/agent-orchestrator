@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -132,5 +133,32 @@ func TestCreateShowsEachReportedArtifactAfterTheReportIsStored(t *testing.T) {
 		SessionID: "ao-7", Outputs: []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "report.html"}},
 	}); err == nil || len(calls) != 0 {
 		t.Fatalf("unknown session: err = %v, recorded %q", err, calls)
+	}
+}
+
+type cardSummaryRecorder struct{ filed []domain.ReportRecord }
+
+func (r *cardSummaryRecorder) ReportFiled(report domain.ReportRecord) {
+	r.filed = append(r.filed, report)
+}
+
+// Every stored report, of any state, goes on to the card summarizer; a rejected
+// one does not.
+func TestCreatePassesEveryStoredReportToCardSummaries(t *testing.T) {
+	st := &fakeStore{ok: true, session: domain.SessionRecord{ID: "ao-8", ProjectID: "ao", Kind: domain.KindWorker}}
+	summaries := &cardSummaryRecorder{}
+	ids := 0
+	svc := New(Deps{Store: st, CardSummaries: summaries, NewID: func() string { ids++; return fmt.Sprintf("rpt_%d", ids) }})
+	ctx := context.Background()
+	for _, state := range []domain.ReportState{domain.ReportCheckpoint, domain.ReportDone} {
+		if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: state, Note: "note"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: domain.ReportDone}); err == nil {
+		t.Fatal("a done report without a note was accepted")
+	}
+	if len(summaries.filed) != 2 || summaries.filed[0].State != domain.ReportCheckpoint || summaries.filed[1].State != domain.ReportDone {
+		t.Fatalf("filed = %+v, want the checkpoint then the done report", summaries.filed)
 	}
 }

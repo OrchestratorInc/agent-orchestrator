@@ -71,6 +71,11 @@ export type BoardSessionPresentation = {
 	plainSurface?: boolean;
 	title: string;
 	trackerIssueId?: string;
+	/**
+	 * The agent's one-line summary, printed verbatim beneath the branch on full
+	 * cards. Absent until the agent sets one and while card summaries are off.
+	 */
+	summary?: string;
 	updatedAt: string;
 	lastUserMessageAt?: string;
 };
@@ -476,6 +481,11 @@ export function SessionCardView({
 				) : showBranch ? (
 					<div className={cn("flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground", still ? "mt-1" : "mt-1.5")}>
 						{branchRow}
+					</div>
+				) : null}
+				{!compact && session.summary ? (
+					<div className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground" data-testid="board-session-summary">
+						{session.summary}
 					</div>
 				) : null}
 				{compact && pullRequestProgressLabel ? (

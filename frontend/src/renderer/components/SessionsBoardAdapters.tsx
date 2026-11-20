@@ -35,6 +35,7 @@ import { canonicalTrackerIssueId, sessionDeliverables } from "../types/workspace
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
+import { useCardSummariesEnabled } from "../lib/card-summaries";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
@@ -61,6 +62,8 @@ import { SessionOwnerTag } from "./SessionOwnerTag";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
+	/** Card summaries are a Developer Mode preview; off, the card prints none. */
+	showSummary = false,
 ): BoardSessionPresentation {
 	const provisioningStatus =
 		session.provisionState === "provisioning"
@@ -102,6 +105,7 @@ export function toBoardSessionPresentation(
 		statusPresentation: provisioningStatus ?? failedStartStatus ?? importStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
+		summary: showSummary ? session.summary : undefined,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt,
 	};
@@ -287,6 +291,8 @@ function DesktopSessionCard({
 		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId, live);
+	const showSummary = useCardSummariesEnabled();
+	const presentation = toBoardSessionPresentation(session, showSummary);
 	// Archiving is the owner workspace's; a guest's archive would always be refused.
 	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
@@ -425,8 +431,8 @@ function DesktopSessionCard({
 			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
 			session={
 				hideTerminatedStatus
-					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
-					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
+					? hideTerminatedCardStatus(presentation)
+					: withSharedWorkStatus(presentation, participants, me, t)
 			}
 			selected={selected}
 			still={still}

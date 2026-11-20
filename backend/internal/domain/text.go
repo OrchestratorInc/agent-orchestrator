@@ -24,3 +24,35 @@ func SanitizeControlChars(s string) string {
 		return r
 	}, s)
 }
+
+// MaxCardSummaryRunes bounds the one-line summary on a worker's card.
+const MaxCardSummaryRunes = 200
+
+// cleanCardSummary drops control characters and collapses whitespace to single
+// spaces. Bidi overrides and zero-width characters can make a card read
+// differently from what it says, so they go too.
+func cleanCardSummary(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+			return -1
+		}
+		return r
+	}, SanitizeControlChars(s))
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// CardSummaryFromNote turns free text, such as a worker's report note or a
+// model's rewrite of one, into a card summary: one clean line, cut at a word
+// boundary and marked with an ellipsis when it is longer than
+// MaxCardSummaryRunes.
+func CardSummaryFromNote(note string) string {
+	runes := []rune(cleanCardSummary(note))
+	if len(runes) <= MaxCardSummaryRunes {
+		return string(runes)
+	}
+	cut := string(runes[:MaxCardSummaryRunes-1])
+	if i := strings.LastIndex(cut, " "); i > 0 {
+		cut = cut[:i]
+	}
+	return strings.TrimRight(cut, " ,;:-") + "…"
+}

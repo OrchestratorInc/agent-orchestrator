@@ -188,6 +188,8 @@ ao report --done --note "Focused tests passed"
 
 `ao report` must run in a worker environment that provides `AO_SESSION_ID`.
 
+With Card summaries on (a Developer Mode preview in Settings), a light model rewrites each report's note as a one-line summary on the worker's board card. A card changes at most once a minute; `--done`, `--needs-input` and `--stuck` reports always go through.
+
 ## Pull requests and reviews
 
 | Command | Purpose |

@@ -48,7 +48,12 @@ type Snapshot struct {
 	// default, keeps it.
 	SessionRetentionDays int
 	AccountHandoff       bool
-	UpdatedAt            time.Time
+	// CardSummaries turns worker reports into a one-line summary on the
+	// worker's kanban card. It lives in memory and is off on every daemon
+	// start: the desktop app turns it on while Developer Mode and its Card
+	// summaries toggle are both on.
+	CardSummaries bool
+	UpdatedAt     time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -103,6 +108,7 @@ type Service struct {
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
+	cardSummaries   atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
@@ -135,6 +141,7 @@ func (s *Service) Offering() Offering {
 func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
+	snapshot.CardSummaries = s.cardSummaries.Load()
 	if err == nil {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
 	}
@@ -213,6 +220,17 @@ func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, e
 	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err
 	}
+	return s.Get(ctx)
+}
+
+// CardSummariesEnabled reports whether worker reports become kanban card
+// summaries. Off on every daemon start until the desktop app turns it on.
+func (s *Service) CardSummariesEnabled(context.Context) bool { return s.cardSummaries.Load() }
+
+// SetCardSummaries changes the in-memory card summaries gate. It applies to
+// the next report of every worker, running or new.
+func (s *Service) SetCardSummaries(ctx context.Context, enabled bool) (Snapshot, error) {
+	s.cardSummaries.Store(enabled)
 	return s.Get(ctx)
 }
 

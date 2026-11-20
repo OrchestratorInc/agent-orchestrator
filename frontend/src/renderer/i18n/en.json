@@ -1975,6 +1975,8 @@
 	"settings.splitPanesHint": "Drag a tab to an edge of the center pane to show it beside the current one. When you ask, agents in your sessions can also split panes and run commands in terminals.",
 	"settings.prView": "PR view",
 	"settings.prViewHint": "Open a pull request in its own tab, with its description, comments, checks and stack.",
+	"settings.cardSummaries": "Card summaries",
+	"settings.cardSummariesHint": "A light model turns each worker report into a one-line summary on the worker's card.",
 	"settings.chromeAgents.label": "Use agents in my Chrome",
 	"settings.chromeAgents.hint": "Let agents browse in your own Chrome, signed in as you. Set it up in Browser settings.",
 	"settings.chromeAgents.goTo": "Go to",

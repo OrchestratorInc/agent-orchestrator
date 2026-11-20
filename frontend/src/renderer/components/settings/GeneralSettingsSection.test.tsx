@@ -28,6 +28,7 @@ vi.mock("./CliLinkSettingsRow", () => ({ CliLinkSettings: () => null }));
 
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { TooltipProvider } from "../ui/tooltip";
+import { useUiStore } from "../../stores/ui-store";
 
 function renderSection() {
 	render(
@@ -83,5 +84,26 @@ describe("archived session retention", () => {
 		renderSection();
 
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
+	});
+});
+
+describe("card summaries", () => {
+	beforeEach(() => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.setState({ cardSummaries: false });
+	});
+
+	it("shows an off toggle only in Developer mode, and Developer mode leaves it off", async () => {
+		useUiStore.setState({ developerMode: false });
+		renderSection();
+		expect(screen.queryByRole("switch", { name: "Card summaries" })).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = screen.getByRole("switch", { name: "Card summaries" });
+		expect(toggle).not.toBeChecked();
+		expect(useUiStore.getState().cardSummaries).toBe(false);
+
+		await userEvent.click(toggle);
+		expect(useUiStore.getState().cardSummaries).toBe(true);
 	});
 });

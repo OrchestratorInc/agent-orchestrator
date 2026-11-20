@@ -165,6 +165,23 @@ func TestComputerUseToggle(t *testing.T) {
 	}
 }
 
+// Card summaries are an in-memory Developer Mode gate: off on every daemon
+// start, and on or off for the next spawn without touching the store.
+func TestCardSummariesToggle(t *testing.T) {
+	ctx := context.Background()
+	svc := New(&hibernationSettingsStore{}, nil, Offering{}, nil)
+	if svc.CardSummariesEnabled(ctx) {
+		t.Fatal("card summaries are on at daemon start")
+	}
+	snapshot, err := svc.SetCardSummaries(ctx, true)
+	if err != nil || !snapshot.CardSummaries || !svc.CardSummariesEnabled(ctx) {
+		t.Fatalf("after enabling: snapshot=%+v err=%v", snapshot, err)
+	}
+	if snapshot, err := svc.SetCardSummaries(ctx, false); err != nil || snapshot.CardSummaries || svc.CardSummariesEnabled(ctx) {
+		t.Fatalf("after disabling: snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
 // Turning computer use on needs Cua Driver installed, whatever client asks;
 // turning it off always works.
 func TestComputerUseNeedsCuaDriverToTurnOn(t *testing.T) {
