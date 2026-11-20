@@ -33,6 +33,77 @@ func textBlock(text string) acpsdk.ContentBlock {
 	return acpsdk.ContentBlock{Text: &acpsdk.ContentBlockText{Text: text}}
 }
 
+func TestACPDroppedSegmentCompletionsRemainEligibleForTurnSettlement(t *testing.T) {
+	conv := replayConversation()
+	conv.messages = map[string]string{"assistant-turn": "message"}
+	conv.thoughts = map[string]string{"thought-turn": "reasoning"}
+	conv.settledItems = make(map[string]bool)
+	conv.openMessageID = "assistant-turn"
+	conv.openThoughtID = "thought-turn"
+
+	conv.eventMu.Lock()
+	conv.eventsClosed = true
+	conv.eventMu.Unlock()
+	conv.mu.Lock()
+	closed := conv.closeIDLessSegmentsLocked()
+	conv.mu.Unlock()
+	conv.emitClosedSegments("turn", closed.messageID, closed.messageText,
+		closed.thoughtID, closed.thoughtText, conv.emit)
+
+	conv.mu.Lock()
+	if conv.settledItems[closed.messageID] || conv.settledItems[closed.thoughtID] {
+		conv.mu.Unlock()
+		t.Fatal("undelivered segment completions were marked settled")
+	}
+	conv.mu.Unlock()
+
+	conv.eventMu.Lock()
+	conv.eventsClosed = false
+	conv.eventMu.Unlock()
+	conv.settleOpenItems("turn")
+	got := []ports.ChatEvent{<-conv.events, <-conv.events}
+	if got[0].Kind != ports.ChatEventMessageCompleted || got[0].Text != "message" ||
+		got[1].Kind != ports.ChatEventActivityCompleted || got[1].Text != "reasoning" {
+		t.Fatalf("terminal events = %#v, want the full message and reasoning completions", got)
+	}
+
+	conv.settleOpenItems("turn")
+	if len(conv.events) != 0 {
+		t.Fatalf("repeated settlement emitted duplicate completions: %d", len(conv.events))
+	}
+}
+
+func TestACPAcceptedPromptSteerClosesIDLessSegments(t *testing.T) {
+	conv := replayConversation()
+	conv.activeTurn = "turn"
+	conv.messages = map[string]string{"assistant-turn": "before steer"}
+	conv.thoughts = map[string]string{"thought-turn": "before steer thought"}
+	conv.settledItems = make(map[string]bool)
+	conv.openMessageID = "assistant-turn"
+	conv.openThoughtID = "thought-turn"
+
+	conv.mu.Lock()
+	closed := conv.steerTookLocked(&promptSteer{turn: "turn", result: make(chan error, 1)})
+	conv.mu.Unlock()
+	conv.emitClosedSegments("turn", closed.messageID, closed.messageText,
+		closed.thoughtID, closed.thoughtText, conv.emit)
+
+	if closed.messageID != "assistant-turn" || closed.thoughtID != "thought-turn" {
+		t.Fatalf("closed segments = %+v, want both open segments", closed)
+	}
+	nextMessage, _ := segmentedMessageID(nil, "assistant", "turn", conv.messageSegment)
+	nextThought, _ := segmentedMessageID(nil, "thought", "turn", conv.thoughtSegment)
+	if nextMessage == closed.messageID || nextThought == closed.thoughtID {
+		t.Fatalf("post-steer segments reused IDs: message=%q thought=%q", nextMessage, nextThought)
+	}
+	if got := <-conv.events; got.Kind != ports.ChatEventMessageCompleted || got.Text != "before steer" {
+		t.Fatalf("message completion = %+v", got)
+	}
+	if got := <-conv.events; got.Kind != ports.ChatEventActivityCompleted || got.Text != "before steer thought" {
+		t.Fatalf("thought completion = %+v", got)
+	}
+}
+
 func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
 	const preamble = "Standing instructions from Agent Orchestrator:\n<ao_standing_instructions>rules</ao_standing_instructions>"
 	conv := replayConversation()
@@ -497,6 +568,134 @@ func TestACPReplayAbortDiscardsRawUpdates(t *testing.T) {
 		if event.Delta == "discard" {
 			t.Fatal("aborted update imported on retry")
 		}
+	}
+}
+
+func TestACPReplayDrainSegmentsIDLessProseAcrossTools(t *testing.T) {
+	replay := func() []ports.ChatEvent {
+		conv := replayConversation()
+		conv.beginHistoryReplay("session-1")
+
+		completed := acpsdk.ToolCallStatusCompleted
+		updates := []acpsdk.SessionNotification{
+			replayUserChunk("session-1", "", "fix the bug"),
+			replayAgentChunk("session-1", "", "I'll inspect the files."),
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					ToolCall: &acpsdk.SessionUpdateToolCall{
+						ToolCallId: "t1",
+						Title:      "Inspect bug",
+						Kind:       acpsdk.ToolKindRead,
+						Status:     acpsdk.ToolCallStatusInProgress,
+					},
+				},
+			},
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+						ToolCallId: "t1",
+						Status:     &completed,
+					},
+				},
+			},
+			replayAgentChunk("session-1", "", "I found it. "),
+			replayAgentChunk("session-1", "", "Applying fix."),
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					Plan: &acpsdk.SessionUpdatePlan{
+						Entries: []acpsdk.PlanEntry{{Content: "Patch", Priority: acpsdk.PlanEntryPriorityMedium, Status: acpsdk.PlanEntryStatusCompleted}},
+					},
+				},
+			},
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					AgentThoughtChunk: &acpsdk.SessionUpdateAgentThoughtChunk{
+						Content: textBlock("Double checking."),
+					},
+				},
+			},
+			replayAgentChunk("session-1", "", "All fixed."),
+		}
+		for _, update := range updates {
+			if err := conv.SessionUpdate(context.Background(), update); err != nil {
+				t.Fatalf("SessionUpdate: %v", err)
+			}
+		}
+		if err := conv.drainAndFinishReplay(context.Background()); err != nil {
+			t.Fatalf("drainAndFinishReplay: %v", err)
+		}
+		history, err := conv.ReadHistory(context.Background())
+		if err != nil {
+			t.Fatalf("ReadHistory: %v", err)
+		}
+		return history
+	}
+
+	first := replay()
+	second := replay()
+	assertReplayHistoryEqual(t, first, second)
+
+	type step struct {
+		kind ports.ChatEventKind
+		text string
+	}
+	var got []step
+	var completedItems []string
+	seenEventIDs := map[string]bool{}
+	for _, ev := range first {
+		if ev.ProviderEventID == "" {
+			t.Fatalf("replayed event missing ProviderEventID: %+v", ev)
+		}
+		if seenEventIDs[ev.ProviderEventID] {
+			t.Fatalf("duplicate ProviderEventID %q on %+v", ev.ProviderEventID, ev)
+		}
+		seenEventIDs[ev.ProviderEventID] = true
+
+		switch ev.Kind {
+		case ports.ChatEventUserMessageCompleted, ports.ChatEventMessageCompleted:
+			if ev.Kind == ports.ChatEventMessageCompleted {
+				completedItems = append(completedItems, ev.ProviderItemID)
+			}
+			got = append(got, step{kind: ev.Kind, text: ev.Text})
+		case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted:
+			got = append(got, step{kind: ev.Kind, text: ev.Summary})
+		case ports.ChatEventPlanUpdated:
+			got = append(got, step{kind: ev.Kind})
+		case ports.ChatEventTurnStarted, ports.ChatEventTurnCompleted:
+			got = append(got, step{kind: ev.Kind})
+		}
+	}
+
+	want := []step{
+		{kind: ports.ChatEventTurnStarted},
+		{kind: ports.ChatEventUserMessageCompleted, text: "fix the bug"},
+		{kind: ports.ChatEventMessageCompleted, text: "I'll inspect the files."},
+		{kind: ports.ChatEventActivityStarted, text: "Inspect bug"},
+		{kind: ports.ChatEventActivityCompleted, text: "Inspect bug"},
+		{kind: ports.ChatEventMessageCompleted, text: "I found it. Applying fix."},
+		{kind: ports.ChatEventPlanUpdated},
+		{kind: ports.ChatEventActivityStarted, text: "Reasoning"},
+		{kind: ports.ChatEventActivityCompleted, text: "Reasoning"},
+		{kind: ports.ChatEventMessageCompleted, text: "All fixed."},
+		{kind: ports.ChatEventTurnCompleted},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("replayed steps = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("replayed step %d = %+v, want %+v (all=%+v)", i, got[i], want[i], got)
+		}
+	}
+	if len(completedItems) != 3 ||
+		completedItems[0] == completedItems[1] ||
+		completedItems[1] == completedItems[2] ||
+		completedItems[0] == completedItems[2] {
+		t.Fatalf("message item IDs were not distinct across segments: %v", completedItems)
 	}
 }
 

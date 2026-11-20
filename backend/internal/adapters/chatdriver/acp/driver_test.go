@@ -901,6 +901,8 @@ type legacyKimiAgent struct {
 	mu                 sync.Mutex
 	currentModel       string
 	availableModels    []legacyModelInfo
+	newConfig          []acpsdk.SessionConfigOption
+	options            map[string]string
 	rejectUnknownModel bool
 	model              string
 	modelCalls         int
@@ -964,7 +966,8 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 				}}
 			}
 			result = map[string]any{
-				"sessionId": "kimi-session-1",
+				"sessionId":     "kimi-session-1",
+				"configOptions": agent.newConfig,
 				"models": map[string]any{
 					"currentModelId":  currentModel,
 					"availableModels": availableModels,
@@ -1006,10 +1009,22 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 			agent.modeCalls++
 			agent.mu.Unlock()
 		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
 			agent.mu.Lock()
 			agent.configCalls++
+			if agent.newConfig != nil {
+				if agent.options == nil {
+					agent.options = map[string]string{}
+				}
+				agent.options[params.ConfigID] = params.Value
+			} else {
+				responseError = map[string]any{"code": -32601, "message": "Method not found"}
+			}
 			agent.mu.Unlock()
-			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		default:
 			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		}
@@ -6315,6 +6330,283 @@ func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
 				t.Fatalf("Hermes selected %q, want auto:model", agent.model)
 			}
 		})
+	}
+}
+
+func TestAgyCombinedModelUsesSeparateACPOptions(t *testing.T) {
+	agent := &legacyKimiAgent{currentModel: "gemini-4-argon-high", availableModels: []legacyModelInfo{
+		{ModelID: "gemini-4-argon-high", Name: "Gemini 4 Argon (High)"},
+		{ModelID: "gemini-3.8-flash-low", Name: "Gemini 3.8 Flash (Low)"},
+	}, newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-4-argon", "gemini-4-argon", "gemini-3.8-flash"),
+		selectConfigOption("thinking_level", "Thinking Level", "thought_level", "high", "low", "high"),
+	}}
+	driver := New(Config{Harness: domain.HarnessAgy, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }, SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+		return []SessionOption{{ID: "model", Value: settings.Model}}
+	}}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-low"})
+	if err != nil {
+		t.Fatalf("start with combined model: %v", err)
+	}
+	defer opened.Close()
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["model"] != "gemini-3.8-flash" || agent.options["thinking_level"] != "low" {
+		t.Fatalf("settings = %#v, want separate model and low thinking level", agent.options)
+	}
+}
+
+func TestAgyCombinedModelRejectsUnavailableChoice(t *testing.T) {
+	agent := &legacyKimiAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-4-argon", "gemini-4-argon"),
+		selectConfigOption("thinking_level", "Thinking Level", "thought_level", "high", "low", "high"),
+	}}
+	driver := New(Config{Harness: domain.HarnessAgy, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }, SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+		return []SessionOption{{ID: "model", Value: settings.Model}}
+	}}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: "gemini-unknown-low"})
+	if opened != nil {
+		defer opened.Close()
+	}
+	if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		t.Fatalf("start with unavailable model: %v, want invalid model", err)
+	}
+}
+
+func TestACPDriverSegmentsIDLessProseAcrossToolCallsAndPlans(t *testing.T) {
+	turnNumber := 0
+	agent := &fakeAgent{}
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		turnNumber++
+		send := func(update acpsdk.SessionUpdate) {
+			if err := agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+				SessionId: params.SessionId,
+				Update:    update,
+			}); err != nil {
+				t.Errorf("SessionUpdate: %v", err)
+			}
+		}
+		if turnNumber == 1 {
+			send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Let me inspect ")}})
+			send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("the repo.")}})
+			send(acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+				ToolCallId: "tool-1",
+				Title:      "Read file",
+				Kind:       acpsdk.ToolKindRead,
+				Status:     acpsdk.ToolCallStatusInProgress,
+			}})
+			send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Checking something else ")}})
+			send(acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+				ToolCallId: "tool-1",
+				Status:     pointer(acpsdk.ToolCallStatusInProgress),
+				Title:      pointer("Reading file"),
+			}})
+			send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("while tool runs.")}})
+			send(acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+				ToolCallId: "tool-1",
+				Status:     pointer(acpsdk.ToolCallStatusCompleted),
+			}})
+			send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Updating the plan.")}})
+			send(acpsdk.SessionUpdate{Plan: &acpsdk.SessionUpdatePlan{
+				Entries: []acpsdk.PlanEntry{{Content: "Step 1", Priority: acpsdk.PlanEntryPriorityMedium, Status: acpsdk.PlanEntryStatusInProgress}},
+			}})
+			send(acpsdk.SessionUpdate{AgentThoughtChunk: &acpsdk.SessionUpdateAgentThoughtChunk{Content: acpsdk.TextBlock("Thinking about next edit.")}})
+			send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Done.")}})
+		} else {
+			send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Second turn reply.")}})
+		}
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	collectTurnEvents := func(prompt string) (string, []ports.ChatEvent) {
+		t.Helper()
+		ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: prompt})
+		if err != nil {
+			t.Fatalf("SendTurn: %v", err)
+		}
+		if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			t.Fatalf("StartDeferredTurn: %v", err)
+		}
+		var out []ports.ChatEvent
+		for {
+			event := nextEvent(t, conv.Events())
+			out = append(out, event)
+			if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
+				return ref.ProviderTurnID, out
+			}
+		}
+	}
+
+	_ = nextEvent(t, conv.Events()) // initial controller.ready
+	turn1ID, events1 := collectTurnEvents("first")
+
+	type summaryEvent struct {
+		kind         ports.ChatEventKind
+		item         string
+		text         string
+		activityKind domain.ActivityKind
+	}
+	var got []summaryEvent
+	completedCount := map[string]int{}
+	for _, ev := range events1 {
+		switch ev.Kind {
+		case ports.ChatEventMessageDelta:
+			got = append(got, summaryEvent{kind: ev.Kind, item: ev.ProviderItemID, text: ev.Delta})
+		case ports.ChatEventMessageCompleted:
+			completedCount[ev.ProviderItemID]++
+			got = append(got, summaryEvent{kind: ev.Kind, item: ev.ProviderItemID, text: ev.Text})
+		case ports.ChatEventReasoningDelta:
+			got = append(got, summaryEvent{kind: ev.Kind, item: ev.ProviderItemID, text: ev.Delta})
+		case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted:
+			if ev.Kind == ports.ChatEventActivityCompleted && ev.ActivityKind == domain.ActivityKindReasoning {
+				completedCount[ev.ProviderItemID]++
+			}
+			got = append(got, summaryEvent{kind: ev.Kind, item: ev.ProviderItemID, text: ev.Text, activityKind: ev.ActivityKind})
+		case ports.ChatEventPlanUpdated:
+			got = append(got, summaryEvent{kind: ev.Kind})
+		}
+	}
+
+	want := []summaryEvent{
+		{kind: ports.ChatEventMessageDelta, item: "assistant-" + turn1ID, text: "Let me inspect "},
+		{kind: ports.ChatEventMessageDelta, item: "assistant-" + turn1ID, text: "the repo."},
+		{kind: ports.ChatEventMessageCompleted, item: "assistant-" + turn1ID, text: "Let me inspect the repo."},
+		{kind: ports.ChatEventActivityStarted, item: "tool-1", activityKind: domain.ActivityKindMCPTool},
+		{kind: ports.ChatEventMessageDelta, item: "assistant-" + turn1ID + "-1", text: "Checking something else "},
+		{kind: ports.ChatEventActivityStarted, item: "tool-1", activityKind: domain.ActivityKindMCPTool},
+		{kind: ports.ChatEventMessageDelta, item: "assistant-" + turn1ID + "-1", text: "while tool runs."},
+		{kind: ports.ChatEventMessageCompleted, item: "assistant-" + turn1ID + "-1", text: "Checking something else while tool runs."},
+		{kind: ports.ChatEventActivityCompleted, item: "tool-1", activityKind: domain.ActivityKindMCPTool},
+		{kind: ports.ChatEventMessageDelta, item: "assistant-" + turn1ID + "-2", text: "Updating the plan."},
+		{kind: ports.ChatEventMessageCompleted, item: "assistant-" + turn1ID + "-2", text: "Updating the plan."},
+		{kind: ports.ChatEventPlanUpdated},
+		{kind: ports.ChatEventActivityStarted, item: "thought-" + turn1ID, activityKind: domain.ActivityKindReasoning},
+		{kind: ports.ChatEventReasoningDelta, item: "thought-" + turn1ID, text: "Thinking about next edit."},
+		{kind: ports.ChatEventActivityCompleted, item: "thought-" + turn1ID, text: "Thinking about next edit.", activityKind: domain.ActivityKindReasoning},
+		{kind: ports.ChatEventMessageDelta, item: "assistant-" + turn1ID + "-3", text: "Done."},
+		{kind: ports.ChatEventMessageCompleted, item: "assistant-" + turn1ID + "-3", text: "Done."},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("turn 1 events:\ngot:  %#v\nwant: %#v", got, want)
+	}
+	for id, count := range completedCount {
+		if count != 1 {
+			t.Fatalf("item %q completed %d times, want 1", id, count)
+		}
+	}
+
+	turn2ID, events2 := collectTurnEvents("second")
+	var turn2Items []string
+	for _, ev := range events2 {
+		if ev.Kind == ports.ChatEventMessageCompleted {
+			turn2Items = append(turn2Items, ev.ProviderItemID)
+		}
+	}
+	if !reflect.DeepEqual(turn2Items, []string{"assistant-" + turn2ID}) {
+		t.Fatalf("turn 2 completed message items = %v, want reset to [assistant-%s]", turn2Items, turn2ID)
+	}
+}
+
+func TestACPDriverSegmentsIDLessThoughtsAcrossToolsAndKeepsIdentifiedRepliesWhole(t *testing.T) {
+	agent := &fakeAgent{}
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		send := func(update acpsdk.SessionUpdate) {
+			if err := agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+				SessionId: params.SessionId,
+				Update:    update,
+			}); err != nil {
+				t.Errorf("SessionUpdate: %v", err)
+			}
+		}
+		explicitID := "explicit-msg-1"
+		send(acpsdk.SessionUpdate{AgentThoughtChunk: &acpsdk.SessionUpdateAgentThoughtChunk{Content: acpsdk.TextBlock("First thought.")}})
+		send(acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+			ToolCallId: "tool-1",
+			Title:      "Run check",
+			Kind:       acpsdk.ToolKindExecute,
+			Status:     acpsdk.ToolCallStatusCompleted,
+		}})
+		send(acpsdk.SessionUpdate{AgentThoughtChunk: &acpsdk.SessionUpdateAgentThoughtChunk{Content: acpsdk.TextBlock("Second thought.")}})
+		send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{
+			MessageId: &explicitID,
+			Content:   acpsdk.TextBlock("Part A "),
+		}})
+		send(acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+			ToolCallId: "tool-2",
+			Title:      "Read output",
+			Kind:       acpsdk.ToolKindRead,
+			Status:     acpsdk.ToolCallStatusCompleted,
+		}})
+		send(acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{
+			MessageId: &explicitID,
+			Content:   acpsdk.TextBlock("Part B."),
+		}})
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+	_ = nextEvent(t, conv.Events())
+
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "go"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+
+	var completedThoughts []string
+	var completedMessages []ports.ChatEvent
+	for {
+		event := nextEvent(t, conv.Events())
+		switch event.Kind {
+		case ports.ChatEventActivityCompleted:
+			if event.ActivityKind == domain.ActivityKindReasoning {
+				completedThoughts = append(completedThoughts, event.ProviderItemID+"="+event.Text)
+			}
+		case ports.ChatEventMessageCompleted:
+			completedMessages = append(completedMessages, event)
+		}
+		if event.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+
+	wantThoughts := []string{
+		"thought-" + ref.ProviderTurnID + "=First thought.",
+		"thought-" + ref.ProviderTurnID + "-1=Second thought.",
+	}
+	if !reflect.DeepEqual(completedThoughts, wantThoughts) {
+		t.Fatalf("completed thoughts = %v, want %v", completedThoughts, wantThoughts)
+	}
+	if len(completedMessages) != 1 || completedMessages[0].ProviderItemID != "explicit-msg-1" || completedMessages[0].Text != "Part A Part B." {
+		t.Fatalf("identified message split unexpectedly: %#v", completedMessages)
 	}
 }
 

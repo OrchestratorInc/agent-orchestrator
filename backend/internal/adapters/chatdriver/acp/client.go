@@ -697,12 +697,12 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	sourceID := stableACPEventID(params.Meta)
 	sourceIndex := 0
-	emit := func(event ports.ChatEvent) {
+	emit := func(event ports.ChatEvent) bool {
 		if sourceID != "" {
 			event.ProviderEventID = fmt.Sprintf("%s:%d", sourceID, sourceIndex)
 			sourceIndex++
 		}
-		c.emit(event)
+		return c.emit(event)
 	}
 
 	update := params.Update
@@ -711,7 +711,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		update.ToolCall != nil ||
 		update.Plan != nil
 	if providerOutputResumed {
-		c.completeProviderFailure(turnID, emit)
+		c.completeProviderFailure(turnID, func(event ports.ChatEvent) { emit(event) })
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
@@ -722,7 +722,6 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
-		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
@@ -733,13 +732,11 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			break
 		}
 		parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta))
-		if parentID != "" {
-			// A steer goes to the parent turn, so a subagent's reply stays one message.
-			segment = 0
-		}
-		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, segment))
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
 			if parentID != "" {
+				// A steer or tool split goes to the parent turn, so a subagent's reply stays one message.
+				rawID, _ := segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, 0)
+				id := c.providerItemID(rawID)
 				c.mu.Lock()
 				item, existed := c.nestedMessages[id]
 				item.text += delta
@@ -757,24 +754,36 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 				break
 			}
 			c.mu.Lock()
+			closedThoughtID, closedThoughtText := c.closeIDLessThoughtLocked()
+			rawID, idless := segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, c.messageSegment)
+			id := c.providerItemID(rawID)
+			if idless {
+				c.openMessageID = id
+			}
 			c.messages[id] += delta
 			c.mu.Unlock()
+			c.emitClosedSegments(turnID, "", "", closedThoughtID, closedThoughtText, emit)
 			emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turnID, ProviderItemID: id, Delta: delta})
 		}
 	case update.AgentThoughtChunk != nil:
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
-		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			break
 		}
-		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", turnID, segment))
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
 			c.mu.Lock()
+			closedMsgID, closedMsgText := c.closeIDLessMessageLocked()
+			rawID, idless := segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", turnID, c.thoughtSegment)
+			id := c.providerItemID(rawID)
+			if idless {
+				c.openThoughtID = id
+			}
 			_, existed := c.thoughts[id]
 			c.thoughts[id] += delta
 			c.mu.Unlock()
+			c.emitClosedSegments(turnID, closedMsgID, closedMsgText, "", "", emit)
 			if !existed {
 				emit(ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: turnID,
 					ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
@@ -792,18 +801,30 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		}
 		c.mu.Lock()
 		c.tools[tool.id] = tool
+		closed := c.closeIDLessSegmentsLocked()
 		c.mu.Unlock()
+		c.emitClosedSegments(turnID, closed.messageID, closed.messageText, closed.thoughtID, closed.thoughtText, emit)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
-		c.emitDiffs(turnID, tool.id, tool.content, emit)
+		c.emitDiffs(turnID, tool.id, tool.content, func(event ports.ChatEvent) { emit(event) })
 	case update.ToolCallUpdate != nil:
-		tool := c.mergeToolUpdate(update.ToolCallUpdate)
+		tool, created := c.mergeToolUpdate(update.ToolCallUpdate)
+		if created || toolTerminal(tool.status) {
+			c.mu.Lock()
+			closed := c.closeIDLessSegmentsLocked()
+			c.mu.Unlock()
+			c.emitClosedSegments(turnID, closed.messageID, closed.messageText, closed.thoughtID, closed.thoughtText, emit)
+		}
 		if delta := terminalOutput(update.ToolCallUpdate.Meta); delta != "" {
 			emit(ports.ChatEvent{Kind: ports.ChatEventCommandOutputDelta, ProviderTurnID: turnID,
 				ProviderItemID: c.providerItemID(tool.id), Delta: delta})
 		}
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
-		c.emitDiffs(turnID, tool.id, tool.content, emit)
+		c.emitDiffs(turnID, tool.id, tool.content, func(event ports.ChatEvent) { emit(event) })
 	case update.Plan != nil:
+		c.mu.Lock()
+		closed := c.closeIDLessSegmentsLocked()
+		c.mu.Unlock()
+		c.emitClosedSegments(turnID, closed.messageID, closed.messageText, closed.thoughtID, closed.thoughtText, emit)
 		plan := normalizePlan(update.Plan.Entries)
 		plan.SpansTurns = c.plansSpanTurns
 		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
@@ -852,6 +873,52 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	return nil
 }
 
+func (c *conversation) emitClosedSegments(
+	turnID, msgID, msgText, thoughtID, thoughtText string,
+	emit func(ports.ChatEvent) bool,
+) {
+	c.itemSettlementMu.Lock()
+	defer c.itemSettlementMu.Unlock()
+	if msgID != "" {
+		c.mu.Lock()
+		settled := c.settledItems[msgID]
+		c.mu.Unlock()
+		if !settled && emit(ports.ChatEvent{
+			Kind:           ports.ChatEventMessageCompleted,
+			ProviderTurnID: turnID,
+			ProviderItemID: msgID,
+			Text:           msgText,
+		}) {
+			c.markItemSettled(msgID)
+		}
+	}
+	if thoughtID != "" {
+		c.mu.Lock()
+		settled := c.settledItems[thoughtID]
+		c.mu.Unlock()
+		if !settled && emit(ports.ChatEvent{
+			Kind:           ports.ChatEventActivityCompleted,
+			ProviderTurnID: turnID,
+			ProviderItemID: thoughtID,
+			ActivityKind:   domain.ActivityKindReasoning,
+			ActivityStatus: domain.ActivityStatusCompleted,
+			Summary:        "Reasoning",
+			Text:           thoughtText,
+		}) {
+			c.markItemSettled(thoughtID)
+		}
+	}
+}
+
+func (c *conversation) markItemSettled(id string) {
+	c.mu.Lock()
+	if c.settledItems == nil {
+		c.settledItems = make(map[string]bool)
+	}
+	c.settledItems[id] = true
+	c.mu.Unlock()
+}
+
 func stableACPEventID(meta map[string]any) string {
 	eventID, _ := meta[persistenthost.ACPEventIDMetaKey].(string)
 	return strings.TrimSpace(eventID)
@@ -864,26 +931,27 @@ func contentText(content acpsdk.ContentBlock) string {
 	return content.Text.Text
 }
 
-// segmentedMessageID names a streamed message. An agent that sends no message
-// id streams the whole turn as one message, so each steer the turn takes starts
-// a new one: otherwise the reply written after the steer would grow the message
-// that sits above it in the timeline.
-func segmentedMessageID(id *string, prefix, turnID string, segment int) string {
+// segmentedMessageID names a streamed message or thought item. An agent that
+// sends no message id streams chunks without a stable boundary, so each steer,
+// tool call, plan, or message/thought switch starts a new segment instead of
+// folding later prose back into the item above it in the timeline.
+func segmentedMessageID(id *string, prefix, turnID string, segment int) (string, bool) {
 	if id != nil && *id != "" {
-		return *id
+		return *id, false
 	}
 	if segment > 0 {
-		return fmt.Sprintf("%s-%s-%d", prefix, turnID, segment)
+		return fmt.Sprintf("%s-%s-%d", prefix, turnID, segment), true
 	}
-	return prefix + "-" + turnID
+	return prefix + "-" + turnID, true
 }
 
-func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) *toolState {
+func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) (*toolState, bool) {
 	id := string(update.ToolCallId)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tool := c.tools[id]
-	if tool == nil {
+	created := tool == nil
+	if created {
 		tool = &toolState{id: id}
 		c.tools[id] = tool
 	}
@@ -913,7 +981,7 @@ func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) *to
 		tool.terminalOutput += delta
 	}
 	snapshot := *tool
-	return &snapshot
+	return &snapshot, created
 }
 
 func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool) ports.ChatEvent {

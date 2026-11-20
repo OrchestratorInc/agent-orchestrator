@@ -156,10 +156,15 @@ type conversation struct {
 	stopAttempts int
 	// nudging is set while a drain nudge is in flight; see steerByDrain.
 	nudging atomic.Bool
-	// steerSegment counts steers the running turn has taken. Text the agent
-	// streams without a message id after one goes to a new message, so it
-	// renders after the steer instead of growing the reply above it.
-	steerSegment int
+	// messageSegment and thoughtSegment split ID-less prose across tool calls,
+	// plans, thought/message transitions, and steers so interleaved output stays
+	// ordered in the timeline instead of concatenating into a single item.
+	messageSegment int
+	openMessageID  string
+	thoughtSegment int
+	openThoughtID  string
+	settledItems   map[string]bool
+	steerSegment   int
 	// turnCtx is the running turn's context. A SteerPrompt steer runs its prompt
 	// under it, so cancelling the turn reaches every prompt in it.
 	turnCtx context.Context
@@ -261,11 +266,12 @@ type conversation struct {
 
 	claudeRejectedLimits map[string]time.Time
 
-	eventMu      sync.RWMutex
-	events       chan ports.ChatEvent
-	eventsClosed bool
-	closeOnce    sync.Once
-	closing      chan struct{}
+	eventMu          sync.RWMutex
+	itemSettlementMu sync.Mutex
+	events           chan ports.ChatEvent
+	eventsClosed     bool
+	closeOnce        sync.Once
+	closing          chan struct{}
 
 	historyMu     sync.Mutex
 	history       *historyCapture
@@ -553,11 +559,7 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 			c.compactingTurnID = providerTurnID
 			c.compactionBefore = c.contextTokens
 		}
-		c.messages = make(map[string]string)
-		c.steerSegment = 0
-		c.thoughts = make(map[string]string)
-		c.nestedMessages = make(map[string]nestedMessageState)
-		c.tools = make(map[string]*toolState)
+		c.resetTurnItemsLocked()
 	}
 	c.mu.Unlock()
 	c.proc.gate.Open()
@@ -630,6 +632,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	// Prefer the modern selector when an agent (such as Grok) also advertises
 	// legacy models, matching SetConfigOption and preserving rebuilt catalogs.
 	legacyModel := c.legacyModel && !c.modelConfigOption
+	modelConfigOption := c.modelConfigOption
 	legacyMode := c.legacyMode
 	configOptions := cloneConfigOptions(c.configOptions)
 	c.mu.Unlock()
@@ -644,6 +647,34 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	var options []SessionOption
 	if optionsFor != nil {
 		options = optionsFor(settings)
+	}
+	// Agy advertises legacy model-effort IDs alongside modern separate model
+	// and thinking-level options. Translate only combinations the live catalog
+	// confirms; preserve unknown values for the normal validation error.
+	if c.harness == domain.HarnessAgy && modelConfigOption {
+		for i := range options {
+			if options[i].ID != "model" || options[i].Value == "" {
+				continue
+			}
+			base, effort := "", ""
+			for _, level := range []string{"minimal", "low", "medium", "high", "xhigh"} {
+				if candidate, ok := strings.CutSuffix(options[i].Value, "-"+level); ok {
+					base, effort = candidate, level
+					break
+				}
+			}
+			if effort != "" {
+				modelOffered, _ := c.configOptionOffers("model", base)
+				effortOffered, _ := c.configOptionOffers("thinking_level", effort)
+				if modelOffered && effortOffered {
+					options[i].Value = base
+					options = append(options, SessionOption{ID: "thinking_level", Value: effort})
+				}
+			}
+			if offered, known := c.configOptionOffers("model", options[i].Value); known && !offered {
+				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, options[i].Value)
+			}
+		}
 	}
 	// A setting the session already has is skipped (some agents take seconds
 	// per change) unless session/set_model made the list stale.
@@ -855,11 +886,7 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.resetPromptSteeringLocked()
 	c.outstanding = map[int]bool{0: true}
 	sessionID := c.sessionID
-	c.messages = make(map[string]string)
-	c.steerSegment = 0
-	c.thoughts = make(map[string]string)
-	c.nestedMessages = make(map[string]nestedMessageState)
-	c.tools = make(map[string]*toolState)
+	c.resetTurnItemsLocked()
 	c.turnDiffs = nil
 	c.turnDiffTurnID = ""
 	c.providerFailure = nil
@@ -1156,11 +1183,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
-	c.messages = make(map[string]string)
-	c.steerSegment = 0
-	c.thoughts = make(map[string]string)
-	c.nestedMessages = make(map[string]nestedMessageState)
-	c.tools = make(map[string]*toolState)
+	c.resetTurnItemsLocked()
 	c.turnDiffs = nil
 	c.turnDiffTurnID = ""
 	c.providerFailure = nil
@@ -1541,45 +1564,106 @@ func (c *conversation) watchConnection() {
 	c.eventMu.Unlock()
 }
 
-func (c *conversation) emit(event ports.ChatEvent) {
+func (c *conversation) emit(event ports.ChatEvent) bool {
 	if c.captureHistoryEvent(event) {
-		return
+		return true
 	}
 	c.eventMu.RLock()
 	defer c.eventMu.RUnlock()
 	if c.eventsClosed {
-		return
+		return false
 	}
 	if c.proc != nil && c.proc.terminate != nil {
 		// Host-journaled frames must reach durable projection; dropping one here
 		// would make a successful replay look exactly-once while losing content.
 		select {
 		case c.events <- event:
+			return true
 		case <-c.conn.Done():
+			return false
 		case <-c.closing:
+			return false
 		}
-		return
 	}
 	select {
 	case c.events <- event:
-		return
+		return true
 	default:
 	}
 	if event.Kind == ports.ChatEventMessageDelta || event.Kind == ports.ChatEventReasoningDelta {
 		c.log.Warn("dropped ACP chat delta: consumer behind", "kind", event.Kind, "item", event.ProviderItemID)
-		return
+		return false
 	}
 	select {
 	case c.events <- event:
+		return true
 	case <-time.After(5 * time.Second):
 		c.log.Error("dropped ACP lifecycle event: consumer stalled", "kind", event.Kind)
+		return false
+	}
+}
+
+func (c *conversation) resetTurnItemsLocked() {
+	c.messages = make(map[string]string)
+	c.thoughts = make(map[string]string)
+	c.settledItems = make(map[string]bool)
+	c.messageSegment = 0
+	c.openMessageID = ""
+	c.thoughtSegment = 0
+	c.openThoughtID = ""
+	c.steerSegment = 0
+	c.nestedMessages = make(map[string]nestedMessageState)
+	c.tools = make(map[string]*toolState)
+}
+
+func (c *conversation) closeIDLessMessageLocked() (string, string) {
+	if c.openMessageID == "" {
+		return "", ""
+	}
+	id := c.openMessageID
+	text := c.messages[id]
+	c.openMessageID = ""
+	c.messageSegment++
+	return id, text
+}
+
+func (c *conversation) closeIDLessThoughtLocked() (string, string) {
+	if c.openThoughtID == "" {
+		return "", ""
+	}
+	id := c.openThoughtID
+	text := c.thoughts[id]
+	c.openThoughtID = ""
+	c.thoughtSegment++
+	return id, text
+}
+
+type closedIDLessSegments struct {
+	messageID   string
+	messageText string
+	thoughtID   string
+	thoughtText string
+}
+
+func (c *conversation) closeIDLessSegmentsLocked() closedIDLessSegments {
+	msgID, msgText := c.closeIDLessMessageLocked()
+	thoughtID, thoughtText := c.closeIDLessThoughtLocked()
+	return closedIDLessSegments{
+		messageID: msgID, messageText: msgText,
+		thoughtID: thoughtID, thoughtText: thoughtText,
 	}
 }
 
 func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+	c.itemSettlementMu.Lock()
+	defer c.itemSettlementMu.Unlock()
 	c.mu.Lock()
 	messages := c.messages
 	thoughts := c.thoughts
+	settledItems := make(map[string]bool, len(c.settledItems))
+	for id, settled := range c.settledItems {
+		settledItems[id] = settled
+	}
 	nestedMessages := c.nestedMessages
 	tools := c.tools
 	c.mu.Unlock()
@@ -1590,15 +1674,25 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	}
 	messageIDs := sortedKeys(messages)
 	for _, id := range messageIDs {
+		if settledItems[id] {
+			continue
+		}
 		text := messages[id]
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turnID, ProviderItemID: id, Text: text})
+		if c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turnID, ProviderItemID: id, Text: text}) {
+			c.markItemSettled(id)
+		}
 	}
 	thoughtIDs := sortedKeys(thoughts)
 	for _, id := range thoughtIDs {
+		if settledItems[id] {
+			continue
+		}
 		text := thoughts[id]
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
+		if c.emit(ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
 			ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
-			ActivityStatus: activityStatus, Summary: "Reasoning", Text: text})
+			ActivityStatus: activityStatus, Summary: "Reasoning", Text: text}) {
+			c.markItemSettled(id)
+		}
 	}
 	nestedIDs := sortedKeys(nestedMessages)
 	for _, id := range nestedIDs {

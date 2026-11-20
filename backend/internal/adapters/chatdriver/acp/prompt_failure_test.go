@@ -237,7 +237,7 @@ func TestPromptFailureLetsTurnSettlementCloseActiveRetry(t *testing.T) {
 				t.Fatal("missing retry activity")
 			}
 			if tc.recovered {
-				conv.completeProviderFailure("turn-1", conv.emit)
+				conv.completeProviderFailure("turn-1", func(event ports.ChatEvent) { conv.emit(event) })
 			}
 			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: testPromptFailureMeta(map[string]any{
 				"id": "failure-1", "severity": "error", "title": "Provider unavailable",
@@ -293,7 +293,7 @@ func TestRetryEpisodesKeepRecoveredDiagnosticsAndReplayIdentity(t *testing.T) {
 		meta := testPromptFailureMeta(map[string]any{"id": "reused-incident", "severity": "warning", "title": "Retrying"})
 		first, _ := conv.sessionFailureEvent("turn-1", "host:1", meta)
 		attempt, _ := conv.sessionFailureEvent("turn-1", "host:2", meta)
-		conv.completeProviderFailure("turn-1", conv.emit)
+		conv.completeProviderFailure("turn-1", func(event ports.ChatEvent) { conv.emit(event) })
 		second, _ := conv.sessionFailureEvent("turn-1", "host:4", meta)
 		if first.ProviderItemID != "session-failure:host:1" || attempt.ProviderItemID != first.ProviderItemID || second.ProviderItemID != "session-failure:host:4" {
 			t.Fatalf("episode identities: first=%q attempt=%q second=%q", first.ProviderItemID, attempt.ProviderItemID, second.ProviderItemID)

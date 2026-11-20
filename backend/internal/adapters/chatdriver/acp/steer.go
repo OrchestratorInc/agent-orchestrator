@@ -323,11 +323,15 @@ func (c *conversation) steerByRequest(
 	}
 	switch outcome {
 	case SteerInjected:
+		var closed closedIDLessSegments
 		c.mu.Lock()
 		if c.activeTurn == providerTurnID {
 			c.steerSegment++
+			closed = c.closeIDLessSegmentsLocked()
 		}
 		c.mu.Unlock()
+		c.emitClosedSegments(providerTurnID, closed.messageID, closed.messageText,
+			closed.thoughtID, closed.thoughtText, c.emit)
 		return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
 	case SteerNoRunningTurn:
 		return ports.ChatTurnRef{}, ports.ErrChatNoSteerableTurn
@@ -446,14 +450,16 @@ type promptSteer struct {
 // segment in the same critical section, as a drain does. Text the agent
 // streams without a message id from here on then renders after the steer,
 // even if it arrives before Steer has returned. Callers must hold c.mu.
-func (c *conversation) steerTookLocked(w *promptSteer) {
+func (c *conversation) steerTookLocked(w *promptSteer) closedIDLessSegments {
 	if w.settled {
-		return
+		return closedIDLessSegments{}
 	}
 	w.settle(nil)
 	if c.activeTurn == w.turn {
 		c.steerSegment++
+		return c.closeIDLessSegmentsLocked()
 	}
+	return closedIDLessSegments{}
 }
 
 func (w *promptSteer) settle(err error) {
@@ -673,6 +679,7 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		}
 		return
 	}
+	var closedSegments []closedIDLessSegments
 	delete(c.outstanding, seq)
 	answer := promptAnswer{resp: resp, err: err}
 	c.lastAnswer = &answer
@@ -708,13 +715,13 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		case w.seq == seq && cancelled:
 			w.settle(errSteerCancelled) // stopped before the agent acted on it
 		case w.seq == seq && !acknowledged:
-			c.steerTookLocked(w) // it ran inside this turn
+			closedSegments = append(closedSegments, c.steerTookLocked(w)) // it ran inside this turn
 		case w.seq == seq && !w.awaitingAck:
 			// The acknowledgement can trail the answer; let it decide.
 			w.awaitingAck = true
 			go c.awaitSteerAck(w)
 		case w.seq == handoffTo:
-			c.steerTookLocked(w) // the earlier prompt handed the work on to it
+			closedSegments = append(closedSegments, c.steerTookLocked(w)) // the earlier prompt handed the work on to it
 		}
 	}
 	final, done := c.turnEndLocked(turnID)
@@ -729,6 +736,10 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		go c.finishAfterStragglers(turnID, c.turnResult, wait)
 	}
 	c.mu.Unlock()
+	for _, closed := range closedSegments {
+		c.emitClosedSegments(turnID, closed.messageID, closed.messageText,
+			closed.thoughtID, closed.thoughtText, c.emit)
+	}
 	if done {
 		c.finishPrompt(turnID, final.resp, final.err)
 	} else if err != nil && !lostSession {
@@ -832,18 +843,23 @@ func (c *conversation) adoptedPromptHandoff(answer promptAnswer) {
 		return // a cancelled answer hands nothing on, as in finishTurnPrompt
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.activeTurn == "" || !c.adoptedPrompt || c.steering.prompt == nil || c.steering.prompt.Ack != nil {
 		// An acknowledging agent says itself whether a steer took.
+		c.mu.Unlock()
 		return
 	}
 	// The adopted prompt came before every prompt this attachment sent.
 	next := c.nextOutstandingLocked(adoptedPromptSeq)
+	var closed closedIDLessSegments
 	for _, w := range c.promptSteers {
 		if w.turn == c.activeTurn && w.seq == next {
-			c.steerTookLocked(w)
+			closed = c.steerTookLocked(w)
 		}
 	}
+	turnID := c.activeTurn
+	c.mu.Unlock()
+	c.emitClosedSegments(turnID, closed.messageID, closed.messageText,
+		closed.thoughtID, closed.thoughtText, c.emit)
 }
 
 // errSteerDeclined marks guidance the agent acknowledged but did not take.
@@ -869,11 +885,12 @@ func (c *conversation) steerAcknowledgement(turnID, text string) bool {
 		return false
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.activeTurn != turnID || c.promptSeq == 0 {
 		// Only a turn that sent a steer prompt hides the acknowledgement.
+		c.mu.Unlock()
 		return false
 	}
+	var closed closedIDLessSegments
 	for _, w := range c.promptSteers {
 		if w.turn != turnID || w.ackKnown || w.settled {
 			continue // a steer the agent refused outright sends no note
@@ -883,10 +900,13 @@ func (c *conversation) steerAcknowledgement(turnID, text string) bool {
 		if declined != nil {
 			w.settle(fmt.Errorf("%w: %w", errSteerDeclined, declined))
 		} else {
-			c.steerTookLocked(w)
+			closed = c.steerTookLocked(w)
 		}
 		break
 	}
+	c.mu.Unlock()
+	c.emitClosedSegments(turnID, closed.messageID, closed.messageText,
+		closed.thoughtID, closed.thoughtText, c.emit)
 	return true
 }
 
@@ -970,6 +990,7 @@ func (c *conversation) collectSteers(params json.RawMessage) any {
 	texts := []string{}
 	c.mu.Lock()
 	drain := c.steering.drain
+	turnID := c.activeTurn
 	ownSession := request.SessionID == "" ||
 		request.SessionID == c.sessionID || request.SessionID == c.reportedSessionID
 	if ownSession {
@@ -985,7 +1006,13 @@ func (c *conversation) collectSteers(params json.RawMessage) any {
 			c.steerSegment++
 		}
 	}
+	var closed closedIDLessSegments
+	if len(texts) > 0 {
+		closed = c.closeIDLessSegmentsLocked()
+	}
 	c.mu.Unlock()
+	c.emitClosedSegments(turnID, closed.messageID, closed.messageText,
+		closed.thoughtID, closed.thoughtText, c.emit)
 	return drain.Response(texts)
 }
 
