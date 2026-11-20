@@ -743,16 +743,24 @@ export function ArtifactPathCode({ text, children, unlisted = children }: { text
 
 function InlineSessionReference({ id, node, fallback }: { id: string; node?: HastElement; fallback: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
-	let target: { href: string; title: string } | undefined;
-	for (const workspace of workspaces) {
-		const session = workspace.sessions.find((entry) => entry.id === id);
-		if (!session) continue;
-		if (target) return <>{fallback}</>;
-		target = { href: `ao://sessions/${encodeURIComponent(workspace.id)}/${encodeURIComponent(id)}`, title: session.title || id };
-	}
-	return target
-		? <SessionLabelLink href={target.href}><span {...excerptElementProps(node)} data-excerpt-kind="inline-code">{target.title}</span></SessionLabelLink>
-		: <>{fallback}</>;
+	const target = useMemo(() => {
+		let match: { href: string; title: string } | undefined;
+		for (const workspace of workspaces) {
+			const session = workspace.sessions.find((entry) => entry.id === id);
+			if (!session) continue;
+			if (match) return undefined;
+			match = { href: `ao://sessions/${encodeURIComponent(workspace.id)}/${encodeURIComponent(id)}`, title: session.title || id };
+		}
+		return match;
+	}, [workspaces, id]);
+	const href = target?.href;
+	const title = target?.title;
+	return useMemo(() => {
+		if (!href) return fallback;
+		// A displayed title represents the entire source token when quoted.
+		const mapping = title === id ? { "data-excerpt-kind": "inline-code" } : { "data-excerpt-block": "" };
+		return <SessionLabelLink href={href}><span {...excerptElementProps(node)} {...mapping}>{title}</span></SessionLabelLink>;
+	}, [href, title, id, fallback, node]);
 }
 
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {

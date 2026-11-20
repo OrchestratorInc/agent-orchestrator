@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as appLinks from "../AppLink";
+import { captureExcerptSnapshot } from "../../lib/chat-excerpt-snapshot";
 import { aoBridge } from "../../lib/bridge";
 import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "../../lib/chat-find";
 import { setApiBaseUrl } from "../../lib/api-client";
@@ -502,6 +504,44 @@ describe("ChatMarkdown", () => {
 		await screen.findByTestId("session-link-preview");
 		await userEvent.click(link);
 		expect(open).toHaveBeenCalledWith("ao://sessions/project/worker-94");
+	});
+
+	it("updates a late or renamed session title and skips rendering the link on unrelated refreshes", () => {
+		const message = <ChatMarkdown text="Ask `worker-94`." />;
+		const open = vi.fn();
+		const chat = () => <ChatLinkProvider onSessionLinkOpen={open}>{message}</ChatLinkProvider>;
+		const view = renderWithQueries(chat());
+		expect(screen.getByText("worker-94").tagName).toBe("CODE");
+		const refresh = (title: string) => {
+			linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title }] }];
+			view.rerender(chat());
+		};
+		const renderLink = vi.spyOn(appLinks, "AppLink");
+		try {
+			refresh("Trace session sharing");
+			expect(screen.getByRole("link")).toHaveTextContent("Trace session sharing");
+			const renders = renderLink.mock.calls.length;
+			expect(renders).toBeGreaterThan(0);
+			refresh("Trace session sharing");
+			expect(renderLink).toHaveBeenCalledTimes(renders);
+			refresh("Review sharing");
+			expect(screen.getByRole("link")).toHaveTextContent("Review sharing");
+		} finally {
+			renderLink.mockRestore();
+		}
+	});
+
+	it("quotes a selection inside a session title using the original worker token", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		const source = "Ask `worker-94` for an update.";
+		const { container } = renderWithSessionLinkHandler(source, vi.fn());
+		const label = screen.getByText("Trace session sharing").firstChild!;
+		const range = document.createRange();
+		range.setStart(label, 6);
+		range.setEnd(label, 13);
+		const quote = captureExcerptSnapshot(container, range, source);
+		expect(quote.text).toBe("session");
+		expect(quote.snapshot.rawText).toBe("`worker-94`");
 	});
 
 	it("requires an explicit session link in safe-origin content", () => {
