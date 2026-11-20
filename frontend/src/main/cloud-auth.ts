@@ -1040,6 +1040,10 @@ export function installCloudIPC(
   // Runs before an explicit sign-out completes, so its effects are durable even
   // if the app quits right after.
   onSignedOut: () => Promise<void> = async () => undefined,
+  // The environment agent CLIs run with: the recovered login-shell PATH and
+  // SHELL, and the daemon's data dir. A browser provider login finds the agent
+  // CLI with it, the way the daemon does.
+  agentCliEnv: () => Promise<NodeJS.ProcessEnv> = async () => process.env,
 ): void {
   notifyRenderersFn = notifyRenderers;
   ipcMain.handle("cloud:getSession", () => getCloudSessionCached(getDataDir()));
@@ -1107,7 +1111,8 @@ export function installCloudIPC(
     activeProviderAuthAbort = new AbortController();
     let credential;
     try {
-      credential = await providerAuthFlow(provider).authenticate(dataDir, activeProviderAuthAbort.signal);
+      const signal = activeProviderAuthAbort.signal;
+      credential = await providerAuthFlow(provider).authenticate(dataDir, signal, await agentCliEnv());
     } finally {
       activeProviderAuthAbort = null;
     }

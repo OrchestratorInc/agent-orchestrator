@@ -8,6 +8,7 @@ import {
 	findCodexAuthFile,
 	firstExecutable,
 	readClaudeOAuthTokenFromDir,
+	resolveProviderBinary,
 } from "./provider-auth-flow";
 
 // firstExecutable is the core of the GUI-launched-app PATH fix: it must locate an
@@ -57,6 +58,49 @@ describe("firstExecutable", () => {
 			await chmod(bin, 0o755);
 		}
 		expect(await firstExecutable("codex", ["", first, first, second])).toBe(path.join(first, "codex"));
+	});
+});
+
+// The cloud browser login must find the agent CLI wherever the daemon finds
+// it: AO's managed launcher first, then the login-shell PATH the desktop
+// recovered at startup, which a Finder/Dock launch's own PATH lacks.
+describe.skipIf(process.platform === "win32")("resolveProviderBinary", () => {
+	const dirs: string[] = [];
+
+	afterEach(async () => {
+		await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
+		dirs.length = 0;
+	});
+
+	async function tempDir(): Promise<string> {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-provider-bin-"));
+		dirs.push(dir);
+		return dir;
+	}
+
+	async function executable(dir: string, name: string): Promise<string> {
+		await mkdir(dir, { recursive: true });
+		const bin = path.join(dir, name);
+		await writeFile(bin, "#!/bin/sh\n");
+		await chmod(bin, 0o755);
+		return bin;
+	}
+
+	it("finds a CLI on the recovered shell PATH", async () => {
+		const shellBin = await tempDir();
+		const bin = await executable(shellBin, "ao-test-agent");
+		const resolved = await resolveProviderBinary("ao-test-agent", { PATH: shellBin });
+		expect(resolved?.path).toBe(bin);
+		expect(resolved?.pathEnv.split(path.delimiter)).toContain(shellBin);
+	});
+
+	it("prefers AO's managed launcher over a PATH copy, as the daemon does", async () => {
+		const dataDir = await tempDir();
+		const shellBin = await tempDir();
+		await executable(shellBin, "ao-test-agent");
+		const managed = await executable(path.join(dataDir, "harnesses", "bin"), "ao-test-agent");
+		const resolved = await resolveProviderBinary("ao-test-agent", { PATH: shellBin, AO_DATA_DIR: dataDir });
+		expect(resolved?.path).toBe(managed);
 	});
 });
 
