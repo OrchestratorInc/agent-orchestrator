@@ -199,6 +199,8 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			setProjectsError(null);
 			return true;
 		} catch (cause) {
+			// A newer read already answered: this failure is out of date too.
+			if (readId < appliedProjectRead.current) return true;
 			if (own === generation.current) setProjectsError(cloudErrorMessage(cause));
 			fail(cause, own);
 			return false;

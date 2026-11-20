@@ -160,6 +160,17 @@ describe("CloudProvider", () => {
 		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
 	});
 
+	it("ignores the failure of a project read that lands after a newer one succeeded", async () => {
+		await mount();
+		const failA: Array<(cause: unknown) => void> = [];
+		fixtures.client.listProjects.mockImplementation(() => new Promise((_resolve, reject) => { failA.push(reject); }));
+		const readA = latest!.refreshProjects();
+		fixtures.client.listProjects.mockImplementation(async (orgId: string) => page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshProjects(); await flush(); });
+		await act(async () => { failA.forEach((reject) => reject(new Error("offline"))); await readA; await flush(); });
+		expect(latest).toMatchObject({ projectsError: null, error: null, projects: [{ id: "a-p" }] });
+	});
+
 	it("reads the projects again when a polled session names one it hasn't read, once per project", async () => {
 		await mount();
 		const reads = () => fixtures.client.listProjects.mock.calls.length;
