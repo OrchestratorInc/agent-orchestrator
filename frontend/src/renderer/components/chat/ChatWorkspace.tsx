@@ -7614,9 +7614,10 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	}
 
 	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
-	if (!conversation) return groups.flatMap(splitAtSteers);
-	return groups.flatMap((group) =>
-		splitAtSteers(group)
+	const parts = groups.flatMap((group) => {
+		const segments = splitAtSteers(group);
+		if (!conversation) return segments;
+		return segments
 			.map((segment) => withSubagentSteps(segment, conversation))
 			// A part made only of steps that moved under a launch elsewhere has nothing
 			// left to draw. A live one keeps its Working row, and one whose turn did not
@@ -7624,8 +7625,49 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 			.filter((segment) =>
 				segment.live
 				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
-				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
-	);
+				|| segment.items.some((item) => !conversation.stepIds.has(item.id)));
+	});
+	return inDrawOrder(parts, groups, byTurn);
+}
+
+/**
+ * The parts of every turn in the order they happened. A part sorts by its first row, so
+ * a steer's part lands below a turn that ran beside the steered one, such as a Codex
+ * subagent's. A queued prompt is recorded when it is sent but runs later, so a turn also
+ * sorts no earlier than the last row of every turn that ended before it started.
+ */
+function inDrawOrder(parts: TimelineGroup[], turns: readonly TimelineGroup[], byTurn: ReadonlyMap<string, ConversationTurn>): TimelineGroup[] {
+	const time = (turnId: string | undefined, field: "startedAt" | "completedAt") =>
+		Date.parse((turnId && byTurn.get(turnId)?.[field]) || "");
+	const ended = turns
+		.map((turn) => {
+			const last = turn.items.at(-1)!.sequence;
+			return { at: time(turn.turnId, "completedAt"), startedAt: time(turn.turnId, "startedAt"), last, lastSoFar: last };
+		})
+		.filter(({ at, startedAt }) => Number.isFinite(at) && !(startedAt > at))
+		.sort((a, b) => a.at - b.at);
+	for (let index = 1; index < ended.length; index += 1) ended[index]!.lastSoFar = Math.max(ended[index]!.last, ended[index - 1]!.lastSoFar);
+	const position = (part: TimelineGroup) => {
+		const startedAt = time(part.turnId, "startedAt");
+		let low = 0;
+		let high = ended.length;
+		while (low < high) {
+			const middle = (low + high) >> 1;
+			if (ended[middle]!.at < startedAt) low = middle + 1;
+			else high = middle;
+		}
+		let before = ended[low - 1]?.lastSoFar ?? -Infinity;
+		// Timestamps parse to the millisecond, so a turn that ended as this one started
+		// still ran first if it started earlier. That also leaves this turn out.
+		for (let index = low; ended[index]?.at === startedAt; index += 1) {
+			if (ended[index]!.startedAt < startedAt) before = Math.max(before, ended[index]!.last);
+		}
+		return before > part.anchor ? before + 0.001 : part.anchor;
+	};
+	return parts
+		.map((part) => ({ part, at: position(part) }))
+		.sort((a, b) => a.at - b.at)
+		.map(({ part }) => part);
 }
 
 type ConversationSubagents = {
@@ -7725,7 +7767,8 @@ function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
 		return {
 			key,
 			turnId: group.turnId,
-			anchor: first.sequence,
+			// The first part keeps where the turn began, which may be above the loaded history.
+			anchor: index === 0 ? group.anchor : first.sequence,
 			items,
 			outcome: {
 				state: "completed" as const,
