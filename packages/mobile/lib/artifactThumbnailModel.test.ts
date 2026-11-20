@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cachedThumbnailText, THUMBNAIL_MUTE_SCRIPT, THUMBNAIL_PAGE_HEAD, THUMBNAIL_PAGE_WIDTH, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
+import { cachedThumbnailText, THUMBNAIL_PAGE_WIDTH, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
 
 describe("thumbnailScale", () => {
 	it("fits the preview page width into the card", () => {
@@ -9,29 +9,11 @@ describe("thumbnailScale", () => {
 });
 
 describe("thumbnailPageHtml", () => {
-	const rule = THUMBNAIL_PAGE_HEAD;
+	const rule = "<style>html{overflow:hidden!important}</style>";
 
-	it("hides the scrollbars and mutes media from the head", () => {
-		expect(rule).toContain("<style>html{overflow:hidden!important}</style>");
-		expect(rule).toContain(`<script>${THUMBNAIL_MUTE_SCRIPT}</script>`);
+	it("hides the scrollbars from the head", () => {
 		expect(thumbnailPageHtml("<!doctype html><html><head><title>x</title></head><body>b</body></html>"))
 			.toBe(`<!doctype html><html><head>${rule}<title>x</title></head><body>b</body></html>`);
-	});
-
-	it("mutes a card's video and audio as they load, play, or are unmuted", () => {
-		const listeners = new Map<string, { handler: (event: { target: unknown }) => void; capture: unknown }>();
-		const document = { addEventListener: (name: string, handler: (event: { target: unknown }) => void, capture: unknown) => listeners.set(name, { handler, capture }) };
-		new Function("document", THUMBNAIL_MUTE_SCRIPT)(document);
-		expect([...listeners.keys()]).toEqual(["loadstart", "play", "volumechange"]);
-		// Media events don't bubble: only a capture listener at the document sees them.
-		for (const { capture } of listeners.values()) expect(capture).toBe(true);
-		for (const name of listeners.keys()) {
-			const video = { tagName: "VIDEO", muted: false };
-			const audio = { tagName: "AUDIO", muted: false };
-			const image = { tagName: "IMG", muted: false };
-			for (const target of [video, audio, image]) listeners.get(name)!.handler({ target });
-			expect([video.muted, audio.muted, image.muted]).toEqual([true, true, false]);
-		}
 	});
 
 	it("falls back to <html>, then to after the doctype, never before it", () => {
