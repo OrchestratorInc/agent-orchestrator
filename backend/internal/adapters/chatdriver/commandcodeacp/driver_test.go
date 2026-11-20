@@ -2,6 +2,7 @@ package commandcodeacp
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -261,4 +263,59 @@ func (stubPlugin) ResolveBinary(context.Context) (string, error) { return "comma
 
 func (stubPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
 	return ports.AgentAuthStatusAuthorized, nil
+}
+
+// This exercises the real ACP configure callback, before a provider process can
+// start or best-effort history migration can reseed the removed private copy.
+func TestConfigureImportedHistoryCannotBeReseeded(t *testing.T) {
+	for _, broken := range []string{"missing", "corrupt", "profile-removed"} {
+		t.Run(broken, func(t *testing.T) {
+			home, cwd, data := t.TempDir(), t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			root := filepath.Join(home, ".commandcode")
+			id := "11111111-2222-4333-8444-555555555555"
+			source := filepath.Join(root, "projects", "source", id+".jsonl")
+			if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			header, err := json.Marshal(map[string]any{"type": "session", "version": 3, "id": id, "cwd": cwd, "timestamp": "2026-11-18T00:00:00Z"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := string(header) + "\n" + `{"type":"message","id":"u","parentId":null,"timestamp":"2026-11-18T00:00:00Z","message":{"role":"user","content":"synthetic"}}` + "\n"
+			if err := os.WriteFile(source, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ref, err := commandcode.New().PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, LaunchCWD: cwd, DataDir: data, Chat: true, Env: map[string]string{"AO_SESSION_ID": "imported"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := acpdriver.LaunchConfig{DataDir: data, SessionID: "imported", ProviderConversationID: id, WorkspacePath: cwd}
+			if _, _, err := configure(context.Background(), cfg); err != nil {
+				t.Fatalf("valid imported copy refused: %v", err)
+			}
+			switch broken {
+			case "missing":
+				err = os.Remove(ref.TranscriptPath)
+			case "corrupt":
+				err = os.WriteFile(ref.TranscriptPath, []byte("corrupt native history"), 0o600)
+			case "profile-removed":
+				err = os.RemoveAll(commandcode.SessionHomeDir(data, "imported"))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := configure(context.Background(), cfg); err == nil {
+				t.Fatal("invalid imported history reached native ACP launch")
+			}
+			if got, err := os.ReadFile(source); err != nil || string(got) != body {
+				t.Fatalf("original history changed: %v", err)
+			}
+			got, readErr := os.ReadFile(ref.TranscriptPath)
+			if broken == "corrupt" && (readErr != nil || string(got) != "corrupt native history") || broken != "corrupt" && !os.IsNotExist(readErr) {
+				t.Fatalf("private history was reseeded: %q %v", got, readErr)
+			}
+		})
+	}
 }
