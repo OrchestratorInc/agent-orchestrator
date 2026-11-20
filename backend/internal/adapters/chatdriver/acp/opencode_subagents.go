@@ -62,8 +62,9 @@ type openCodeChildUpdate struct {
 // openCodeSubagents is what the conversation knows about OpenCode 2 children.
 // It outlives turns, as the children do, and is guarded by conversation.mu.
 type openCodeSubagents struct {
-	// launchTurn is the provider turn each launch was made in, which its child's
-	// steps join. A launch a child made takes the turn of the child's own launch.
+	// launchTurn is the provider turn each launch was made in. A child's edits
+	// count in that turn's diff while it runs. A launch a child made takes the
+	// turn of the child's own launch.
 	launchTurn map[string]string
 	// inflight holds launches that started but have not named their child.
 	inflight map[string]struct{}
@@ -85,7 +86,8 @@ type openCodeSubagents struct {
 	lastSaid map[string]string
 }
 
-type childMessage struct{ id, text string }
+// childMessage is what a child is saying, and the launch it was saying it for.
+type childMessage struct{ id, text, launch string }
 
 func (c *conversation) subagentsLocked() *openCodeSubagents {
 	if c.subagents == nil {
@@ -174,9 +176,11 @@ func (c *conversation) observeSubagentLaunch(turnID string, tool *toolState, emi
 		if _, known := s.launchTurn[tool.id]; !known {
 			s.launchTurn[tool.id] = turnID
 		}
-		// A follow-up names its child in the input; a new child is named by the result.
-		child := stringField(tool.rawInput, "sessionID")
-		if child == "" {
+		// The result names the child, a new one or the one a follow-up went to. Only
+		// an accepted call moves the child's work to it: a rejected follow-up names
+		// its child in the input too, but the child stays with the launch it has.
+		child := ""
+		if tool.status == acpsdk.ToolCallStatusCompleted {
 			child = stringField(nestedMap(asMap(tool.rawOutput), "metadata"), "sessionID")
 		}
 		switch {
@@ -282,11 +286,10 @@ func (c *conversation) applyChildUpdate(update openCodeChildUpdate) {
 	c.mu.Lock()
 	s := c.subagentsLocked()
 	launch, placed := s.launchOf[update.ChildSessionID]
-	turn := s.launchTurn[launch]
 	c.mu.Unlock()
 	if update.Type == "status" {
 		if placed {
-			c.childEnded(update, launch, turn)
+			c.childEnded(update, launch)
 		}
 		return
 	}
@@ -306,14 +309,18 @@ func (c *conversation) applyChildUpdate(update openCodeChildUpdate) {
 		}
 		return
 	}
-	c.childStep(update, sessionUpdate, launch, turn)
+	c.childStep(update, sessionUpdate, launch)
 }
 
 // childStep turns what a child did into a step under its launch. Only its tool
 // calls and what it says are steps: its plan, usage and session details describe
 // the child's session, and applied here they would replace the parent's. Its
 // reasoning is left out, as Claude's subagent reasoning is.
-func (c *conversation) childStep(update openCodeChildUpdate, sessionUpdate acpsdk.SessionUpdate, launch, turn string) {
+//
+// A child's steps carry no turn. The child runs on its own clock, and filed on
+// the parent's turn, a step still running when that turn ends would be settled
+// with it. The renderer reads a child's steps across the whole conversation.
+func (c *conversation) childStep(update openCodeChildUpdate, sessionUpdate acpsdk.SessionUpdate, launch string) {
 	emit := c.sourceEmitter(stableACPEventID(update.Meta))
 	child := update.ChildSessionID
 	switch {
@@ -329,7 +336,11 @@ func (c *conversation) childStep(update openCodeChildUpdate, sessionUpdate acpsd
 			mergeToolState(s.tools, sessionUpdate.ToolCallUpdate)
 		}
 		stored := s.tools[id]
-		stored.parentID = launch
+		if stored.parentID == "" {
+			// A step stays with the launch it began under, even if a follow-up
+			// takes the child before it ends.
+			stored.parentID = launch
+		}
 		// OpenCode prefixes each of a child's tool titles with the child's title,
 		// which the launch already shows.
 		if update.Title != "" {
@@ -340,9 +351,10 @@ func (c *conversation) childStep(update openCodeChildUpdate, sessionUpdate acpsd
 		if toolTerminal(tool.status) {
 			delete(s.tools, id)
 		}
+		turn := s.launchTurn[stored.parentID]
 		activeTurn := c.activeTurn
 		c.mu.Unlock()
-		emit(c.toolEvent(turn, tool, toolTerminal(tool.status)))
+		emit(c.toolEvent("", tool, toolTerminal(tool.status)))
 		if turn != "" && turn == activeTurn {
 			// A turn's diff only counts edits made while it runs.
 			c.emitDiffs(turn, tool.id, tool.content, emit)
@@ -370,7 +382,7 @@ func (c *conversation) childStep(update openCodeChildUpdate, sessionUpdate acpsd
 		message := previous
 		if started {
 			// A new message finishes the one before it.
-			message = childMessage{id: id}
+			message = childMessage{id: id, launch: launch}
 			if previous.id != "" {
 				s.lastSaid[child] = strings.TrimSpace(previous.text)
 			}
@@ -379,20 +391,20 @@ func (c *conversation) childStep(update openCodeChildUpdate, sessionUpdate acpsd
 		s.open[child] = message
 		c.mu.Unlock()
 		if started && previous.id != "" {
-			emit(c.childMessageEvent(turn, launch, previous, true))
+			emit(c.childMessageEvent(previous, true))
 		}
 		if started {
-			emit(c.childMessageEvent(turn, launch, message, false))
+			emit(c.childMessageEvent(message, false))
 		}
-		emit(ports.ChatEvent{Kind: ports.ChatEventActivityText, ProviderTurnID: turn, ProviderItemID: id, Delta: delta})
+		emit(ports.ChatEvent{Kind: ports.ChatEventActivityText, ProviderItemID: id, Delta: delta})
 	}
 }
 
 // childMessageEvent opens or completes one thing a child said.
-func (c *conversation) childMessageEvent(turn, launch string, message childMessage, completed bool) ports.ChatEvent {
-	detail, _ := json.Marshal(map[string]any{"parentProviderItemId": c.providerItemID(launch), "nestedAgent": true})
+func (c *conversation) childMessageEvent(message childMessage, completed bool) ports.ChatEvent {
+	detail, _ := json.Marshal(map[string]any{"parentProviderItemId": c.providerItemID(message.launch), "nestedAgent": true})
 	event := ports.ChatEvent{
-		Kind: ports.ChatEventActivityStarted, ProviderTurnID: turn, ProviderItemID: message.id,
+		Kind: ports.ChatEventActivityStarted, ProviderItemID: message.id,
 		ActivityKind: domain.ActivityKindMCPTool, ActivityStatus: domain.ActivityStatusRunning,
 		Summary: "Subagent response", Detail: detail,
 	}
@@ -406,7 +418,7 @@ func (c *conversation) childMessageEvent(turn, launch string, message childMessa
 
 // childEnded writes the child's report when its run ends: what it said last, or
 // why it failed.
-func (c *conversation) childEnded(update openCodeChildUpdate, launch, turn string) {
+func (c *conversation) childEnded(update openCodeChildUpdate, launch string) {
 	var status domain.ActivityStatus
 	switch update.Status {
 	case "completed":
@@ -431,12 +443,12 @@ func (c *conversation) childEnded(update openCodeChildUpdate, launch, turn strin
 	delete(s.lastSaid, child)
 	c.mu.Unlock()
 	if streaming {
-		emit(c.childMessageEvent(turn, launch, open, true))
+		emit(c.childMessageEvent(open, true))
 	}
 	if status == domain.ActivityStatusFailed && update.Error != nil && strings.TrimSpace(update.Error.Message) != "" {
 		report = strings.TrimSpace(update.Error.Message)
 	}
-	emit(c.handbackEvent(turn, launch, status, report))
+	emit(c.handbackEvent("", launch, status, report))
 }
 
 // handbackEvent is a child's report to the launch that started it.

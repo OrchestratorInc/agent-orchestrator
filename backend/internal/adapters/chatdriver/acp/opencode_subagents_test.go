@@ -161,21 +161,22 @@ func TestOpenCodeV2SubagentFilesChildWorkUnderItsLaunch(t *testing.T) {
 	}
 	step := nextActivity(t, conv)
 	if step.Kind != ports.ChatEventActivityStarted || step.ProviderItemID != "ses_child:call_read" ||
-		step.ProviderTurnID != "turn-1" || step.Summary != "read" {
+		step.ProviderTurnID != "" || step.Summary != "read" {
 		t.Fatalf("child step = %#v", step)
 	}
 	if detail := detailOf(t, step); detail["parentProviderItemId"] != "call_launch" {
 		t.Fatalf("child step detail = %#v", detail)
 	}
 
-	// The parent's turn ends; the child keeps working and its steps still join it.
+	// A child's steps carry no turn, so the parent's turn ending cannot settle
+	// them; the child keeps working after it.
 	setActiveTurn(conv, "")
 	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update", "update": map[string]any{
 		"sessionUpdate": "agent_message_chunk", "messageId": "msg_1",
 		"content": map[string]any{"type": "text", "text": "Found 3 tests."},
 	}})
 	said := nextActivity(t, conv)
-	if detail := detailOf(t, said); said.Kind != ports.ChatEventActivityStarted || said.ProviderTurnID != "turn-1" ||
+	if detail := detailOf(t, said); said.Kind != ports.ChatEventActivityStarted || said.ProviderTurnID != "" ||
 		said.ActivityKind != domain.ActivityKindMCPTool || detail["nestedAgent"] != true ||
 		detail["parentProviderItemId"] != "call_launch" || detail["providerToolName"] != nil {
 		t.Fatalf("child message = %#v, detail %#v", said, detail)
@@ -187,7 +188,7 @@ func TestOpenCodeV2SubagentFilesChildWorkUnderItsLaunch(t *testing.T) {
 		"sessionUpdate": "tool_call_update", "toolCallId": "ses_child:call_read", "status": "completed",
 	}})
 	if read := nextActivity(t, conv); read.Kind != ports.ChatEventActivityCompleted ||
-		read.ProviderTurnID != "turn-1" || detailOf(t, read)["parentProviderItemId"] != "call_launch" {
+		read.ProviderTurnID != "" || detailOf(t, read)["parentProviderItemId"] != "call_launch" {
 		t.Fatalf("child step completion = %#v", read)
 	}
 
@@ -200,7 +201,7 @@ func TestOpenCodeV2SubagentFilesChildWorkUnderItsLaunch(t *testing.T) {
 	detail := detailOf(t, handback)
 	input, _ := detail["input"].(map[string]any)
 	if handback.Kind != ports.ChatEventActivityCompleted || handback.ActivityStatus != domain.ActivityStatusCompleted ||
-		handback.ProviderTurnID != "turn-1" || detail["providerToolName"] != subagentHandbackTool ||
+		handback.ProviderTurnID != "" || detail["providerToolName"] != subagentHandbackTool ||
 		detail["parentProviderItemId"] != "call_launch" || input["message"] != "Found 3 tests." {
 		t.Fatalf("hand-back = %#v, detail %#v", handback, detail)
 	}
@@ -351,6 +352,7 @@ func TestOpenCodeV2FollowUpMessageIsItsOwn(t *testing.T) {
 			"sessionID": "ses_child"},
 	}})
 	_ = nextActivity(t, conv)
+	_ = completeLaunch(t, agent, conv, "call_second", "ses_child")
 	second := say()
 
 	if first.ProviderItemID == second.ProviderItemID {
@@ -358,5 +360,53 @@ func TestOpenCodeV2FollowUpMessageIsItsOwn(t *testing.T) {
 	}
 	if parent := detailOf(t, second)["parentProviderItemId"]; parent != "call_second" {
 		t.Fatalf("follow-up message parent = %v", parent)
+	}
+}
+
+// A follow-up names its child in its input before OpenCode accepts it. The child
+// stays with its launch until a follow-up is accepted, and a step it began under
+// one launch ends under that launch.
+func TestOpenCodeV2FollowUpTakesTheChildOnlyOnceAccepted(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+	_ = launchSubagent(t, agent, conv, "call_first")
+	_ = completeLaunch(t, agent, conv, "call_first", "ses_child")
+	sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update",
+		"update": childToolCall("ses_child:call_sleep", "Find tests: sleep", "in_progress")})
+	_ = nextActivity(t, conv)
+
+	followUp := func(id string, status acpsdk.ToolCallStatus) {
+		t.Helper()
+		sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+			SessionUpdate: "tool_call", ToolCallId: acpsdk.ToolCallId(id), Title: "subagent",
+			Kind: acpsdk.ToolKindThink, Status: acpsdk.ToolCallStatusInProgress,
+			RawInput: map[string]any{"agent": "explore", "description": "Find tests", "prompt": "And the e2e tests",
+				"sessionID": "ses_child"},
+		}})
+		_ = nextActivity(t, conv)
+		sendUpdate(t, agent, conv, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+			SessionUpdate: "tool_call_update", ToolCallId: acpsdk.ToolCallId(id), Status: &status,
+			RawOutput: map[string]any{"metadata": map[string]any{"sessionID": "ses_child", "status": "running"}},
+		}})
+		_ = nextActivity(t, conv)
+	}
+	parentOf := func(update map[string]any) any {
+		t.Helper()
+		sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update", "update": update})
+		return detailOf(t, nextActivity(t, conv))["parentProviderItemId"]
+	}
+
+	followUp("call_rejected", acpsdk.ToolCallStatusFailed)
+	if parent := parentOf(childToolCall("ses_child:call_ls", "Find tests: ls", "pending")); parent != "call_first" {
+		t.Fatalf("step after a rejected follow-up is under %v, want call_first", parent)
+	}
+
+	followUp("call_accepted", acpsdk.ToolCallStatusCompleted)
+	if parent := parentOf(map[string]any{
+		"sessionUpdate": "tool_call_update", "toolCallId": "ses_child:call_sleep", "status": "completed",
+	}); parent != "call_first" {
+		t.Fatalf("step begun before the follow-up ended under %v, want call_first", parent)
+	}
+	if parent := parentOf(childToolCall("ses_child:call_grep", "Find tests: grep", "pending")); parent != "call_accepted" {
+		t.Fatalf("step after an accepted follow-up is under %v, want call_accepted", parent)
 	}
 }

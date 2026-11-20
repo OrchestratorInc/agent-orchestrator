@@ -200,3 +200,52 @@ func TestSettleStrandedActivitiesLeavesInFlightAOActions(t *testing.T) {
 		t.Fatalf("AO action after its terminal update = %q, want completed", got)
 	}
 }
+
+// A background subagent's step runs on the child's clock, so the ACP driver files
+// it with no turn (opencode_subagents.go). Settling the parent's turn while the
+// step still runs leaves it running, and the child's own completion settles it.
+func TestSettleTurnLeavesAChildStepWithNoTurnRunning(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+		ID: "turn-parent-msg", Text: "start a subagent", Origin: domain.MessageOriginHuman,
+	}, "turn-parent", histClock); err != nil || !created {
+		t.Fatalf("append prompt: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "turn-parent", "provider-turn-parent", histClock); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	upsert := func(status domain.ActivityStatus, at time.Time) {
+		t.Helper()
+		if err := s.UpsertActivity(ctx, conversation, "", domain.ConversationActivity{
+			ID: "child-step", Kind: domain.ActivityKindCommand, Status: status, Summary: "sleep 14",
+			ProviderItemID: "ses_child:call_sleep", Detail: []byte(`{"parentProviderItemId":"call_launch"}`),
+		}, at); err != nil {
+			t.Fatalf("upsert child step %s: %v", status, err)
+		}
+	}
+	read := func() domain.ActivityStatus {
+		t.Helper()
+		got, found, err := s.ActivityStatusByProviderItem(ctx, conversation, "ses_child:call_sleep")
+		if err != nil || !found {
+			t.Fatalf("read child step: found=%v err=%v", found, err)
+		}
+		return got
+	}
+	upsert(domain.ActivityStatusRunning, histClock)
+
+	later := histClock.Add(7 * time.Second)
+	if err := s.SettleTurn(ctx, conversation, "provider-turn-parent", domain.TurnStateCompleted, "", later); err != nil {
+		t.Fatalf("settle parent turn: %v", err)
+	}
+	if err := s.SettleStrandedActivities(ctx, conversation, later); err != nil {
+		t.Fatalf("SettleStrandedActivities: %v", err)
+	}
+	if got := read(); got != domain.ActivityStatusRunning {
+		t.Fatalf("child step after the parent turn settled = %q, want running", got)
+	}
+	upsert(domain.ActivityStatusCompleted, later.Add(7*time.Second))
+	if got := read(); got != domain.ActivityStatusCompleted {
+		t.Fatalf("child step after its own completion = %q, want completed", got)
+	}
+}
