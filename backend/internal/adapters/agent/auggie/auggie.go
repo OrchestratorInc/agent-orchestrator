@@ -144,7 +144,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	appendModelFlag(&cmd, cfg.Config)
 	cmd = append(cmd, "--resume", agentSessionID)
-	appendRestoreWorkspace(&cmd, cfg)
 	return cmd, true, nil
 }
 
