@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -362,6 +363,20 @@ func TestGetAgentHooksInstallsIntoFactoryHooksJSON(t *testing.T) {
 	if !strings.Contains(body, `"startup"`) {
 		t.Fatalf("SessionStart hook missing startup matcher:\n%s", body)
 	}
+	// Droid's standalone hooks.json is keyed directly by event name; it ignores
+	// events nested under a "hooks" object.
+	var events map[string]json.RawMessage
+	if err := json.Unmarshal(data, &events); err != nil {
+		t.Fatalf("parse hooks.json: %v", err)
+	}
+	if _, wrapped := events["hooks"]; wrapped {
+		t.Fatalf("hooks.json nests events under \"hooks\":\n%s", body)
+	}
+	for _, spec := range droidManagedHooks {
+		if _, ok := events[spec.Event]; !ok {
+			t.Fatalf("hooks.json missing top-level %s event:\n%s", spec.Event, body)
+		}
+	}
 
 	installed, err := plugin.AreHooksInstalled(context.Background(), ws)
 	if err != nil {
@@ -379,7 +394,7 @@ func TestGetAgentHooksIdempotentAndPreservesUserHooks(t *testing.T) {
 	if err := os.MkdirAll(droidHooksPath(ws)[:len(droidHooksPath(ws))-len(droidHooksFileName)], 0o750); err != nil {
 		t.Fatal(err)
 	}
-	seed := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}`
+	seed := `{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}`
 	if err := os.WriteFile(droidHooksPath(ws), []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +426,7 @@ func TestUninstallHooksRemovesAOHooksLeavesUserHooks(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	seed := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}`
+	seed := `{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}`
 	if err := os.WriteFile(droidHooksPath(ws), []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -440,5 +455,51 @@ func TestUninstallHooksRemovesAOHooksLeavesUserHooks(t *testing.T) {
 	}
 	if installed {
 		t.Fatal("AreHooksInstalled=true after uninstall, want false")
+	}
+}
+
+func TestGetAgentHooksMigratesWrappedHooksFile(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "droid"}
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(droidHooksPath(ws)), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Earlier AO releases wrote events under "hooks", which Droid never ran.
+	seed := `{
+  "Stop": [{"hooks": [{"type": "command", "command": "echo top"}]}],
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "ao hooks droid stop", "timeout": 30}, {"type": "command", "command": "echo wrapped"}]}],
+    "PreToolUse": [{"matcher": "Execute", "hooks": [{"type": "command", "command": "echo pre"}]}]
+  }
+}`
+	if err := os.WriteFile(droidHooksPath(ws), []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: ws}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(droidHooksPath(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events map[string]json.RawMessage
+	if err := json.Unmarshal(data, &events); err != nil {
+		t.Fatal(err)
+	}
+	if _, wrapped := events["hooks"]; wrapped {
+		t.Fatalf("legacy \"hooks\" wrapper kept:\n%s", data)
+	}
+	body := string(data)
+	for _, want := range []string{"echo top", "echo wrapped", "echo pre"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("user hook %q dropped:\n%s", want, body)
+		}
+	}
+	if n := strings.Count(body, droidHookCommandPrefix+"stop"); n != 1 {
+		t.Fatalf("AO stop command count = %d, want 1:\n%s", n, body)
+	}
+	if _, ok := events["PreToolUse"]; !ok {
+		t.Fatalf("wrapped PreToolUse not moved to the top level:\n%s", body)
 	}
 }
