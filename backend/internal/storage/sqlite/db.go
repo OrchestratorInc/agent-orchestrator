@@ -2332,7 +2332,7 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsTau := !strings.Contains(schema, "'tau'")
 	needsMastraCode := !strings.Contains(schema, "'mastra-code'")
 	needsCodeBuddy := !strings.Contains(schema, "'codebuddy'")
-	if !needsCodeBuddy && !needsMastraCode &&!needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
+	if !needsCodeBuddy && !needsMastraCode && !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {

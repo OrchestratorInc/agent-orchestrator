@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -37,7 +38,11 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	}
 	fallback := ports.AgentAuthStatusUnknown
 	for _, key := range []string{"CODEBUDDY_API_KEY", "CODEBUDDY_AUTH_TOKEN"} {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
+		value, overridden := ports.AuthEnvironmentOverride(ctx, key)
+		if !overridden {
+			value = os.Getenv(key)
+		}
+		if strings.TrimSpace(value) != "" {
 			fallback = ports.AgentAuthStatusConfigured
 			break
 		}
@@ -99,7 +104,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = time.Second
 	cmd.Dir = dir
-	cmd.Env = authProbeEnv()
+	cmd.Env = authProbeEnv(ctx)
 	output := &boundedAuthOutput{cancel: cancel}
 	cmd.Stdout = output
 	// Native errors can echo credentials and URLs. They never enter diagnostics,
@@ -120,8 +125,9 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return finish(status, code, started)
 }
 
-func authProbeEnv() []string {
-	env := os.Environ()
+func authProbeEnv(ctx context.Context) []string {
+	// The probe sees what this harness's sessions receive, including keys saved in AO.
+	env := authprobe.Environ(ctx, os.Environ())
 	// Function-hook mods have a separate native startup gate from disableAllHooks.
 	// Override only the probe child; normal sessions retain their plugin setup.
 	for _, binding := range []string{"CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS=1", "CODEBUDDY_DISABLE_CRON=1", "DISABLE_AUTOUPDATER=1", "CBC_ENABLE_FUNCTION_HOOKS=0", "CODEBUDDY_PLUGIN_DIRS="} {

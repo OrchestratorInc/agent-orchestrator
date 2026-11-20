@@ -246,3 +246,28 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"O
 		t.Fatalf("probe resolved relative override a second time: %q", dir)
 	}
 }
+
+// A key saved in AO reaches CodeBuddy sessions through the auth environment, so
+// the probe must check that key, not only what the daemon itself inherited.
+func TestAuthProbeUsesKeySavedInAO(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake executable")
+	}
+	t.Setenv("CODEBUDDY_API_KEY", "")
+	t.Setenv("CODEBUDDY_AUTH_TOKEN", "")
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	success := `{"type":"result","subtype":"success","is_error":false,"result":"OK","usage":{"output_tokens":1}}`
+	path := filepath.Join(t.TempDir(), "codebuddy")
+	script := "#!/bin/sh\nif [ \"$CODEBUDDY_API_KEY\" = saved-in-ao ]; then\ncat <<'AO_NATIVE_RESULT'\n" + success + "\nAO_NATIVE_RESULT\nexit 0\nfi\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{binary: path}
+	if got, err := p.AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusUnknown {
+		t.Fatalf("no key = %s, %v; want unknown", got, err)
+	}
+	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"CODEBUDDY_API_KEY": "saved-in-ao"})
+	if got, err := p.AuthStatus(ctx); err != nil || got != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("saved key = %s, %v; want authorized", got, err)
+	}
+}
