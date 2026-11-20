@@ -266,6 +266,10 @@ function Timeline({
 	const latestFollow = useRef<() => void>(() => {});
 	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
+	// Content added since the person's drag began, which no follow tracked:
+	// Android reports momentum after every touch-up, even a still one, so output
+	// can land between letting go at the end and the momentum's end.
+	const grewWhileDragging = useRef(0);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
@@ -497,9 +501,13 @@ function Timeline({
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+		// Output that arrived mid-drag does not count against resting at the end;
+		// the distance the person scrolled still does.
+		followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP + grewWhileDragging.current);
 		// The jump shows past the wider slop, as `onScroll` decides it.
 		setShowJump(!followsTail.current && !atTail(event.nativeEvent, keyboardInset.current));
+		// A follow that resumes catches up on that output.
+		if (followsTail.current) requestAnimationFrame(followTail);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
@@ -552,7 +560,7 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; grewWhileDragging.current = 0; }}
 							onScrollEndDrag={settle}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
@@ -579,6 +587,7 @@ function Timeline({
 								settleOpening();
 							}}
 							onContentSizeChange={(_width, height) => {
+								if (dragging.current) grewWhileDragging.current += Math.max(0, height - contentHeight.current);
 								contentHeight.current = height;
 								measureFill();
 								notifyRenderViewport();

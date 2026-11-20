@@ -164,8 +164,17 @@ describe("jump to latest", () => {
 		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
 	});
 	it("follows again only once the person comes to rest right at the end", () => {
-		expect(source).toContain("followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
+		expect(source).toContain("followsTail.current = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP + grewWhileDragging.current);");
 		expect(source).toContain("if (!dragging.current && atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP)) followsTail.current = true;");
+	});
+	// Android reports momentum after every touch-up, even a still one, so output
+	// that lands between letting go at the end and the momentum's end is not
+	// followed. It must not count against coming to rest at the end, and a
+	// follow that resumes catches up on it.
+	it("discounts output that arrived mid-drag and catches up when the follow resumes", () => {
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; grewWhileDragging.current = 0; }}");
+		expect(source).toContain("if (dragging.current) grewWhileDragging.current += Math.max(0, height - contentHeight.current);");
+		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
 	});
 	// The jump shows past the wider slop on every path; a drag that came to rest
 	// between the two slops showed it here and hid it on the next scroll event.
@@ -396,7 +405,7 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; grewWhileDragging.current = 0; }}");
 		expect(source).toContain("onScrollEndDrag={settle}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
 		expect(source).toContain("if (!dragging.current && atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP)) followsTail.current = true;");
