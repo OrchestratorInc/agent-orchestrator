@@ -23,7 +23,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 let client: QueryClient;
 let state: AwakeState;
-let mobile: { keepAwake: { supported: boolean; enabled: boolean; active: boolean; lidClosed: boolean } };
+let mobile: { keepAwake: { supported: boolean; enabled: boolean; active: boolean; lidClosed: boolean; hasBattery: boolean } };
 let mobileEnabled: boolean;
 let release: (() => void) | undefined;
 let blockStart: boolean;
@@ -38,7 +38,7 @@ beforeEach(() => {
 	blockStart = false;
 	client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	state = { settings: { lidClosed: true }, sessions: [], rules: [], activeRules: [], active: false, paused: false, capabilities: [{ id: "idle", available: true }] } as unknown as AwakeState;
-	mobile = { keepAwake: { supported: true, enabled: false, active: false, lidClosed: false } };
+	mobile = { keepAwake: { supported: true, enabled: false, active: false, lidClosed: false, hasBattery: true } };
 	mobileEnabled = false;
 	test.get.mockReset().mockImplementation(async (path) => ({ data: path === "/api/v1/awake" ? snapshot() : structuredClone(mobile) }));
 	test.post.mockReset().mockImplementation(async (path, options) => {
@@ -641,12 +641,27 @@ describe("shared Stay Awake controls", () => {
 		expect(test.post).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not arm mobile wake when the sidebar starts desktop wake", async () => {
+	it("does not arm mobile wake when the sidebar starts desktop wake on a battery Mac", async () => {
 		await show();
 		fireEvent.click(coffee());
 		await waitFor(() => expect(state.active).toBe(true));
 		expect(mobile.keepAwake.enabled).toBe(false);
 		expect(test.post).not.toHaveBeenCalledWith("/api/v1/mobile/keep-awake", expect.anything());
+	});
+	it("keeps sidebar wake on across a daemon restart on a Mac without a battery or closed-lid wake", async () => {
+		mobile.keepAwake.hasBattery = false;
+		const view = render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
+		await waitFor(() => expect(coffee()).toBeEnabled());
+		fireEvent.click(coffee());
+		await waitFor(() => expect(state.active).toBe(true));
+		expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: false } });
+		// Daemon restart: the desktop request ends by design; the saved choice is restored on boot.
+		view.unmount();
+		state.sessions = state.sessions.map((s) => ({ ...s, endedAt: "now", endReason: "shutdown" }));
+		state.active = false;
+		client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
+		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "true"));
 	});
 	it("reports safety rearm failures without enabling mobile wake", async () => {
 		state.paused = true;

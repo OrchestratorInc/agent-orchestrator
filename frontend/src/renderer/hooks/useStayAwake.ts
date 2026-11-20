@@ -175,7 +175,11 @@ export function useStayAwake(enabled = true) {
 			const on = !(latestChange()?.on ?? requested);
 			// Sidebar and Settings are one switch: where closed-lid wake is
 			// supported, turning on here arms the same mode Settings shows.
-			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true, idleFallback: true } : { on });
+			// Elsewhere the desktop request ends at every daemon restart. A Mac
+			// without a battery needs none of its battery safety stops, so also
+			// save the choice where boot restores it.
+			const remember = on && mobileState?.keepAwake?.hasBattery === false;
+			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true, idleFallback: true } : { on, rememberMobile: remember });
 		},
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),
