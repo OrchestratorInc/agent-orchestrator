@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // maxDisplayNameLen caps the sidebar label set by `--name`. Mirrored by the
@@ -114,17 +116,11 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if opts.mode != "" && opts.mode != "chat" && opts.mode != "tui" {
 				return usageError{fmt.Errorf(`--mode must be "chat" or "tui"`)}
 			}
-			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
-				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
-			}
-			if opts.output != "" && opts.output != "artifact" {
-				return usageError{fmt.Errorf(`--output must be "artifact"`)}
-			}
-			if opts.output != "" && opts.kind == "orchestrator" {
-				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
+			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" && opts.kind != "reviewer" {
+				return usageError{fmt.Errorf(`--kind must be "worker", "orchestrator", or "reviewer"`)}
 			}
 			if opts.standalone {
-				if opts.kind == "orchestrator" {
+				if opts.kind != "" && opts.kind != "worker" {
 					return usageError{fmt.Errorf("standalone sessions must be workers")}
 				}
 				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.baseBranch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
@@ -134,6 +130,19 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 					return usageError{fmt.Errorf("--agent is required with --standalone")}
 				}
 				opts.kind = "worker"
+			}
+			if opts.kind == "" {
+				if opts.review {
+					opts.kind = "reviewer"
+				} else {
+					opts.kind = "worker"
+				}
+			}
+			if opts.output != "" && opts.output != "artifact" {
+				return usageError{fmt.Errorf(`--output must be "artifact"`)}
+			}
+			if opts.output != "" && opts.kind != "worker" {
+				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
 			}
 
 			tp := strings.TrimSpace(opts.trackerProvider)
@@ -273,8 +282,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	})
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
 	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an Orchestrator-managed plain directory (requires --agent)")
-	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, codewhale, mimo-code, deepseek-harness, openhands, command-code, docker-agent, minimax-code, memcode, hermes, stakpak, open-interpreter, tau (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
-	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
+	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, codewhale, mimo-code, deepseek-harness, openhands, command-code, docker-agent, minimax-code, memcode, hermes, stakpak, open-interpreter, tau (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; reviewer spawns default to project reviewer; required if the project has none)")
+	f.StringVar(&opts.kind, "kind", "", "Session role: worker, orchestrator, or reviewer (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.baseBranch, "base", "", "Start the session's branch from this branch, to stack on its pull request (default: the project's default branch); with --branch, that branch must be new")
@@ -463,11 +472,22 @@ func resolveSpawnHarness(explicit, kind string, project projectDetails) (string,
 		return harness, nil
 	}
 	if project.Config != nil {
-		if kind == "orchestrator" {
+		switch kind {
+		case "orchestrator":
 			if harness := strings.TrimSpace(project.Config.Orchestrator.Agent); harness != "" {
 				return harness, nil
 			}
-		} else {
+		case "reviewer":
+			if len(project.Config.Reviewers) > 0 {
+				if harness := strings.TrimSpace(project.Config.Reviewers[0].Harness); harness != "" {
+					return harness, nil
+				}
+			}
+			if worker := strings.TrimSpace(project.Config.Worker.Agent); worker != "" {
+				cfg := domain.ProjectConfig{}
+				return string(cfg.ResolveReviewerHarness(domain.AgentHarness(worker))), nil
+			}
+		default:
 			if harness := strings.TrimSpace(project.Config.Worker.Agent); harness != "" {
 				return harness, nil
 			}
@@ -475,6 +495,9 @@ func resolveSpawnHarness(explicit, kind string, project projectDetails) (string,
 	}
 	if kind == "orchestrator" {
 		return "", usageError{fmt.Errorf("agent could not be resolved; pass --agent or configure `ao project set-config %s --orchestrator-agent <agent>`", project.ID)}
+	}
+	if kind == "reviewer" {
+		return "", usageError{fmt.Errorf("agent could not be resolved; pass --agent or configure `ao project set-config %s --reviewer <agent>`", project.ID)}
 	}
 	return "", usageError{fmt.Errorf("agent could not be resolved; pass --agent or configure `ao project set-config %s --worker-agent <agent>`", project.ID)}
 }

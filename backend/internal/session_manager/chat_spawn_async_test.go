@@ -1340,6 +1340,10 @@ func TestSpawnOrchestratorAsyncFailurePreservesSessionForRetry(t *testing.T) {
 	testResumeFailedAsyncChatSpawn(t, domain.KindOrchestrator)
 }
 
+func TestSpawnReviewerAsyncFailurePreservesSessionForRetry(t *testing.T) {
+	testResumeFailedAsyncChatSpawn(t, domain.KindReviewer)
+}
+
 // The provision observer is how ao.sessions.spawned learns when an
 // asynchronous start became usable or failed: it must see provisioning while
 // the request is live, then exactly the settled state, with the failure cause.
