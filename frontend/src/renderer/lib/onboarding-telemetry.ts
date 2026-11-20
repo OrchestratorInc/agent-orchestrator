@@ -460,6 +460,11 @@ export function onboardingActionPending(action: OnboardingAction, target?: strin
 	return pending.has(actionKey(action, target));
 }
 
+/** Whether an action started during onboarding has not ended yet, under either analytics choice. */
+export function onboardingActionWatched(action: OnboardingAction, target?: string): boolean {
+	return errorWatch.has(actionKey(action, target));
+}
+
 /** The attempt in progress for (action, target), to pass back to finishOnboardingAction from an async check. */
 export function onboardingActionAttempt(action: OnboardingAction, target?: string): number | undefined {
 	return pending.get(actionKey(action, target))?.attempt;
