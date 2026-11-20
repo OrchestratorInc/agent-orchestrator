@@ -9,6 +9,26 @@ const rowBaseClass = "flex min-h-8 min-w-0 items-center gap-2 rounded-md px-1.5 
 // Interactive controls hover like sidebar rows: the shared growing pill owns the fill.
 const interactiveRowClass = cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60");
 
+/** A plain inspector row: an icon and a label, with `action` beside it. */
+export function InfoRow({ action, icon: Icon, iconClassName, label, title }: {
+	action?: ReactNode;
+	icon: LucideIcon;
+	/** Overrides the icon's muted colour, e.g. for a status tone. */
+	iconClassName?: string;
+	label: ReactNode;
+	title?: string;
+}) {
+	return (
+		<div className="-mx-1.5 flex min-w-0 items-center gap-0.5">
+			<div className={cn(rowBaseClass, "flex-1")}>
+				<Icon aria-hidden="true" className={cn("size-icon-sm shrink-0", iconClassName ?? "text-muted-foreground")} />
+				<span className="min-w-0 flex-1 truncate" title={title}>{label}</span>
+			</div>
+			{action}
+		</div>
+	);
+}
+
 /**
  * An inspector row whose label is the button, read like a link: it underlines
  * on hover rather than filling the row, so the controls in `action` beside it

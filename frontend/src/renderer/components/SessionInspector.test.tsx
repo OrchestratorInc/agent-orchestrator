@@ -1151,6 +1151,71 @@ describe("SessionInspector PR section", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("moves Tab between the description and Close when the text has no links", async () => {
+    const summary = { ...conversationPR(), description: "Adds the search box." };
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path));
+    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: summary.url })])} />, undefined, (client) => seedPRSummaries(client, [summary]));
+    within(await screen.findByTestId("pr-card")).getByRole("button", { name: /^PR #7/ }).focus();
+    await userEvent.keyboard("{Enter}");
+    const drawer = within(await screen.findByRole("dialog"));
+    // Focus starts on the text, so the arrow keys scroll it.
+    const text = drawer.getByRole("region", { name: "Description" });
+    await waitFor(() => expect(text).toHaveFocus());
+    const close = drawer.getByRole("button", { name: "Close" });
+    await userEvent.tab();
+    expect(close).toHaveFocus();
+    await userEvent.tab();
+    expect(text).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(close).toHaveFocus();
+  });
+
+  it.each([
+    { who: "its owner", shared: false },
+    { who: "a guest", shared: true },
+  ])("keeps a Cloud PR's title plain for $who: AO has no description to show there yet", ({ shared }) => {
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { cloud: { orgId: "cloud-org-1", ...(shared ? { shared: true } : {}) } })} />,
+      undefined,
+      (client) => {
+        client.setQueryData(settingsQueryKey, {
+          defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+          cloudEnabled: true, cloudControlPlaneUrl: "https://cloud.example.test",
+        });
+        client.setQueryData(["cloud-session-scm-summary", "https://cloud.example.test", "cloud-org-1", "sess-1"], { prs: [prSummary(7, "open")], linkedPrs: [] });
+      },
+    );
+    const card = within(screen.getByTestId("pr-card"));
+    expect(card.getByText("PR 7")).toBeInTheDocument();
+    expect(card.queryByRole("button", { name: /^PR #7/ })).not.toBeInTheDocument();
+    expect(card.getByRole("link", { name: "Open PR #7" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens a GitLab merge request's tab from its title: AO reads no GitLab description yet", async () => {
+    function OpenTabs() {
+      const tabs = usePRTabs(sessionUiKey("sess-1"));
+      return <output data-testid="pr-tabs">{`${tabs.active ?? ""}|${tabs.request?.section ?? ""}`}</output>;
+    }
+    const summary = prSummary(7, "open", { url: "https://gitlab.com/acme/repo/-/merge_requests/7", htmlUrl: "https://gitlab.com/acme/repo/-/merge_requests/7", provider: "gitlab" });
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path));
+    renderWithQuery(
+      <><SessionInspector session={session([pr(7, "open", { url: summary.url })])} /><OpenTabs /></>,
+      undefined,
+      (client) => seedPRSummaries(client, [summary]),
+    );
+    const card = within(await screen.findByTestId("pr-card"));
+    const title = card.getByRole("button", { name: /^PR #7/ });
+    expect(title).not.toHaveAttribute("aria-haspopup");
+    // The title already opens the tab.
+    expect(card.queryByRole("button", { name: "Open tab" })).not.toBeInTheDocument();
+    await userEvent.click(title);
+    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(`${summary.url}|summary`);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("shows a PR's description and comments in its tab; checks and labels stay on the card", async () => {
     const summary = { ...conversationPR(), description: "Adds the search box.", labels: [{ name: "bug" }], ci: { autoInjectCI: true, state: "passing" as const, failingChecks: [], checks: [{ name: "lint", status: "passed" as const }] } };
     servePRTab(summary);

@@ -43,7 +43,7 @@ import {
 	Loader2,
 	X,
 } from "@/components/app-icons";
-import { InfoRowLabelButton, InfoRowLink } from "./InspectorInfoRow";
+import { InfoRow, InfoRowLabelButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
 import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
@@ -1258,44 +1258,53 @@ function PRViewSummaryCard({
 	// The card leaves the description out: a few lines of a long body told too
 	// little for the room they took. The title opens all of it in a drawer, or,
 	// while the PR's tab is showing, its Summary, where the description already is.
-	const titleOpensDrawer = !tabShowing;
+	// AO reads a description only for a local GitHub PR; AO Cloud and GitLab send
+	// none yet, so there the title keeps its old job rather than open an empty drawer.
+	const describes = Boolean(pr.detailsObservedAt) || (pr.provider === "github" && !cloudOrgId);
+	const titleOpensDrawer = describes && !tabShowing;
 	return (
 		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus" ref={sectionRef}>
-			<InfoRowLabelButton
-				action={(
-					<>
-						{opensTab && !tabShowing ? (
-							<Pressable className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => openTab()}>
-								<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
-								{t("pr.openTab")}
-							</Pressable>
-						) : null}
-						{providerLink}
-					</>
-				)}
-				aria-expanded={titleOpensDrawer ? descriptionOpen : undefined}
-				aria-haspopup={titleOpensDrawer ? "dialog" : undefined}
-				icon={state.icon}
-				iconClassName={state.className}
-				label={(
-					<>
-						{titleLabel}
-						{titleOpensDrawer ? <span className="sr-only">, {t("pr.description.show")}</span> : null}
-					</>
-				)}
-				onClick={() => titleOpensDrawer ? setDescriptionOpen(true) : openTab()}
-				title={pr.title}
-			/>
+			{titleOpensDrawer || opensTab ? (
+				<InfoRowLabelButton
+					action={(
+						<>
+							{opensTab && titleOpensDrawer ? (
+								<Pressable className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => openTab()}>
+									<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
+									{t("pr.openTab")}
+								</Pressable>
+							) : null}
+							{providerLink}
+						</>
+					)}
+					aria-expanded={titleOpensDrawer ? descriptionOpen : undefined}
+					aria-haspopup={titleOpensDrawer ? "dialog" : undefined}
+					icon={state.icon}
+					iconClassName={state.className}
+					label={(
+						<>
+							{titleLabel}
+							{titleOpensDrawer ? <span className="sr-only">, {t("pr.description.show")}</span> : null}
+						</>
+					)}
+					onClick={() => titleOpensDrawer ? setDescriptionOpen(true) : openTab()}
+					title={pr.title}
+				/>
+			) : (
+				<InfoRow action={providerLink} icon={state.icon} iconClassName={state.className} label={titleLabel} title={pr.title} />
+			)}
 			{cardView}
-			<PRDescriptionDrawer
-				anchor={sectionRef}
-				cloud={Boolean(cloudOrgId)}
-				detailsFailed={detailsFailed}
-				onOpenChange={setDescriptionOpen}
-				open={descriptionOpen}
-				pr={pr}
-				title={titleLabel}
-			/>
+			{describes ? (
+				<PRDescriptionDrawer
+					anchor={sectionRef}
+					cloud={Boolean(cloudOrgId)}
+					detailsFailed={detailsFailed}
+					onOpenChange={setDescriptionOpen}
+					open={descriptionOpen}
+					pr={pr}
+					title={titleLabel}
+				/>
+			) : null}
 
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>

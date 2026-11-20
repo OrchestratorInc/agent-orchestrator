@@ -102,7 +102,14 @@ export function PRDescriptionDrawer({ anchor, cloud, detailsFailed, onOpenChange
 						<CloseButton aria-label={t("common.close")} size="icon-sm" />
 					</DialogClose>
 				</header>
-				<div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 outline-none" ref={bodyRef} tabIndex={-1}>
+				{/* A tab stop of its own, after ✕, so Tab moves between the two even when the text has no links. */}
+				<div
+					aria-label={t("pr.description.title")}
+					className="min-h-0 flex-1 overflow-y-auto px-5 py-4 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset"
+					ref={bodyRef}
+					role="region"
+					tabIndex={0}
+				>
 					<PRDescriptionBody cloud={cloud} detailsFailed={detailsFailed} narrow pr={pr} />
 				</div>
 			</DialogContent>
