@@ -34,7 +34,7 @@ type CloudWorkspaceExplorerProps = {
 	split?: boolean;
 };
 
-const noAnnotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: () => undefined, draftFor: () => "", statusFor: () => "idle", setDraft: () => undefined, cancel: () => undefined, submit: async () => undefined };
+const noAnnotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: () => undefined, draftFor: () => "", statusFor: () => "idle", setDraft: () => undefined, cancel: () => undefined, submit: async () => undefined, consumeOpened: () => false };
 
 export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isMaximized = false, onOpenFile, onSplitChange, onToggleMaximized, split: controlledSplit }: CloudWorkspaceExplorerProps) {
 	const { t } = useTranslation();

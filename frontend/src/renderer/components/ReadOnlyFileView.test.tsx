@@ -58,7 +58,7 @@ vi.mock("@pierre/diffs/react", () => ({
 }));
 
 function annotation(overrides: Partial<FileAnnotationModel> = {}): FileAnnotationModel {
-	return { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn(), ...overrides };
+	return { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn(), consumeOpened: vi.fn(() => true), ...overrides };
 }
 
 function baseDetail(overrides: Partial<WorkspaceFileDetail> = {}): WorkspaceFileDetail {

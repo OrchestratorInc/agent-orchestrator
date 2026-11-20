@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ActiveFileAnnotationTarget, FileAnnotationModel } from "../components/WorkspaceDiffView";
 import { useFileAnnotation } from "./useFileAnnotation";
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn().mockResolvedValue({ data: {} }) }));
@@ -24,6 +25,46 @@ describe("useFileAnnotation", () => {
 
 		act(() => result.current.begin({ ...target }));
 		expect(result.current.targets).toEqual([]);
+	});
+
+	it("gives a box its scroll token once, and a fresh one when it opens again", () => {
+		const { result } = renderHook(() => useFileAnnotation("sess-1"));
+		const target = { path: "src/App.tsx", side: "new" as const, line: 12, surface: "review" as const };
+
+		act(() => result.current.begin(target));
+		expect(result.current.consumeOpened(target)).toBe(true);
+		// A virtualized row that scrolls away and back remounts its box.
+		expect(result.current.consumeOpened(target)).toBe(false);
+
+		act(() => result.current.begin(target));
+		act(() => result.current.begin(target));
+		expect(result.current.consumeOpened(target)).toBe(true);
+	});
+
+	it("keeps the scroll token for the newest box only", () => {
+		const { result } = renderHook(() => useFileAnnotation("sess-1"));
+		const first = { path: "src/App.tsx", side: "file" as const, surface: "review" as const };
+		const second = { path: "src/Other.tsx", side: "file" as const, surface: "review" as const };
+
+		act(() => result.current.begin(first));
+		act(() => result.current.begin(second));
+
+		expect(result.current.consumeOpened(first)).toBe(false);
+		expect(result.current.consumeOpened(second)).toBe(true);
+	});
+
+	it.each([
+		["toggled shut", (model: FileAnnotationModel, target: ActiveFileAnnotationTarget) => model.begin(target)],
+		["cancelled", (model: FileAnnotationModel, target: ActiveFileAnnotationTarget) => model.cancel(target)],
+		["cancelled with every box", (model: FileAnnotationModel) => model.cancel()],
+	])("drops the scroll token when a box is %s before it mounts", (_name, close) => {
+		const { result } = renderHook(() => useFileAnnotation("sess-1"));
+		const target = { path: "src/App.tsx", side: "file" as const, surface: "review" as const };
+
+		act(() => result.current.begin(target));
+		act(() => close(result.current, target));
+
+		expect(result.current.consumeOpened(target)).toBe(false);
 	});
 
 	it("submits feedback through the provided Cloud message sender", async () => {

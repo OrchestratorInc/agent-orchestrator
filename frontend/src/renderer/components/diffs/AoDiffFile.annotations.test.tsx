@@ -17,7 +17,7 @@ vi.mock("./trailingContext", () => ({
 vi.mock("@pierre/diffs/react", () => ({FileDiff: ({fileDiff}:{fileDiff:{newFile?:{contents:string}}}) => <pre data-testid="hydrated-content">{fileDiff.newFile?.contents ?? "Loading"}</pre>}));
 vi.mock("./useFileAnnotationReveal", () => ({useFileAnnotationReveal: () => ({selectedLines:null,changed:false,reveal:()=>{}})}));
 
-const model:FileAnnotationModel={targets:[],status:"idle",error:"",begin:()=>{},draftFor:()=>"",statusFor:()=>"idle",setDraft:()=>{},cancel:()=>{},submit:async()=>{}};
+const model:FileAnnotationModel={targets:[],status:"idle",error:"",begin:()=>{},draftFor:()=>"",statusFor:()=>"idle",setDraft:()=>{},cancel:()=>{},submit:async()=>{},consumeOpened:()=>false};
 const range:FileAnnotationRange={requestKey:1,side:"new",line:2,endLine:2,lines:[{kind:"add",oldNo:null,newNo:2,text:"captured();"}]};
 function detail(patch:string,version:string):WorkspaceFileDetail {
  return {sessionId:"session",path:"a.ts",status:"modified",additions:1,deletions:1,size:50,binary:false,deleted:false,content:"captured();",contentTruncated:false,diff:patch,diffTruncated:false,fileFingerprint:version,workspaceVersion:version};

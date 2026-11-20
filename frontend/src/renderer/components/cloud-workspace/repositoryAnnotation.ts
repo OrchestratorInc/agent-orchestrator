@@ -30,5 +30,6 @@ export function repositoryAnnotationModel(model: FileAnnotationModel, repository
 		setDraft: (target, draft) => model.setDraft(outward(target), draft),
 		cancel: (target) => model.cancel(target ? outward(target) : undefined),
 		submit: (target, text) => model.submit(target ? outward(target) : undefined, text),
+		consumeOpened: (target) => model.consumeOpened(outward(target)),
 	};
 }
