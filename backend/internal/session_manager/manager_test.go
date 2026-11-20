@@ -1873,6 +1873,48 @@ func TestSpawn_IgnoresNonOrchestratorParent(t *testing.T) {
 	}
 }
 
+// The orchestrator's approval mode fills in only what the project leaves
+// unset: an explicit project permission for the role is the user's choice and
+// wins over it, and a permission the spawn names wins over both (#5954).
+func TestSpawn_ExplicitProjectPermissionBeatsOrchestratorInheritance(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*domain.ProjectConfig)
+		requested domain.PermissionMode
+		want      domain.PermissionMode
+	}{
+		{"worker role permission", func(c *domain.ProjectConfig) {
+			c.Worker.AgentConfig.Permissions = domain.PermissionModeAcceptEdits
+		}, "", domain.PermissionModeAcceptEdits},
+		{"project-wide permission", func(c *domain.ProjectConfig) {
+			c.AgentConfig.Permissions = domain.PermissionModeDefault
+		}, "", domain.PermissionModeDefault},
+		{"spawn's own permission", func(c *domain.ProjectConfig) {
+			c.Worker.AgentConfig.Permissions = domain.PermissionModeAcceptEdits
+		}, domain.PermissionModeAuto, domain.PermissionModeAuto},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			tc.configure(&project.Config)
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindOrchestrator}
+			st.conversations["mer-0"] = domain.ConversationRecord{
+				SessionID: "mer-0", Settings: domain.ConversationSettings{ApprovalMode: domain.PermissionModeBypassPermissions},
+			}
+			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+				AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.want) {
+				t.Fatalf("worker permission environment = %q, want %q (not the orchestrator's bypass-permissions)", got, tc.want)
+			}
+		})
+	}
+}
+
 type rejectingHarnessUseGate struct {
 	harness domain.AgentHarness
 }

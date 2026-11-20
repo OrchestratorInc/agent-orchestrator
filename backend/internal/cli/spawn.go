@@ -34,6 +34,7 @@ type spawnOptions struct {
 	model           string
 	output          string
 	effort          string
+	permission      string
 	account         string
 	claimPR         string
 	noTakeover      bool
@@ -57,6 +58,7 @@ type spawnRequest struct {
 	Prompt              string `json:"prompt,omitempty"`
 	Model               string `json:"model,omitempty"`
 	Effort              string `json:"effort,omitempty"`
+	ApprovalMode        string `json:"approvalMode,omitempty"`
 	AccountID           string `json:"accountId,omitempty"`
 	RequestedOutput     string `json:"requestedOutput,omitempty"`
 	DisplayName         string `json:"displayName"`
@@ -198,6 +200,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Prompt:              opts.prompt,
 				Model:               strings.TrimSpace(opts.model),
 				Effort:              strings.TrimSpace(opts.effort),
+				ApprovalMode:        strings.TrimSpace(opts.permission),
 				AccountID:           strings.TrimSpace(opts.account),
 				RequestedOutput:     opts.output,
 				DisplayName:         name,
@@ -283,6 +286,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
 	f.StringVar(&opts.account, "account", "", "Claude Code or Codex account id to start on, from ao account ls; empty uses the agent's default account")
 	f.StringVar(&opts.effort, "effort", "", "Reasoning effort override for this session only (e.g. low, medium, high); empty defers to the agent/model default")
+	f.StringVar(&opts.permission, "permission", "", "Permission mode for this session only: default, accept-edits, auto, or bypass-permissions; empty uses the project's role setting, or the spawning orchestrator's mode when the project sets none")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")
