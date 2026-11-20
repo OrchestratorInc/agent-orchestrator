@@ -1971,8 +1971,6 @@
 	"settings.help": "Yardım",
 	"settings.diagnostics": "Tanılama",
 	"settings.diagnosticsToggleHint": "Oturum kartlarında, panoda ve Tanılama sayfasında bellek ve CPU kullanımını gösterir.",
-	"settings.sideChats": "Yan sohbetler",
-	"settings.sideChatsHint": "İnceleme panelinde ayrı yan sohbetler açın ve bu sohbetlere soru sormak için /btw kullanın.",
 	"settings.splitPanes": "Bölünmüş paneller",
 	"settings.splitPanesHint": "Bir sekmeyi mevcut sekmenin yanında göstermek için orta panelin bir kenarına sürükleyin. İstediğinizde oturumlarınızdaki aracılar da panelleri bölebilir ve terminallerde komut çalıştırabilir.",
 	"settings.prView": "PR görünümü",
