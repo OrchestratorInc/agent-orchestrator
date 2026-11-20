@@ -558,20 +558,7 @@ func TestCollectorRegistersChatUsageWhenLifecycleMarksControllerSpawned(t *testi
 	mustNoError(t, manager.MarkSpawned(context.Background(), session.ID, domain.SessionMetadata{
 		ProviderConversationID: "native-chat",
 	}))
-	// MarkSpawned reactivates usage in the background.
-	var bindings []domain.UsageBindingRecord
-	var err error
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		bindings, err = store.ListUsageBindingsForSession(context.Background(), session.ID)
-		if err != nil {
-			break
-		}
-		if len(bindings) == 1 {
-			if sources, _ := store.ListUsageSourcesForBinding(context.Background(), bindings[0].ID); len(sources) == 1 {
-				break
-			}
-		}
-	}
+	bindings, err := store.ListUsageBindingsForSession(context.Background(), session.ID)
 	if err != nil || len(bindings) != 1 {
 		t.Fatalf("chat usage bindings=%+v err=%v, want one binding for the provider conversation", bindings, err)
 	}

@@ -262,11 +262,6 @@ type Manager struct {
 	projects         projectConfigLoader
 	operationGateMu  sync.RWMutex
 	operationGate    sessionOperationGate
-
-	// usageReactivations holds a spawn's background usage reactivation until it
-	// ends. Termination waits for it before finalizing usage. Guarded by mu.
-	usageReactivations map[domain.SessionID]chan struct{}
-
 	// dataDir backs ReconcileSessionOutputType's artifact-dir fallback for
 	// sessions rows created before session_output_type/artifact_dir existed.
 	dataDir string
@@ -319,7 +314,6 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		clock:                       clock,
 		react:                       newReactionState(),
 		flights:                     map[domain.SessionID]*toolFlight{},
-		usageReactivations:          map[domain.SessionID]chan struct{}{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
@@ -511,7 +505,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		return err
 	}
 
-	m.finalizeUsage(ctx, id, terminationLaunch, terminationRevision, finalizer)
+	finalizeSessionUsage(ctx, id, terminationLaunch, terminationRevision, finalizer)
 
 	terminated := false
 	var beforeEnd domain.SessionRecord
@@ -1580,17 +1574,16 @@ func (m *Manager) markSpawned(
 	prepare func(context.Context) error,
 ) error {
 	launchID := strings.TrimSpace(metadata.RuntimeLaunchID)
-	var previous chan struct{}
-	reactivator, done, err := func() (sessionUsageReactivator, chan struct{}, error) {
+	reactivator, err := func() (sessionUsageReactivator, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		defer m.finishLaunchLocked(id, launchID)
 		rec, ok, err := m.store.GetSession(ctx, id)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if !ok {
-			return nil, nil, fmt.Errorf("lifecycle: MarkSpawned for unknown session %q", id)
+			return nil, fmt.Errorf("lifecycle: MarkSpawned for unknown session %q", id)
 		}
 		now := m.clock()
 		if rec.IsTerminated {
@@ -1614,23 +1607,23 @@ func (m *Manager) markSpawned(
 		rec.UpdatedAt = now
 		if boundary == nil {
 			if err := m.store.UpdateSession(ctx, rec); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		} else if prepare == nil {
 			writer, ok := m.store.(chatSpawnStore)
 			if !ok {
-				return nil, nil, errors.New("lifecycle: atomic Chat spawn persistence is unavailable")
+				return nil, errors.New("lifecycle: atomic Chat spawn persistence is unavailable")
 			}
 			if err := writer.CommitChatSpawn(ctx, rec, *boundary); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		} else {
 			writer, ok := m.store.(preparedChatSpawnStore)
 			if !ok {
-				return nil, nil, errors.New("lifecycle: atomic Chat provider-history persistence is unavailable")
+				return nil, errors.New("lifecycle: atomic Chat provider-history persistence is unavailable")
 			}
 			if err := writer.CommitChatSpawnPrepared(ctx, rec, *boundary, handoff, prepare); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
 		if rec.Harness == domain.HarnessKimi {
@@ -1638,66 +1631,13 @@ func (m *Manager) markSpawned(
 			// approval callbacks must not inherit the prior launch's cache.
 			delete(m.flights, id)
 		}
-		if m.usageReactivator == nil {
-			return nil, nil, nil
-		}
-		// Registered while the spawn commit still holds mu, so a termination
-		// that follows it always finds the reactivation to wait for.
-		// An earlier spawn's reactivation may still run; this one's channel
-		// closes only after it, so waiting on the newest waits for both.
-		done := make(chan struct{})
-		previous = m.usageReactivations[id]
-		m.usageReactivations[id] = done
-		return m.usageReactivator, done, nil
+		return m.usageReactivator, nil
 	}()
-	if err != nil || done == nil {
+	if err != nil {
 		return err
 	}
-	// Usage collection catches up in the background; a new agent's first prompt
-	// does not wait for it. Termination waits for it before finalizing usage.
-	go func() {
-		defer func() {
-			m.mu.Lock()
-			if m.usageReactivations[id] == done {
-				delete(m.usageReactivations, id)
-			}
-			m.mu.Unlock()
-			close(done)
-		}()
-		reactivateSessionUsage(context.WithoutCancel(ctx), id, launchID, reactivator)
-		if previous != nil {
-			<-previous
-		}
-	}()
+	reactivateSessionUsage(ctx, id, launchID, reactivator)
 	return nil
-}
-
-// usageReactivationWait bounds termination's usage work while a spawn's usage
-// reactivation is pending, so a stuck usage lookup cannot keep a session from
-// stopping.
-var usageReactivationWait = 5 * time.Second
-
-// finalizeUsage finalizes a terminating session's usage. While a spawn's usage
-// reactivation is pending it first waits for it, so the reactivation cannot
-// reopen a finalized binding. The reactivation holds the usage collector's
-// semaphore, which finalizing also needs, so the wait and the finalize share
-// one bound. The termination write that follows keeps the caller's context.
-func (m *Manager) finalizeUsage(ctx context.Context, id domain.SessionID, launchID string, revision int64, finalizer sessionUsageFinalizer) {
-	m.mu.Lock()
-	pending := m.usageReactivations[id]
-	m.mu.Unlock()
-	if pending == nil {
-		finalizeSessionUsage(ctx, id, launchID, revision, finalizer)
-		return
-	}
-	usageCtx, cancel := context.WithTimeout(ctx, usageReactivationWait)
-	defer cancel()
-	select {
-	case <-pending:
-	case <-usageCtx.Done():
-		slog.Default().Warn("lifecycle: spawn's usage reactivation did not end before termination", "session", id, "waited", usageReactivationWait)
-	}
-	finalizeSessionUsage(usageCtx, id, launchID, revision, finalizer)
 }
 
 // CommitControllerEpoch atomically changes which controller owns a live
@@ -1871,7 +1811,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 		m.mu.Lock()
 		finalizer := m.usageFinalizer
 		m.mu.Unlock()
-		m.finalizeUsage(ctx, id, launchID, sessionRevision, finalizer)
+		finalizeSessionUsage(ctx, id, launchID, sessionRevision, finalizer)
 
 		const (
 			terminationChanged = iota

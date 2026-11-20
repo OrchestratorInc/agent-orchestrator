@@ -1969,10 +1969,6 @@ type fakeUsageLifecycle struct {
 	reactivateID     domain.SessionID
 	reactivateLaunch string
 	sawLive          bool
-	reactivated      chan struct{}
-	release          chan struct{}
-	// blockLaunch limits release to one launch; empty blocks every call.
-	blockLaunch string
 }
 
 func (f *fakeUsageLifecycle) ReactivateSession(
@@ -1980,16 +1976,10 @@ func (f *fakeUsageLifecycle) ReactivateSession(
 	id domain.SessionID,
 	launchID string,
 ) error {
-	if f.release != nil && (f.blockLaunch == "" || f.blockLaunch == launchID) {
-		<-f.release
-	}
 	f.reactivateCalls++
 	f.reactivateID = id
 	f.reactivateLaunch = launchID
 	f.sawLive = !f.store.sessions[id].IsTerminated
-	if f.reactivated != nil {
-		f.reactivated <- struct{}{}
-	}
 	return nil
 }
 
@@ -2005,16 +1995,11 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 	rec := st.sessions["mer-1"]
 	rec.CleanupGeneration = 7
 	st.sessions[rec.ID] = rec
-	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}, reactivated: make(chan struct{}, 1)}
+	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}}
 	m.SetUsageFinalizer(usage)
 
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
 		t.Fatal(err)
-	}
-	select {
-	case <-usage.reactivated:
-	case <-time.After(5 * time.Second):
-		t.Fatal("usage was not reactivated")
 	}
 	if got := st.sessions["mer-1"].CleanupGeneration; got != 8 {
 		t.Fatalf("restored cleanup generation = %d, want 8", got)
@@ -2023,147 +2008,6 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 		usage.reactivateLaunch != "launch-new" || !usage.sawLive {
 		t.Fatalf("usage reactivation = calls:%d id:%q launch:%q live:%v",
 			usage.reactivateCalls, usage.reactivateID, usage.reactivateLaunch, usage.sawLive)
-	}
-}
-
-func TestMarkTerminatedFinalizesUsageAfterSpawnReactivation(t *testing.T) {
-	m, st, _ := newManager()
-	st.sessions["mer-1"] = domain.SessionRecord{
-		ID:           "mer-1",
-		ProjectID:    "mer",
-		IsTerminated: true,
-		Activity:     domain.Activity{State: domain.ActivityExited},
-		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
-	}
-	release := make(chan struct{})
-	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}, release: release}
-	reactivatedFirst := false
-	usage.onFinalize = func(domain.SessionID, string, int64) error {
-		reactivatedFirst = usage.reactivateCalls == 1
-		return nil
-	}
-	m.SetUsageFinalizer(usage)
-
-	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
-		t.Fatal(err)
-	}
-	terminated := make(chan error, 1)
-	go func() { terminated <- m.MarkTerminated(ctx, "mer-1") }()
-	select {
-	case err := <-terminated:
-		t.Fatalf("termination finished while the spawn's usage reactivation was still running: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(release)
-	if err := <-terminated; err != nil {
-		t.Fatal(err)
-	}
-	if !reactivatedFirst || !st.sessions["mer-1"].IsTerminated {
-		t.Fatalf("usage finalized before reactivation ended: reactivated first=%v terminated=%v", reactivatedFirst, st.sessions["mer-1"].IsTerminated)
-	}
-}
-
-func TestMarkTerminatedWaitsForEveryPendingSpawnReactivation(t *testing.T) {
-	m, st, _ := newManager()
-	st.sessions["mer-1"] = domain.SessionRecord{
-		ID:           "mer-1",
-		ProjectID:    "mer",
-		IsTerminated: true,
-		Activity:     domain.Activity{State: domain.ActivityExited},
-		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
-	}
-	release := make(chan struct{})
-	usage := &fakeUsageLifecycle{
-		fakeUsageFinalizer: fakeUsageFinalizer{store: st},
-		reactivated:        make(chan struct{}, 2),
-		release:            release,
-		blockLaunch:        "launch-1",
-	}
-	reactivatedBeforeFinalize := 0
-	usage.onFinalize = func(domain.SessionID, string, int64) error {
-		reactivatedBeforeFinalize = usage.reactivateCalls
-		return nil
-	}
-	m.SetUsageFinalizer(usage)
-
-	for _, launch := range []string{"launch-1", "launch-2"} {
-		if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: launch}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	<-usage.reactivated // the second spawn's reactivation ended; the first is held
-	terminated := make(chan error, 1)
-	go func() { terminated <- m.MarkTerminated(ctx, "mer-1") }()
-	select {
-	case err := <-terminated:
-		t.Fatalf("termination finished while the first spawn's usage reactivation was still running: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(release)
-	if err := <-terminated; err != nil {
-		t.Fatal(err)
-	}
-	if reactivatedBeforeFinalize != 2 {
-		t.Fatalf("usage finalized after %d of 2 reactivations", reactivatedBeforeFinalize)
-	}
-}
-
-// sharedLockUsage reactivates and finalizes under one lock, as the usage
-// collector's semaphore does. Its reactivation takes the lock and keeps it.
-type sharedLockUsage struct {
-	lock  chan struct{}
-	held  chan struct{}
-	stuck chan struct{}
-}
-
-func (u *sharedLockUsage) ReactivateSession(context.Context, domain.SessionID, string) error {
-	u.lock <- struct{}{}
-	close(u.held)
-	<-u.stuck
-	<-u.lock
-	return nil
-}
-
-func (u *sharedLockUsage) FinalizeSession(ctx context.Context, _ domain.SessionID, _ string, _ int64) error {
-	select {
-	case u.lock <- struct{}{}:
-		<-u.lock
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func TestMarkTerminatedIsNotHeldByAReactivationThatKeepsTheUsageLock(t *testing.T) {
-	defer func(wait time.Duration) { usageReactivationWait = wait }(usageReactivationWait)
-	usageReactivationWait = 50 * time.Millisecond
-	m, st, _ := newManager()
-	st.sessions["mer-1"] = domain.SessionRecord{
-		ID:           "mer-1",
-		ProjectID:    "mer",
-		IsTerminated: true,
-		Activity:     domain.Activity{State: domain.ActivityExited},
-		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
-	}
-	usage := &sharedLockUsage{lock: make(chan struct{}, 1), held: make(chan struct{}), stuck: make(chan struct{})}
-	defer close(usage.stuck)
-	m.SetUsageFinalizer(usage)
-	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
-		t.Fatal(err)
-	}
-	<-usage.held
-	terminated := make(chan error, 1)
-	go func() { terminated <- m.MarkTerminated(ctx, "mer-1") }()
-	select {
-	case err := <-terminated:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("termination stayed blocked on the usage lock held by the spawn's reactivation")
-	}
-	if !st.sessions["mer-1"].IsTerminated {
-		t.Fatal("session was not terminated")
 	}
 }
 
