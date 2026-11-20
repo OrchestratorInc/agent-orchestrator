@@ -152,3 +152,21 @@ func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 		t.Fatalf("Limits error = %v, want could not fetch", err)
 	}
 }
+
+// A setup-token login cannot read usage: the CLI says so without asking the
+// provider, so the answer is no proof the login works.
+func TestClaudeLimitsMarksAnAnswerWithoutUsageUnreported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	reply := `{"type":"control_response","response":{"subtype":"success","request_id":"ao-usage","response":{"rate_limits_available":false}}}`
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nread -r _\necho '"+reply+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	limits, err := c.Limits(context.Background(), "")
+	if err != nil || !limits.Unreported || len(limits.Windows) != 0 {
+		t.Fatalf("Limits = %+v, %v; want unreported with no windows", limits, err)
+	}
+}

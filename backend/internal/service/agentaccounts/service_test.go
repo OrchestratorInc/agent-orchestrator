@@ -59,6 +59,7 @@ type fakeClaude struct {
 	apiKey     map[string]bool // folders logged in with an API key
 	failing    map[string]bool // folders whose check fails (a timeout)
 	windows    []domain.AgentAccountLimitWindow
+	unreported bool // the CLI answers without asking the provider (a setup token)
 	limitsErr  error
 	orgOf      map[string]string
 	orgNameOf  map[string]string
@@ -87,7 +88,7 @@ func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits,
 	if f.limitsErr != nil {
 		return domain.AgentAccountLimits{}, f.limitsErr
 	}
-	return domain.AgentAccountLimits{Windows: f.windows}, nil
+	return domain.AgentAccountLimits{Windows: f.windows, Unreported: f.unreported}, nil
 }
 func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
 	return []string{"claude", "auth", "login"}, nil
@@ -776,9 +777,17 @@ func TestAReadingThatReachesTheProviderConfirmsTheLogin(t *testing.T) {
 	if len(confirmed) != 0 {
 		t.Fatalf("confirmed without a working login: %v", confirmed)
 	}
-	// Signed in with the CLI's own login, outside AO.
+	// A setup token reads as signed in whether or not it still works, and its
+	// usage answer never reached the provider.
 	claude.failing[""] = false
 	claude.signedInAs[""] = "a@example.com"
+	claude.unreported = true
+	read()
+	if len(confirmed) != 0 {
+		t.Fatalf("confirmed on an answer that never reached the provider: %v", confirmed)
+	}
+	// Signed in with the CLI's own login, outside AO.
+	claude.unreported = false
 	read()
 	if len(confirmed) != 1 || confirmed[0] != domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude) {
 		t.Fatalf("confirmed = %v", confirmed)

@@ -435,8 +435,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	confirmed := s.loginConfirmed
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
-	// that has them shows the login worked when the reading began.
-	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil && r.limitsErr == "" {
+	// that has them shows the login worked when the reading began. An answer the
+	// CLI gave without asking (an expired setup token reads the same) does not.
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil && !r.limits.Unreported && r.limitsErr == "" {
 		confirmed(account, r.at)
 	}
 	return r
