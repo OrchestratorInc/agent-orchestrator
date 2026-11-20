@@ -60,7 +60,6 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
-import { NATIVE_BOUNCE_Y } from "../lib/native-overscroll";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
 
@@ -872,7 +871,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						<>
 						<div
 						aria-busy={allQuery.isFetchingNextPage || remoteLoadingEarlierHost !== null}
-						className={`board-scrollbar min-h-0 max-h-notification-max-height overflow-x-hidden overflow-y-auto ${NATIVE_BOUNCE_Y}`}
+						className="board-scrollbar min-h-0 max-h-notification-max-height overflow-x-hidden overflow-y-auto overscroll-none"
 						onScroll={loadEarlierOnScroll}
 						role="list"
 					>

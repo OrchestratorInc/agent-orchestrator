@@ -169,7 +169,6 @@ import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { RemoteHostsSection } from "./RemoteHostsSection";
-import { NATIVE_BOUNCE_Y } from "../lib/native-overscroll";
 
 // macOS paints framed chrome: the fixed TitlebarNav cluster carries the
 // sidebar toggle + history arrows above this surface. Windows hangs the sidebar
@@ -386,11 +385,9 @@ const SIDEBAR_INITIAL_SECTION_LIMIT = 10;
 const SIDEBAR_PROJECT_SESSION_LIMIT = 6;
 /** Initial agent count listed in the Sessions section, which sits above Projects, before its Show more. */
 const SIDEBAR_SESSIONS_LIMIT = 5;
-/** Section scrollers fill the height their flex parent leaves them and scroll inside it.
- *  At either end a trackpad stretches the list natively on macOS (the shell's
- *  scrollBounce) while the sidebar around it stays put; reduced motion keeps it rigid. */
+/** Section scrollers fill the height their flex parent leaves them and scroll inside it. */
 const SECTION_SCROLLER_CLASS =
-	`scrollbar-none overflow-y-auto overflow-x-hidden ${NATIVE_BOUNCE_Y} group-data-[collapsible=icon]:overflow-visible`;
+	"scrollbar-none overflow-y-auto overflow-x-hidden overscroll-none group-data-[collapsible=icon]:overflow-visible";
 
 /** Caps a sidebar list at `limit` behind Show more/less. The cap lifts on its
  *  own when the active item sits past it, until the user collapses it again. */

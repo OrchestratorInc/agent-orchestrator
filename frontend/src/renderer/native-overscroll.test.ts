@@ -33,10 +33,8 @@ const BOUNCING_FILES = [
 	"frontend/src/renderer/components/ui/command.tsx",
 	// Lists and menus with their own scroller.
 	"frontend/src/renderer/components/BrowserPanel.tsx",
-	"frontend/src/renderer/components/NotificationCenter.tsx",
 	"frontend/src/renderer/components/ReviewerPicker.tsx",
 	"frontend/src/renderer/components/SearchablePicker.tsx",
-	"frontend/src/renderer/components/Sidebar.tsx",
 	"frontend/src/renderer/components/chat/AgentSwitchPicker.tsx",
 	"frontend/src/renderer/components/chat/ChatAnnotationSummary.tsx",
 	"frontend/src/renderer/components/chat/ComposerSuggestMenu.tsx",
