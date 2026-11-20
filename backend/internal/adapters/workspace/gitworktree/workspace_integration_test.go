@@ -1568,6 +1568,9 @@ func TestWorkspaceIntegrationRefreshesInferredChildBaseBeforeMaterialization(t *
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
+	// Resolving the clone's cached default looks the remote HEAD up again in
+	// the background; let it finish before the temporary repositories go.
+	t.Cleanup(ws.waitForHeadRefreshes)
 	childTarget, err := ws.ResolveDefaultBranch(context.Background(), childRepo, "")
 	if err != nil {
 		t.Fatalf("resolve inferred child default: %v", err)
