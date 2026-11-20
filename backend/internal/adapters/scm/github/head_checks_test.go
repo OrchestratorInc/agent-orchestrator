@@ -24,7 +24,9 @@ func TestHeadChecks_ReadsSuitesStatusesAndWhenChecksCouldStart(t *testing.T) {
 	f.on(http.MethodGet, "/repos/octocat/hello/commits/"+stackHead+"/status", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"state": "pending", "total_count": 0, "statuses": []any{}})
 	})
-	got, err := newProviderForTest(t, f).HeadChecks(ctx(), stackRepo, stackHead)
+	p := newProviderForTest(t, f)
+	p.now = func() time.Time { return pushed }
+	got, err := p.HeadChecks(ctx(), stackRepo, stackHead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,10 +35,11 @@ func TestHeadChecks_ReadsSuitesStatusesAndWhenChecksCouldStart(t *testing.T) {
 	}
 }
 
-// With no suites at all, the commit's own date is the earliest checks could start.
-func TestHeadChecks_UsesTheCommitDateWithoutSuites(t *testing.T) {
+// A future commit date must not extend the observation grace period.
+func TestHeadChecks_UsesObservationTimeWithoutSuites(t *testing.T) {
 	f := newFakeGH(t)
-	committed := time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)
+	observed := time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)
+	committed := observed.Add(time.Hour)
 	f.on(http.MethodGet, "/repos/octocat/hello/commits/"+stackHead+"/check-suites", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 0, "check_suites": []any{}})
 	})
@@ -46,11 +49,49 @@ func TestHeadChecks_UsesTheCommitDateWithoutSuites(t *testing.T) {
 	f.on(http.MethodGet, "/repos/octocat/hello/commits/"+stackHead, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]any{"committer": map[string]any{"date": committed}}})
 	})
-	got, err := newProviderForTest(t, f).HeadChecks(ctx(), stackRepo, stackHead)
+	p := newProviderForTest(t, f)
+	p.now = func() time.Time { return observed }
+	got, err := p.HeadChecks(ctx(), stackRepo, stackHead)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Suites != 0 || got.Started != 0 || got.Statuses != 1 || !got.Since.Equal(committed) {
+	if got.Suites != 0 || got.Started != 0 || got.Statuses != 1 || !got.Since.Equal(observed) {
 		t.Fatalf("got = %#v", got)
+	}
+}
+
+// Commit and suite dates describe old objects, not when this head was pushed.
+func TestHeadChecksGraceStartsAtObservation(t *testing.T) {
+	f := newFakeGH(t)
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	p := newProviderForTest(t, f)
+	p.now = func() time.Time { return now }
+	for _, sha := range []string{stackHead, "new-head"} {
+		f.on(http.MethodGet, "/repos/octocat/hello/commits/"+sha+"/check-suites", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"total_count":0,"check_suites":[]}`))
+		})
+		f.on(http.MethodGet, "/repos/octocat/hello/commits/"+sha+"/status", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"total_count":0}`)) })
+		f.on(http.MethodGet, "/repos/octocat/hello/commits/"+sha, func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]any{"committer": map[string]any{"date": now.Add(-time.Hour)}}})
+		})
+	}
+	first, err := p.HeadChecks(ctx(), stackRepo, stackHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Since.Equal(now) {
+		t.Fatalf("first observation since=%v, want %v", first.Since, now)
+	}
+	now = now.Add(3 * time.Minute)
+	same, err := p.HeadChecks(ctx(), stackRepo, stackHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := p.HeadChecks(ctx(), stackRepo, "new-head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same.Since.Equal(first.Since) || !next.Since.Equal(now) {
+		t.Fatalf("same=%v next=%v, want %v and %v", same.Since, next.Since, first.Since, now)
 	}
 }
