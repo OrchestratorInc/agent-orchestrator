@@ -120,14 +120,47 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(gitActionMessage("createPR", "main", undefined))).toEqual({ kind: "gitAction", action: "createPR", base: "main" });
 		expect(readAutomation(gitActionMessage("createDraftPR", undefined, undefined))).toEqual({ kind: "gitAction", action: "createDraftPR", base: undefined });
 		expect(readAutomation(gitActionMessage("commit", "main", undefined))).toEqual({ kind: "gitAction", action: "commit" });
-		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush" });
+		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush", prNumber: 12 });
+		expect(readAutomation(gitActionMessage("commitPush", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "commitPush",
+			branch: "8534",
+			remote: "origin",
+		});
 		expect(readAutomation(gitActionMessage("push", "main", undefined))).toEqual({ kind: "gitAction", action: "push" });
+		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "push",
+			branch: "8534",
+			remote: "origin",
+		});
+		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", remoteBranch: "origin/8534", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "push",
+			branch: "8534",
+			remote: "origin/8534",
+		});
 		expect(readAutomation(gitActionMessage("updateBase", "main", 7534))).toEqual({ kind: "gitAction", action: "updateBase", base: "main" });
 		expect(readAutomation(gitActionMessage("updateBase", undefined, undefined))).toEqual({ kind: "gitAction", action: "updateBase" });
+		expect(readAutomation(gitActionMessage("updateBase", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "updateBase",
+			base: "main",
+			branch: "8534",
+			remote: "origin",
+		});
 		expect(readAutomation(gitActionMessage("resolveConflicts", "main", 7534, ["src/a.tsx", "src/a.test.tsx"]))).toEqual({
 			kind: "gitAction", action: "resolveConflicts", base: "main", files: ["src/a.tsx", "src/a.test.tsx"],
 		});
 		expect(readAutomation(gitActionMessage("resolveConflicts", undefined, undefined))).toEqual({ kind: "gitAction", action: "resolveConflicts" });
+		expect(readAutomation(gitActionMessage("resolveConflicts", "main", undefined, ["src/a.tsx"], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "resolveConflicts",
+			base: "main",
+			files: ["src/a.tsx"],
+			branch: "8534",
+			remote: "origin",
+		});
 		expect(readAutomation(otherPRConflict({ number: 8, sourceBranch: "ao/feature", targetBranch: "main", mergeability: { state: "conflicting", conflictFiles: [{ path: "src/a.tsx" }] } }))).toEqual({
 			kind: "gitAction", action: "resolveConflicts", base: "main", prNumber: 8, files: ["src/a.tsx"],
 		});
@@ -284,6 +317,12 @@ describe("drawing AO's automation messages", () => {
 		expect(action).toHaveTextContent("Queued · sends when the agent finishes");
 		cleanup();
 
+		draw(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }), {}, true);
+		const pushAction = screen.getByTestId("your-action");
+		expect(pushAction).toHaveTextContent("Push");
+		expect(pushAction).toHaveTextContent("origin/8534");
+		cleanup();
+
 		draw(formatDiffSelectionMessage({ instruction: "Use a constant here.", filePath: "src/app.ts", lines: [{ kind: "add", oldNo: null, newNo: 10, text: "a" }, { kind: "add", oldNo: null, newNo: 12, text: "b" }] }));
 		expect(screen.getByTestId("your-action")).toHaveTextContent("app.ts:10–12");
 		expect(screen.getByTestId("your-action")).toHaveTextContent("Use a constant here.");
@@ -306,6 +345,18 @@ describe("drawing AO's automation messages", () => {
 		const update = screen.getByTestId("your-action");
 		expect(update).toHaveTextContent("Update from develop");
 		expect(update).not.toHaveTextContent("developdevelop");
+		cleanup();
+
+		draw(gitActionMessage("updateBase", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }));
+		const updateTarget = screen.getByTestId("your-action");
+		expect(updateTarget).toHaveTextContent("Update from main");
+		expect(updateTarget).toHaveTextContent("origin/8534");
+		cleanup();
+
+		draw(gitActionMessage("resolveConflicts", "main", undefined, ["src/a.tsx"], { branch: "8534", remote: "origin", hasOtherPRs: true }));
+		const resolveTarget = screen.getByTestId("your-action");
+		expect(resolveTarget).toHaveTextContent("Resolve conflictsmain");
+		expect(resolveTarget).toHaveTextContent("origin/8534");
 	});
 
 	it("leaves a message an agent sent to the agent's card, whatever its text says", () => {

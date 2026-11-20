@@ -7225,6 +7225,127 @@ describe("SessionInspector branch summary", () => {
     expect(within(screen.getByTestId("pr-card")).queryByText("1 uncommitted file")).not.toBeInTheDocument();
   });
 
+  it("renders working tree in a separate section and makes Push target explicit when branch matches no open PR", async () => {
+    const prOpen = prSummary(7, "open", { sourceBranch: "feat/other" });
+    mockGitState({
+      committed: [changedFile("src/a.ts", 5, 0)],
+      prs: [prOpen],
+    });
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(7, "open")], {
+          branch: "feat/my-fix",
+          branchState: { behind: 0, commits: 2, unpushed: 2 },
+        })}
+      />,
+      undefined,
+      (client) => seedPRSummaries(client, [prOpen]),
+    );
+
+    // PR card renders PR #7, without the working tree's unpushed commits or Push button
+    const card = () => within(screen.getByTestId("pr-card"));
+    expect(await card().findByText("PR #7")).toBeInTheDocument();
+    expect(card().queryByText("2 commits")).not.toBeInTheDocument();
+    expect(card().queryByRole("button", { name: /Push/ })).not.toBeInTheDocument();
+
+    // Working tree is in a separate section clearly labeled with the checked-out branch
+    expect(screen.getByRole("button", { name: /Working tree: feat\/my-fix/ })).toBeInTheDocument();
+    const workingTree = within(screen.getByTestId("inspector-working-tree"));
+    expect(await workingTree.findByText("2 commits")).toBeInTheDocument();
+    expect(workingTree.getByText("not pushed")).toBeInTheDocument();
+
+    // Push button has explicit branch and remote target, not referencing PR
+    const pushBtn = workingTree.getByRole("button", { name: "Push feat/my-fix to origin" });
+    expect(pushBtn).toBeInTheDocument();
+
+    await userEvent.click(pushBtn);
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toBe("Push branch `feat/my-fix` to remote `origin`.");
+  });
+
+  it("targets the tracking remote branch when checked-out branch already has a remote counterpart", async () => {
+    const prOpen = prSummary(7, "open", { sourceBranch: "feat/other" });
+    mockGitState({
+      committed: [changedFile("src/a.ts", 5, 0)],
+      prs: [prOpen],
+    });
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(7, "open")], {
+          branch: "feat/my-fix",
+          branchState: { behind: 0, commits: 3, remoteBranch: "origin/feat/my-fix", unpushed: 1 },
+        })}
+      />,
+      undefined,
+      (client) => seedPRSummaries(client, [prOpen]),
+    );
+
+    const workingTree = within(await screen.findByTestId("inspector-working-tree"));
+    const pushBtn = await workingTree.findByRole("button", { name: "Push feat/my-fix to origin" });
+    await userEvent.click(pushBtn);
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toBe("Push branch `feat/my-fix` to `origin/feat/my-fix`.");
+  });
+
+  it("derives working tree heading and push target from observed checkout when recorded and checked-out branch names differ", async () => {
+    const prOpen = prSummary(7, "open", { sourceBranch: "feat/other" });
+    mockGitState({
+      committed: [changedFile("src/a.ts", 5, 0)],
+      prs: [prOpen],
+    });
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(7, "open")], {
+          branch: "feat/original",
+          branchState: { branch: "feat/my-fix", behind: 0, commits: 2, unpushed: 2 },
+        })}
+      />,
+      undefined,
+      (client) => seedPRSummaries(client, [prOpen]),
+    );
+
+    // Section heading uses observed checkout branch feat/my-fix, not recorded feat/original
+    expect(screen.getByRole("button", { name: /Working tree: feat\/my-fix/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Working tree: feat\/original/ })).not.toBeInTheDocument();
+
+    const workingTree = within(screen.getByTestId("inspector-working-tree"));
+    expect(await workingTree.findByText("2 commits")).toBeInTheDocument();
+    expect(workingTree.getByText("not pushed")).toBeInTheDocument();
+
+    // Push button has explicit branch and remote target targeting the observed checkout
+    const pushBtn = workingTree.getByRole("button", { name: "Push feat/my-fix to origin" });
+    expect(pushBtn).toBeInTheDocument();
+
+    await userEvent.click(pushBtn);
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toBe("Push branch `feat/my-fix` to remote `origin`.");
+  });
+
+  it("targets tracking remote branch when recorded and checked-out branch names differ and checkout has a remote counterpart", async () => {
+    const prOpen = prSummary(7, "open", { sourceBranch: "feat/other" });
+    mockGitState({
+      committed: [changedFile("src/a.ts", 5, 0)],
+      prs: [prOpen],
+    });
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(7, "open")], {
+          branch: "feat/original",
+          branchState: { branch: "feat/my-fix", behind: 0, commits: 3, remoteBranch: "origin/feat/my-fix", unpushed: 1 },
+        })}
+      />,
+      undefined,
+      (client) => seedPRSummaries(client, [prOpen]),
+    );
+
+    expect(screen.getByRole("button", { name: /Working tree: feat\/my-fix/ })).toBeInTheDocument();
+    const workingTree = within(await screen.findByTestId("inspector-working-tree"));
+    const pushBtn = await workingTree.findByRole("button", { name: "Push feat/my-fix to origin" });
+    await userEvent.click(pushBtn);
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toBe("Push branch `feat/my-fix` to `origin/feat/my-fix`.");
+  });
+
   it("shows the PR's labels and the people asked to review it on the card", async () => {
     const labelled = prSummary(7, "open", {
       labels: [{ name: "bug", color: "d73a4a" }, { name: "docs" }],
