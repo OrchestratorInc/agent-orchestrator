@@ -67,7 +67,9 @@ export function BrowserImportDialog({
 	const sourceLoading = source ? loadingSourceId === source.id : false;
 	const showSafariAccessDenied = source?.family === "safari" && safariAccessDenied;
 	const resultEmpty = result?.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0) ?? false;
-	const resultTitle = resultEmpty ? "settings.browserImport.empty" : "settings.browserImport.complete";
+	const resultTitle = resultEmpty ? "settings.browserImport.empty"
+		: includeCookies && result?.entries.some((entry) => entry.importedCookies === 0)
+			? "settings.browserImport.partial" : "settings.browserImport.complete";
 
 	async function loadSourceProfiles(id: string): Promise<BrowserImportSource | null> {
 		if (!bridge) return null;
@@ -584,6 +586,11 @@ function ResultStep({ empty, includeCookies, includeHistory, result }: { empty: 
 								: <CircleMinus aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
 						</div>
 					))}
+					{includeCookies && (entry.importedCookies === 0 || entry.warnings.some((warning) => warning.code === "cookie-encryption-unsupported")) ? (
+						<p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+							{t(entry.importedCookies === 0 ? "settings.browserImport.resultNoCookies" : "settings.browserImport.resultNoSignIns")}
+						</p>
+					) : null}
 					{entry.skippedCookies > 0 || entry.warnings.length > 0 ? (
 						<details className="border-t border-border py-3 text-xs text-muted-foreground">
 							<summary className="cursor-pointer">{t("settings.browserImport.importDetails")}{entry.skippedCookies > 0 ? ` · ${t("settings.browserImport.skippedCookies", { count: entry.skippedCookies })}` : ""}</summary>
@@ -627,6 +634,7 @@ function applySourceDefaults(
 function capabilityKey(reason: BrowserImportSource["cookieSupportReason"]): MessageKey {
 	if (reason === "chromium-encryption-partial") return "settings.browserImport.capability.chromium-encryption-partial";
 	if (reason === "chromium-encryption-unsupported") return "settings.browserImport.capability.chromium-encryption-unsupported";
+	if (reason === "chromium-app-bound-encryption") return "settings.browserImport.capability.chromium-app-bound-encryption";
 	return "settings.browserImport.cookiesDescription";
 }
 
@@ -638,6 +646,7 @@ function warningKey(code: BrowserImportWarning["code"]): MessageKey {
 		case "cookie-limit-truncated": return "settings.browserImport.warning.cookie-limit-truncated";
 		case "history-limit-truncated": return "settings.browserImport.warning.history-limit-truncated";
 		case "encrypted-cookies-skipped": return "settings.browserImport.warning.encrypted-cookies-skipped";
+		case "cookie-encryption-unsupported": return "settings.browserImport.warning.cookie-encryption-unsupported";
 		case "expired-cookies-skipped": return "settings.browserImport.warning.expired-cookies-skipped";
 		case "invalid-cookies-skipped": return "settings.browserImport.warning.invalid-cookies-skipped";
 		case "cookie-attributes-defaulted": return "settings.browserImport.warning.cookie-attributes-defaulted";

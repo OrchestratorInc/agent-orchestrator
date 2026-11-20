@@ -50,6 +50,10 @@ const IMPORT_TOTAL_MAX_BYTES = 512 * 1024 * 1024;
 const LOCAL_STATE_MAX_BYTES = 4 * 1024 * 1024;
 const STAGING_STALE_AGE_MS = 24 * 60 * 60 * 1_000;
 const SOURCE_ID_PATTERN = /^[0-9a-f]{32}$/;
+// Chromium v20 = App-Bound Encryption (Windows, Chrome 127+). The key lives in
+// `os_crypt.app_bound_encrypted_key` and Chrome only releases it to itself, so
+// these values can never be decrypted by another app.
+const APP_BOUND_ENCRYPTION_PREFIX = "v20";
 
 type BrowserFamily = "chromium" | "firefox" | "safari";
 
@@ -116,6 +120,7 @@ export type BrowserProfileImportOptions = {
 	env?: NodeJS.ProcessEnv;
 	now?: () => Date;
 	sourceLstat?: typeof lstat;
+	readMacPassword?: typeof readMacChromiumPassword;
 };
 
 class SourceBudget {
@@ -550,16 +555,37 @@ async function hasImportableDatabase(
 	return false;
 }
 
-function cookieCapability(
-	family: BrowserFamily,
+async function cookieCapability(
+	descriptor: BrowserDescriptor,
+	root: string,
 	platform: NodeJS.Platform,
-): { support: BrowserImportSource["cookieSupport"]; reason: BrowserImportCookieSupportReason } {
-	if (family === "firefox") return { support: "supported", reason: "firefox-plaintext" };
-	if (family === "safari") return { support: "supported", reason: "safari-plaintext" };
+): Promise<{ support: BrowserImportSource["cookieSupport"]; reason: BrowserImportCookieSupportReason }> {
+	if (descriptor.family === "firefox") return { support: "supported", reason: "firefox-plaintext" };
+	if (descriptor.family === "safari") return { support: "supported", reason: "safari-plaintext" };
+	if (platform === "win32" && await usesAppBoundEncryption(root)) {
+		// Chrome ≥127 on Windows re-encrypts every cookie with app-bound
+		// encryption (v20). Its key is only released to Chrome itself, so the
+		// sign-in cookies are unreadable — say so up front instead of letting
+		// an import complete with zero usable logins.
+		return { support: "unsupported", reason: "chromium-app-bound-encryption" };
+	}
 	return {
 		support: "partial",
 		reason: platform === "linux" ? "chromium-encryption-unsupported" : "chromium-encryption-partial",
 	};
+}
+
+async function usesAppBoundEncryption(root: string): Promise<boolean> {
+	try {
+		const localState = await readSmallJSON(path.join(root, "Local State"), LOCAL_STATE_MAX_BYTES);
+		return isRecord(localState)
+			&& isRecord(localState.os_crypt)
+			&& typeof localState.os_crypt.app_bound_encrypted_key === "string"
+			&& localState.os_crypt.app_bound_encrypted_key.length > 0;
+	} catch {
+		// A missing or malformed Local State cannot prove app-bound encryption.
+		return false;
+	}
 }
 
 export class BrowserProfileImportService {
@@ -630,7 +656,7 @@ export class BrowserProfileImportService {
 				if (!root) continue;
 				const publicSourceId = opaqueSourceId(`${descriptor.id}:source`, root);
 				if (options.sourceId && publicSourceId !== options.sourceId) continue;
-				const capability = cookieCapability(descriptor.family, this.context.platform);
+				const capability = await cookieCapability(descriptor, root, this.context.platform);
 				if (descriptor.family === "safari" && !options.includeProtectedSource) {
 					sources.push({
 						descriptor,
@@ -729,7 +755,7 @@ export class BrowserProfileImportService {
 				onProgress({ requestId: request.requestId, phase: "permission", completed: 0, total: selected.length });
 			}
 			const decryptor = request.includeCookies
-				? await ChromiumCookieDecryptor.create(source, this.context.platform, signal)
+				? await ChromiumCookieDecryptor.create(source, this.context.platform, signal, this.options.readMacPassword)
 				: null;
 			const readData: ReadProfileData[] = [];
 			for (const [index, profile] of selected.entries()) {
@@ -1238,6 +1264,14 @@ function readChromiumCookies(
 	return withReadOnlyDatabase(file, (database) => {
 		requireTable(database, "cookies", "The selected Chromium profile does not contain supported cookie data.");
 		const columns = tableColumns(database, "cookies");
+		const versionRow = hasTable(database, "meta")
+			? database.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value?: unknown } | undefined
+			: undefined;
+		// Old databases (and exports without metadata) contain bare cookie values.
+		const databaseVersion = versionRow ? Number(versionRow.value) : 0;
+		if (!Number.isSafeInteger(databaseVersion) || databaseVersion < 0) {
+			throw new Error("The selected Chromium cookie database has an invalid version.");
+		}
 		const hasPartitionKey = columns.has("top_frame_site_key");
 		const isolationWhere = hasPartitionKey ? "WHERE COALESCE(top_frame_site_key, '') = ''" : "";
 		const total = countRows(database, "cookies");
@@ -1253,17 +1287,23 @@ function readChromiumCookies(
 			LIMIT ${BROWSER_IMPORT_MAX_COOKIES}
 		`).all() as Record<string, unknown>[];
 		let encryptedSkipped = 0;
+		let appBoundSkipped = 0;
 		const raw: Array<Record<string, unknown>> = [];
 		for (const row of rows) {
 			const domain = stringValue(row.host_key);
 			let value = stringValue(row.value);
 			if (!value) {
 				const encrypted = Buffer.isBuffer(row.encrypted_value) ? row.encrypted_value : Buffer.alloc(0);
-				value = decryptor?.decrypt(encrypted, domain) ?? "";
-				if (!value && encrypted.length > 0) {
-					encryptedSkipped += 1;
+				const decrypted = decryptor?.decrypt(encrypted, domain, databaseVersion) ?? null;
+				if (decrypted === null && encrypted.length > 0) {
+					if (encrypted.subarray(0, 3).toString() === APP_BOUND_ENCRYPTION_PREFIX) {
+						appBoundSkipped += 1;
+					} else {
+						encryptedSkipped += 1;
+					}
 					continue;
 				}
+				value = decrypted ?? "";
 			}
 			raw.push({
 				domain,
@@ -1278,9 +1318,10 @@ function readChromiumCookies(
 		}
 		const normalized = normalizeCookieRows(raw, now);
 		if (encryptedSkipped > 0) normalized.warnings.push({ code: "encrypted-cookies-skipped", count: encryptedSkipped });
+		if (appBoundSkipped > 0) normalized.warnings.push({ code: "cookie-encryption-unsupported", count: appBoundSkipped });
 		if (isolatedSkipped > 0) normalized.warnings.push({ code: "isolated-cookies-skipped", count: isolatedSkipped });
 		if (truncated > 0) normalized.warnings.push({ code: "cookie-limit-truncated", count: truncated });
-		normalized.skipped += encryptedSkipped + isolatedSkipped + truncated;
+		normalized.skipped += encryptedSkipped + appBoundSkipped + isolatedSkipped + truncated;
 		return normalized;
 	});
 }
@@ -1670,7 +1711,7 @@ class ChromiumCookieDecryptor {
 		private readonly key: Buffer | null,
 	) {}
 
-	static async create(source: InternalSource, platform: NodeJS.Platform, signal: AbortSignal): Promise<ChromiumCookieDecryptor> {
+	static async create(source: InternalSource, platform: NodeJS.Platform, signal: AbortSignal, readMacPassword = readMacChromiumPassword): Promise<ChromiumCookieDecryptor> {
 		if (source.descriptor.family !== "chromium") return new ChromiumCookieDecryptor(platform, null);
 		if (platform === "win32") {
 			try {
@@ -1686,15 +1727,15 @@ class ChromiumCookieDecryptor {
 			}
 		}
 		if (platform === "darwin") {
-			return new ChromiumCookieDecryptor(platform, await readMacChromiumPassword(source.descriptor.chromiumKeychainNames ?? [], signal));
+			return new ChromiumCookieDecryptor(platform, await readMacPassword(source.descriptor.chromiumKeychainNames ?? [], signal));
 		}
 		return new ChromiumCookieDecryptor(platform, null);
 	}
 
-	decrypt(encrypted: Buffer, host: string): string | null {
+	decrypt(encrypted: Buffer, host: string, databaseVersion: number): string | null {
 		if (encrypted.length === 0 || !this.key) return null;
-		if (this.platform === "win32") return decryptWindowsChromiumCookie(encrypted, this.key, host);
-		if (this.platform === "darwin") return decryptMacChromiumCookie(encrypted, this.key, host);
+		if (this.platform === "win32") return decryptWindowsChromiumCookie(encrypted, this.key, host, databaseVersion);
+		if (this.platform === "darwin") return decryptMacChromiumCookie(encrypted, this.key, host, databaseVersion);
 		return null;
 	}
 }
@@ -1726,7 +1767,7 @@ export async function readMacChromiumPassword(
 	throw new Error("The browser's Safe Storage key was not found. Turn off cookies to import history only.");
 }
 
-export function decryptWindowsChromiumCookie(encrypted: Buffer, key: Buffer, host: string): string | null {
+export function decryptWindowsChromiumCookie(encrypted: Buffer, key: Buffer, host: string, databaseVersion: number): string | null {
 	if (encrypted.subarray(0, 3).toString() !== "v10" && encrypted.subarray(0, 3).toString() !== "v11") return null;
 	if (encrypted.length < 3 + 12 + 16) return null;
 	try {
@@ -1739,33 +1780,34 @@ export function decryptWindowsChromiumCookie(encrypted: Buffer, key: Buffer, hos
 		return stripChromiumCookieHostDigest(
 			Buffer.concat([decipher.update(ciphertext), decipher.final()]),
 			host,
-		).toString("utf8");
+			databaseVersion,
+		)?.toString("utf8") ?? null;
 	} catch {
 		return null;
 	}
 }
 
-function decryptMacChromiumCookie(encrypted: Buffer, password: Buffer, host: string): string | null {
+function decryptMacChromiumCookie(encrypted: Buffer, password: Buffer, host: string, databaseVersion: number): string | null {
 	const prefix = encrypted.subarray(0, 3).toString();
 	if (prefix !== "v10" && prefix !== "v11") return null;
 	try {
 		const key = pbkdf2Sync(password, "saltysalt", 1_003, 16, "sha1");
 		const decipher = createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
 		const plaintext = Buffer.concat([decipher.update(encrypted.subarray(3)), decipher.final()]);
-		return stripChromiumCookieHostDigest(plaintext, host).toString("utf8");
+		return stripChromiumCookieHostDigest(plaintext, host, databaseVersion)?.toString("utf8") ?? null;
 	} catch {
 		return null;
 	}
 }
 
-function stripChromiumCookieHostDigest(plaintext: Buffer, host: string): Buffer {
-	// Chromium cookie DB v24 prefixes encrypted values with SHA-256(host_key)
-	// and verifies/removes it after platform decryption. Older databases do not,
-	// so only strip an exact digest match.
+function stripChromiumCookieHostDigest(plaintext: Buffer, host: string, databaseVersion: number): Buffer | null {
+	if (databaseVersion < 24) return plaintext;
+	// v24+ requires a matching SHA-256(host_key), even when AES padding is valid.
+	// A mismatch is corrupt data, never a legacy cookie value.
 	const hostDigest = createHash("sha256").update(host).digest();
 	return plaintext.subarray(0, hostDigest.length).equals(hostDigest)
 		? plaintext.subarray(hostDigest.length)
-		: plaintext;
+		: null;
 }
 
 async function windowsDPAPIUnprotect(input: Buffer): Promise<Buffer | null> {
