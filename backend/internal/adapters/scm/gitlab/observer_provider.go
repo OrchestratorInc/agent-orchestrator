@@ -322,6 +322,7 @@ func mrToSCMPRObservation(repo ports.SCMRepo, mr *restMR) ports.SCMPRObservation
 		Closed:                   closed,
 		SourceBranch:             mr.SourceBranch,
 		HeadRepo:                 repo.Repo,
+		HeadFromFork:             mr.SourceProjectID != 0 && mr.SourceProjectID != mr.TargetProjectID,
 		TargetBranch:             mr.TargetBranch,
 		HeadSHA:                  mr.SHA,
 		Title:                    mr.Title,

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
@@ -103,16 +104,68 @@ describe("render activity", () => {
 		expect(inline.getAttribute("src")).toBe(src);
 	});
 
-	it("shows a note instead of a frame in a remote host's chat", () => {
-		// The local daemon has no copy of a remote host's render, and the remote
-		// proxy URL carries a capability token the page could read.
-		render(
-			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
-				<ActivityRow activity={renderActivity()} />
-			</ChatImageSourceProvider>,
-		);
-		expect(document.querySelector("iframe")).toBeNull();
-		expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+	describe("in a remote host's chat", () => {
+		const renderOrigin = "http://ao-preview-0123.localhost:4000";
+		afterEach(() => vi.restoreAllMocks());
+
+		function remoteChat(baseUrl?: string) {
+			return render(
+				<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+					<ActivityRow activity={renderActivity()} />
+				</ChatImageSourceProvider>,
+			);
+		}
+
+		it("frames the page from the proxy's render origin, sandboxed, without the proxy token", async () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-0123\.localhost:4000\/r1#ao-theme=/));
+			expect(previewUrl).toHaveBeenCalledWith("h_box", "proj-1", "/api/v1/sessions/proj-1/renders/r1");
+			expect(frame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+		});
+
+		it("reads the source from the render origin and offers no local-only actions", async () => {
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>chart</p>"));
+			const user = userEvent.setup();
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			await user.click(screen.getByRole("button", { name: "Expand page" }));
+			const dialog = screen.getByRole("dialog");
+			for (const name of ["Save as artifact", "Open in Orchestrator Browser", "Open in external browser"]) {
+				expect(within(dialog).queryByRole("button", { name })).toBeNull();
+			}
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			await waitFor(() => expect(fetch).toHaveBeenCalledWith(`${renderOrigin}/r1?source=1`, expect.anything()));
+		});
+
+		it("drops the previous origin while a reconnected host's lookup is pending", async () => {
+			let resolveNext!: (url: string) => void;
+			vi.spyOn(aoBridge.remotes, "previewUrl")
+				.mockResolvedValueOnce(`${renderOrigin}/r1`)
+				.mockReturnValueOnce(new Promise((resolve) => (resolveNext = resolve)));
+			const chat = (baseUrl: string) => (
+				<TooltipProvider>
+					<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+						<ActivityRow activity={renderActivity()} />
+					</ChatImageSourceProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(chat("http://127.0.0.1:4000/tok123"));
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			rerender(chat("http://127.0.0.1:4001/tok456"));
+			expect(document.querySelector("iframe")).toBeNull();
+			act(() => resolveNext("http://ao-preview-4567.localhost:4001/r1"));
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-4567\.localhost:4001\/r1#/));
+		});
+
+		it("shows the note while the host is not connected", () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
+			remoteChat();
+			expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+			expect(previewUrl).not.toHaveBeenCalled();
+			expect(document.querySelector("iframe")).toBeNull();
+		});
 	});
 
 	it("frames the page in a local chat", () => {
@@ -466,12 +519,12 @@ describe("artifact activity", () => {
 	const previewUrl = "http://ao-preview-artifact.x.localhost:3001/q3/Q3%20(final).html";
 	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
 
-	function renderArtifact(artifacts?: SessionArtifact[]) {
+	function renderArtifact(artifacts?: SessionArtifact[], activity = artifactActivity) {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		return render(
 			<QueryClientProvider client={client}>
 				<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
-					<ActivityRow activity={artifactActivity} />
+					<ActivityRow activity={activity} />
 				</ChatImageSourceProvider>
 			</QueryClientProvider>,
 		);
@@ -620,6 +673,40 @@ describe("artifact activity", () => {
 		expect(header).toHaveTextContent("Q3 (final).html");
 		// The session lists no preview for this artifact, so there is nothing to open.
 		expect(within(header).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
+	});
+
+	it("folds the page from its header and keeps it folded when the card remounts", async () => {
+		const user = userEvent.setup();
+		// Its own card: the fold is remembered per card for the rest of the run.
+		const activity = { ...artifactActivity, id: "act-fold" };
+		const fold = () => within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" });
+		const { unmount } = renderArtifact(undefined, activity);
+		expect(fold()).toHaveAttribute("aria-expanded", "true");
+		const frame = artifactFrame();
+		await user.click(fold());
+		expect(fold()).toHaveAttribute("aria-expanded", "false");
+		// Folded, the page leaves the tab order and its hover actions go with it.
+		expect(frame.closest("[inert]")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Expand page" })).toBeNull();
+		// A long chat remounts a card that scrolls away; it comes back folded, without loading the page.
+		unmount();
+		renderArtifact(undefined, activity);
+		expect(fold()).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByTitle("Q3 (final).html")).toBeNull();
+		await user.click(fold());
+		expect(fold()).toHaveAttribute("aria-expanded", "true");
+		expect(artifactFrame().closest("[inert]")).toBeNull();
+		expect(screen.getByRole("button", { name: "Expand page" })).toBeInTheDocument();
+	});
+
+	it("opens a later report of a folded file unfolded", async () => {
+		const user = userEvent.setup();
+		const first = renderArtifact(undefined, { ...artifactActivity, id: "act-fold-first" });
+		await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" }));
+		first.unmount();
+		renderArtifact(undefined, { ...artifactActivity, id: "act-fold-later" });
+		expect(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" })).toHaveAttribute("aria-expanded", "true");
+		expect(artifactFrame()).toBeInTheDocument();
 	});
 
 	it("opens the artifact in the Artifacts tab straight from the card", async () => {

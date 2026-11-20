@@ -52,7 +52,7 @@ func (s *Store) OpenRender(ctx context.Context, id domain.SessionID, renderID st
 		return nil, nil, fs.ErrNotExist
 	}
 	defer func() { _ = sessionRoot.Close() }()
-	return openRegularFile(ctx, sessionRoot, renderName(renderID))
+	return openRegularFile(ctx, sessionRoot, renderName(renderID), MaxFileBytes)
 }
 
 // RemoveRender deletes a render whose timeline row was never recorded.
