@@ -160,3 +160,17 @@ describe("second review fixes", () => {
 		expect(repairStreamingInline("Run `x **")).toBe("Run `x **`");
 	});
 });
+
+describe("third review fixes", () => {
+	it("starts the repair after a heading that text follows, and still repairs a final heading", () => {
+		expect(repairStreamingInline("# **Title\nBody")).toBe("# **Title\nBody");
+		expect(repairStreamingInline("# Title\nBody **bold")).toBe("# Title\nBody **bold**");
+		expect(repairStreamingInline("# **Title")).toBe("# **Title**");
+		expect(repairStreamingInline("A **multi\nline")).toBe("A **multi\nline**");
+	});
+
+	it("reads an escaped backtick as a literal, not a code span", () => {
+		expect(repairStreamingInline("Use \\` and **bold")).toBe("Use \\` and **bold**");
+		expect(repairStreamingInline("Run `x **")).toBe("Run `x **`");
+	});
+});

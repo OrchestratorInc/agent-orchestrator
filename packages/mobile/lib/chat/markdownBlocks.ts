@@ -196,7 +196,9 @@ export function repairStreamingInline(text: string): string {
 	// Where the prose after the last closed fence starts: its markers are not the reply's.
 	let afterFence = 0;
 	// Where the last list item or heading starts: its text is one inline run of its own.
+	// A heading is one line, so text after it starts a run of its own.
 	let lastItem = 0;
+	let afterHeading: number | null = null;
 	let at = 0;
 	for (const line of text.split("\n")) {
 		const lineStart = at;
@@ -207,7 +209,9 @@ export function repairStreamingInline(text: string): string {
 		}
 		const fence = FENCE.exec(line);
 		if (fence) open = fence[2];
-		else if ((LIST_ITEM.test(line) && !RULE.test(line)) || HEADING.test(line)) lastItem = lineStart;
+		else if (HEADING.test(line)) { lastItem = lineStart; afterHeading = at; }
+		else if (LIST_ITEM.test(line) && !RULE.test(line)) { lastItem = lineStart; afterHeading = null; }
+		else if (afterHeading !== null && line.trim()) { lastItem = afterHeading; afterHeading = null; }
 	}
 	if (open !== null) return text;
 	const start = Math.max(afterFence, text.lastIndexOf("\n\n") + 1, lastItem);
@@ -240,9 +244,9 @@ function unmatched(text: string, marker: string): boolean {
 	return countUnescaped(marker === "`" ? text : outsideCode(text), marker) % 2 === 1;
 }
 
-/** `text` without its code spans, including one still open at the end. */
+/** `text` without its code spans, including one still open at the end; `\`` is a literal backtick, not a span. */
 function outsideCode(text: string): string {
-	const closed = text.replace(/`[^`]*`/g, "");
+	const closed = text.replace(/\\`/g, "").replace(/`[^`]*`/g, "");
 	const open = closed.indexOf("`");
 	return open === -1 ? closed : closed.slice(0, open);
 }
