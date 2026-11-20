@@ -5990,6 +5990,66 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("reviews only the chosen PR from its row in a multi-PR session", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review"), reviewState(4, "needs_review")]);
+    postMock.mockResolvedValue({ response: { status: 201 }, data: { reviews: [], runs: [], reviewerHandleId: "" } });
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />);
+    await openReviewsSection();
+
+    expect(await screen.findByText("All PRs")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Review PR #4" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).toEqual({ prUrl: "https://example.com/pr/4" });
+  });
+
+  it("confirms a same-commit re-review of one PR and sends only that PR", async () => {
+    mockCommonGets([approvedReview], "reviewer-pane", [reviewState(3, "up_to_date"), reviewState(4, "needs_review")]);
+    postMock.mockResolvedValue({ response: { status: 201 }, data: { reviews: [], runs: [], reviewerHandleId: "reviewer-pane" } });
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />);
+    await openReviewsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run PR #3" }));
+    expect(await screen.findByText("This commit has already been reviewed, are you sure you want to re-review the same commit?")).toBeInTheDocument();
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Re-review commit" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).toEqual({ rerun: true, prUrl: "https://example.com/pr/3" });
+  });
+
+  it("names the repository on per-PR rows when two repositories share a PR number", async () => {
+    const webUrl = "https://github.com/acme/web/pull/7";
+    const apiUrl = "https://github.com/acme/api/pull/7";
+    mockCommonGets([], "", [
+      { ...reviewState(7, "needs_review"), prUrl: webUrl },
+      { ...reviewState(7, "needs_review"), prUrl: apiUrl },
+    ]);
+    postMock.mockResolvedValue({ response: { status: 201 }, data: { reviews: [], runs: [], reviewerHandleId: "" } });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: webUrl }), pr(7, "open", { url: apiUrl })])} />);
+    await openReviewsSection();
+
+    expect(await screen.findByRole("button", { name: "Review web PR #7" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Review api PR #7" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).toEqual({ prUrl: apiUrl });
+  });
+
+  it("disables the per-PR row of a PR that is not eligible", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review"), reviewState(5, "ineligible")]);
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(5, "draft")])} />);
+    await openReviewsSection();
+    expect(await screen.findByRole("button", { name: "Review PR #3" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review PR #5" })).toBeDisabled();
+  });
+
+  it("shows no per-PR rows when the session has one open PR", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review")]);
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "merged")])} />);
+    await openReviewsSection();
+    expect(await screen.findByRole("button", { name: "Review latest commit" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review PR #3" })).not.toBeInTheDocument();
+    expect(screen.queryByText("All PRs")).not.toBeInTheDocument();
+  });
+
   it("cancels the running review instead of allowing rerun", async () => {
     mockCommonGets([approvedReview], "reviewer-pane", [
       reviewState(3, "running", "abc123"),

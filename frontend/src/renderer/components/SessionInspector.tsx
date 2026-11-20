@@ -1922,7 +1922,8 @@ function LocalReviewsSection({
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const reviewsKey = sessionReviewsQueryKey(session.id, hostId);
-	const [rerunConfirmation, setRerunConfirmation] = useState<{ ownerKey: string; heads: string } | null>(null);
+	// prUrl set: the confirmed rerun covers that PR alone; unset: the whole session.
+	const [rerunConfirmation, setRerunConfirmation] = useState<{ ownerKey: string; heads: string; prUrl?: string } | null>(null);
 	const reviewsQuery = useQuery({
 		...sessionReviewsQueryOptions(session, hasPr, undefined, hostId),
 		refetchInterval: (query) => {
@@ -2015,7 +2016,7 @@ function LocalReviewsSection({
 		},
 	});
 	const triggerReview = useMutation({
-		mutationFn: async ({ ownerKey, rerun = false }: { ownerKey: string; rerun?: boolean }) => {
+		mutationFn: async ({ ownerKey, rerun = false, prUrl }: { ownerKey: string; rerun?: boolean; prUrl?: string }) => {
 			// Keep agent/model/effort overrides scoped to this pass; the daemon selects the surface.
 			const reviewerConfig = reviewerModel || reviewerMode || reviewerEffort
 				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}), ...(reviewerEffort ? { effort: reviewerEffort } : {}) }
@@ -2023,22 +2024,22 @@ function LocalReviewsSection({
 			const selectedHarness = reviewerOverride || undefined;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 				params: { path: { sessionId: session.id } },
-				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(rerun ? { rerun: true } : {}) },
+				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(rerun ? { rerun: true } : {}), ...(prUrl ? { prUrl } : {}) },
 			});
 			if (error) throw apiErrorException(error, t("inspector.unableStartReview"));
-			return { data, reused: response?.status === 200, rerun, ownerKey, reviewsKey, workspaceKey };
+			return { data, reused: response?.status === 200, rerun, prUrl, ownerKey, reviewsKey, workspaceKey };
 		},
 		onMutate: async () => {
 			await queryClient.cancelQueries({ queryKey: reviewsKey });
 			return { reviewsKey };
 		},
-		onSuccess: ({ data, reused, rerun, ownerKey, reviewsKey: requestReviewsKey, workspaceKey: requestWorkspaceKey }) => {
+		onSuccess: ({ data, reused, rerun, prUrl, ownerKey, reviewsKey: requestReviewsKey, workspaceKey: requestWorkspaceKey }) => {
 			if (data) queryClient.setQueryData(requestReviewsKey, data);
 			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
 			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
 			if (ownerKey !== reviewerOwnerKey) return;
 			const started = data?.reviews?.some((review) => review.status === "running" && review.latestRun);
-			if (!started && reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
+			if (!started && reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads, prUrl });
 		},
 		onError: (_error, _variables, context) => {
 			void queryClient.invalidateQueries({ queryKey: context?.reviewsKey ?? reviewsKey });
@@ -2116,6 +2117,10 @@ function LocalReviewsSection({
 					if (currentHeadReviewed) setRerunConfirmation({ ownerKey: reviewerOwnerKey, heads: reviewHeads });
 					else triggerReview.mutate({ ownerKey: reviewerOwnerKey });
 				}}
+				onTriggerPR={(prUrl, headReviewed) => {
+					if (headReviewed) setRerunConfirmation({ ownerKey: reviewerOwnerKey, heads: reviewHeads, prUrl });
+					else triggerReview.mutate({ ownerKey: reviewerOwnerKey, prUrl });
+				}}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
 				reviewerSurface={reviewsQuery.data?.reviewerSurface}
 				reviewerActivityState={reviewsQuery.data?.reviewerActivityState}
@@ -2148,8 +2153,9 @@ function LocalReviewsSection({
 				onOpenChange={(open) => { if (!open) setRerunConfirmation(null); }}
 				onConfirm={() => {
 					if (rerunConfirmation?.ownerKey !== reviewerOwnerKey || rerunConfirmation.heads !== reviewHeads) return;
+					const { prUrl } = rerunConfirmation;
 					setRerunConfirmation(null);
-					triggerReview.mutate({ ownerKey: reviewerOwnerKey, rerun: true });
+					triggerReview.mutate({ ownerKey: reviewerOwnerKey, rerun: true, prUrl });
 				}}
 			/>
 
@@ -2930,6 +2936,7 @@ function ReviewPanel({
 	reviewerEffort,
 	onReviewerOverrideChange,
 	onTrigger,
+	onTriggerPR,
 	onCancel,
 	onAutoReviewChange,
 	onKill,
@@ -2959,6 +2966,8 @@ function ReviewPanel({
 	reviewerEffort: string;
 	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string; effort?: string }) => void;
 	onTrigger: () => void;
+	/** Reviews one PR; headReviewed asks the caller to confirm a rerun first. Omitted: no per-PR rows. */
+	onTriggerPR?: (prUrl: string, headReviewed: boolean) => void;
 	onCancel: () => void;
 	onAutoReviewChange: (enabled: boolean) => void;
 	isAutoReviewSaving: boolean;
@@ -3031,6 +3040,25 @@ function ReviewPanel({
 		: runAction;
 	const archiveActionLabel = isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession");
 	const killDisabled = isKilling || isCancelling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
+	// With one PR the session button already reviews just that PR. Cloud
+	// triggers take no PR, so per-PR rows are local only.
+	const perPRRows = onTriggerPR && !cloud
+		? sortedPRs(session)
+			.filter((pr) => pr.state === "open" || pr.state === "draft")
+			.map((pr) => {
+				const state = openReviewStates.find((reviewState) => reviewState.prUrl === pr.url);
+				const headReviewed = Boolean(
+					state?.latestRun && state.latestRun.targetSha === state.targetSha && state.latestRun.status === "completed",
+				);
+				return { pr, state, headReviewed };
+			})
+		: [];
+	const showPerPRRows = perPRRows.length > 1;
+	// Across repositories two PRs can share a number, so the row names its repository.
+	const perPRSpanRepositories = prsSpanRepositories(perPRRows.map(({ pr }) => pr));
+	// The session button's rules, applied to one PR: a running pass, auto review,
+	// or a reviewer switch in flight blocks every manual trigger.
+	const perPRLocked = reviewRunning || autoReviewEnabled || isTriggering || isKilling || isSwitchingReviewer || isCancelling;
 
 	return (
 		<Section surface={false} title={t("inspector.review.controls")}>
@@ -3179,7 +3207,7 @@ function ReviewPanel({
 						tooltipClassName="max-w-64"
 					/>
 					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-						<span className="text-sm text-settings-label">{t("inspector.review.session")}</span>
+						<span className="text-sm text-settings-label">{showPerPRRows ? t("inspector.review.allPrs") : t("inspector.review.session")}</span>
 						<div className="flex min-w-0 items-center justify-end gap-1.5">
 							<Button
 								aria-label={primaryReviewActionLabel}
@@ -3215,6 +3243,44 @@ function ReviewPanel({
 							) : null}
 						</div>
 					</div>
+					{showPerPRRows ? perPRRows.map(({ pr, state, headReviewed }) => {
+						const ineligible = !state || state.status === "ineligible";
+						const running = state?.status === "running";
+						const action = running
+							? t("inspector.review.reviewing")
+							: state?.status !== "needs_review" && (headReviewed || state?.latestRun)
+								? t("inspector.review.prRerun")
+								: t("inspector.review.prRun");
+						const repository = perPRSpanRepositories ? prRepositoryFromUrl(pr.url) : undefined;
+						const repositoryPrefix = repository ? `${prRepositoryShortName(repository)} ` : "";
+						const button = (
+							<Button
+								aria-label={t("inspector.review.prActionLabel", { action, number: pr.number, repository: repositoryPrefix })}
+								className="shrink-0 px-1.5"
+								disabled={perPRLocked || ineligible}
+								onClick={() => onTriggerPR?.(pr.url, headReviewed)}
+								size="sm"
+								type="button"
+								variant="ghost"
+							>
+								{action}
+							</Button>
+						);
+						return (
+							<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1" key={pr.url}>
+								{/* The number alone: the review list below already carries each PR's title. */}
+								<span className="min-w-0 truncate text-sm text-settings-label tabular-nums">{repositoryPrefix}PR #{pr.number}</span>
+								{ineligible && !perPRLocked ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<span className="inline-flex">{button}</span>
+										</TooltipTrigger>
+										<TooltipContent>{t("inspector.review.notEligible")}</TooltipContent>
+									</Tooltip>
+								) : button}
+							</div>
+						);
+					}) : null}
 				</div>
 				)}
 				{phase ? (
