@@ -32,7 +32,9 @@ const QUOTE = /^\s{0,3}>\s?/;
  * document (an artifact), as an image; a chat reply keeps to web images.
  */
 export function parseBlocks(input: string, { relativeImages = false }: { relativeImages?: boolean } = {}): MarkdownBlock[] {
-	const lines = input.replace(/\r/g, "").replace(/\t/g, "    ").split("\n");
+	// Structure reads indentation with tabs as four spaces; code keeps its own tabs.
+	const raw = input.replace(/\r/g, "").split("\n");
+	const lines = raw.map((line) => line.replace(/^[ \t]+/, (indent) => indent.replace(/\t/g, "    ")));
 	const blocks: MarkdownBlock[] = [];
 	let paragraph: string[] = [];
 	// The open list: its block, the indent of each open nesting level, and each
@@ -62,7 +64,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 			if (!inList) closeList();
 			const close = new RegExp(`^\\s*${marker[0] === "`" ? "`" : "~"}{${marker.length},}\\s*$`);
 			const code: string[] = [];
-			for (i += 1; i < lines.length && !close.test(lines[i]); i++) code.push(dedent(lines[i], fence[1].length));
+			for (i += 1; i < lines.length && !close.test(lines[i]); i++) code.push(dedent(raw[i], fence[1].length));
 			blocks.push({ kind: "code", language, text: code.join("\n") });
 			if (inList) listResumes = true;
 			continue;
@@ -110,7 +112,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 			const opensBlock = HEADING.test(line) || QUOTE.test(line) || RULE.test(line) || /^\s*!\[/.test(line)
 				|| (line.includes("|") && i + 1 < lines.length && tableDivider(lines[i + 1], tableCells(line).length) !== null);
 			if (last && !listResumes && (indent >= 2 || (!list.blank && !opensBlock))) {
-				last.text = list.blank ? `${endLine(last.text)}\n${line.trimStart()}` : appendLine(last.text, line);
+				last.text = list.blank ? `${last.text.trimEnd()}\n${line.trimStart()}` : appendLine(last.text, line);
 				list.blank = false;
 				continue;
 			}
@@ -161,7 +163,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 		paragraph.push(line);
 	}
 	flushParagraph();
-	for (const block of blocks) if (block.kind === "list") for (const item of block.items) item.text = endLine(item.text);
+	for (const block of blocks) if (block.kind === "list") for (const item of block.items) item.text = item.text.trimEnd();
 	return blocks;
 }
 
@@ -172,19 +174,27 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
  * left as it is.
  */
 export function repairStreamingInline(text: string): string {
-	let open: string | null = null;
+	// A fence closes only on a bare run of its own character at least as long as the one that opened it.
+	let open: { char: string; length: number } | null = null;
+	// Where the prose after the last closed fence starts: its markers are not the reply's.
+	let afterFence = 0;
+	let at = 0;
 	for (const line of text.split("\n")) {
 		const fence = FENCE.exec(line);
+		at += line.length + 1;
 		if (!fence) continue;
-		if (open === null) open = fence[2][0];
-		else if (fence[2][0] === open && !fence[3].trim()) open = null;
+		if (open === null) open = { char: fence[2][0], length: fence[2].length };
+		else if (fence[2][0] === open.char && fence[2].length >= open.length && !fence[3].trim()) {
+			open = null;
+			afterFence = at;
+		}
 	}
 	if (open !== null) return text;
-	const tail = text.slice(text.lastIndexOf("\n\n") + 1);
-	// Code spans first: emphasis markers inside them are not emphasis.
-	let repaired = text;
-	if (countUnescaped(tail, "`") % 2 === 1) return `${repaired}\``;
-	const prose = tail.replace(/`[^`]*`/g, "");
+	const tail = text.slice(Math.max(afterFence, text.lastIndexOf("\n\n") + 1));
+	// Code spans first, closing an open one: emphasis markers inside code are not emphasis.
+	const closeCode = countUnescaped(tail, "`") % 2 === 1 ? "`" : "";
+	let repaired = text + closeCode;
+	const prose = (tail + closeCode).replace(/`[^`]*`/g, "");
 	if (countUnescaped(prose, "**") % 2 === 1) repaired += "**";
 	if (countUnescaped(prose, "~~") % 2 === 1) repaired += "~~";
 	return repaired;
@@ -237,7 +247,8 @@ function quoteText(value: string, relativeImages: boolean): string {
 function joinLines(lines: string[]): string {
 	let text = "";
 	for (const line of lines) text = text ? appendLine(text, line) : line.trimStart();
-	return endLine(text);
+	// A backslash with no line after it is not a break: `C:\` keeps it.
+	return text.trimEnd();
 }
 
 /** `before` followed by the next source line, across a hard or a soft break. */
@@ -248,7 +259,7 @@ function appendLine(before: string, line: string): string {
 
 const HARD_BREAK = /(?: {2,}|\\)$/;
 
-/** A line without the trailing spaces or backslash that would have broken it. */
+/** A line without the trailing spaces or backslash that break it before the next. */
 function endLine(text: string): string {
 	return text.replace(HARD_BREAK, "").trimEnd();
 }
@@ -257,9 +268,18 @@ function leadingSpaces(line: string): number {
 	return /^ */.exec(line)![0].length;
 }
 
-/** Removes up to `count` leading spaces: a fence's own indent from its code. */
+/**
+ * Removes a fence's own indent (`count` columns) from a line of its code, a tab
+ * counting four; a tab wider than what is left to remove stays, as code.
+ */
 function dedent(line: string, count: number): string {
-	return line.slice(Math.min(count, leadingSpaces(line)));
+	let at = 0;
+	for (let left = count; at < line.length && left > 0; at++) {
+		const width = line[at] === " " ? 1 : line[at] === "\t" ? 4 : 0;
+		if (!width || width > left) break;
+		left -= width;
+	}
+	return line.slice(at);
 }
 
 function taskItem(value: string): { text: string; checked?: boolean } {
