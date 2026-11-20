@@ -229,6 +229,8 @@ type Controller struct {
 	backgroundSampledAt    time.Time
 	backgroundPartial      bool
 	backgroundErr          error
+	backgroundCommands     map[string]backgroundCommand
+	backgroundCommandOrder []string
 	store                  Store
 	continuationReader     SnapshotReader
 	activity               ActivityRecorder

@@ -23,7 +23,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -56,6 +56,7 @@ export function SessionInspectorShellView({
 	reviewsView,
 	summaryView,
 	tabs,
+	taskView,
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
@@ -72,6 +73,8 @@ export function SessionInspectorShellView({
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
+	/** The Background tasks tab: its list, or the task it has open. */
+	taskView?: ReactNode;
 }) {
 
 	if (loadingText) {
@@ -181,10 +184,10 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
 					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts") && "p-0 overflow-hidden",
+					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -199,6 +202,7 @@ export function SessionInspectorShellView({
 				{activeView === "subagents" ? subagentsView : null}
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
+				{activeView === "task" ? taskView : null}
 			</div>
 		</aside>
 	);

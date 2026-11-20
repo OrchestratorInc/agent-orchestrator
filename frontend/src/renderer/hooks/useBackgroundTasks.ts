@@ -40,8 +40,11 @@ export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) 
 	});
 }
 
-/** Only attached providers are inspected; this read never wakes an agent. */
-export function useBackgroundTasks(sessionId: string, enabled: boolean) {
+/**
+ * Only attached providers are inspected; this read never wakes an agent.
+ * `fast` reads every 2 s, for the side panel's Background tasks tab.
+ */
+export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = false) {
 	return useQuery({
 		queryKey: [...backgroundTasksQueryRoot, sessionId],
 		enabled,
@@ -53,7 +56,7 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean) {
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
 			return data;
 		},
-		refetchInterval: 5_000,
+		refetchInterval: fast ? 2_000 : 5_000,
 		staleTime: 1_000,
 		retry: false,
 	});
@@ -73,5 +76,41 @@ export function useStopBackgroundTask(sessionId: string) {
 			if (error && response.status !== 409) throw error;
 		},
 		onSettled: () => queryClient.invalidateQueries({ queryKey: [...backgroundTasksQueryRoot, sessionId] }),
+	});
+}
+
+/** `lastRead`: the daemon no longer has this output, so it is the last one read. */
+export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"] & { lastRead?: boolean };
+
+export const backgroundTaskOutputQueryKey = (sessionId: string, taskId: string) => ["background-task-output", sessionId, taskId] as const;
+
+/**
+ * One task's latest output (the daemon keeps the last 200 lines). Polls every
+ * second while `live`; otherwise reads once. Unchanged output keeps the same
+ * object, so an idle task does not re-render its tab. Output the daemon no
+ * longer has, after the chat ends or the daemon restarts, stays as last read.
+ */
+export function useBackgroundTaskOutput(sessionId: string, taskId: string, { enabled, live }: { enabled: boolean; live: boolean }) {
+	const queryClient = useQueryClient();
+	const queryKey = backgroundTaskOutputQueryKey(sessionId, taskId);
+	return useQuery({
+		queryKey,
+		enabled,
+		queryFn: async ({ signal }) => {
+			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
+				params: { path: { sessionId, taskId } }, signal,
+			});
+			if (error) throw error;
+			if (!data || typeof data.output !== "string" || (data.availability !== "ready" && data.availability !== "unavailable")) {
+				throw new Error("Invalid background task output response");
+			}
+			const previous = queryClient.getQueryData<BackgroundTaskOutput>(queryKey);
+			if (data.availability === "unavailable" && previous?.availability === "ready" && previous.output) {
+				return previous.lastRead ? previous : { ...previous, lastRead: true };
+			}
+			return data as BackgroundTaskOutput;
+		},
+		refetchInterval: live ? 1_000 : false,
+		retry: false,
 	});
 }

@@ -117,6 +117,9 @@ jobs:
       - name: Test Docker Agent Windows admission and native config
         run: go test -race -count=1 -run '^(TestProbeChecksPlatformWithoutRequiringDaemonConfig|TestContextualConfigValidation)$' ./internal/adapters/chatdriver/dockeragentacp/
 
+      - name: Test Windows background task log redirects
+        run: go test -race -count=1 -run '^(TestStdoutFile|TestRedirectedOutput)' ./internal/adapters/chatdriver/backgroundtasks/
+
       - name: Test Windows shell terminal start grid (pty-host --size)
         run: go test -race -count=3 -v -run '^(TestConPTYStartsAtRequestedGrid|TestHostStartGrid|TestPtyHostArgsCarryInitialGrid|TestPtyHostArgsCarryHostOptions)$' ./internal/adapters/runtime/conpty/
 

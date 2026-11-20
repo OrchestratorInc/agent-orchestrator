@@ -4,7 +4,7 @@ import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
-import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
+import { Chat, CheckWaves, Folder, List, Package, SquareTerminal } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
 import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
@@ -52,6 +52,9 @@ import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { useBackgroundTasks } from "../hooks/useBackgroundTasks";
+import { BackgroundTasksPanel } from "./BackgroundTaskPanel";
+import { supportsLocalBackgroundTasks } from "./BackgroundTasks";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -139,7 +142,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title" | "backgroundTasks.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
@@ -149,6 +152,7 @@ const VIEW_DEFS: {
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
 	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
+	{ id: "task", labelKey: "backgroundTasks.title", icon: <SquareTerminal /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -228,6 +232,25 @@ export const SessionInspector = memo(function SessionInspector({
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
 	);
+	// The Background tasks tab: every task this chat ran, and one at a time when opened.
+	const uiKey = session ? sessionUiKey(session.id, hostId) : "";
+	const taskTabs = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.taskTabs : undefined));
+	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
+	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
+	const tasksWatchable = Boolean(session && supportsLocalBackgroundTasks(session));
+	// Polls every 2 s only while the tab shows; each reading asks the provider.
+	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible);
+	const tasksReading = tasksQuery.data;
+	// A failed refresh keeps the last reading: still shown, but marked stale.
+	const tasksStale = tasksQuery.isError && tasksReading !== undefined;
+	useEffect(() => {
+		if (!uiKey) return;
+		// An ended session sends no more readings, and an unavailable one means its
+		// agent isn't reporting: a task still shown as live would offer a Stop that
+		// can't land. Mark it ended; a reading that lists it again restores it.
+		if (!tasksWatchable || tasksReading?.availability === "unavailable") useUiStore.getState().syncTaskTabs(uiKey, []);
+		else if (tasksReading) useUiStore.getState().syncTaskTabs(uiKey, tasksReading.tasks);
+	}, [tasksReading, tasksWatchable, uiKey]);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -281,8 +304,17 @@ export const SessionInspector = memo(function SessionInspector({
 			&& (entry.id !== "subagents" || subagentsView !== undefined)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
-			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)
+			// Background tasks shows once the chat has run one.
+			&& (entry.id !== "task" || Boolean(taskTabs?.length)));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	// A failure shown in its tab has been seen: the composer strip stops raising it.
+	const shownFailure = view === "task" && isInspectorVisible && activeTaskTab && !activeTaskTab.ended && activeTaskTab.task.state === "failed"
+		? activeTaskTab.task
+		: undefined;
+	useEffect(() => {
+		if (uiKey && shownFailure) useUiStore.getState().acknowledgeFailedTask(uiKey, shownFailure);
+	}, [shownFailure, uiKey]);
 	const sessionLoaded = session !== undefined;
 	// The chat reports its subagents just after it mounts, so on the way back to a
 	// session the Subagents tab is briefly missing. Show Summary through that gap but
@@ -384,6 +416,9 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				tabs={tabs}
+				taskView={session && taskTabs?.length ? (
+					<BackgroundTasksPanel isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} stale={tasksStale} tasks={taskTabs} uiKey={uiKey} />
+				) : undefined}
 			/>
 		</div>
 	);
