@@ -4179,7 +4179,7 @@ describe("TaskComposer local saved choices", () => {
 describe("useTaskLaunch agent choices", () => {
 	function Choices() {
 		const task = useTaskLaunch({ projectId: "proj-1" });
-		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.id}</li>)}</ul>;
+		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.unavailable ? `${agent.id}: ${agent.unavailable}` : agent.id}</li>)}</ul>;
 	}
 
 	it("offers locally only agents that can start, never an \"Auth unknown\" one", async () => {
@@ -4188,12 +4188,24 @@ describe("useTaskLaunch agent choices", () => {
 			agentReadiness("claude-code", "Claude Code"),
 			agentReadiness("amp", "Amp", { authentication: "unknown" }),
 			agentReadiness("fx", "fx", { authentication: "configured" }),
-			agentReadiness("goose", "Goose", { authentication: "unauthorized" }),
 			agentReadiness("crush", "Crush", { installation: "unknown" }),
 			agentReadiness("aider", "Aider", { installation: "not_installed" }),
 		] };
 		render(<Wrap><Choices /></Wrap>);
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort()).toEqual(["claude-code", "fx"]));
+	});
+
+	it("offers a chat agent that is not installed, and any agent not signed in, dimmed for setup", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("codex", "Codex", { installation: "not_installed" }),
+			agentReadiness("goose", "Goose", { authentication: "unauthorized" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["claude-code", "codex: Not installed", "goose: Not signed in"]));
 	});
 });
 

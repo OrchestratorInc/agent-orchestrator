@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversation";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
+import { CHAT_SWITCH_TARGETS } from "../lib/agent-switch-targets";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -1407,15 +1408,28 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// installed agents whose sign-in is known to be usable: an "Auth unknown" agent may
 	// not start, so it stays in Harness settings. A remote host's readiness can be
 	// unknown without anything being wrong, so there definite failures alone are left out.
-	const agentChoices = useMemo(() => {
+	// The chat agents, and any installed agent that is not signed in, are still offered
+	// dimmed with the reason, so the picker opens their setup instead of hiding them.
+	const agentChoices = useMemo((): Array<{ id: string; label: string; unavailable?: string }> => {
 		const agents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 		const ranked = buildRankedAgentOptions({
 			agents,
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
 		});
-		return (agents ? ranked.filter(hostId ? isLaunchableAgent : startsLocally) : ranked).map(({ id, label }) => ({ id, label }));
-	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject]);
+		if (!agents) return ranked.map(({ id, label }) => ({ id, label }));
+		const runs = hostId ? isLaunchableAgent : startsLocally;
+		const offeredForSetup = (agent: AgentInfo) => !isCloudProject
+			&& ((CHAT_SWITCH_TARGETS as readonly string[]).includes(agent.id) || agent.authentication.state === "unauthorized");
+		return ranked.flatMap((agent) => {
+			if (runs(agent)) return [{ id: agent.id, label: agent.label }];
+			if (!offeredForSetup(agent)) return [];
+			const unavailable = agent.installation.state === "not_installed" ? t("agentSwitch.notInstalled")
+				: agent.authentication.state === "unauthorized" ? t("agentSwitch.notSignedIn")
+				: t("agentSelector.needsSetup");
+			return [{ id: agent.id, label: agent.label, unavailable }];
+		});
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, t]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.
