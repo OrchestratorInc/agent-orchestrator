@@ -58,6 +58,8 @@ it.each([
 	[Object.assign(new Error("terminated"), { killed: true }), ""],
 	[new Error("exit 1"), "gh: Internal Server Error (HTTP 500)"],
 	[new Error("exit 1"), "Post: context deadline exceeded"],
+	[new Error("exit 1"), "gh: unexpected EOF"],
+	[new Error("exit 1"), "gh: read tcp: connection reset by peer"],
 ])("returns the original issue when GitHub may have stored the upload", async (error, stderr) => {
 	reply("", error, stderr);
 	await expect(publishIssueArtifact({ ...destination, name: "notes.md" }, {})).resolves.toEqual({

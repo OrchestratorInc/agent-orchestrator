@@ -10,7 +10,7 @@ function issuePath(repo: string) {
 
 class UploadUnconfirmed extends Error {}
 
-const ambiguousUploadError = /\bHTTP (?:5\d\d|408)\b|\b(?:timeout|timed out|context deadline exceeded)\b/i;
+const ambiguousUploadError = /\bHTTP (?:5\d\d|408)\b|\b(?:timeout|timed out|context deadline exceeded|unexpected EOF|connection reset by peer)\b/i;
 
 function ghApi(endpoint: string, env: NodeJS.ProcessEnv, body?: object): Promise<string> {
 	const args = ["api", "--hostname", "github.com", "-H", "X-GitHub-Api-Version: 2026-03-10", endpoint];
