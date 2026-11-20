@@ -655,7 +655,7 @@ func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *
 				t.Fatalf("installation reason code = %q, want not_installed", observation.ReasonCode)
 			}
 			if tc.wantReasonHas != "" {
-				if !strings.Contains(observation.Reason, tc.wantReasonHas) || !strings.Contains(observation.Reason, "first reinstall OpenCode 2 from AO") {
+				if !strings.Contains(observation.Reason, tc.wantReasonHas) || !strings.Contains(observation.Reason, "first reinstall OpenCode 2 from Orchestrator") {
 					t.Fatalf("installation reason = %q, want replacement explanation %q with repair steps", observation.Reason, tc.wantReasonHas)
 				}
 			} else if wantReason := tc.label + " is not installed."; observation.Reason != wantReason {

@@ -72,8 +72,12 @@ title = "gitleaks config"
     regex = '''-----BEGIN ((EC|PGP|DSA|RSA|OPENSSH) )?PRIVATE KEY( BLOCK)?-----'''
     tags = ["key", "AsymmetricPrivateKey"]
     [rules.allowlist]
-        description = "Synthetic empty private key fixture"
-        regexes = ['''^\s*"private_key": "-----BEGIN PRIVATE KEY-----\\n-----END PRIVATE KEY-----\\n",$''']
+        description = "Synthetic private key fixtures"
+        regexes = [
+            '''^\s*"private_key": "-----BEGIN PRIVATE KEY-----\\n-----END PRIVATE KEY-----\\n",$''',
+            # cloud-folder-push.test.ts: PEM blocks whose body is the FAKE placeholder.
+            '''-----BEGIN ((EC|PGP|DSA|RSA|OPENSSH) )?PRIVATE KEY( BLOCK)?-----\\n\$\{FAKE\}\\n-----END ''',
+        ]
 
 [[rules]]
     description = "Google API key"
@@ -244,4 +248,9 @@ title = "gitleaks config"
         "949e3e8d8138ec35d0595597cdc41c82e87618b2",
         "a4180fb84c7c16835eadfddbb1c12f17a8cc3a8e",
         "cd08f63c2b567557abe59a4d2b53a1452d5aa49c",
+        "8a07eb618e978840adcab4340667054f5154bb75",
+        # Fake OpenSSH key header in the render-images test
+        # (backend/internal/cli/render_images_test.go), split in #8550;
+        # this #6378 merge of main from before that split still carries it.
+        "fc3d1db67f311a03187807b4f4a7f15601f06144",
     ]

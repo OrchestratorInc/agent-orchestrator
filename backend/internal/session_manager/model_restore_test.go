@@ -51,6 +51,10 @@ func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) 
 			}
 			for _, operation := range []string{"restore", "native_resume", "restore_all", "saved_prompt", "chat_restore", "chat_resume"} {
 				t.Run(string(kind)+"/"+selection.name+"/"+operation, func(t *testing.T) {
+					// Each case owns its store, fakes and manager. Run serially, the
+					// ~300 cases spend ~0.55s each mostly waiting, 2.5 minutes in all.
+					t.Parallel()
+					selection := selection // the legacy case rewrites wantEffort below
 					ctx := context.Background()
 					dataDir := t.TempDir()
 					store, err := sqlitetest.Open(dataDir)

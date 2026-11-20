@@ -14,7 +14,7 @@ import {
  ListChevronsDownUp,
  ListChevronsUpDown,
 	Search,
-} from "lucide-react";
+} from "@/components/app-icons";
 import {
 	sessionSourceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,

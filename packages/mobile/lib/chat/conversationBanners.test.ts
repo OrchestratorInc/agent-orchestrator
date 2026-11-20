@@ -1,27 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
+import { controllerStoppedBanner, errorBanner, mcpNoticeKey, mcpNoticeText, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
 
 describe("conversation banners", () => {
-	it("headlines tool servers by count and keeps the raw error out", () => {
-		const copy = mcpBanner([
+	it("says which tool servers did not start in the desktop's words", () => {
+		expect(mcpNoticeText([
 			{ name: "canva", status: "failed", error: "The canva MCP server is not logged in. Run `codex mcp login canva`." },
 			{ name: "posthog", status: "failed", failureReason: "reauthenticationRequired", error: "long text" },
-		]);
-		expect(copy?.title).toBe("2 tool servers did not start");
-		expect(copy?.body).toBe("canva, posthog · reauthenticationRequired. The agent works around them silently.");
-		expect(copy?.body).not.toContain("codex mcp login");
-		expect(mcpBanner([{ name: "canva", status: "failed" }])?.title).toBe("A tool server did not start");
-		expect(mcpBanner([])).toBeUndefined();
+		])).toBe("Canva, Posthog didn’t start. Continuing without them.");
+		expect(mcpNoticeText([{ name: "notion", status: "failed" }])).toBe("Notion didn’t start. Continuing without it.");
+		expect(mcpNoticeText([])).toBeUndefined();
+	});
+
+	it("gives each run of a session its own tool-server note", () => {
+		const first = mcpNoticeKey("h_1", "ao-1", "2026-11-09T10:00:00Z");
+		expect(mcpNoticeKey("h_1", "ao-1", "2026-11-09T10:00:00Z")).toBe(first);
+		expect(mcpNoticeKey("h_1", "ao-1", "2026-11-09T11:00:00Z")).not.toBe(first);
+		expect(mcpNoticeKey("h_2", "ao-1", "2026-11-09T10:00:00Z")).not.toBe(first);
+		expect(mcpNoticeKey(undefined, "ao-1", undefined)).toBe(":ao-1:");
 	});
 
 	it("brings a closed banner back only when what it reports changes", () => {
-		const one = mcpBanner([{ name: "canva", status: "failed" }]);
-		const same = mcpBanner([{ name: "canva", status: "failed" }]);
-		const more = mcpBanner([{ name: "canva", status: "failed" }, { name: "posthog", status: "failed" }]);
-		expect(one?.key).toBe(same?.key);
-		expect(one?.key).not.toBe(more?.key);
-		expect(quotaBanner({ percent: 80, severity: "warn" }).key).toBe(quotaBanner({ percent: 84, severity: "warn" }).key);
-		expect(quotaBanner({ percent: 80, severity: "warn" }).key).not.toBe(quotaBanner({ percent: 92, severity: "critical" }).key);
+		expect(rolledBackBanner(1)?.key).toBe(rolledBackBanner(1)?.key);
+		expect(rolledBackBanner(1)?.key).not.toBe(rolledBackBanner(2)?.key);
 	});
 
 	it("uses the desktop's short headlines", () => {
@@ -30,7 +30,6 @@ describe("conversation banners", () => {
 		expect(threadBanner("closed")?.title).toBe("The agent closed this thread");
 		expect(threadBanner("active")).toBeUndefined();
 		expect(controllerStoppedBanner(true).title).toBe("This session is terminated");
-		expect(quotaBanner({ percent: 91, severity: "critical", resetsInSeconds: 7200 })).toMatchObject({ title: "91% of quota used", body: "Resets in 2h." });
 		expect(rolledBackBanner(2)?.title).toBe("2 turns were rolled back");
 		expect(rolledBackBanner(0)).toBeUndefined();
 		expect(errorBanner("action", "boom")).toMatchObject({ title: "That didn't work", body: "boom" });

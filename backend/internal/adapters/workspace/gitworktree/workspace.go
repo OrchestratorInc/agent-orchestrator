@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -22,6 +22,13 @@ import (
 const (
 	defaultGitBinary              = "git"
 	defaultBranchResolutionBudget = 5 * time.Second
+	// automaticDefaultRecheck is how long one live lookup of a repository's
+	// remote HEAD stays current. Within it, an automatic default branch is read
+	// from the HEAD Git cached from that lookup; the branch's commits are still
+	// refreshed by the caller's fetch. After it, the cached HEAD is still used
+	// at once and the lookup runs again in the background, so a remote that
+	// renames its default branch is picked up by the start after that.
+	automaticDefaultRecheck = 10 * time.Minute
 )
 
 // ErrUnsafePath is returned when a resolved worktree path escapes the managed
@@ -123,12 +130,22 @@ type Workspace struct {
 	// discards tracks background worktree removals so tests can wait for them.
 	// Production never waits: that deferral is the point (see discard.go).
 	discards sync.WaitGroup
+	// now is the clock for automaticDefaultRecheck; tests replace it.
+	now func() time.Time
+	// liveDefaultAt records, per repository, when automatic default-branch
+	// resolution last asked the remote for its HEAD.
+	liveDefaultMu sync.Mutex
+	liveDefaultAt map[string]time.Time
+	// headRefreshes tracks background remote HEAD lookups so tests can wait
+	// for them. Production never waits.
+	headRefreshes sync.WaitGroup
 }
 
 type commandRunner func(ctx context.Context, binary string, args ...string) ([]byte, error)
 
 var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceDefaultBranchRefresher = (*Workspace)(nil)
+var _ ports.WorkspaceDefaultBranchBudgetedResolver = (*Workspace)(nil)
 var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
@@ -157,6 +174,7 @@ func New(opts Options) (*Workspace, error) {
 		repos:       opts.RepoResolver,
 		run:         runCommand,
 		logger:      opts.Logger,
+		now:         time.Now,
 	}
 	// A daemon that died mid-removal leaves directories under the discard root
 	// that nothing else will ever look at again. Sweeping at construction is
@@ -165,19 +183,28 @@ func New(opts Options) (*Workspace, error) {
 	return w, nil
 }
 
-// ResolveDefaultBranch selects a canonical remote-tracking ref using only local
-// repository state. A slash is treated as a remote qualifier only when its
-// prefix exactly matches a configured remote; otherwise it remains part of an
-// origin branch name such as release/2026.
+// ResolveDefaultBranch selects a canonical remote-tracking ref. A configured
+// branch is resolved from local repository state only. A slash is treated as
+// a remote qualifier only when its prefix exactly matches a configured remote;
+// otherwise it remains part of an origin branch name such as release/2026. An
+// automatic default goes through resolveAutomaticDefault, whose network work is
+// bounded by defaultBranchResolutionBudget.
 func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
+	defer cancelRemote()
+	return w.ResolveDefaultBranchWithin(ctx, remoteCtx, repoPath, configuredBranch)
+}
+
+// ResolveDefaultBranchWithin is ResolveDefaultBranch with its network work
+// bounded by the caller's remoteCtx, which several repositories can share.
+func (w *Workspace) ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
 	repo, err := physicalAbs(repoPath)
 	if err != nil {
 		return ports.WorkspaceDefaultBranch{}, fmt.Errorf("gitworktree: repo path: %w", err)
 	}
 	branch := strings.TrimSpace(configuredBranch)
 	if branch == "" {
-		resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
-		resolution, err := resolver.Resolve(ctx, ctx, repo)
+		resolution, fetched, err := w.resolveAutomaticDefault(ctx, remoteCtx, repo, true)
 		if err != nil {
 			return ports.WorkspaceDefaultBranch{}, fmt.Errorf("gitworktree: resolve repository default for %q: %w", repo, err)
 		}
@@ -185,6 +212,7 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 			Remote:  resolution.Remote,
 			Branch:  resolution.Branch,
 			BaseRef: resolution.Ref,
+			Fetched: fetched,
 		}, nil
 	}
 	remote := "origin"
@@ -281,7 +309,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if err := validateConfig(cfg); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	repo, err := w.repoPath(cfg.ProjectID)
+	repo, err := w.repoPathForConfig(cfg)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
@@ -335,12 +363,22 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	}
 	seedRef := ""
 	seedSHA := ""
-	if cfg.FreshBranch {
+	if cfg.FreshBranch && cfg.StartRef == "" {
 		refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, cfg.Branch, cfg.BaseBranch)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
 		cfg.BaseRef, seedRef = refs.baseRef, refs.seedRef
+		if cfg.StartPoint != "" {
+			seedRef = cfg.StartPoint
+		}
+		seedSHA, err = w.revParse(ctx, repo, seedRef)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+	}
+	if cfg.FreshBranch && cfg.StartRef != "" {
+		seedRef = cfg.StartRef
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -366,7 +404,8 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if cfg.FreshBranch {
 		baseSHA = seedSHA
 	}
-	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
+	w.deleteOrphanedFileSnapshots(ctx, repo)
+	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 }
 
 // rollbackPreparedAdd cleans only the exact registered worktree, without
@@ -501,6 +540,10 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
 	defer cancelRemote()
 	for i := range repos {
+		if i == 0 && cfg.StartRef != "" {
+			repos[i].seedRef, repos[i].baseRef = cfg.StartRef, cfg.StartRef
+			continue
+		}
 		if i == 0 {
 			refs, err := w.resolveWorkspaceRootRefs(ctx, repos[i].repoPath, repos[i].baseBranch)
 			if err != nil {
@@ -534,8 +577,12 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if cfg.FreshBranch {
 			return w.rollbackWorkspaceProjectPreparation(ctx, out, touched, cause)
 		}
+		// A cancelled or expired start must still remove what it created, or a
+		// retry would treat the half-built root as existing on the next attempt.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 		for i := len(created) - 1; i >= 0; i-- {
-			_ = w.forceDestroyPath(ctx, created[i].repoPath, created[i].outputPath)
+			_ = w.forceDestroyPath(cleanupCtx, created[i].repoPath, created[i].outputPath)
 		}
 		return ports.WorkspaceProjectInfo{}, cause
 	}
@@ -586,14 +633,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 				rootSHA = creationSHA
 			}
 			out.Root = ports.WorkspaceInfo{Path: repo.outputPath, Branch: branch, BaseSHA: rootSHA, BaseRef: repo.baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}
-		}
-		if repoIndex == 0 {
-			_, rootAlreadyExisted := existing[repoIndex]
-			if !rootAlreadyExisted {
-				if err := copyWorkspaceAssets(rootRepo, rootPath, cfg.Assets); err != nil {
-					return fail(err)
-				}
-			}
 		}
 	}
 	return out, nil
@@ -669,136 +708,6 @@ func (w *Workspace) repairWorkspaceRootDefault(ctx context.Context, repo string)
 	return worktreeRefs{seedRef: ref, baseRef: ref}, nil
 }
 
-func copyWorkspaceAssets(sourceRoot, destinationRoot string, assets []ports.WorkspaceProjectAssetConfig) error {
-	for _, asset := range assets {
-		rel, err := cleanRelativePath(asset.RelativePath)
-		if err != nil || hasWorkspaceManagedComponent(rel) {
-			return fmt.Errorf("gitworktree: workspace asset %q: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		source, err := physicalAbs(asset.SourcePath)
-		if err != nil || !assetPathWithin(sourceRoot, source) {
-			return fmt.Errorf("gitworktree: workspace asset %q source: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		destination := filepath.Join(destinationRoot, filepath.FromSlash(rel))
-		if !assetPathWithin(destinationRoot, destination) {
-			return fmt.Errorf("gitworktree: workspace asset %q destination: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		if err := copyWorkspaceAssetTree(sourceRoot, source, destination); err != nil {
-			return fmt.Errorf("gitworktree: copy workspace asset %q: %w", asset.RelativePath, err)
-		}
-	}
-	return nil
-}
-
-func copyWorkspaceAssetTree(sourceRoot, source, destination string) error {
-	info, err := os.Lstat(source)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(source)
-		if err != nil {
-			return err
-		}
-		if filepath.IsAbs(target) {
-			return fmt.Errorf("absolute symlink %q: %w", source, ErrUnsafePath)
-		}
-		resolved := filepath.Clean(filepath.Join(filepath.Dir(source), target))
-		if !assetPathWithin(sourceRoot, resolved) || hasWorkspaceManagedComponent(relativeOrEmpty(sourceRoot, resolved)) {
-			return fmt.Errorf("symlink %q escapes or targets managed data: %w", source, ErrUnsafePath)
-		}
-		physicalTarget, err := filepath.EvalSymlinks(resolved)
-		if err != nil || !assetPathWithin(sourceRoot, physicalTarget) {
-			return fmt.Errorf("symlink %q has an unsafe or unresolved target: %w", source, ErrUnsafePath)
-		}
-		if existing, err := os.Lstat(destination); err == nil {
-			if existing.IsDir() {
-				return fmt.Errorf("cannot overlay symlink on directory %q", destination)
-			}
-			if err := os.Remove(destination); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return os.Symlink(target, destination)
-	}
-	if info.IsDir() {
-		if existing, err := os.Lstat(destination); err == nil {
-			if !existing.IsDir() || existing.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("cannot overlay directory on non-directory %q", destination)
-			}
-		} else if errors.Is(err, os.ErrNotExist) {
-			if err := os.Mkdir(destination, info.Mode().Perm()); err != nil {
-				return err
-			}
-		} else {
-			return err
-		}
-		entries, err := os.ReadDir(source)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if entry.Name() == ".git" || entry.Name() == ".ao" {
-				continue
-			}
-			if err := copyWorkspaceAssetTree(sourceRoot, filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("unsupported file type at %q", source)
-	}
-	if existing, err := os.Lstat(destination); err == nil {
-		if !existing.Mode().IsRegular() {
-			return fmt.Errorf("cannot overlay file on non-regular path %q", destination)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if err := out.Chmod(info.Mode().Perm()); err != nil {
-		_ = out.Close()
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
-func assetPathWithin(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func relativeOrEmpty(root, path string) string {
-	rel, _ := filepath.Rel(root, path)
-	return rel
-}
-
-func hasWorkspaceManagedComponent(path string) bool {
-	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
-		if component == ".git" || component == ".ao" {
-			return true
-		}
-	}
-	return false
-}
-
 // DestroyWorkspaceProject removes worktrees children first, preserving any
 // uncommitted changes even when a start is cancelled after publication.
 func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.WorkspaceProjectInfo) error {
@@ -833,7 +742,7 @@ func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.Work
 // Destroy removes the session's worktree and prunes it from the repo, refusing
 // (rather than force-deleting) if git still has the path registered afterwards.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
-	_, err := w.destroy(ctx, info)
+	_, err := w.DestroyReclaim(ctx, info)
 	return err
 }
 
@@ -844,7 +753,48 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 // success without any disk having been released. Callers that count reclaimed
 // workspaces need that told apart from a real removal.
 func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
-	return w.destroy(ctx, info)
+	reclaim, err := w.destroy(ctx, info)
+	if err == nil {
+		w.deleteFileSnapshots(ctx, info)
+	}
+	return reclaim, err
+}
+
+// deleteFileSnapshots drops the Chat rollback snapshots of a session whose
+// worktree is gone, since nothing can restore them any more, and then those of
+// any other session in the repository whose worktree went without a Destroy. A
+// failure only leaves unreachable refs behind, so it is logged rather than
+// failing teardown.
+func (w *Workspace) deleteFileSnapshots(ctx context.Context, info ports.WorkspaceInfo) {
+	if info.SessionID == "" {
+		return
+	}
+	repo, err := w.repoPathForInfo(info)
+	if err == nil {
+		err = filesnapshot.DeleteAll(ctx, repo, filesnapshot.SessionPrefix(info.SessionID))
+	}
+	if err != nil {
+		w.logf("gitworktree: delete file snapshots for session %s: %v", info.SessionID, err)
+		return
+	}
+	w.deleteOrphanedFileSnapshots(ctx, repo)
+}
+
+// deleteOrphanedFileSnapshots drops the Chat rollback snapshots of every session
+// whose worktree is no longer registered in repo, however that session ended. A
+// failure only leaves unreachable refs behind, so it is logged.
+func (w *Workspace) deleteOrphanedFileSnapshots(ctx context.Context, repo string) {
+	records, err := w.listRecords(ctx, repo)
+	if err == nil {
+		paths := make([]string, len(records))
+		for i, record := range records {
+			paths[i] = record.Path
+		}
+		err = filesnapshot.DeleteOrphans(ctx, repo, paths)
+	}
+	if err != nil {
+		w.logf("gitworktree: delete orphaned file snapshots in %s: %v", repo, err)
+	}
 }
 
 // DeletePreparedBranch is called only after a speculative worktree is gone.
@@ -1464,6 +1414,14 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 		if rec.Branch != "" {
 			recreateBranch = rec.Branch
 		}
+	} else if cfg.LastBranch != "" && cfg.LastBranch != cfg.Branch {
+		exists, err := w.refExists(ctx, repo, "refs/heads/"+cfg.LastBranch)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+		if _, elsewhere := findWorktreeByBranch(records, cfg.LastBranch); exists && !elsewhere {
+			recreateBranch = cfg.LastBranch
+		}
 	}
 	if nonEmpty, err := pathExistsNonEmpty(path); err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -2044,7 +2002,7 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 	if requestedErr != nil && !errors.Is(requestedErr, gitdefault.ErrUnresolved) {
 		return worktreeRefs{}, fmt.Errorf("gitworktree: inspect requested branch for %q: %w", repo, requestedErr)
 	}
-	resolution, err := resolver.Resolve(ctx, remoteCtx, repo)
+	resolution, _, err := w.resolveAutomaticDefault(ctx, remoteCtx, repo, false)
 	if err != nil {
 		if errors.Is(err, gitdefault.ErrUnresolved) {
 			// A fetched requested branch remains a valid seed when the remote
@@ -2083,6 +2041,105 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 		return worktreeRefs{seedRef: seedRef, baseRef: resolution.Ref}, nil
 	}
 	return worktreeRefs{}, fmt.Errorf("%w: resolved default branch %q from %q, but ref %q is unavailable", errNoBaseRef, resolution.Branch, resolution.Source, resolution.Ref)
+}
+
+// resolveAutomaticDefault resolves a repository's automatic default branch.
+// Within automaticDefaultRecheck of the last live lookup it answers from the
+// remote HEAD Git cached, with no network. Past it, background (the refresh a
+// spawn runs first) still answers from the cache at once and repeats the
+// lookup in the background for later starts; otherwise (worktree creation
+// with no refresh before it) the caller waits for the lookup as before. A
+// repository with no usable cached HEAD always waits; that lookup also
+// fetches the branch, and fetched reports it.
+//
+// A spawn resolves the same repository twice, once to refresh the base and
+// again while creating the worktree; without this every start asked the remote
+// and fetched more than once before the agent could begin.
+func (w *Workspace) resolveAutomaticDefault(ctx, remoteCtx context.Context, repo string, background bool) (resolution gitdefault.Resolution, fetched bool, err error) {
+	resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
+	current := w.liveDefaultCurrent(repo)
+	if current || background {
+		if cached, inspectErr := resolver.Inspect(ctx, repo); inspectErr == nil {
+			if !current {
+				w.refreshRemoteHeadInBackground(repo)
+			}
+			return cached, false, nil
+		}
+	}
+	resolution, err = resolver.Resolve(ctx, remoteCtx, repo)
+	// Record the attempt even when the remote was unreachable, so an offline
+	// machine does not start another lookup for every start in the window.
+	w.recordLiveDefault(repo)
+	if err != nil {
+		return gitdefault.Resolution{}, false, err
+	}
+	return resolution, resolution.Source == gitdefault.SourceLiveRemoteHead, nil
+}
+
+// refreshRemoteHeadInBackground asks the remote for its HEAD off the caller's
+// path. The first caller to claim the recheck window launches it; concurrent
+// starts that also found the window expired launch nothing.
+func (w *Workspace) refreshRemoteHeadInBackground(repo string) {
+	if !w.claimLiveDefault(repo) {
+		return
+	}
+	w.headRefreshes.Add(1)
+	go func() {
+		defer w.headRefreshes.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), defaultBranchResolutionBudget)
+		defer cancel()
+		resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
+		if err := resolver.RefreshRemoteHead(ctx, ctx, repo); err != nil {
+			w.logf("gitworktree: background remote HEAD lookup for %q failed; keeping the cached default: %v", repo, err)
+		}
+	}()
+}
+
+// waitForHeadRefreshes blocks until every background remote HEAD lookup has
+// finished. Test-only: production callers deliberately do not wait.
+func (w *Workspace) waitForHeadRefreshes() {
+	w.headRefreshes.Wait()
+}
+
+func (w *Workspace) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
+}
+
+func (w *Workspace) liveDefaultCurrent(repo string) bool {
+	w.liveDefaultMu.Lock()
+	defer w.liveDefaultMu.Unlock()
+	at, ok := w.liveDefaultAt[filepath.Clean(repo)]
+	return ok && w.clock().Sub(at) < automaticDefaultRecheck
+}
+
+// claimLiveDefault records a live lookup attempt for repo unless one inside
+// automaticDefaultRecheck is already recorded, reporting whether it did. The
+// check and the record share one lock, so only one caller wins a window.
+func (w *Workspace) claimLiveDefault(repo string) bool {
+	w.liveDefaultMu.Lock()
+	defer w.liveDefaultMu.Unlock()
+	key := filepath.Clean(repo)
+	now := w.clock()
+	if at, ok := w.liveDefaultAt[key]; ok && now.Sub(at) < automaticDefaultRecheck {
+		return false
+	}
+	if w.liveDefaultAt == nil {
+		w.liveDefaultAt = make(map[string]time.Time)
+	}
+	w.liveDefaultAt[key] = now
+	return true
+}
+
+func (w *Workspace) recordLiveDefault(repo string) {
+	w.liveDefaultMu.Lock()
+	defer w.liveDefaultMu.Unlock()
+	if w.liveDefaultAt == nil {
+		w.liveDefaultAt = make(map[string]time.Time)
+	}
+	w.liveDefaultAt[filepath.Clean(repo)] = w.clock()
 }
 
 func (w *Workspace) resolveWorktreeRefsWithBudget(ctx context.Context, repo, branch, baseBranch string) (worktreeRefs, error) {

@@ -151,12 +151,46 @@ func TestSaveLocalOAuthTokenReplacesTokenWithoutLeftovers(t *testing.T) {
 // for the same credential a session would get.
 func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
 	dataDir := withSavedSetupToken(t)
-	got := New().RuntimeCredentialEnv(dataDir)
+	got := New().RuntimeCredentialEnv(dataDir, nil)
 	if len(got) != 1 || got["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
 		t.Fatalf("RuntimeCredentialEnv = %v, want only the saved setup token", got)
 	}
-	if got := New().RuntimeCredentialEnv(t.TempDir()); got != nil {
+	if got := New().RuntimeCredentialEnv(t.TempDir(), nil); got != nil {
 		t.Fatalf("RuntimeCredentialEnv without a saved token = %v, want nil", got)
+	}
+}
+
+// AO exports its saved keys to the daemon, so the caller passes what Claude
+// Code's sessions do not get, and the probe must not see it either.
+func TestAuthStatusForRuntimeHoldsBackWhatTheCallerWithholds(t *testing.T) {
+	dataDir := withSavedSetupToken(t)
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	var probed map[string]string
+	previousCommand := claudeAuthCommand
+	claudeAuthCommand = func(_ context.Context, _, _ string, env map[string]string) (claudeCommandOutput, error) {
+		probed = env
+		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}`)}, nil
+	}
+	t.Cleanup(func() { claudeAuthCommand = previousCommand })
+	previousValidator := claudeValidator
+	claudeValidator = func() *agentcreds.Validator {
+		return agentcreds.New(&http.Client{Transport: claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-test"}]}`)), Request: req,
+			}, nil
+		})})
+	}
+	t.Cleanup(func() { claudeValidator = previousValidator })
+	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"ANTHROPIC_API_KEY": ""})
+	_, _, _, _ = (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatusForRuntime(ctx, dataDir)
+	if value, ok := probed["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("probe env = %v, want ANTHROPIC_API_KEY blanked", probed)
+	}
+	// The credential a session launch gets itself is kept.
+	if probed["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
+		t.Fatalf("probe env = %v, want the saved setup token", probed)
 	}
 }
 
@@ -234,5 +268,58 @@ func TestRemoveLocalOAuthTokenKeepsCloudToken(t *testing.T) {
 	}
 	if got := readTokenFile(CloudOAuthTokenPath(dataDir)); got != testCloudToken {
 		t.Fatalf("cloud token = %q after removing the menu token", got)
+	}
+}
+
+// An Anthropic key AO exported to the daemon for another harness is blanked
+// for Claude Code's sessions, so it is no login of Claude Code's own: the
+// probe gets the AO Cloud token those sessions get.
+func TestAuthStatusForRuntimeOffersTheCloudTokenWhenTheExportedKeyIsHeldBack(t *testing.T) {
+	dataDir := withCloudToken(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ao-exported")
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	var probed map[string]string
+	previousCommand := claudeAuthCommand
+	claudeAuthCommand = func(_ context.Context, _, _ string, env map[string]string) (claudeCommandOutput, error) {
+		probed = env
+		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}`)}, nil
+	}
+	t.Cleanup(func() { claudeAuthCommand = previousCommand })
+	previousValidator := claudeValidator
+	claudeValidator = func() *agentcreds.Validator {
+		return agentcreds.New(&http.Client{Transport: claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-test"}]}`)), Request: req,
+			}, nil
+		})})
+	}
+	t.Cleanup(func() { claudeValidator = previousValidator })
+	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"ANTHROPIC_API_KEY": ""})
+	_, _, _, _ = (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatusForRuntime(ctx, dataDir)
+	if probed["CLAUDE_CODE_OAUTH_TOKEN"] != testCloudToken {
+		t.Fatalf("probe env = %v, want the AO Cloud token", probed)
+	}
+	if value, ok := probed["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("probe env = %v, want ANTHROPIC_API_KEY blanked", probed)
+	}
+}
+
+// Model discovery and the account check pass the keys AO holds back as base:
+// a blanked exported key does not hide the AO Cloud token sessions get.
+func TestRuntimeCredentialEnvChoosesTheCloudTokenAgainstHeldBackKeys(t *testing.T) {
+	dataDir := withCloudToken(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ao-exported")
+	base := map[string]string{"ANTHROPIC_API_KEY": ""}
+	got := New().RuntimeCredentialEnv(dataDir, base)
+	if got["CLAUDE_CODE_OAUTH_TOKEN"] != testCloudToken {
+		t.Fatalf("RuntimeCredentialEnv = %v, want the AO Cloud token", got)
+	}
+	if value, ok := got["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("RuntimeCredentialEnv = %v, want ANTHROPIC_API_KEY kept blank", got)
+	}
+	if len(base) != 1 {
+		t.Fatalf("base was changed: %v", base)
 	}
 }

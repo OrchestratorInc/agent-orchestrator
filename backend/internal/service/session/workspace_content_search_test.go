@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 func searchContentPaths(t *testing.T, svc *Service, query string) ([]string, []WorkspaceContentHit) {
@@ -96,5 +98,26 @@ func TestGrepOutputStopsAtLimit(t *testing.T) {
 	out := &grepOutput{limit: 4, full: func() { stopped = true }}
 	if n, err := out.Write([]byte("abcdef")); n != 6 || err != nil || out.buffer.String() != "abcd" || !out.filled || !stopped {
 		t.Fatalf("Write = %d, %v; buffer %q filled %v stopped %v", n, err, out.buffer.String(), out.filled, stopped)
+	}
+}
+
+func TestGrepRecoveryRearmsOnlyGrep(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	writeWorkspaceFile(t, root, "notes.txt", "needle\n")
+	failure := func(op string) error {
+		return classifyWorkspaceGitError(t.Context(), root, op, errors.New("git exit"), "fatal: broken")
+	}
+	failure("status")
+	for _, term := range []string{"needle", "absent"} {
+		failure("grep")
+		if _, err := grepWorkspace(t.Context(), workspaceGrepRoot{dir: root}, []string{term}, false); err != nil {
+			t.Fatal(err)
+		}
+		if sentryobs.IsRepeat(failure("grep")) {
+			t.Error("recovered grep stayed suppressed")
+		}
+		if !sentryobs.IsRepeat(failure("status")) {
+			t.Error("grep rearmed unrelated status failure")
+		}
 	}
 }
