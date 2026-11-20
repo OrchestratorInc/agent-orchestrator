@@ -2123,7 +2123,7 @@ func TestAgentInstallReportsLiveOutputWithoutDuplicatingDiagnostics(t *testing.T
 		if !ok {
 			t.Error("script runner stdout does not take download progress as data")
 		} else {
-			reporter.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: time.Second})
+			reporter.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: time.Minute})
 		}
 		_, _ = io.WriteString(stdout, "[installer] Retrying download in 1s (attempt 2/3).\n")
 		close(started)
@@ -2147,8 +2147,9 @@ func TestAgentInstallReportsLiveOutputWithoutDuplicatingDiagnostics(t *testing.T
 		t.Fatalf("live job = %+v, error = %v", job, err)
 	}
 	// The retry reaches clients as data; the English log line is not the detail.
-	if got := *job.Progress; got.DownloadAttempts != 3 || got.RetryInSeconds != 1 || got.Detail != "" {
-		t.Fatalf("live progress = %+v, want attempt 2 of 3 retrying in 1s with no detail", got)
+	// The delay counts down from a minute while the poll above waits.
+	if got := *job.Progress; got.DownloadAttempts != 3 || got.RetryInSeconds < 1 || got.RetryInSeconds > 60 || got.Detail != "" {
+		t.Fatalf("live progress = %+v, want attempt 2 of 3 retrying within a minute with no detail", got)
 	}
 	jobs, err := s.AgentJobs(context.Background())
 	if err != nil || len(jobs) != 1 || jobs[0].Output != job.Output {

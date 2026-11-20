@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -146,6 +147,29 @@ func TestProgressTrackerKeepsARecoveredDownloadFailureOutOfTheDetail(t *testing.
 	if got := tracker.Snapshot(); got != nil {
 		t.Fatalf("quiet installer after a recovered download = %+v, want no progress", got)
 	}
+}
+
+func TestProgressTrackerCountsDownTheRetryDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tracker := newProgressTracker(io.Discard)
+		tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: 10 * time.Second})
+		if got := tracker.Snapshot(); got.RetryInSeconds != 10 {
+			t.Fatalf("at the start of the wait = %+v, want 10s", got)
+		}
+		time.Sleep(8500 * time.Millisecond)
+		if got := tracker.Snapshot(); got.RetryInSeconds != 2 || got.DownloadAttempt != 2 {
+			t.Fatalf("8.5s into the wait = %+v, want 2s left (rounded up)", got)
+		}
+		time.Sleep(2 * time.Second)
+		if got := tracker.Snapshot(); got.RetryInSeconds != 0 || got.DownloadAttempt != 2 {
+			t.Fatalf("after the wait = %+v, want no delay left", got)
+		}
+		// The next attempt starting clears the deadline.
+		tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3})
+		if got := tracker.Snapshot(); got.RetryInSeconds != 0 {
+			t.Fatalf("next attempt = %+v, want no retry delay", got)
+		}
+	})
 }
 
 func TestProgressTrackerReportsScriptDownloadAsData(t *testing.T) {

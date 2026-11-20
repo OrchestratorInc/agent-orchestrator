@@ -103,8 +103,10 @@ type progressTracker struct {
 	brewSteps     int
 	brewStarted   int
 	brewInstalled bool
-	// The script runner's own download, reported as data.
+	// The script runner's own download, reported as data. retryAt is when the
+	// next attempt starts while the runner waits; zero otherwise.
 	download ports.InstallScriptDownload
+	retryAt  time.Time
 }
 
 func newProgressTracker(dst io.Writer) *progressTracker {
@@ -116,6 +118,10 @@ func (t *progressTracker) ReportInstallScriptDownload(download ports.InstallScri
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.download = download
+	t.retryAt = time.Time{}
+	if download.RetryIn > 0 {
+		t.retryAt = time.Now().Add(download.RetryIn)
+	}
 }
 
 func (t *progressTracker) Write(p []byte) (int, error) {
@@ -157,8 +163,9 @@ func (t *progressTracker) Snapshot() *Progress {
 	if t.download.Attempt > 0 {
 		progress.DownloadAttempt = t.download.Attempt
 		progress.DownloadAttempts = t.download.MaxAttempts
-		if t.download.RetryIn > 0 {
-			progress.RetryInSeconds = int((t.download.RetryIn + time.Second - 1) / time.Second)
+		// The time left, rounded up, so repeated snapshots count down.
+		if remaining := time.Until(t.retryAt); !t.retryAt.IsZero() && remaining > 0 {
+			progress.RetryInSeconds = int((remaining + time.Second - 1) / time.Second)
 		}
 	}
 	if t.percent >= 0 {
