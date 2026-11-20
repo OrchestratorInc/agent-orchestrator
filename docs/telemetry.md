@@ -874,6 +874,31 @@ not both:
   `ao.renderer.cloud_signed_in` with `source` `onboarding`.
 - `activated` with `during_tour` true and `step_completed` (`first_task`).
 
+### Onboarding errors in Sentry
+
+Onboarding errors go to the desktop Sentry project under **Share error
+events**, not the analytics choice, so they are sent with analytics off and
+stop when error sharing is off. They follow the sampling and daily caps above.
+
+- An install or sign-in started during onboarding that breaks is one Sentry
+  issue per attempt, titled `Onboarding <action> failed (<reason>)` and grouped
+  by action and reason alone. Its tags are `category` `onboarding`, `code`
+  `<action>:<reason>`, `action`, `reason` and `flow` `onboarding`. Only these
+  reasons are sent: `start_failed`, `install_failed`, `interrupted`,
+  `lost_contact`, `cleanup_failed`, `request_failed` and `other`. A login the
+  person did not finish (`not_signed_in`), a platform with no installer
+  (`unsupported`), an agent that signs in outside the app (`documentation`),
+  cancelled and timed-out attempts are setup states, counted only in PostHog.
+  The same panels outside onboarding (the clone dialog's GitHub sign-in) send
+  nothing. The target (which agent or tool) and the API error code stay in
+  PostHog's `action_finished`.
+- Every other desktop Sentry event (a crash, a failed query, an API error)
+  sent while the onboarding window or a tour step shows carries
+  `flow:onboarding`. The tag does not change how the event is grouped.
+- To keep this working while analytics is off, the app holds the names of the
+  actions started during onboarding in memory until each ends. Nothing about
+  them is stored or sent to PostHog.
+
 ### Property values
 
 - `run_kind` is `first_run` or `replay` (Replay onboarding in Developer Mode,
@@ -1153,7 +1178,8 @@ only: the daemon's Sentry capture of reportable 5xx errors, registered fault
 codes answered as 4xx or 503, background failures, and handler or background
 goroutine panics; and Electron main capture of process crashes, handled
 daemon, update and IPC failures, uncaught exceptions, unhandled rejections,
-and reportable renderer errors. Sentry
+reportable renderer errors, and installs and sign-ins that broke during
+onboarding (see "Onboarding errors in Sentry"). Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
 raw error messages. It groups HTTP faults by registered route and stable error
 code, or by a bounded cause type when no code exists. Ordinary Go errors carry

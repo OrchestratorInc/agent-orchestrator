@@ -1,11 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { captureApiErrorToSentry, captureExceptionToSentry } from "./sentry";
+import { captureApiErrorToSentry, captureExceptionToSentry, captureOnboardingFailureToSentry, setSentryFlowSource } from "./sentry";
 import { SAFE_APP_ASSET, safeSentryFunctionName } from "../../shared/sentry-config";
 
 const capture = vi.hoisted(() => vi.fn());
 vi.mock("./bridge", () => ({ aoBridge: { telemetry: { capture } } }));
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+	vi.clearAllMocks();
+	setSentryFlowSource(() => undefined);
+});
 
 it("keeps real component names and built route assets without accepting arbitrary function text", () => {
 	expect(safeSentryFunctionName("ChatWorkspace", "renderer_frame")).toBe("ChatWorkspace");
@@ -71,4 +74,33 @@ it("keeps anonymous minified frames and their chunk debug IDs", () => {
 	} finally {
 		delete (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
 	}
+});
+
+it("reports a broken onboarding action as an error titled by action and reason", () => {
+	captureOnboardingFailureToSentry("gh_install", "install_failed");
+	expect(capture).toHaveBeenCalledWith({
+		kind: "message",
+		message: "Onboarding action failed",
+		level: "error",
+		tags: { platform: "desktop", category: "onboarding", code: "gh_install:install_failed", severity: "P1", owner: "ours", flow: "onboarding" },
+	});
+});
+
+it("does not report onboarding setup states", () => {
+	for (const reason of ["not_signed_in", "unsupported", "documentation"] as const) captureOnboardingFailureToSentry("agent_sign_in", reason);
+	expect(capture).not.toHaveBeenCalled();
+});
+
+it("tags every capture with the flow showing, and none once it closes", () => {
+	let showing = true;
+	setSentryFlowSource(() => (showing ? "onboarding" : undefined));
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	captureApiErrorToSentry("GET /api/v1/projects", "http_5xx", 500);
+	expect(capture.mock.calls.map((call) => call[0].tags.flow)).toEqual(["onboarding", "onboarding"]);
+	showing = false;
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+	setSentryFlowSource(() => { throw new Error("broken source"); });
+	expect(() => captureExceptionToSentry(new TypeError("private"), { category: "render_crash" })).not.toThrow();
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
 });

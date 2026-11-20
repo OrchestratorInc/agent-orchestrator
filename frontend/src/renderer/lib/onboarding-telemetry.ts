@@ -11,6 +11,7 @@ import type {
 } from "./onboarding-telemetry-schema";
 import { isAnalyticsOptedOut, onAnalyticsOptedOut } from "./analytics-opt-out";
 import { captureRendererEvent, captureRendererEventOnUnload } from "./telemetry";
+import { captureOnboardingFailureToSentry, setSentryFlowSource } from "./sentry";
 
 // The desktop onboarding funnel (docs/telemetry.md, "Desktop onboarding
 // funnel"). Two layers:
@@ -30,6 +31,12 @@ import { captureRendererEvent, captureRendererEventOnUnload } from "./telemetry"
 // While analytics is opted out nothing here is counted or stored, and an
 // opt-out drops the run, attempts and timings already held, so nothing from
 // the opted-out period reaches an event sent after a later opt-in.
+//
+// Sentry follows the separate Share error events choice, enforced in Electron
+// main: an install or sign-in started during onboarding that then breaks is
+// one Sentry issue per attempt, and every Sentry event while onboarding shows
+// is tagged flow:onboarding. Only the started action names are held for that,
+// in memory, whatever the analytics choice.
 
 type StepPhase = "viewed" | "completed" | "abandoned";
 export type OnboardingPhase = StepPhase;
@@ -400,6 +407,8 @@ export function supersedeOnboardingRun(): void {
 
 const attempts = new Map<string, number>();
 const pending = new Map<string, { attempt: number; startedAt: number; step?: OnboardingStep }>();
+/** Actions started during onboarding and not yet ended, for Sentry; kept under either analytics choice. */
+const errorWatch = new Set<string>();
 
 function actionKey(action: OnboardingAction, target?: string) {
 	return `${action}:${target ?? ""}`;
@@ -410,8 +419,9 @@ export function startOnboardingAction(
 	action: OnboardingAction,
 	options: { target?: string; step?: OnboardingStep; auto?: boolean } = {},
 ): void {
-	if (!tracking()) return;
 	const key = actionKey(action, options.target);
+	errorWatch.add(key);
+	if (!tracking()) return;
 	const attempt = (attempts.get(key) ?? 0) + 1;
 	attempts.set(key, attempt);
 	pending.set(key, { attempt, startedAt: Date.now(), step: options.step });
@@ -424,12 +434,14 @@ export function finishOnboardingAction(
 	outcome: OnboardingActionOutcome,
 	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number } = {},
 ): boolean {
-	if (!tracking()) return false;
 	const key = actionKey(action, options.target);
 	const attempt = pending.get(key);
-	if (!attempt) return false;
 	// A check that outlived its attempt (a retry started meanwhile) leaves the new one alone.
-	if (options.attempt !== undefined && options.attempt !== attempt.attempt) return false;
+	if (attempt && options.attempt !== undefined && options.attempt !== attempt.attempt) return false;
+	// Once per attempt, and only for one started during onboarding: the same
+	// panels outside onboarding (the clone dialog's GitHub sign-in) send nothing.
+	if (errorWatch.delete(key) && outcome === "failed" && options.reason) captureOnboardingFailureToSentry(action, options.reason);
+	if (!tracking() || !attempt) return false;
 	pending.delete(key);
 	capture("ao.onboarding.action_finished", {
 		action,
@@ -493,6 +505,8 @@ export function setOnboardingTourStep(step: OnboardingStep | undefined): void {
 export function onboardingInProgress(): boolean {
 	return flowOpen || tourStep !== undefined;
 }
+
+setSentryFlowSource(() => (onboardingInProgress() ? "onboarding" : undefined));
 
 /**
  * A project was cloned or added; the tour's project step reads where it came
@@ -573,6 +587,7 @@ export function resetOnboardingTelemetryForTests(): void {
 	stepStartedAt.clear();
 	attempts.clear();
 	pending.clear();
+	errorWatch.clear();
 	tourStep = undefined;
 	projectNote = undefined;
 }
