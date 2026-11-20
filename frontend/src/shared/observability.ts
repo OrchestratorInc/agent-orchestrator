@@ -59,6 +59,8 @@ const CATEGORY: Record<string, Base> = {
 	http_5xx: { severity: "P1", owner: "ours" },
 	agent_runtime: { severity: "P1", owner: "ours" },
 	update: { severity: "P1", owner: "ours" },
+	// A first-run install or sign-in that broke: a new user is blocked on it.
+	onboarding: { severity: "P1", owner: "ours" },
 	integration: { severity: "P2", owner: "external" },
 	rate_limited: { severity: "P2", owner: "external" },
 	auth: { severity: "P2", owner: "external" },

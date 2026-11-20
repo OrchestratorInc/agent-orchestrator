@@ -26,7 +26,7 @@ import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useCh
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
-import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
+import { readChatSkills, rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
@@ -59,6 +59,7 @@ import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from 
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
+import { useTranscriptTiming } from "../../lib/performance-telemetry";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, continuableTurnId, type ChatFindRequest } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode, withUltracode } from "./TurnSettingsBar";
@@ -102,7 +103,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenLinkInBrowser,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -165,7 +165,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
@@ -210,6 +209,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
+	useTranscriptTiming(session.id, Boolean(snapshot), hostId);
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(snapshot && activeTurn(snapshot)));
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
@@ -413,17 +413,25 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
-	const { skills } = useConversationSkills(
+	// A new chat of this agent offers these "/" skills before its own session runs,
+	// and so does this chat while its agent starts, wakes or reattaches.
+	const skillsHarness = snapshot?.harness ?? session.provider;
+	const rememberedSkills = useMemo(
+		() => session.cloud ? [] : readChatSkills(skillsHarness ?? "", hostId, session.workspaceId),
+		[hostId, session.cloud, session.workspaceId, skillsHarness],
+	);
+	const { skills, settled: skillsSettled, loading: skillsLoading } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
+		rememberedSkills,
 	);
-	// A new chat of this agent offers these "/" skills before its own session runs.
-	const skillsHarness = snapshot?.harness;
+	// Only the agent's believed answer is kept, an empty one included, so a skill
+	// removed from the project stops being offered from memory.
 	useEffect(() => {
-		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
-		rememberChatSkills(skillsHarness, hostId, skills);
-	}, [hostId, session.kind, skills, skillsHarness]);
+		if (session.kind !== "worker" || !snapshot?.harness || !skillsSettled) return;
+		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
+	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
@@ -443,19 +451,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const openFind = findNavigation.navigate;
 	const [heldReveal, setHeldReveal] = useState<{ owner: string; reveal: SessionSearchReveal }>();
 	useEffect(() => {
+		// Keyed like the reveal was: this machine's sessions by id, another
+		// machine's by host and id, so a remote target never lands here.
 		const revealPending = () => {
-			const reveal = takeSessionSearchReveal(session.id);
+			const reveal = takeSessionSearchReveal(uiSessionId);
 			if (!reveal) return;
 			// The chat comes forward at once; the match waits for its conversation.
 			onSelectChat?.();
-			setHeldReveal({ owner: session.id, reveal });
+			setHeldReveal({ owner: uiSessionId, reveal });
 		};
 		// The target that opened the session, then every later one: picking another
 		// result in this session keeps the surface mounted, so this effect does not
 		// run again to pick it up.
 		revealPending();
-		return subscribeSessionSearchReveal(session.id, revealPending);
-	}, [onSelectChat, session.id]);
+		return subscribeSessionSearchReveal(uiSessionId, revealPending);
+	}, [onSelectChat, uiSessionId]);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
@@ -592,12 +602,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		const { owner, reveal } = heldReveal;
 		setHeldReveal(undefined);
 		// Once per match: StrictMode runs this effect twice with the same one.
-		if (owner !== session.id || appliedReveal.current === reveal) return;
+		if (owner !== uiSessionId || appliedReveal.current === reveal) return;
 		appliedReveal.current = reveal;
 		navigateToAnnotation({ id: crypto.randomUUID(), text: reveal.text, messageId: reveal.messageId, activitySequence: reveal.activitySequence });
 		const word = reveal.text.trim();
 		if (word && reveal.find) openFind({ id: crypto.randomUUID(), query: word, messageId: reveal.messageId });
-	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, session.id]);
+	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, uiSessionId]);
 	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
 	// The model the running agent reports, kept so this chat names it at once the next time it loads.
 	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
@@ -732,7 +742,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				theme={theme}
 				headerActions={headerActions}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabs={workspaceTabs}
 				workspaceTabActions={workspaceTabActions}
@@ -911,6 +920,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				activateBranchTarget={commands.activateBranchTarget}
 				activateBranchError={commands.activateBranchError}
 				skills={sideCreationEnabled ? [...(["btw"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw")] : skills}
+				skillsLoading={skillsLoading}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

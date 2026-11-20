@@ -391,6 +391,65 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(event)).not.toContain("private session");
 	});
 
+	it("titles and groups a failed onboarding action by its action and reason alone", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "install /Users/alice/private-repo", level: "error", tags: { category: "onboarding", code: "gh_install:install_failed", target: "gh", flow: "onboarding", severity: "P1", owner: "ours" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.category": "onboarding", "ao.code": "gh_install:install_failed", "ao.target": "gh", "ao.flow": "onboarding" });
+		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(event.message).toBe("Onboarding gh_install failed (install_failed)");
+		// The target is a tag to filter by, not part of the grouping.
+		expect(event.fingerprint).toEqual(["electron", "onboarding", "gh_install", "install_failed", "renderer"]);
+		expect(event.tags).toMatchObject({ surface: "renderer", kind: "message", category: "onboarding", code: "gh_install:install_failed", action: "gh_install", reason: "install_failed", target: "gh", flow: "onboarding", sample_rate: "1" });
+		expect(JSON.stringify(event)).not.toMatch(/private-repo|alice/);
+	});
+
+	it("tags an onboarding failure's target only from the known list", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "agent_sign_in:start_failed", target: "claude-code" } });
+		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent).tags).toMatchObject({ action: "agent_sign_in", target: "claude-code" });
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "agent_install:install_failed", target: "private-agent" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.target": "other" });
+		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent).tags).toMatchObject({ action: "agent_install", target: "other" });
+		// Other renderer events don't carry it.
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED", target: "codex" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("ao.target");
+		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent).tags).not.toHaveProperty("target");
+	});
+
+	it("drops onboarding codes outside the closed action and reason lists", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		for (const code of ["gh_install:private-repo", "private:install_failed", "agent_sign_in:not_signed_in", "gh_install:install_failed:extra", "WORKSPACE_GIT_READ_FAILED"]) {
+			transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code } });
+			expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.category": "onboarding", "ao.code": "unknown" });
+		}
+		// They share one fingerprint, so scrub one: the per-fingerprint budget allows three a day.
+		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(event.message).toBe("Renderer API error (onboarding)");
+		expect(event.tags).toMatchObject({ code: "unknown" });
+		expect(event.tags).not.toHaveProperty("action");
+		// An onboarding code is not a code for any other category.
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "http_5xx", code: "gh_install:install_failed" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.code": "unknown" });
+	});
+
+	it("keeps the onboarding flow tag on other renderer errors without changing their grouping", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		const request = { consentGeneration: "generation-1", kind: "message", message: "private session", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED" } } as const;
+		transport.capture(request);
+		const plain = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		transport.capture({ ...request, tags: { ...request.tags, flow: "onboarding" } });
+		const tagged = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(tagged.tags).toMatchObject({ flow: "onboarding", code: "CHAT_DELIVERY_FAILED" });
+		expect(tagged.fingerprint).toEqual(plain.fingerprint);
+		expect(plain.tags).not.toHaveProperty("flow");
+		transport.capture({ ...request, tags: { ...request.tags, flow: "private-flow" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("ao.flow");
+	});
+
 	it("groups Electron main exceptions by safe type and top in-app frame", async () => {
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
@@ -523,6 +582,28 @@ describe("Electron main error sampling and budget", () => {
 			const uncaught: ErrorEvent = { type: undefined, level: "fatal", exception: { values: [{ type: "Error", mechanism: { type: "generic", handled: false } }] } };
 			expect(beforeSend(uncaught)?.tags).toMatchObject({ kind: "uncaught_exception", sample_rate: "1" });
 			expect(beforeSend(crash())?.tags).toMatchObject({ kind: "process_exit", sample_rate: "1" });
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("sends failed onboarding actions from every install, within the daily caps", async () => {
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			const transport = await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			const beforeSend = beforeSendOf();
+			const failure = { consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "agent_install:install_failed", target: "codex" } } as const;
+			for (let sent = 0; sent < 3; sent++) {
+				transport.capture(failure);
+				expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent)?.tags).toMatchObject({ action: "agent_install", sample_rate: "1" });
+			}
+			// The fourth of the day is over the per-fingerprint cap.
+			transport.capture(failure);
+			expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent)).toBeNull();
+			// A forged onboarding code is an ordinary event, so this install still samples it out.
+			transport.capture({ ...failure, tags: { category: "onboarding", code: "private:install_failed" } });
+			expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent)).toBeNull();
 		} finally {
 			rmSync(unsampledDir, { recursive: true, force: true });
 		}

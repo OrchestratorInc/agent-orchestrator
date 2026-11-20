@@ -175,10 +175,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Lists the emails an active link of the caller's is shared with, oldest first. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
+        /** @description Lists who an active link of the caller's is shared with, oldest first: people by email in grants, and, on a team workspace, its teams and the whole workspace. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
         get: operations["listArtifactShareGrants"];
         put?: never;
-        /** @description Shares an active link of the caller's with emails, at once, and lists everyone it is shared with now. Each gets view access once they sign in with that verified email; nobody is emailed. Emails are matched case-insensitively; one already listed, and the owner's own, change nothing. 400 for a value that is not a bare email address or more than 50 at once; 409 artifact_share_grant_limit past 200 emails on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
+        /** @description Shares an active link of the caller's with emails and, on a team workspace, with its teams or everyone in it, at once, and lists everyone it is shared with now. Each person gets view access once they sign in with that verified email; each member of a team or the workspace gets it while they are one, and the link is listed in their Artifacts. A team or workspace grant works only while the link's owner is an active member of that workspace too: if the owner leaves or is removed, it stays, dormant (listed to the owner unnamed, to remove), and works again if they are added back. Email grants do not depend on it. Nobody is emailed. Emails are matched case-insensitively; one already listed, the owner's own, and a team or workspace already listed change nothing. 400 for a value that is not a bare email address, more than 50 at once, nothing to share with, or teams or workspace without orgId; 403 when the caller is not an active member of orgId, and 403 team_workspace_required when orgId is a personal workspace: teams and workspaces are for team workspaces on a paid Cloud plan; 404 for a team that is not one of orgId's; 409 artifact_share_grant_limit past 200 emails, or 50 teams and workspaces, on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
         post: operations["addArtifactShareGrants"];
         delete?: never;
         options?: never;
@@ -199,7 +199,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Stops a link being shared with one email. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
+        /** @description Stops a link being shared with one email, team or workspace, by the grant's id. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
         delete: operations["removeArtifactShareGrant"];
         options?: never;
         head?: never;
@@ -215,7 +215,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. */
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. The images and other files an HTML page refers to by relative path are uploaded under this upload with createArtifactShareFileUpload and listed when finalizing. */
         post: operations["createArtifactShareUpload"];
         delete?: never;
         options?: never;
@@ -257,6 +257,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/artifact-shares/uploads/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts uploading one file the page being uploaded (uploadToken, from createArtifactShareUpload) refers to by relative path, such as an image. The link serves it at path under its root, so <img src="images/a.png"> in the page loads the file whose path is images/a.png. Any file type but video may be included, and there is no file size limit. Its parts go as the page's do (presignArtifactShareParts, PUT each, abortArtifactShareUpload to cancel); finish it with completeArtifactShareFileUpload. 400 invalid_request for a path that is absolute, has an empty, "." or ".." segment, a backslash or a control character, or is reserved (raw, or under _ao/ or a first segment starting with ~); 429 artifact_share_rate_limited past the hourly allowance. A control plane that predates included files answers 404. 415 artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm, .ogv, .avi, .mkv), as for a link's own file. */
+        post: operations["createArtifactShareFileUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/files/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Finishes an included file's upload from every one of its parts, in order, and answers the fileToken finalizeArtifactShare lists. Errors are finalizeArtifactShare's. A file no finalize lists before expiresAt is deleted. */
+        post: operations["completeArtifactShareFileUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/artifact-shares/finalize": {
         parameters: {
             query?: never;
@@ -266,7 +300,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired. */
+        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired, or a fileToken that is not one of this upload's link; 400 artifact_share_too_many_files for more than 200 files; 409 artifact_share_upload_gone when an included file's upload expired. */
         post: operations["finalizeArtifactShare"];
         delete?: never;
         options?: never;
@@ -308,6 +342,23 @@ export interface paths {
         put?: never;
         /** @description Returns what the viewer page shows a signed-in person for a link: the same details as getPublicArtifactShare, for a public link, a link they own, or a private link shared with their verified email. For a private link contentUrl carries a view token (?vt=) that opens the file for 10 minutes; the file host checks the token and the link's grants on every request, so removing someone or unpublishing takes effect at once. Any other link, private or not there at all, returns 404, so the answer never says that a private link exists. For the link's owner the answer adds you, with the link's ID, so they can unpublish it from the viewer page. Rate-limited per person (429 rate_limited). */
         post: operations["viewArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/shared-artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists the active links other people published and shared with the signed-in person, newest change first: links shared with their verified email, and links shared with a team they are in, private or public. They are listed without being opened; opening a link never lists it. A link shared both ways is listed once. An unpublished link is no longer listed; their own links never are. No owner is named. A link's file opens through viewArtifactShare. Available only when artifact share links are on; otherwise 404. */
+        get: operations["listSharedArtifacts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3030,6 +3081,8 @@ export interface components {
             currency: string;
             interval: string;
             limits?: components["schemas"]["PlanLimits"];
+            /** @description Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial. */
+            trialDays?: number;
         };
         PutPushDeviceInput: {
             /** @description The Expo push token the app minted. */
@@ -3261,7 +3314,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -3380,6 +3433,9 @@ export interface components {
             orchestratorRules?: components["schemas"]["ProjectRules"];
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
+            sandboxDocker?: components["schemas"]["ProjectSandboxDocker"];
+            agentsCanUseSudo?: components["schemas"]["ProjectAgentsCanUseSudo"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
@@ -3567,12 +3623,24 @@ export interface components {
             orchestratorRules?: components["schemas"]["ProjectRules"];
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
+            sandboxDocker?: components["schemas"]["ProjectSandboxDocker"];
+            agentsCanUseSudo?: components["schemas"]["ProjectAgentsCanUseSudo"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
         };
+        /**
+         * @description Where the orchestrator of a project whose sessions run on Coder runs. freestyle, the default and the same as absent, runs it on an instant VM; coder runs it on the organization's Coder exactly as the project's workers run (the project's template and the organization's own Coder deployment and workspace rules). The project's workers run on Coder either way. Setting coder needs a project whose sessions run on Coder and an organization whose offering lists orchestrator-on-coder; otherwise the write is refused with 422 provider_unavailable. It is read when an orchestrator session is created, so an orchestrator that is running, paused or restored stays where it was created. When the organization can no longer run orchestrators on Coder, a new orchestrator runs on an instant VM. It has no effect on a project on any other provider, or on a deployment without instant VMs, where the orchestrator of a Coder project already runs on Coder.
+         * @enum {string}
+         */
+        ProjectOrchestratorSandboxProvider: "freestyle" | "coder";
         /** @description Workers request AO's review of their own pull request once it is pushed and ready, instead of waiting to be asked. Defaults to off. */
         ProjectWorkersRequestReview: boolean;
         /** @description Commits a session's agent makes carry a Co-authored-by trailer naming the AO GitHub App's bot account, so GitHub shows the App as a co-author beside the person the commit is authored as. Defaults to on. */
         ProjectCoAuthorCommits: boolean;
+        /** @description Docker (Coder sandboxes): the session's agents may use Docker in a Coder sandbox. Docker access amounts to root there, so while it is on, saved logins are not filled into that sandbox's browser. Sandboxes whose provider runs no Docker (Freestyle) ignore it. Defaults to on. */
+        ProjectSandboxDocker: boolean;
+        /** @description The session's agents may use sudo in the cloud sandbox. While it is on, saved logins are not filled into that sandbox's browser. Defaults to off. */
+        ProjectAgentsCanUseSudo: boolean;
         /** @description Issue intake: while enabled, every open GitHub issue of the project's repository (or repo) that assignee matches gets one worker session, started as the organization owner or admin who last saved the rule. Only issues opened by the repository's owners, members and collaborators are taken; an issue anyone else opens is skipped. The sessions intake starts get none of the project's environment variables. An enabled rule needs an assignee. A patch merges into the stored rule. Setting it requires an organization owner or admin. */
         ProjectTrackerIntake: {
             enabled?: boolean;
@@ -4881,6 +4949,8 @@ export interface components {
             access?: components["schemas"]["ArtifactShareAccess"];
             /** @description How many emails the link is shared with. Absent from a control plane that predates private links. */
             grantCount?: number;
+            /** @description How many files the link serves beside its own, at their paths under contentUrl (see createArtifactShareFileUpload). Absent from a control plane that predates included files. */
+            fileCount?: number;
         };
         /**
          * @description Who a link opens for. restricted: only its owner and the emails it is shared with, once they sign in with that verified email; its file needs a view token (viewArtifactShare), so share viewerUrl, never contentUrl. anyone: everyone with the link, no sign-in. Absent from a control plane that predates private links, where every link is anyone.
@@ -4899,11 +4969,46 @@ export interface components {
             createdAt: string;
         };
         ArtifactShareGrantList: {
+            /** @description The people the link is shared with, by email. */
             grants: components["schemas"]["ArtifactShareGrant"][];
+            /** @description The teams the link is shared with. */
+            teams: components["schemas"]["ArtifactShareSubjectGrant"][];
+            /** @description The workspaces the link is shared with, everyone in each. */
+            workspaces: components["schemas"]["ArtifactShareSubjectGrant"][];
         };
+        ArtifactShareSubjectGrant: {
+            /**
+             * Format: uuid
+             * @description The grant's id, for removeArtifactShareGrant.
+             */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /**
+             * Format: uuid
+             * @description The team; absent for a workspace.
+             */
+            teamId?: string;
+            /** @description The team's or workspace's name; empty when the owner is no longer a member of the workspace. */
+            name: string;
+            /** @description Its members now; 0 when the owner is no longer one of the workspace. */
+            memberCount: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description At least one of emails, teamIds and workspace. */
         ArtifactShareGrantsInput: {
             /** @description Bare email addresses to share the link with. */
-            emails: string[];
+            emails?: string[];
+            /**
+             * Format: uuid
+             * @description The team workspace teamIds and workspace belong to; required with either.
+             */
+            orgId?: string;
+            /** @description Teams of orgId to share the link with. */
+            teamIds?: string[];
+            /** @description Share the link with everyone in orgId. */
+            workspace?: boolean;
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -4977,18 +5082,50 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
         };
+        ArtifactShareCompletedPart: {
+            partNumber: number;
+            sha256: string;
+            /** @description The ETag the part's PUT returned. */
+            etag: string;
+        };
+        /** @description An included file's upload and every one of its parts, in order. It takes no access, emails or files: those are the page's, set when the page is finalized. */
+        ArtifactShareFileCompleteInput: {
+            /** @description The file's uploadToken, from createArtifactShareFileUpload. */
+            uploadToken: string;
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
+        };
         ArtifactShareFinalizeInput: {
             uploadToken: string;
-            parts: {
-                partNumber: number;
-                sha256: string;
-                /** @description The ETag the part's PUT returned. */
-                etag: string;
-            }[];
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
             /** @description The access a new or restored link starts with. Absent, it is anyone, as before links could be private. An active link keeps its own access. */
             access?: components["schemas"]["ArtifactShareAccess"];
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
             emails?: string[];
+            /** @description Every file the link serves beside its own from now on, each from completeArtifactShareFileUpload under this upload, at most one per path; an empty list leaves it none. Absent, an active link keeps the files it has and a new or restored one has none. A private link's page that has files, opened at contentUrl with its view token in the query, is redirected to /~vt/<token>/ under the same host, so the files it refers to by relative path carry the token. */
+            files?: {
+                /** @description From completeArtifactShareFileUpload; opaque. */
+                fileToken: string;
+            }[];
+        };
+        ArtifactShareFileUploadInput: {
+            /** @description The page's upload, from createArtifactShareUpload. */
+            uploadToken: string;
+            /** @description Where the link serves the file: slash-separated, relative to the page, as a browser asks for it once it resolves the page's relative URL (images/a.png, not ./images/a.png). */
+            path: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The whole file's SHA-256, as for the page. */
+            sha256: string;
+        };
+        ArtifactShareFileUploaded: {
+            /** @description Lists the file in finalizeArtifactShare; opaque. */
+            fileToken: string;
+            path: string;
+            /**
+             * Format: date-time
+             * @description When the file can no longer be listed.
+             */
+            expiresAt: string;
         };
         SessionArtifactShareInput: {
             /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
@@ -5005,9 +5142,49 @@ export interface components {
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
             emails?: string[];
         };
+        /** @description A link someone else published and shared with the signed-in person, as their Artifacts list shows it. */
+        SharedArtifact: {
+            /** @description The link's public ID, for viewArtifactShare. */
+            linkId: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When the link last served a new version.
+             */
+            updatedAt: string;
+            /** @enum {string} */
+            access: "restricted" | "anyone";
+            /** @description The viewer page of the link; absent without a viewer. */
+            viewerUrl?: string;
+            /**
+             * @description How it reached them, the first that holds: direct, shared with their email; team, with a team they are in; workspace, with a workspace they are a member of.
+             * @enum {string}
+             */
+            via: "direct" | "team" | "workspace";
+            /** @description Every team of theirs the link is shared with; empty when none. */
+            teams: {
+                id: string;
+                name: string;
+            }[];
+            /** @description Every workspace of theirs the link is shared with; empty when none. */
+            workspaces: {
+                id: string;
+                name: string;
+            }[];
+            /**
+             * Format: date-time
+             * @description When it was first shared with them.
+             */
+            sharedAt: string;
+        };
         PublicArtifactShare: {
             linkId: string;
             name: string;
+            /** @description The document title when available, otherwise the filename without its extension. */
+            title?: string;
             contentType: string;
             /** Format: int64 */
             size: number;
@@ -5020,11 +5197,18 @@ export interface components {
             /** @description Where the link's file is served; the viewer frames it. For a private link (viewArtifactShare) it carries a short-lived view token in its vt query parameter. */
             contentUrl: string;
             access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description The link's viewer page; absent where the control plane has no viewer. The desktop app opens a link sent from a viewer page only when it came from this origin. */
+            viewerUrl?: string;
             /** @description Only from viewArtifactShare, and only for the link's owner: what the viewer page needs to manage the link. shareId unpublishes it (deleteArtifactShare); grantCount is how many emails it is shared with. Absent for everyone else. */
             you?: {
                 owner: boolean;
                 /** Format: uuid */
                 shareId: string;
+                /**
+                 * Format: date-time
+                 * @description When you first created this artifact link.
+                 */
+                createdAt?: string;
                 grantCount: number;
             };
         };
@@ -6499,7 +6683,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The email no longer has access. */
+            /** @description The email, team or workspace no longer has access. */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -6582,6 +6766,56 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    createArtifactShareFileUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFileUploadInput"];
+            };
+        };
+        responses: {
+            /** @description The file's upload, ready for its parts. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeArtifactShareFileUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFileCompleteInput"];
+            };
+        };
+        responses: {
+            /** @description The finished file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareFileUploaded"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     finalizeArtifactShare: {
         parameters: {
             query?: never;
@@ -6659,6 +6893,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSharedArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The links shared with the signed-in person. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        artifacts: components["schemas"]["SharedArtifact"][];
+                    };
                 };
             };
             default: components["responses"]["Error"];

@@ -75,6 +75,38 @@ export interface CloudShareGrant {
 	createdAt: string;
 }
 
+/**
+ * One team, or a whole workspace, a link is shared with. Only a team
+ * workspace on a paid Cloud plan takes them. teamId is unset for a workspace;
+ * name is empty, and memberCount 0, when the owner has left the workspace.
+ */
+export interface CloudShareSubjectGrant {
+	id: string;
+	orgId: string;
+	teamId?: string;
+	name: string;
+	memberCount: number;
+	createdAt: string;
+}
+
+/** Everyone a link is shared with: people by email, teams, and workspaces. */
+export interface CloudShareGrants {
+	people: CloudShareGrant[];
+	teams: CloudShareSubjectGrant[];
+	workspaces: CloudShareSubjectGrant[];
+}
+
+/**
+ * Who to share a link with at once. teamIds and workspace name teams of, or
+ * everyone in, the team workspace orgId, which either needs.
+ */
+export interface CloudShareInvite {
+	emails?: string[];
+	orgId?: string;
+	teamIds?: string[];
+	workspace?: boolean;
+}
+
 /** One committed file of a cloud session. */
 export interface CloudSessionShareFile extends CloudShareFile {
 	source: "cloud";
@@ -172,6 +204,11 @@ export interface CloudShareInspection {
 	 * not checked: a different value means the file changed since publishing.
 	 */
 	publishedFingerprint?: string;
+	/**
+	 * An HTML page published with the files it uses: whether any of them
+	 * changed, appeared or went since, though the page did not.
+	 */
+	pageFilesChanged?: boolean;
 }
 
 /**
@@ -183,8 +220,26 @@ export function sameShareFingerprint(recorded: string, current: string): boolean
 	return recorded === current || (current !== "" && recorded.endsWith(`:${current}`));
 }
 
+/**
+ * What publishing an HTML page did with the files it uses (images and the
+ * like, by relative path), which its link serves beside it.
+ */
+export interface CloudSharePageFiles {
+	/** How many the link serves beside the page now. */
+	included: number;
+	/**
+	 * How many the page uses that were left out: video (not shared yet), a
+	 * file outside the page's folder or missing, or past the link's limit.
+	 */
+	skipped: number;
+	/** How many of skipped are video. */
+	videos: number;
+	/** The control plane predates included files: the page was published alone. */
+	unsupported: boolean;
+}
+
 export type CloudSharePublishResult =
-	| { status: "published"; share: CloudShareLink; replaced: boolean }
+	| { status: "published"; share: CloudShareLink; replaced: boolean; pageFiles?: CloudSharePageFiles }
 	/** The person cancelled before the upload finished; nothing was published. */
 	| { status: "cancelled" }
 	/** The file changed since it was inspected; nothing was uploaded. Show this inspection instead. */
@@ -194,8 +249,11 @@ export type CloudSharePublishResult =
 	| { status: "unsupported"; message: string }
 	/** A cloud session's files are shared only by the person who started the session. */
 	| { status: "not_owner" }
-	/** Refused for another reason, such as no free disk space or another file being shared. */
-	| { status: "error"; message: string }
+	/**
+	 * Refused for another reason, such as no free disk space or another file
+	 * being shared. failure is its category for telemetry, never its message.
+	 */
+	| { status: "error"; message: string; failure?: "too_large" | "upload_failed" }
 	| { status: "signed_out" };
 
 /**

@@ -71,6 +71,7 @@ vi.mock("./TaskComposer", () => ({
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
+		notePreparationUsed: () => undefined,
 		modelWarning: h.modelWarning,
 		modelWarningRetries: h.modelWarningRetries,
 		chatModels: h.chatModels,

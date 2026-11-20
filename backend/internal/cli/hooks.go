@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -676,8 +677,11 @@ type claudePreToolUseDenyOutput struct {
 
 const artifactToolName = "Artifact"
 
+// The nudge blocks only the first use, so the reason must say a retry works:
+// otherwise an agent told to make a Claude artifact reads it as a ban.
 const artifactNudgeReason = "Orchestrator does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
-	"in a chat session, use html_render."
+	"in a chat session, use html_render. This is a one-time reminder: if the user asked for a Claude artifact, " +
+	"call Artifact again and it will be allowed."
 
 // claimArtifactNudge reports whether this is the session's first Artifact tool
 // use, by atomically creating a marker file under AO_DATA_DIR. Any failure
@@ -805,7 +809,8 @@ func (c *commandContext) emitComputerUsePermissionNotice(agent, event, sessionID
 
 const reviewerPermissionDenyMessage = "Orchestrator headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+	"and the exact submit commands from the review task, fed by a quoted <<'" + ports.ReviewSubmitHeredocDelimiter + "' heredoc " +
+	"or, in a read-only sandbox, by `printf '%s' '<text>' | ...`."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
 // allow the exact submit shapes (claudecode.ReviewerSubmitCommandAllowed, which
@@ -903,6 +908,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			c.reportHookFailure(agent, event, sessionID, fmt.Errorf("read stdin: %w", err))
 		}
 	}
+	if agent == string(domain.HarnessOpenInterpreter) && !openinterpreter.IsRootHook(payload) {
+		return nil
+	}
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
@@ -958,7 +966,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessContinue:
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
-		domain.HarnessOMP, domain.HarnessPi,
+		domain.HarnessOMP, domain.HarnessPi, domain.HarnessTau,
 		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessMiniMaxCode:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 		if domain.AgentHarness(agent) == domain.HarnessPi {
@@ -971,6 +979,16 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if domain.AgentHarness(agent) == domain.HarnessCopilot && event == "stop" && conversation.FinalAssistantMessage == "" {
 		// Copilot's stop hook names its event log instead of carrying the answer.
 		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
+	}
+	if domain.AgentHarness(agent) == domain.HarnessMastraCode && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Mastra's TUI Stop hook omits the answer. The daemon reads it from
+		// native history; the hook only forwards a reply the payload carries.
+		var reply struct {
+			AssistantMessage string `json:"assistant_message"`
+		}
+		if json.Unmarshal(payload, &reply) == nil {
+			conversation.FinalAssistantMessage = capHookText(strings.TrimSpace(reply.AssistantMessage), maxHookInteractionLen)
+		}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{
@@ -1201,7 +1219,7 @@ func shouldEmitSessionStartContext(agent, event string) bool {
 		return false
 	}
 	switch agent {
-	case "agy", "devin":
+	case "agy", "devin", "open-interpreter":
 		return true
 	default:
 		return false

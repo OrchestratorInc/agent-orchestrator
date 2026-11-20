@@ -274,7 +274,8 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			const decisions: DecisionOption[] = Array.isArray(payload.decisions)
 				? payload.decisions.flatMap((value): DecisionOption[] => {
 					const decision = value as Payload | null;
-					return decision && typeof decision.id === "string" && typeof decision.label === "string" ? [{ id: decision.id, label: decision.label }] : [];
+					if (!decision || typeof decision.id !== "string" || typeof decision.label !== "string") return [];
+					return [typeof decision.kind === "string" && decision.kind ? { id: decision.id, label: decision.label, kind: decision.kind } : { id: decision.id, label: decision.label }];
 				})
 				: [];
 			const activity: ConversationActivity = {

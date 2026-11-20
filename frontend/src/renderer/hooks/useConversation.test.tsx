@@ -23,6 +23,8 @@ import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
 	conversationQueryKey,
+	conversationSkillsQueryKey,
+	refreshLocalConversationTail,
 	useConversation,
 	ProviderSwitchFailed,
 	useConversationCommands,
@@ -1644,17 +1646,105 @@ describe("useConversationSkills polling", () => {
 		}
 	});
 
-	it("keeps polling once the catalog loads", async () => {
+	it("rechecks an early empty list quickly, then polls at the normal pace", async () => {
 		vi.useFakeTimers();
 		try {
-			// An empty catalog is a real answer, not a failure: polling continues so a
-			// skill published later becomes visible without a second event channel.
+			// An ACP agent publishes its commands a few seconds after it starts, so the
+			// first answer is often empty. It is asked again every few seconds until the
+			// empty answer has held for the grace period, then once a minute: an empty
+			// catalog is still a real answer, and a skill published later shows up.
 			getMock.mockResolvedValue({ data: { skills: [] } });
 			const queryClient = new QueryClient({
 				defaultOptions: { queries: { retry: false } },
 			});
 
-			renderHook(() => useConversationSkills("ao-skills-ok", true), {
+			const { result } = renderHook(() => useConversationSkills("ao-skills-ok", true), {
+				wrapper: skillsWrapper(queryClient),
+			});
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(getMock).toHaveBeenCalledTimes(1);
+			expect(result.current.loading).toBe(true);
+			// Not yet the list to remember: it may still be filled in.
+			expect(result.current.settled).toBe(false);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(getMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(15_000);
+			});
+			// Believed now: `/` is an ordinary character again, and the empty list is
+			// what gets remembered, so removed skills stop being offered.
+			expect(result.current.loading).toBe(false);
+			expect(result.current.skills).toEqual([]);
+			expect(result.current.settled).toBe(true);
+			const settledCalls = getMock.mock.calls.length;
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(getMock).toHaveBeenCalledTimes(settledCalls);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(35_000);
+			});
+			expect(getMock).toHaveBeenCalledTimes(settledCalls + 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("restarts the grace period when the controller comes back", async () => {
+		vi.useFakeTimers();
+		try {
+			// A restart keeps the session's query, and with it an empty answer from the
+			// last controller. That old answer must not count toward the new one's
+			// grace period, or the first fresh empty answer would be believed at once
+			// and skills published moments later would wait a full minute.
+			getMock.mockResolvedValue({ data: { skills: [] } });
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+			queryClient.setQueryData(conversationSkillsQueryKey("ao-skills-restart"), [], { updatedAt: Date.now() - 5 * 60_000 });
+
+			const { result, rerender } = renderHook(
+				({ enabled }: { enabled: boolean }) => useConversationSkills("ao-skills-restart", enabled),
+				{ wrapper: skillsWrapper(queryClient), initialProps: { enabled: false } },
+			);
+			expect(result.current.settled).toBe(false);
+
+			rerender({ enabled: true });
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(getMock).toHaveBeenCalledTimes(1);
+			expect(result.current.settled).toBe(false);
+			expect(result.current.loading).toBe(true);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(6_000);
+			});
+			// Still rechecked quickly rather than once a minute.
+			expect(getMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("polls once a minute after a non-empty list", async () => {
+		vi.useFakeTimers();
+		try {
+			getMock.mockResolvedValue({ data: { skills: [{ name: "review", displayName: "review", source: "repo" }] } });
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+
+			renderHook(() => useConversationSkills("ao-skills-full", true), {
 				wrapper: skillsWrapper(queryClient),
 			});
 
@@ -1664,12 +1754,93 @@ describe("useConversationSkills polling", () => {
 			expect(getMock).toHaveBeenCalledTimes(1);
 
 			await act(async () => {
-				await vi.advanceTimersByTimeAsync(60_000);
+				await vi.advanceTimersByTimeAsync(59_000);
+			});
+			expect(getMock).toHaveBeenCalledTimes(1);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1_000);
 			});
 			expect(getMock).toHaveBeenCalledTimes(2);
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("bounds each read so a provider that never answers cannot hold the list", async () => {
+		getMock.mockResolvedValue({ data: { skills: [] } });
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		renderHook(() => useConversationSkills("ao-skills-timeout", true), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/skills",
+			expect.objectContaining({ signal: expect.any(AbortSignal) }),
+		);
+	});
+
+	it("shows the remembered list until the live one arrives", async () => {
+		// `/` must open at once on a chat whose agent is still starting: the list it
+		// reported last time stands in, and the live answer replaces it.
+		let answer: (value: unknown) => void = () => undefined;
+		getMock.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const remembered = [{ name: "old-skill", displayName: "old-skill", source: "agent" }];
+
+		const { result } = renderHook(() => useConversationSkills("ao-skills-remembered", true, undefined, remembered), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		expect(result.current.skills).toEqual(remembered);
+		expect(result.current.remembered).toBe(true);
+		expect(result.current.loading).toBe(false);
+		expect(result.current.settled).toBe(false);
+
+		const live = [{ name: "new-skill", displayName: "new-skill", source: "agent" }];
+		await act(async () => {
+			answer({ data: { skills: live } });
+		});
+		await waitFor(() => expect(result.current.skills).toEqual(live));
+		expect(result.current.remembered).toBe(false);
+		expect(result.current.settled).toBe(true);
+	});
+
+	it("keeps the remembered list while an early empty answer may still be filled in", async () => {
+		getMock.mockResolvedValue({ data: { skills: [] } });
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const remembered = [{ name: "old-skill", displayName: "old-skill", source: "agent" }];
+
+		const { result } = renderHook(() => useConversationSkills("ao-skills-early-empty", true, undefined, remembered), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(result.current.skills).toEqual(remembered);
+	});
+
+	it("shows the remembered list without asking while the agent is not running", () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const remembered = [{ name: "old-skill", displayName: "old-skill", source: "agent" }];
+
+		const { result } = renderHook(() => useConversationSkills("ao-skills-asleep", false, undefined, remembered), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		expect(getMock).not.toHaveBeenCalled();
+		expect(result.current.skills).toEqual(remembered);
+		// Nothing is being read, so there is nothing to say is loading.
+		expect(result.current.loading).toBe(false);
 	});
 });
 
@@ -1730,6 +1901,45 @@ describe("toSnapshot", () => {
 	});
 });
 
+it("loads a small initial page and keeps older history through refreshes and revisits", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const message = (sequence: number, text = `Message ${sequence}`, revision = 1) => ({
+		id: `m${sequence}`, sequence, revision, role: "assistant", origin: "provider", text,
+		streaming: false, createdAt: "2026-11-12T00:00:00Z",
+	});
+	let latest = [message(31), message(32)];
+	getMock.mockImplementation((_path, options) => {
+		const older = options.params.query.beforeSequence !== undefined;
+		return Promise.resolve({ data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence: 32, oldestSequence: older ? 1 : 31, hasMoreBefore: !older,
+			turns: [], messages: older ? [message(1), message(2)] : latest, activities: [],
+		} });
+	});
+	const first = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	await waitFor(() => expect(first.result.current.snapshot?.items).toHaveLength(2));
+	expect(getMock.mock.calls[0][1].params.query).toEqual({ limit: 30, beforeSequence: undefined });
+	expect(first.result.current.hasOlder).toBe(true);
+
+	act(() => first.result.current.loadOlder());
+	await waitFor(() => expect(first.result.current.snapshot?.items.map((item) => item.id)).toEqual(["m1", "m2", "m31", "m32"]));
+	expect(getMock.mock.calls[1][1].params.query).toEqual({ limit: 200, beforeSequence: 31 });
+	expect(first.result.current.hasOlder).toBe(false);
+
+	latest = [message(31), message(32, "Updated answer", 2)];
+	await act(async () => { await queryClient.invalidateQueries({ queryKey: ["conversation", "ao-1"] }); });
+	await waitFor(() => expect(first.result.current.snapshot?.items.at(-1)).toMatchObject({ text: "Updated answer", revision: 2 }));
+	expect(first.result.current.snapshot?.items.map((item) => item.id)).toEqual(["m1", "m2", "m31", "m32"]);
+	first.unmount();
+	getMock.mockClear();
+	const revisit = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	expect(revisit.result.current.snapshot?.items).toHaveLength(4);
+	expect(getMock).not.toHaveBeenCalled();
+	revisit.unmount();
+	queryClient.clear();
+});
+
 it("keeps a live refresh that is in flight when older history starts loading", async () => {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -1755,6 +1965,32 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 	await act(async () => { refresh.resolve(page(21)); });
 
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
+	// Asked for during the refresh, the older page loads once the refresh lands.
+	await waitFor(() => expect(result.current.hasOlder).toBe(false));
+	expect(getMock.mock.calls.at(-1)?.[1].params.query).toMatchObject({ beforeSequence: 20 });
+	expect(result.current.snapshot?.latestSequence).toBe(21);
+});
+
+it("keeps a local chat on screen when only its older page fails", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	getMock.mockReset().mockImplementation((_path, options) => Promise.resolve(options.params.query.beforeSequence === undefined
+		? { data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence: 20, oldestSequence: 20, hasMoreBefore: true, turns: [], activities: [],
+			messages: [{ id: "m20", sequence: 20, revision: 1, role: "assistant", origin: "provider", text: "Latest", streaming: false, createdAt: "2026-11-18T00:00:00Z" }],
+		} }
+		: { error: { code: "INTERNAL", message: "older page failed" } }));
+	const { result } = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	await waitFor(() => expect(result.current.snapshot?.items).toHaveLength(1));
+
+	act(() => result.current.loadOlder());
+	await waitFor(() => expect(queryClient.getQueryCache().find({ queryKey: ["conversation", "ao-1"] })?.state.error).toBeTruthy());
+	await waitFor(() => expect(result.current.isLoadingOlder).toBe(false));
+	expect(result.current.error).toBeUndefined();
+	expect(result.current.snapshot?.items.map((item) => item.id)).toEqual(["m20"]);
+	expect(result.current.hasOlder).toBe(true);
+	queryClient.clear();
 });
 
 describe("opening a local chat it has cached", () => {
@@ -1768,6 +2004,29 @@ describe("opening a local chat it has cached", () => {
 	});
 	const mount = (queryClient: QueryClient) => renderHook(() => useConversation("ao-1"), {
 		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+	});
+
+	it("leaves an open read in flight to land instead of merging a tail it would overwrite", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockReturnValueOnce(openRead.promise)
+			.mockRejectedValue(new Error("read during the open read"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		// An event for the open chat arrives while its open read is in flight.
+		await expect(refreshLocalConversationTail(queryClient, "ao-1")).resolves.toBe(false);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await act(async () => { openRead.resolve(page(21, 1, false)); });
+		await waitFor(() => expect(second.result.current.snapshot?.latestSequence).toBe(21));
+		second.unmount();
 	});
 
 	it("reads only the live page when the chat changed while closed, keeping older pages", async () => {

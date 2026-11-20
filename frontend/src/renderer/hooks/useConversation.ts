@@ -29,6 +29,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
@@ -164,6 +165,8 @@ type ConversationDispatchTrackingBySession = Record<string, ConversationDispatch
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
+	/** A retained receipt can fail locally or have an uncertain dispatch. */
+	delivery?: "failed" | "uncertain";
 	/** A continue after a stop, drawn as a marker while it is sent. */
 	continuation?: boolean;
 	createdAt: string;
@@ -357,7 +360,8 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 	void queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
-const CONVERSATION_PAGE_SIZE = 200;
+const LOCAL_INITIAL_PAGE_SIZE = 30;
+const LOCAL_OLDER_PAGE_SIZE = 200;
 // A remote page crosses a tunnel, often on the host's upload: a small live page,
 // larger pages on scroll, and each tool output cut to its head and tail.
 const REMOTE_LIVE_PAGE_SIZE = 30;
@@ -372,6 +376,22 @@ const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
  */
 const SEND_ANSWER_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
+/**
+ * Kept well past React Query's 5 minute default: going back to a chat after a
+ * while, its "/" menu must still be there while the agent wakes.
+ */
+const SKILLS_CACHE_MS = 30 * 60_000;
+/** A provider that never answers must not hold the list in a fetch forever. */
+export const SKILLS_REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * ACP agents (Claude among them) publish their commands a few seconds after the
+ * session starts, once the CLI has loaded its plugins and MCP servers. An empty
+ * answer from a controller that just started is usually that gap, not "no
+ * skills", so it is asked again quickly for this long before it is believed.
+ */
+export const EMPTY_SKILLS_GRACE_MS = 20_000;
+export const EMPTY_SKILLS_RECHECK_MS = 2_000;
+const NO_SKILLS: ChatSkill[] = [];
 
 /**
  * Answers that will never change on a retry. SESSION_MODE_MISMATCH is permanent
@@ -408,7 +428,7 @@ async function fetchConversationWire(sessionId: string, hostId: string | undefin
 }
 
 function conversationPageQuery(hostId: string | undefined, beforeSequence?: number): ConversationPageQuery {
-	if (!hostId) return { beforeSequence, limit: CONVERSATION_PAGE_SIZE };
+	if (!hostId) return { beforeSequence, limit: beforeSequence ? LOCAL_OLDER_PAGE_SIZE : LOCAL_INITIAL_PAGE_SIZE };
 	return { beforeSequence, limit: beforeSequence ? REMOTE_OLDER_PAGE_SIZE : REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT };
 }
 
@@ -467,8 +487,10 @@ export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: C
 export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
 	const key = conversationQueryKey(sessionId, hostId);
 	let latest: ConversationSnapshot;
+	let priorControllerState: string | undefined;
 	try {
 		const prior = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages[0];
+		priorControllerState = prior?.controller.state;
 		const floor = prior ? remoteConversationFloor(prior) : 0;
 		if (prior && floor >= 1) {
 			const wire = await fetchConversationWire(sessionId, hostId, { afterSequence: floor, limit: REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT });
@@ -479,6 +501,10 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			if (merged && current) {
 				queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+				forgetRereadsOnControllerChange(queryClient, sessionId, hostId, priorControllerState, merged.controller.state);
+				// The tail covered every row above the floor, which is below every
+				// running row of the live page, so only older pages can be stale.
+				await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, floor + 1);
 				return;
 			}
 			latest = wire.afterSequence ? await fetchConversationPage(sessionId, hostId) : tail;
@@ -494,6 +520,93 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 	applyLiveConversationPage(queryClient, key, latest);
+	forgetRereadsOnControllerChange(queryClient, sessionId, hostId, priorControllerState, latest.controller.state);
+	// Rows that slid out of the new page stay in the live page uncovered.
+	await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, latest.oldestSequence);
+}
+
+/** At most this many uncovered rows are reread per refresh. */
+const REMOTE_UNCOVERED_UNSETTLED_LIMIT = 20;
+
+/**
+ * Rows a reread found unchanged, as `id:revision`, per open remote chat. A row
+ * the host keeps in progress (an older daemon that never settles it, an AO action
+ * still in flight, an old pending approval) is then read once, not on every
+ * refresh of a streaming turn. Opening the chat, reconnecting its host's stream,
+ * or its controller starting (when a daemon settles stranded rows) reads it again.
+ */
+const unchangedRemoteRereads = new WeakMap<QueryClient, Map<string, Set<string>>>();
+const rereadChatKey = (hostId: string, sessionId: string) => `${hostId}\u0000${sessionId}`;
+
+function unchangedRereadsFor(queryClient: QueryClient, sessionId: string, hostId: string): Set<string> {
+	let chats = unchangedRemoteRereads.get(queryClient);
+	if (!chats) unchangedRemoteRereads.set(queryClient, (chats = new Map()));
+	let rows = chats.get(rereadChatKey(hostId, sessionId));
+	if (!rows) chats.set(rereadChatKey(hostId, sessionId), (rows = new Set()));
+	return rows;
+}
+
+/** Reads every in-progress row of a host's chats, or of one chat, again on its next refresh. */
+export function forgetRemoteConversationRereads(queryClient: QueryClient, hostId: string, sessionId?: string): void {
+	const chats = unchangedRemoteRereads.get(queryClient);
+	if (!chats) return;
+	if (sessionId !== undefined) {
+		chats.delete(rereadChatKey(hostId, sessionId));
+		return;
+	}
+	for (const key of [...chats.keys()]) if (key.startsWith(rereadChatKey(hostId, ""))) chats.delete(key);
+}
+
+function forgetRereadsOnControllerChange(queryClient: QueryClient, sessionId: string, hostId: string, before: string | undefined, after: string | undefined): void {
+	if (before !== undefined && before !== after) forgetRemoteConversationRereads(queryClient, hostId, sessionId);
+}
+
+/**
+ * A refresh reads the live page or its tail, never the rows below what that read
+ * covered: older pages, and rows that slid out of a new live page but stay in it.
+ * A row there held as still in progress keeps that status after the host settles
+ * it, and a daemon's startup repair settles exactly such rows (running notices
+ * stranded on finished turns, which sit in history). Rereads just those rows, one
+ * sequence each, and patches the ones that changed; rows at or after `coveredFrom`
+ * in the live page came with the read and are left alone. Best effort: a row
+ * that cannot be read keeps what its page held.
+ */
+async function rereadUncoveredUnsettledActivities(queryClient: QueryClient, key: QueryKey, sessionId: string, hostId: string, coveredFrom: number): Promise<void> {
+	const pages = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages ?? [];
+	const unchanged = unchangedRereadsFor(queryClient, sessionId, hostId);
+	const unsettled = pages
+		.flatMap((page, index) => index === 0 ? page.items.filter((item) => item.sequence < coveredFrom) : page.items)
+		.filter((item): item is ConversationActivity => item.kind === "activity" && (item.status === "running" || item.status === "pending"))
+		.filter((item) => !unchanged.has(`${item.id}:${item.revision}`))
+		.slice(0, REMOTE_UNCOVERED_UNSETTLED_LIMIT);
+	if (!unsettled.length) return;
+	const fresh = new Map<string, ConversationItem>();
+	await Promise.all(unsettled.map(async (item) => {
+		try {
+			const wire = await fetchConversationWire(sessionId, hostId, {
+				beforeSequence: item.sequence + 1, afterSequence: item.sequence > 1 ? item.sequence - 1 : undefined, limit: 1, outputLimit: REMOTE_OUTPUT_LIMIT,
+			});
+			const row = toSnapshot(wire).items.find((candidate) => candidate.id === item.id);
+			if (row?.kind === "activity" && (row.status !== item.status || row.revision !== item.revision)) fresh.set(item.id, row);
+			// Unchanged, or no longer shown: not worth reading again on every refresh.
+			else unchanged.add(`${item.id}:${item.revision}`);
+		} catch {
+			// The row keeps what its page held; the next refresh tries again.
+		}
+	}));
+	if (!fresh.size) return;
+	// Another refresh may have committed a newer revision while these reads ran,
+	// so a read row only replaces an older revision of what the cache holds now.
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (current) => current && {
+		...current,
+		pages: current.pages.map((page) => ({
+			...page,
+			items: page.items.map((item) => {
+				const read = fresh.get(item.id);
+				return read && read.revision > item.revision ? read : item;
+			}),
+		})),
+	});
 }
 
 /**
@@ -516,6 +629,49 @@ function applyLiveConversationPage(queryClient: QueryClient, key: QueryKey, late
 			: latest;
 		return { ...previous, pages: [live, ...previous.pages.slice(1)] };
 	});
+}
+
+/**
+ * Refresh an open local chat the way a remote one refreshes: read only the rows
+ * above its floor and merge them into the live page, instead of refetching every
+ * loaded page on each event of a streaming turn. Answers false, having written
+ * nothing, when the tail cannot replace those rows (a turn started or settled, an
+ * undo, a branch switch, compaction, a read that failed) or when anything wrote
+ * the live page during the read; the caller then refetches the chat as before.
+ */
+export async function refreshLocalConversationTail(queryClient: QueryClient, sessionId: string): Promise<boolean> {
+	// The open read of a chat that changed while it was closed writes a whole live
+	// page when it lands, possibly one read before this event. A tail merged first
+	// would be overwritten by it, while a full reload started now lands after it.
+	if (localConversationRefreshes.get(queryClient)?.has(sessionId)) return false;
+	const key = conversationQueryKey(sessionId);
+	const loaded = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages;
+	const prior = loaded?.[0];
+	const floor = prior ? remoteConversationFloor(prior) : 0;
+	if (!prior || floor < 1) return false;
+	// The tail holds only rows above the live page's floor. A turn long enough to
+	// span pages, or an unsettled row on an older loaded page, can still change
+	// below it, so such a chat reads every page as before.
+	if (loaded.length > 1 && remoteConversationFloor(mergeConversationPages(loaded) ?? prior) < prior.oldestSequence - 1) return false;
+	let wire: WireSnapshot;
+	try {
+		// The live page's size: the rows above its floor fit in it, and a tail that
+		// does not reach the floor is refused below.
+		wire = await fetchConversationWire(sessionId, undefined, { afterSequence: floor, limit: LOCAL_INITIAL_PAGE_SIZE });
+	} catch {
+		return false;
+	}
+	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
+	// A refetch or an optimistic edit that landed during the read is newer than
+	// this tail's view of the page, so the tail must not overwrite it. A chat
+	// marked stale during the read (it closed and an event arrived) keeps the
+	// mark: writing data would clear it, and its next open would skip the read
+	// that catches it up.
+	if (wire.afterSequence !== floor || current?.pages[0] !== prior || queryClient.getQueryState(key)?.isInvalidated) return false;
+	const merged = mergeRemoteConversationTail(prior, toSnapshot(wire), floor);
+	if (!merged) return false;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+	return true;
 }
 
 const remoteConversationRefreshes = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
@@ -682,12 +838,17 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		if (cached?.data === undefined) return;
 		// A cached remote page (an earlier visit, a prefetch, or the disk copy) shows
 		// at once; the open reads what changed since.
-		if (hostId) refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		if (hostId) {
+			forgetRemoteConversationRereads(queryClient, hostId, sessionId);
+			refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		}
 		// A cached local chat is current unless an event marked it stale while closed.
 		else if (cached.isInvalidated) refreshLocalConversationOnce(queryClient, sessionId);
 	}, [hostId, queryClient, sessionId]);
 
-	if (query.error && (!hostId || !query.data)) {
+	// An older page that failed leaves the pages already loaded usable: the chat
+	// stays, and the button above its first turn asks for that page again.
+	if (query.error && (!query.data || (!hostId && !query.isFetchNextPageError))) {
 		const code = apiErrorCode(query.error);
 		// The session is currently owned by Terminal UI (or its Chat controller is
 		// absent). A deliberate interface switch can change that later, but this
@@ -717,9 +878,15 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
 		// A live refresh may be in flight; cancelling it would drop the newest
-		// page for good. The older page then loads on the next scroll or click.
+		// page for good. Asking during it joins the refresh, which loads no older
+		// page, so the older page is asked for again once the refresh lands.
 		loadOlder: () => {
-			const fetchOlder = () => void query.fetchNextPage({ cancelRefetch: false });
+			const fetchOlder = () => {
+				const state = sessionId ? queryClient.getQueryState(conversationQueryKey(sessionId, hostId)) : undefined;
+				const refreshing = state?.fetchStatus === "fetching" && !state.fetchMeta?.fetchMore;
+				const asked = query.fetchNextPage({ cancelRefetch: false });
+				if (refreshing) void asked.then(() => query.fetchNextPage({ cancelRefetch: false }));
+			};
 			// A local chat's open read is not a query fetch to join. An older-page fetch
 			// started during it copies the cached pages as it starts and writes them
 			// back over the live page the read puts in, so it waits for the read.
@@ -1949,9 +2116,30 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
  * An empty list is a real answer and the composer depends on being able to tell it
  * from a failure — with no skills, `/` has to stay an ordinary character rather than
  * opening an empty menu.
+ *
+ * The live list can only be read from a running controller, which a chat waking
+ * from sleep, starting, or reattaching does not have yet; and an ACP agent
+ * publishes it a few seconds after it starts. Until the live answer is in,
+ * `remembered` (the list this agent last reported in this project) stands in, so
+ * `/` opens at once instead of waiting on the agent. `loading` says a live list is
+ * still on its way and nothing stands in for it.
  */
-export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string) {
-	const query = useQuery({
+export function useConversationSkills(
+	sessionId: string | undefined,
+	enabled: boolean,
+	hostId?: string,
+	remembered: ChatSkill[] = NO_SKILLS,
+) {
+	// When this controller first answered with an empty list: see EMPTY_SKILLS_GRACE_MS.
+	// Kept as state for render and mirrored in a ref for `refetchInterval`, which
+	// runs outside render. Both are written only in the effect below.
+	const [emptySince, setEmptySince] = useState<number | undefined>(undefined);
+	const firstEmptyAt = useRef<number | undefined>(undefined);
+	// When the current controller became readable. A cached empty answer from an
+	// earlier one must not count toward this one's grace period.
+	const enabledAt = useRef<number | undefined>(undefined);
+	// Typed explicitly: `refetchInterval` reads the data, which leaves inference circular.
+	const query = useQuery<ChatSkill[]>({
 		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
 		// ACP agents publish this catalog asynchronously and may replace it later.
@@ -1960,6 +2148,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		// catalog can be large and changes rarely, so it intentionally refreshes much
 		// less often than conversation state.
 		staleTime: SKILLS_POLL_INTERVAL_MS,
+		gcTime: SKILLS_CACHE_MS,
 		// The catalog is only served once a live controller owns the session; before
 		// then the daemon answers 409 CHAT_CONTROLLER_NOT_READY. A cached "ready"
 		// snapshot can outlive the controller (a restart or interface switch), so a
@@ -1968,23 +2157,60 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		// poll while that conflict stands; readiness returning re-enables the query
 		// (the controller-gated `enabled`) or invalidates it, which refetches once and
 		// resumes polling on success.
-		refetchInterval: (query) =>
-			apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY"
-				? false
-				: SKILLS_POLL_INTERVAL_MS,
+		refetchInterval: (query) => {
+			if (apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY") return false;
+			if (query.state.data?.length === 0 && !emptySkillsSettled(firstEmptyAt.current, query.state.dataUpdatedAt)) {
+				return EMPTY_SKILLS_RECHECK_MS;
+			}
+			return SKILLS_POLL_INTERVAL_MS;
+		},
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/skills",
 				{
 					params: { path: { sessionId: sessionId as string } },
+					signal: AbortSignal.any([signal, AbortSignal.timeout(SKILLS_REQUEST_TIMEOUT_MS)]),
 				},
 			);
 			if (error) throw error;
 			return (data?.skills ?? []) as ChatSkill[];
 		},
 	});
-	return { skills: query.data ?? [], isLoading: query.isLoading };
+	const live = query.data;
+	const updatedAt = query.dataUpdatedAt;
+	// Restarted on every new controller: `enabled` drops while it starts.
+	useEffect(() => {
+		enabledAt.current = enabled ? Date.now() : undefined;
+	}, [enabled]);
+	useEffect(() => {
+		const since = enabledAt.current;
+		const next = !enabled || !live || live.length > 0
+			? undefined
+			: firstEmptyAt.current ?? (since !== undefined && updatedAt >= since ? updatedAt : undefined);
+		firstEmptyAt.current = next;
+		setEmptySince(next);
+	}, [enabled, live, updatedAt]);
+	const settled = live !== undefined && (live.length > 0 || (enabled && emptySkillsSettled(emptySince, updatedAt)));
+	const standIn = !settled && remembered.length > 0;
+	const skills = live?.length ? live : standIn ? remembered : (live ?? NO_SKILLS);
+	return {
+		skills,
+		/** True while `skills` is the remembered stand-in rather than the agent's own answer. */
+		remembered: standIn && !live?.length,
+		/**
+		 * `skills` is the agent's own answer and is believed, empty included: the
+		 * list to remember. An early empty answer or a stand-in is not.
+		 */
+		settled,
+		loading: Boolean(sessionId) && enabled && !settled && skills.length === 0 && !query.error,
+		isLoading: query.isLoading,
+	};
+}
+
+/** An empty list is believed once it has held for the grace period. */
+export function emptySkillsSettled(firstEmptyAt: number | undefined, updatedAt: number): boolean {
+	return firstEmptyAt !== undefined && updatedAt - firstEmptyAt >= EMPTY_SKILLS_GRACE_MS;
 }
 
 /**
@@ -2039,7 +2265,7 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 }
 
 /**
- * Write staged images into the session worktree.
+ * Write staged files into the session worktree.
  *
  * Returns the worktree-relative paths the agent can open. The composer names those
  * paths in the message it sends, which is how an image reaches an agent whose
@@ -2047,12 +2273,15 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  */
 export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
 	return useCallback(
-		async (attachments: { mimeType: string; data: string; name?: string }[]): Promise<string[]> => {
+		async (attachments: OutgoingAttachment[], signal?: AbortSignal): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
+			// A file too large to inline is streamed from disk to this session's
+			// daemon first, and the request names the upload.
+			const wire = await toWireAttachments(attachments, hostId, signal);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
 				// The daemon names staged files itself; only the bytes go.
-				body: { attachments: attachments.map(({ mimeType, data }) => ({ mimeType, data })) },
+				body: { attachments: wire },
 			});
 			if (error) throw error;
 			return data?.paths ?? [];
