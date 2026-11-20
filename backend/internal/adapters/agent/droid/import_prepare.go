@@ -67,7 +67,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	var planned *droidImportReceipt
 	var published *droidImportReceipt
 	if _, err := os.Lstat(receiptPath); err == nil {
-		receipt, err := readDroidReceipt(ctx, r.DataDir, config, target, launch)
+		receipt, err := p.readDroidReceipt(ctx, r.DataDir, config, target, launch)
 		if err != nil && (!errors.Is(err, os.ErrNotExist) || receipt.TargetID != target) {
 			return ports.NativeSessionRef{}, err
 		}
@@ -203,7 +203,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err := importcopy.WriteOnce(ctx, receipts, filepath.Base(receiptPath)+".verified", []byte(r.SourceFingerprint)); err != nil && !errors.Is(err, os.ErrExist) {
 		return ports.NativeSessionRef{}, err
 	}
-	if err := verifyDroidReceipt(ctx, r.DataDir, config, target, launch); err != nil {
+	if err := p.verifyDroidReceipt(ctx, r.DataDir, config, target, launch); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	return ports.NativeSessionRef{NativeSessionID: target, ConfigDir: config, TranscriptPath: receipt.Path}, nil
@@ -213,8 +213,8 @@ func droidReceiptPath(dataDir, id string) string {
 	return filepath.Join(dataDir, "native-imports", "droid", id+".json")
 }
 
-func verifyDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) error {
-	r, err := readDroidReceipt(ctx, dataDir, config, id, cwd)
+func (p *Plugin) verifyDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) error {
+	r, err := p.readDroidReceipt(ctx, dataDir, config, id, cwd)
 	if err != nil {
 		return err
 	}
@@ -250,7 +250,7 @@ func droidImportCompleted(dataDir, id, fingerprint string) (bool, error) {
 	return true, nil
 }
 
-func readDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (droidImportReceipt, error) {
+func (p *Plugin) readDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (droidImportReceipt, error) {
 	var r droidImportReceipt
 	if !filepath.IsAbs(dataDir) {
 		return r, errors.New("droid: missing prepared import state")
@@ -278,7 +278,7 @@ func readDroidReceipt(ctx context.Context, dataDir, config, id, cwd string) (dro
 		return r, err
 	}
 	defer func() { _ = f.Close() }()
-	resolved, found, err := New().LocateTranscript(ctx, ports.NativeSessionRef{ConfigDir: config, NativeSessionID: id})
+	resolved, found, err := p.LocateTranscript(ctx, ports.NativeSessionRef{ConfigDir: config, NativeSessionID: id})
 	if err != nil {
 		return r, err
 	}
@@ -380,7 +380,7 @@ func (p *Plugin) validateImportedRuntime(ctx context.Context, cfg ports.Workspac
 	if err != nil {
 		return err
 	}
-	return verifyDroidReceipt(ctx, cfg.DataDir, config, cfg.NativeSessionID, cwd)
+	return p.verifyDroidReceipt(ctx, cfg.DataDir, config, cfg.NativeSessionID, cwd)
 }
 
 // PrepareRuntimeLaunch guards imported first-open and every later reopen before
