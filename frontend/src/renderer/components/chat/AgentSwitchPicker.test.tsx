@@ -391,11 +391,24 @@ describe("AgentModelPicker", () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const labels = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio")
-			.map((radio) => radio.getAttribute("aria-label"));
-		expect(labels).not.toContain("Codex · Not signed in");
-		expect(labels).not.toContain("Cursor · Not installed");
-		expect(labels[0]).toBe("Claude Code");
+		const rail = within(screen.getByRole("radiogroup", { name: "Agents" }));
+		// Not there at all, under any name, rather than there without a reason.
+		expect(rail.queryByRole("radio", { name: /^Codex/ })).not.toBeInTheDocument();
+		expect(rail.queryByRole("radio", { name: /^Cursor/ })).not.toBeInTheDocument();
+		expect(rail.getAllByRole("radio")[0]).toHaveAccessibleName("Claude Code");
+		// Usable agents stay: only the unusable ones are left out.
+		expect(rail.getByRole("radio", { name: "OpenCode" })).not.toHaveAttribute("aria-disabled");
+	});
+
+	it("keeps a pending agent that stops being usable on the rail, dimmed, with none of its models pickable", async () => {
+		readiness.agents = [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] satisfies AgentReadinessSnapshot[];
+		const user = userEvent.setup();
+		open({ harness: "codex" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const codex = screen.getByRole("radio", { name: "Codex · Not signed in" });
+		expect(codex).toHaveAttribute("aria-checked", "true");
+		expect(codex).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByRole("menuitemradio", { name: /^GPT X/ })).toHaveAttribute("data-disabled");
 	});
 
 	it("searches every agent's models and picks one with its agent", async () => {
@@ -461,6 +474,53 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
 		await user.click(await screen.findByText("Thinking"));
 		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "cursor", model: "claude-opus-4-8-thinking-high" }));
+	});
+
+	it("keeps Home, End and the wrap among the agents, reaching the gear only past the last one", async () => {
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const radios = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio");
+		const gear = screen.getByRole("button", { name: "Manage agents…" });
+		act(() => radios[0].focus());
+		await user.keyboard("{End}");
+		expect(radios[radios.length - 1]).toHaveFocus();
+		await user.keyboard("{Home}");
+		expect(radios[0]).toHaveFocus();
+		await user.keyboard("{ArrowLeft}");
+		expect(radios[radios.length - 1]).toHaveFocus();
+		await user.keyboard("{ArrowRight}");
+		expect(gear).toHaveFocus();
+		await user.keyboard("{ArrowRight}");
+		expect(radios[0]).toHaveFocus();
+	});
+
+	it("says why switching is refused while the agent is working", async () => {
+		const user = userEvent.setup();
+		const onPendingChange = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<AgentModelPicker
+					currentHarness="claude-code"
+					current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], onPickEffort: vi.fn() }}
+					agentSwitch={{ projectId: "p", disabled: true, onPendingChange }}
+				/>
+			</QueryClientProvider>,
+		);
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const codex = screen.getByRole("radio", { name: "Codex · The agent is working. Switch when it is idle." });
+		expect(codex).toHaveAttribute("aria-disabled", "true");
+		await user.click(codex);
+		expect(onPendingChange).not.toHaveBeenCalled();
+	});
+
+	it("moves Tab from a terminal's rail to the search when nothing is listed below it", async () => {
+		const user = userEvent.setup();
+		open(undefined, true);
+		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
+		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
+		await user.keyboard("{Tab}");
+		expect(screen.getByPlaceholderText("Search agents and models")).toHaveFocus();
 	});
 
 	it("marks a terminal's running agent on the rail and lists no models until another is picked", async () => {

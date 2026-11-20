@@ -105,7 +105,8 @@ export interface AgentSwitchProps {
 	autoCompact?: AutoCompactControl;
 	/**
 	 * The agents to offer in place of the chat switch targets, for choosing one before a session exists.
-	 * One with `unavailable` (why: not installed, not signed in) is shown dimmed and opens its setup.
+	 * One with `unavailable` (why: not installed, not signed in) is left off the rail, unless it is the
+	 * running or pending agent; then it shows dimmed with that reason and opens its setup.
 	 */
 	agents?: Array<{ id: string; label: string; unavailable?: string }>;
 	/** Which agents settings "Manage agents" opens: a Cloud session's are the Cloud ones. */
@@ -267,12 +268,10 @@ export function AgentModelPicker({
 		enabled: !terminal,
 		staleTime: 60_000,
 	}).data;
-	// Every agent is on the rail in one fixed order, so picking one never moves it (on /new a
-	// pick changes the running agent at once). Runnable ones can be picked, as in New Task;
-	// unknown readiness stays selectable since the daemon checks the target first. One that is
-	// not installed or signed in, or has no chat here, is dimmed after them and opens its setup
-	// in Settings, rather than missing with no word why. The running agent is never dimmed, and
-	// leads the rail only when the list does not name it.
+	// Every agent with why it cannot be used, if it cannot, in one fixed order, so picking one never
+	// moves it (on /new a pick changes the running agent at once). Unknown readiness stays usable,
+	// since the daemon checks the target first. The running agent is never marked, and leads the
+	// list only when the list does not name it.
 	const railAgents = useMemo<RailAgent[]>(() => {
 		const listed: RailAgent[] = choices
 			? choices.map((agent) => (agent.id === currentHarness ? { id: agent.id, label: agent.label } : agent))
@@ -291,12 +290,13 @@ export function AgentModelPicker({
 			? ordered
 			: [{ id: currentHarness, label: agentLabel(currentHarness) }, ...ordered];
 	}, [chatUnavailable, choices, currentHarness, readiness, t, terminal]);
-	// Only agents that can be used are on the rail: one that is not installed or not signed in is
-	// left out rather than dimmed. The agent that is answering stays, so its own rail never loses
-	// the selection, and it still says why it cannot be switched to.
+	// Only agents that can be used are on the rail: one that is not installed, not signed in or has
+	// no chat here is left out rather than dimmed. The running agent and a pending one stay, so the
+	// rail never loses its selection: a pending agent that stops being usable (its readiness arrives
+	// after the pick) shows dimmed with the reason, opens its setup, and offers no model to pick.
 	const agents = useMemo(
-		() => railAgents.filter((agent) => !agent.unavailable || agent.id === currentHarness),
-		[railAgents, currentHarness],
+		() => railAgents.filter((agent) => !agent.unavailable || agent.id === currentHarness || agent.id === pending?.harness),
+		[railAgents, currentHarness, pending?.harness],
 	);
 	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
 	const [open, setOpen] = useState(false);
@@ -388,9 +388,11 @@ export function AgentModelPicker({
 	};
 	// A terminal's running agent cannot be given another model from here.
 	const oneShot = (harness: string) => terminal && TERMINAL_ONE_SHOT_TARGETS.has(harness);
+	// On the rail and not marked: the running agent always is; a pending one may have stopped being.
+	const usable = (harness: string) => agents.some((agent) => agent.id === harness && !agent.unavailable);
 	const pickable = (harness: string) => (harness === currentHarness
 		? !terminal && Boolean(currentSource.onPickModel)
-		: !agentSwitch.disabled && !oneShot(harness) && agents.some((agent) => agent.id === harness));
+		: !agentSwitch.disabled && !oneShot(harness) && usable(harness));
 	// A favourite whose model the agent no longer lists cannot be sent. Until
 	// the agent's list loads, it is taken as offered.
 	const offered = (favorite: ModelFavorite) => {
@@ -430,7 +432,7 @@ export function AgentModelPicker({
 	const blockedReason = (id: string): string | undefined => {
 		if (id === currentHarness) return undefined;
 		if (oneShot(id)) return t("agentSwitch.terminalOneShot", { agent: agentLabel(id) });
-		return agentSwitch.disabled ? "" : undefined;
+		return agentSwitch.disabled ? t("agentSwitch.busy") : undefined;
 	};
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
@@ -611,7 +613,7 @@ export function AgentModelPicker({
 												<OptionMenuItem
 													active={active}
 													radio
-													disabled={!source.onPickModel || Boolean(model.unavailableReason)}
+													disabled={!source.onPickModel || !usable(shownHarness) || Boolean(model.unavailableReason)}
 													// The menu stays open, with the model's effort right under it.
 													onSelect={(event) => {
 														event.preventDefault();
@@ -678,7 +680,7 @@ const RAIL_ITEM_CLASS = cn(
 function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage }: {
 	agents: RailAgent[];
 	selected: string;
-	/** Why an agent cannot be chosen right now; "" for no stated reason, undefined when it can. */
+	/** Why an agent cannot be chosen right now, or undefined when it can. */
 	blockedReason: (id: string) => string | undefined;
 	onPick: (id: string) => void;
 	onSetup: (id: string) => void;
@@ -699,18 +701,23 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 		// Only on open: a pick is already in view.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
+	// Home, End and the wrap stay among the agents; the gear after them is reached by Right from the
+	// last agent, and left by Right (to the first agent) or Left (to the last).
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
 		if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-		const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-rail-item]"));
+		const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-agent]"));
+		const gear = event.currentTarget.querySelector<HTMLElement>("[data-rail-gear]");
+		const onGear = document.activeElement === gear;
 		const index = items.indexOf(document.activeElement as HTMLElement);
-		if (index < 0) return;
+		if ((index < 0 && !onGear) || items.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
-		const next = items[
-			event.key === "Home" ? 0
-			: event.key === "End" ? items.length - 1
-			: (index + (event.key === "ArrowRight" ? 1 : -1) + items.length) % items.length
-		];
+		const last = items.length - 1;
+		const next = event.key === "Home" ? items[0]
+			: event.key === "End" ? items[last]
+			: onGear ? items[event.key === "ArrowRight" ? 0 : last]
+			: event.key === "ArrowRight" ? (index === last ? gear ?? items[0] : items[index + 1])
+			: items[index === 0 ? last : index - 1];
 		next.focus();
 		// Choosing follows focus; an agent that cannot be chosen is only focused.
 		const id = next.dataset.agent;
@@ -721,6 +728,8 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 			<div className="flex items-center gap-1" onKeyDown={onKeyDown}>
 				<div
 					ref={scrollRef}
+					// A radio group inside the menu, outside ARIA's menu content model like the search field
+					// above it: one agent is chosen of several, and its own keys move along it.
 					role="radiogroup"
 					aria-label={t("agentSwitch.agents")}
 					className="edge-fade edge-fade-x relative flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-x-contain [--edge-fade-size:16px] [scrollbar-width:none]"
@@ -743,8 +752,9 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 										// Dimmed rather than disabled, so the tooltip still says why.
 										aria-disabled={agent.unavailable !== undefined || blocked !== undefined || undefined}
 										aria-label={name}
+										// The tooltip shows the same words as the name; described by it too, it would be read twice.
+										aria-describedby={undefined}
 										tabIndex={checked || (chosenIndex < 0 && index === 0) ? 0 : -1}
-										data-rail-item
 										data-agent={agent.id}
 										onClick={() => {
 											if (agent.unavailable) onSetup(agent.id);
@@ -762,7 +772,7 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 				</div>
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<Button variant="quiet" size="icon-xs" tabIndex={-1} data-rail-item aria-label={t("agentSelector.manage")} onClick={onManage}>
+						<Button variant="quiet" size="icon-xs" tabIndex={-1} data-rail-gear aria-label={t("agentSelector.manage")} aria-describedby={undefined} onClick={onManage}>
 							<Settings2 aria-hidden="true" className="size-icon-sm" />
 						</Button>
 					</TooltipTrigger>
