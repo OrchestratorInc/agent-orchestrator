@@ -176,6 +176,10 @@ func capabilities() ports.ChatCapabilities {
 		// interrupt-and-resend, which throws the turn's context and in-flight work
 		// away.
 		ports.ChatCapabilitySteer: true,
+		// Native image prompts use the generated UserInputTypeImage URL shape for
+		// both turn/start and turn/steer. Scripted tests cover the wire shape;
+		// TestLiveTurnCarriesNativeImages separately checks real provider delivery.
+		ports.ChatCapabilityImages: true,
 	}
 }
 

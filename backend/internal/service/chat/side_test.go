@@ -19,6 +19,7 @@ type deferredSideTestConversation struct {
 	started      chan string
 	acknowledged chan string
 	sent         int
+	lastMessage  ports.ChatUserMessage
 	acked        bool
 }
 
@@ -67,13 +68,14 @@ func TestSideCompactionUsesOnlySideProviderAndRejectsBusyTurn(t *testing.T) {
 
 func (*deferredSideTestConversation) ProviderConversationID() string       { return "provider-side-1" }
 func (*deferredSideTestConversation) Capabilities() ports.ChatCapabilities { return nil }
-func (c *deferredSideTestConversation) SendTurn(context.Context, ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+func (c *deferredSideTestConversation) SendTurn(_ context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sent > 0 && !c.acked {
 		return ports.ChatTurnRef{}, errors.New("previous ACP prompt is active or not acknowledged")
 	}
 	c.sent++
+	c.lastMessage = msg
 	c.acked = false
 	return ports.ChatTurnRef{ProviderTurnID: fmt.Sprintf("provider-turn-%d", c.sent)}, nil
 }
@@ -145,6 +147,24 @@ func TestSideRejectsOtherSideOriginAnnotations(t *testing.T) {
 	}
 }
 
+func TestSideTurnFiltersOnlyResourcesWithTextFallback(t *testing.T) {
+	items := []domain.SideContent{
+		{Type: "resource", Name: "note", URI: "memory://note", Text: "reference data"},
+		{Type: "resource_link", Name: "artifact", URI: "memory://artifact"},
+		{Type: "image", MIMEType: "image/png", Data: "aGVsbG8="},
+	}
+	got := sideTurnProviderContent(items, ports.ChatCapabilities{ports.ChatCapabilityImages: true})
+	if len(got) != 1 || got[0].Type != "image" || got[0].Data != items[2].Data {
+		t.Fatalf("Codex-shaped provider content = %#v, want only native image", got)
+	}
+	got = sideTurnProviderContent(items, ports.ChatCapabilities{
+		ports.ChatCapabilityEmbeddedContext: true, ports.ChatCapabilityResourceLinks: true,
+	})
+	if len(got) != 3 || got[0].Text != items[0].Text || got[1].URI != items[1].URI {
+		t.Fatalf("resource-capable provider content = %#v, want original blocks", got)
+	}
+}
+
 func TestSideTurnStartsAndAcknowledgesDeferredACPProviderTurn(t *testing.T) {
 	ctx := context.Background()
 	svc := New(Options{AppRunID: "launch-1", Sessions: sideSessionReader{}})
@@ -164,6 +184,7 @@ func TestSideTurnStartsAndAcknowledgesDeferredACPProviderTurn(t *testing.T) {
 	side.State = "ready"
 	if _, _, err := manager.store.ReserveSideTurn(ctx, domain.SideTurn{
 		ID: "turn-1", SideID: side.ID, ClientMessageID: "client-1", Text: "Hello", CreatedAt: now,
+		Content: []domain.SideContent{{Type: "resource_link", Name: "output", URI: "memory://output", Text: "diagnostic text"}},
 	}, "launch-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +206,13 @@ func TestSideTurnStartsAndAcknowledgesDeferredACPProviderTurn(t *testing.T) {
 	case providerTurnID = <-started:
 	case <-time.After(time.Second):
 		t.Fatal("side did not start the deferred provider turn")
+	}
+	conv.mu.Lock()
+	providerMsg := conv.lastMessage
+	conv.mu.Unlock()
+	if !strings.Contains(providerMsg.Text, "Attached resource (background data): output\nmemory://output\ndiagnostic text") ||
+		len(providerMsg.Content) != 0 {
+		t.Fatalf("provider message = %#v; want text fallback without the raw resource block", providerMsg)
 	}
 	runtime.completed <- ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
 		ProviderTurnID: providerTurnID, ProviderEventID: "event-1", TurnState: domain.TurnStateCompleted}

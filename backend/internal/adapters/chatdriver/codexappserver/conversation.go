@@ -344,12 +344,51 @@ func (c *conversation) configuredServiceTier(ctx context.Context) string {
 // codexFastServiceTier is the fast tier's id before a model list is read.
 const codexFastServiceTier = "priority"
 
-// SendTurn delivers one message to the provider.
-func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
-	if strings.TrimSpace(msg.Text) == "" {
+// turnInput converts the provider-neutral prompt into app-server user input.
+// Codex turn/start and turn/steer accept the same image URL shape: an image block
+// becomes `input_image` carrying a data URL, exactly as the live-verified steer
+// path does (see steer.go). Blocks the app-server cannot represent are refused
+// rather than dropped, because a prompt that silently loses an attachment is worse
+// than one that says it cannot carry it.
+func turnInput(msg ports.ChatUserMessage) ([]codexproto.UserInput, error) {
+	input := make([]codexproto.UserInput, 0, 1+len(msg.Content))
+	if text := strings.TrimSpace(msg.Text); text != "" {
+		value := msg.Text
+		input = append(input, codexproto.UserInput{Type: codexproto.UserInputTypeText, Text: &value})
+	}
+	for _, item := range msg.Content {
+		switch item.Type {
+		case "image":
+			if item.Data == "" {
+				return nil, errors.New("image requires data")
+			}
+			mimeType := strings.ToLower(strings.TrimSpace(item.MIMEType))
+			switch mimeType {
+			case "image/jpg":
+				mimeType = "image/jpeg"
+			case "image/png", "image/jpeg", "image/gif", "image/webp":
+			default:
+				return nil, fmt.Errorf("unsupported Codex image MIME type %q", item.MIMEType)
+			}
+			url := "data:" + mimeType + ";base64," + item.Data
+			input = append(input, codexproto.UserInput{Type: codexproto.UserInputTypeImage, URL: &url})
+		default:
+			return nil, fmt.Errorf("unsupported chat content type %q", item.Type)
+		}
+	}
+	if len(input) == 0 {
 		// There is no keystroke concept here: an empty message is a caller bug,
 		// not a way to nudge the agent.
-		return ports.ChatTurnRef{}, errors.New("chat message text is empty")
+		return nil, errors.New("chat message has no content")
+	}
+	return input, nil
+}
+
+// SendTurn delivers one message to the provider.
+func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	input, err := turnInput(msg)
+	if err != nil {
+		return ports.ChatTurnRef{}, err
 	}
 
 	c.sendMu.Lock()
@@ -357,7 +396,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 
 	params := map[string]any{
 		"threadId": c.threadID,
-		"input":    []any{map[string]any{"type": "text", "text": msg.Text}},
+		"input":    input,
 	}
 	if msg.ClientMessageID != "" {
 		// The provider's own idempotency handle: a retry carrying the same id

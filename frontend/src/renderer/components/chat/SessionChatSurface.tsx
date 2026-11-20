@@ -926,6 +926,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				localEchos={localEchos}
 				onStageAttachments={stageAttachments}
 				nativeImages={can(renderSnapshot, "images")}
+				limitCodexNativeImages={renderSnapshot?.harness === "codex"}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it
 				// covers the window before the controller reports, and it is the last word

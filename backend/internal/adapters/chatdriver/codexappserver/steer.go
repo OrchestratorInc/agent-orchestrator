@@ -65,9 +65,8 @@ func (c *conversation) Steer(
 	msg ports.ChatUserMessage,
 ) (ports.ChatTurnRef, error) {
 	providerTurnID = c.nativeID(providerTurnID)
-	if strings.TrimSpace(msg.Text) == "" {
-		// Same rule as SendTurn: there is no keystroke concept here, so an empty
-		// steer is a caller bug rather than a way to nudge the agent.
+	if strings.TrimSpace(msg.Text) == "" && len(msg.Content) == 0 {
+		// Just like SendTurn, an empty message is a caller error, not a nudge.
 		return ports.ChatTurnRef{}, errors.New("steer message text is empty")
 	}
 
@@ -120,28 +119,13 @@ func (c *conversation) Steer(
 }
 
 // steerInput converts the complete provider-neutral message before the request is
-// sent. Codex turn/steer accepts the same image URL input shape as turn/start;
-// other structured blocks have no honest app-server representation here.
+// sent. turn/steer takes the same input shape as turn/start, so the conversion is
+// shared with turnInput; a content the provider cannot represent keeps the
+// steer-specific error type so the controller can fall back to an ordinary send.
 func steerInput(msg ports.ChatUserMessage) ([]codexproto.UserInput, error) {
-	input := make([]codexproto.UserInput, 0, 1+len(msg.Content))
-	if strings.TrimSpace(msg.Text) != "" {
-		text := msg.Text
-		input = append(input, codexproto.UserInput{Type: codexproto.UserInputTypeText, Text: &text})
-	}
-	for _, item := range msg.Content {
-		switch item.Type {
-		case "image":
-			if item.Data == "" || !strings.HasPrefix(strings.ToLower(item.MIMEType), "image/") {
-				return nil, fmt.Errorf("%w: image requires data and image MIME type", ports.ErrChatSteerContentUnsupported)
-			}
-			url := "data:" + item.MIMEType + ";base64," + item.Data
-			input = append(input, codexproto.UserInput{Type: codexproto.UserInputTypeImage, URL: &url})
-		default:
-			return nil, fmt.Errorf("%w: %s", ports.ErrChatSteerContentUnsupported, item.Type)
-		}
-	}
-	if len(input) == 0 {
-		return nil, errors.New("steer message has no content")
+	input, err := turnInput(msg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ports.ErrChatSteerContentUnsupported, err)
 	}
 	return input, nil
 }

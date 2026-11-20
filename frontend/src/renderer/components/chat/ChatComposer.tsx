@@ -316,6 +316,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onStageAttachments,
 	cloudAttachments,
 	nativeImages,
+	limitCodexNativeImages,
 	onSteer,
 	showSteerButton,
 	onInterrupt,
@@ -454,6 +455,8 @@ export const ChatComposer = memo(function ChatComposer({
 	cloudAttachments?: { maxBytes: number };
 	/** Send the same staged bytes as native ACP image blocks when negotiated. */
 	nativeImages?: boolean;
+	/** Codex app-server inlines data URLs and supports a narrower MIME set. */
+	limitCodexNativeImages?: boolean;
 	/**
 	 * Deliver this text into the turn already running. Absent means the harness
 	 * cannot steer and the choice is never offered.
@@ -1763,6 +1766,9 @@ export const ChatComposer = memo(function ChatComposer({
 			? undefined
 			: durableDelivery;
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
+		const useCodexInlinePolicy = recoveringDelivery
+			? Boolean(recoveringDelivery.limitCodexNativeImages)
+			: Boolean(limitCodexNativeImages);
 		setSendError(null);
 		setSteerOutcomeNotice(null);
 
@@ -1877,12 +1883,18 @@ export const ChatComposer = memo(function ChatComposer({
 			settledAttachments.find((staged) => staged.id === attachment.id) ?? {
 				...attachment, stagedPath: attachment.path,
 			});
+		// Codex repeats images in provider history. Keep inline JSON smaller and
+		// still send every other attachment through its existing workspace path.
+		const codexInlineLimit = 4 * 1024 * 1024;
+		const nativeImageLimit = useCodexInlinePolicy ? codexInlineLimit : MAX_NATIVE_IMAGE_BYTES;
+		const nativeImageBudget = useCodexInlinePolicy ? codexInlineLimit : MAX_NATIVE_IMAGES_BYTES;
 		const nativeImageAttachments = (deliveryAttachments ?? settledAttachments).filter((attachment) => {
 			// Retained image sizes are server-owned and unknown here. Keep new images
 			// as workspace files so an edit cannot exceed the native 25 MiB budget.
 			if (!sendNativeImages || retainedNativeImageCount > 0 || !isSupportedImageAttachment(attachment.mimeType) ||
-				attachment.bytes > MAX_NATIVE_IMAGE_BYTES ||
-				nativeImageBytes + attachment.bytes > MAX_NATIVE_IMAGES_BYTES) return false;
+				(useCodexInlinePolicy && attachment.mimeType.toLowerCase().trim() === "image/bmp") ||
+				attachment.bytes > nativeImageLimit ||
+				nativeImageBytes + attachment.bytes > nativeImageBudget) return false;
 			nativeImageBytes += attachment.bytes;
 			return true;
 		});
@@ -2006,6 +2018,7 @@ export const ChatComposer = memo(function ChatComposer({
 			kind: recoveringDelivery?.kind ?? (shouldSteer ? "steer" : "send"),
 			optimistic: !shouldSteer,
 			nativeImages: sendNativeImages,
+			limitCodexNativeImages: useCodexInlinePolicy || undefined,
 			composerText: currentText,
 			attachments: settledAttachments.flatMap((attachment) =>
 				attachment.stagedPath
