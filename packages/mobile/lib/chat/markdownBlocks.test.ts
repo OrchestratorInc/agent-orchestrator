@@ -130,3 +130,33 @@ describe("repairStreamingInline review fixes", () => {
 		expect(repairStreamingInline("run `npm")).toBe("run `npm`");
 	});
 });
+
+describe("second review fixes", () => {
+	it("closes a top-level fence only on a closer indented at most three spaces", () => {
+		expect(parseBlocks("```\ncode\n    ```\nmore\n```")).toEqual([{ kind: "code", text: "code\n    ```\nmore" }]);
+		expect(parseBlocks("```\ncode\n   ```\nafter")).toEqual([{ kind: "code", text: "code" }, { kind: "paragraph", text: "after" }]);
+	});
+
+	it("holds back an opener that has only just arrived instead of doubling it", () => {
+		expect(repairStreamingInline("Here is **")).toBe("Here is ");
+		expect(repairStreamingInline("Run `")).toBe("Run ");
+		expect(repairStreamingInline("Gone ~~")).toBe("Gone ");
+		expect(repairStreamingInline("Here is ** ▍")).toBe("Here is  ▍");
+	});
+
+	it("closes before the streaming cursor, so the cursor is not formatted", () => {
+		expect(repairStreamingInline("Some **bold ▍")).toBe("Some **bold** ▍");
+	});
+
+	it("counts markers only in the last list item or heading, where the closer lands", () => {
+		expect(repairStreamingInline("- 2**10 is big\n- next item")).toBe("- 2**10 is big\n- next item");
+		expect(repairStreamingInline("- first\n- **bold")).toBe("- first\n- **bold**");
+		expect(repairStreamingInline("## A **heading")).toBe("## A **heading**");
+	});
+
+	it("closes the latest-opened span first, and leaves markers inside open code alone", () => {
+		expect(repairStreamingInline("**a ~~b")).toBe("**a ~~b~~**");
+		expect(repairStreamingInline("~~a **b")).toBe("~~a **b**~~");
+		expect(repairStreamingInline("Run `x **")).toBe("Run `x **`");
+	});
+});

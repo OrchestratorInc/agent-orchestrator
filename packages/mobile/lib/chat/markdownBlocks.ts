@@ -62,9 +62,10 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 			// A fence opened inside a list item keeps the list's numbering going.
 			const inList = Boolean(list) && (fence[1].length > 0 || !list!.blank);
 			if (!inList) closeList();
-			const close = new RegExp(`^\\s*${marker[0] === "`" ? "`" : "~"}{${marker.length},}\\s*$`);
+			// Under a list item the closer's indent is the item's; at top level, at most three spaces.
+			const closes = (candidate: string) => closesFence(candidate, marker, inList ? Infinity : 3);
 			const code: string[] = [];
-			for (i += 1; i < lines.length && !close.test(lines[i]); i++) code.push(dedent(raw[i], fence[1].length));
+			for (i += 1; i < lines.length && !closes(lines[i]); i++) code.push(dedent(raw[i], fence[1].length));
 			blocks.push({ kind: "code", language, text: code.join("\n") });
 			if (inList) listResumes = true;
 			continue;
@@ -168,36 +169,82 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 }
 
 /**
+ * Whether `line` closes a fence opened with `opener`: a bare run of the same
+ * character, at least as long, indented no more than `maxIndent` spaces.
+ */
+function closesFence(line: string, opener: string, maxIndent: number): boolean {
+	const fence = FENCE.exec(line);
+	return Boolean(fence) && fence![1].length <= maxIndent && fence![2][0] === opener[0] && fence![2].length >= opener.length && !fence![3].trim();
+}
+
+/** The glyph the timeline appends to a reply while it streams: not part of the reply's text. */
+const STREAM_CURSOR = "\u258D";
+const INLINE_MARKERS = ["`", "**", "~~"] as const;
+
+/**
  * Ends an unfinished inline span in a reply that is still streaming, so the
  * reader sees **bold** arriving rather than the asterisks that open it. Display
  * only: copying keeps the stored text. Text inside an open fence is code, and is
  * left as it is.
+ *
+ * Markers are counted only in the inline text the closer lands in: the reply's
+ * last list item or heading, or else its last paragraph. An opener with nothing
+ * after it yet (`Here is **`) is held back rather than closed on itself.
  */
 export function repairStreamingInline(text: string): string {
-	// A fence closes only on a bare run of its own character at least as long as the one that opened it.
-	let open: { char: string; length: number } | null = null;
+	let open: string | null = null;
 	// Where the prose after the last closed fence starts: its markers are not the reply's.
 	let afterFence = 0;
+	// Where the last list item or heading starts: its text is one inline run of its own.
+	let lastItem = 0;
 	let at = 0;
 	for (const line of text.split("\n")) {
-		const fence = FENCE.exec(line);
+		const lineStart = at;
 		at += line.length + 1;
-		if (!fence) continue;
-		if (open === null) open = { char: fence[2][0], length: fence[2].length };
-		else if (fence[2][0] === open.char && fence[2].length >= open.length && !fence[3].trim()) {
-			open = null;
-			afterFence = at;
+		if (open !== null) {
+			if (closesFence(line, open, Infinity)) { open = null; afterFence = at; }
+			continue;
 		}
+		const fence = FENCE.exec(line);
+		if (fence) open = fence[2];
+		else if ((LIST_ITEM.test(line) && !RULE.test(line)) || HEADING.test(line)) lastItem = lineStart;
 	}
 	if (open !== null) return text;
-	const tail = text.slice(Math.max(afterFence, text.lastIndexOf("\n\n") + 1));
-	// Code spans first, closing an open one: emphasis markers inside code are not emphasis.
-	const closeCode = countUnescaped(tail, "`") % 2 === 1 ? "`" : "";
-	let repaired = text + closeCode;
-	const prose = (tail + closeCode).replace(/`[^`]*`/g, "");
-	if (countUnescaped(prose, "**") % 2 === 1) repaired += "**";
-	if (countUnescaped(prose, "~~") % 2 === 1) repaired += "~~";
-	return repaired;
+	const start = Math.max(afterFence, text.lastIndexOf("\n\n") + 1, lastItem);
+	const scope = text.slice(start);
+	let end = scope.length;
+	while (end > 0 && (/\s/.test(scope[end - 1]) || scope[end - 1] === STREAM_CURSOR)) end--;
+	const trailing = scope.slice(end);
+	let body = scope.slice(0, end);
+	// Drop an opener that has just arrived, with no text after it to format.
+	for (let dropped = true; dropped;) {
+		dropped = false;
+		for (const marker of INLINE_MARKERS) {
+			if (body.endsWith(marker) && body[body.length - marker.length - 1] !== "\\" && unmatched(body, marker)) {
+				body = body.slice(0, -marker.length);
+				dropped = true;
+			}
+		}
+	}
+	// Close the code span first, then the spans around it, the latest opened first.
+	const closeCode = unmatched(body, "`") ? "`" : "";
+	const prose = outsideCode(body + closeCode);
+	const closers = (["**", "~~"] as const)
+		.filter((marker) => countUnescaped(prose, marker) % 2 === 1)
+		.sort((a, b) => prose.lastIndexOf(b) - prose.lastIndexOf(a));
+	return text.slice(0, start) + body + closeCode + closers.join("") + trailing;
+}
+
+/** Whether `marker` is left open in `text`; markers inside code, closed or still open, do not count. */
+function unmatched(text: string, marker: string): boolean {
+	return countUnescaped(marker === "`" ? text : outsideCode(text), marker) % 2 === 1;
+}
+
+/** `text` without its code spans, including one still open at the end. */
+function outsideCode(text: string): string {
+	const closed = text.replace(/`[^`]*`/g, "");
+	const open = closed.indexOf("`");
+	return open === -1 ? closed : closed.slice(0, open);
 }
 
 function countUnescaped(text: string, marker: string): number {
