@@ -90,6 +90,13 @@ func TestImportArchiveReadsVisibleHistoryWithoutSourceWrites(t *testing.T) {
 	}
 }
 
+func TestNativeProbeWithoutRecordedProfileIsInconclusive(t *testing.T) {
+	got, err := New().ProbeNativeSession(context.Background(), ports.NativeSessionRef{NativeSessionID: importTestID})
+	if err != nil || got != ports.NativeSessionAvailabilityUnknown {
+		t.Fatalf("unbound profile = %v,%v", got, err)
+	}
+}
+
 func TestImportArchiveRefusesUnsupportedAndActiveSources(t *testing.T) {
 	for _, test := range []struct {
 		name, query string

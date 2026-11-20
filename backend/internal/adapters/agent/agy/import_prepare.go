@@ -298,6 +298,9 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 
 // ProbeNativeSession checks native history without launching the provider.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
+	if ref.ConfigDir == "" {
+		return ports.NativeSessionAvailabilityUnknown, nil
+	}
 	_, found, err := p.LocateTranscript(ctx, ref)
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
