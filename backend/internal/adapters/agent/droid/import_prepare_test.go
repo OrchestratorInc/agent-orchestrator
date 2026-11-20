@@ -342,6 +342,32 @@ func TestImportedDroidRestoreRefusesMissingHistoryWrongWorkspaceAndProfile(t *te
 	}
 }
 
+func TestImportedDroidRestoreAfterBinaryUpdate(t *testing.T) {
+	p, r, _ := importFixture(t)
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.resolvedBinary, []byte("#!/bin/sh\nprintf '0.252.0\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Only new preparations require the version that was verified for import.
+	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
+		t.Fatal("unverified binary version accepted for preparation")
+	}
+	session := ports.SessionRef{DataDir: r.DataDir, WorkspacePath: r.LaunchCWD, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: ref.NativeSessionID, ports.MetadataKeyImportConfigDir: ref.ConfigDir}}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: r.DataDir, Env: r.Env, Session: session})
+	if err != nil || !ok || len(cmd) < 2 || cmd[len(cmd)-2] != "-r" || cmd[len(cmd)-1] != ref.NativeSessionID {
+		t.Fatalf("updated binary could not restore same conversation: %v %v %v", cmd, ok, err)
+	}
+	if err := p.PrepareRuntimeLaunch(context.Background(), ports.WorkspaceHookConfig{DataDir: r.DataDir, Env: r.Env, WorkspacePath: r.LaunchCWD, NativeSessionID: ref.NativeSessionID, ImportConfigDir: ref.ConfigDir}); err != nil {
+		t.Fatalf("updated binary failed runtime preparation: %v", err)
+	}
+	if exists, err := p.NativeConversationExists(context.Background(), session, ref.NativeSessionID, r.Env); err != nil || !exists {
+		t.Fatalf("updated binary failed history preflight: %v %v", exists, err)
+	}
+}
+
 func TestImportedDroidRestoreAllowsHistoryToGrowBeyondSourceLimit(t *testing.T) {
 	p, r, source := importFixture(t)
 	ref, err := p.PrepareImportedSession(context.Background(), r)

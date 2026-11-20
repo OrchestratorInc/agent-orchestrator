@@ -30,6 +30,8 @@ type droidImportReceipt struct {
 	ConfigDir   string `json:"configDir"`
 	CWD         string `json:"cwd"`
 	Path        string `json:"path"`
+	// Assumes Droid appends history without rewriting earlier JSONL lines;
+	// the mutable session header is excluded from this hash.
 	PrefixHash  string `json:"prefixHash"`
 	PrefixBytes int    `json:"prefixBytes"`
 }
@@ -366,9 +368,6 @@ func (b *droidVersionOutput) Write(p []byte) (int, error) {
 func (p *Plugin) validateImportedRuntime(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if cfg.ImportConfigDir == "" {
 		return nil
-	}
-	if err := p.verifyImportVersion(ctx, cfg.Env); err != nil {
-		return err
 	}
 	if err := p.verifyImportProfile(ctx, cfg.ImportConfigDir, cfg.Env); err != nil {
 		return err
