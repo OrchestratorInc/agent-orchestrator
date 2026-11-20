@@ -3,10 +3,17 @@
 // profile instead of blocking.
 
 const LOOKUP_TIMEOUT_MS = 3_000;
+// Right after launch the daemon may not be ready yet. Wait for it briefly
+// rather than opening an always-Temporary project's session in the
+// persistent profile.
+const DAEMON_READY_TIMEOUT_MS = 5_000;
+const DAEMON_READY_POLL_MS = 100;
 
 export type ProjectBrowserTemporaryLookupOptions = {
 	daemonPort: () => number | undefined;
 	fetch?: typeof fetch;
+	readyTimeoutMs?: number;
+	readyPollMs?: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -25,8 +32,18 @@ export function createProjectBrowserTemporaryLookup(
 		if (!response.ok) return undefined;
 		return response.json();
 	};
+	const readyTimeoutMs = options.readyTimeoutMs ?? DAEMON_READY_TIMEOUT_MS;
+	const readyPollMs = options.readyPollMs ?? DAEMON_READY_POLL_MS;
+	const waitForPort = async (): Promise<number | undefined> => {
+		const deadline = Date.now() + readyTimeoutMs;
+		for (;;) {
+			const port = options.daemonPort();
+			if (port || Date.now() >= deadline) return port;
+			await new Promise((resolve) => setTimeout(resolve, readyPollMs));
+		}
+	};
 	return async (sessionId) => {
-		const port = options.daemonPort();
+		const port = await waitForPort();
 		if (!port) return false;
 		try {
 			const sessionBody = await getJSON(port, `/api/v1/sessions/${encodeURIComponent(sessionId)}`);

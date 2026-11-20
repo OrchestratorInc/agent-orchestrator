@@ -176,3 +176,12 @@ it("keeps an unsaved remote draft through disconnect and saves after reconnect",
 	expect(screen.getByRole("textbox", { name: "Project name" })).toHaveValue("Draft Beta");
 	await waitFor(() => expect(mocks.put).toHaveBeenCalledWith("box-b", "/api/v1/projects/{id}", expect.objectContaining({ body: expect.objectContaining({ displayName: "Draft Beta" }) })));
 });
+
+it("hides the temporary-browser setting for a project on another host", async () => {
+	// The desktop app resolves the setting through its local daemon only, so it
+	// would be silently ignored for a remote host's sessions.
+	connect("box-a");
+	renderForm("box-a");
+	expect(await screen.findByText("Alpha")).toBeVisible();
+	expect(screen.queryByRole("switch", { name: "Always use a temporary browser" })).toBeNull();
+});

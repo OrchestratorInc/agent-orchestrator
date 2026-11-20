@@ -38,8 +38,34 @@ describe("createProjectBrowserTemporaryLookup", () => {
 		expect(await missing("s")).toBe(false);
 
 		const fetchMock = vi.fn();
-		const notReady = createProjectBrowserTemporaryLookup({ daemonPort: () => undefined, fetch: fetchMock as unknown as typeof fetch });
+		const notReady = createProjectBrowserTemporaryLookup({ daemonPort: () => undefined, readyPollMs: 1, readyTimeoutMs: 10, fetch: fetchMock as unknown as typeof fetch });
 		expect(await notReady("s")).toBe(false);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("waits briefly for a daemon that is still starting instead of failing open", async () => {
+		const ports = [undefined, undefined, 4321];
+		const lookup = createProjectBrowserTemporaryLookup({
+			daemonPort: () => (ports.length > 1 ? ports.shift() : ports[0]),
+			readyPollMs: 1,
+			readyTimeoutMs: 1_000,
+			fetch: (async (url: string) =>
+				url.includes("/sessions/")
+					? jsonResponse({ session: { projectId: "p" } })
+					: jsonResponse({ status: "ok", project: { config: { browserTemporary: true } } })) as unknown as typeof fetch,
+		});
+		expect(await lookup("s")).toBe(true);
+	});
+
+	it("gives up with false when the daemon never becomes ready", async () => {
+		const fetchMock = vi.fn();
+		const lookup = createProjectBrowserTemporaryLookup({
+			daemonPort: () => undefined,
+			readyPollMs: 1,
+			readyTimeoutMs: 20,
+			fetch: fetchMock as unknown as typeof fetch,
+		});
+		expect(await lookup("s")).toBe(false);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
