@@ -202,7 +202,7 @@ describe("host update flow", () => {
 	it("auto-updates each behind host once per version of this computer", async () => {
 		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
 		const behind = "https://auto-behind.example";
-		useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: {
+		useHostUpdateStore.setState({ localVersion: "0.15.0", hostIds: { [behind]: "host-behind" }, byUrl: {
 			[behind]: { view: view("0.14.10") },
 			"https://auto-failed.example": { view: { ...view("0.14.10", "failed"), error: "disk full" } },
 			"https://auto-manual.example": { view: view("0.14.10", "idle", false) },
@@ -210,7 +210,7 @@ describe("host update flow", () => {
 		} });
 		autoUpdateHosts();
 		expect(start).toHaveBeenCalledExactlyOnceWith(behind);
-		expect(JSON.parse(localStorage.getItem("ao.autoUpdateRemoteHostAttempts") ?? "{}")).toEqual({ [behind]: "0.15.0" });
+		expect(JSON.parse(localStorage.getItem("ao.autoUpdateRemoteHostAttempts") ?? "{}")).toEqual({ "host-behind": "0.15.0" });
 		await Promise.resolve();
 		useHostUpdateStore.getState().patch(behind, { view: view("0.14.10"), updating: undefined, error: undefined });
 		autoUpdateHosts();
@@ -235,6 +235,21 @@ describe("host update flow", () => {
 		autoUpdateHosts();
 		expect(start).toHaveBeenLastCalledWith(oldUrl);
 		expect(start).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops a version read that lands after the host was disconnected and never auto-starts it", async () => {
+		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+		let answer!: (value: HostUpdateView) => void;
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockReturnValueOnce(new Promise((done) => { answer = done; }));
+		useHostUpdateStore.setState({ localVersion: "0.15.0", hostIds: { [URL]: "host-a" } });
+		const read = refreshHostUpdate(URL);
+		useHostUpdateStore.setState({ hostIds: {}, byUrl: {} });
+		answer(view("0.14.10"));
+		await read;
+		expect(useHostUpdateStore.getState().byUrl[URL]).toBeUndefined();
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		autoUpdateHosts();
+		expect(start).not.toHaveBeenCalled();
 	});
 
 	it("forgets hosts that went offline unless they are mid-update", () => {

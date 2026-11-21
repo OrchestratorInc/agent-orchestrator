@@ -87,8 +87,11 @@ function settle(url: string, view: HostUpdateView | null) {
 
 export async function refreshHostUpdate(url: string): Promise<void> {
 	const generation = generations.get(url);
+	const hostId = useHostUpdateStore.getState().hostIds[url];
 	const view = await aoBridge.remotes.hostUpdate(url).catch(() => null);
-	if (generation === generations.get(url) && !starting.has(url)) settle(url, view);
+	const { byUrl, hostIds } = useHostUpdateStore.getState();
+	if (generation !== generations.get(url) || starting.has(url) || (hostIds[url] !== hostId && !byUrl[url]?.updating)) return;
+	settle(url, view);
 }
 
 export async function startHostUpdate(url: string): Promise<void> {
@@ -119,8 +122,8 @@ export function autoUpdateHosts(): void {
 	let attempts: Record<string, string> = {};
 	try { attempts = JSON.parse(localStorage.getItem(AUTO_ATTEMPTS_KEY) ?? "{}") ?? {}; } catch { attempts = {}; }
 	for (const [url, state] of Object.entries(byUrl)) {
-		const host = hostIds[url] || url;
-		if (!localVersion || hostUpdateAction(state, localVersion)?.kind !== "update" || attempts[host] === localVersion) continue;
+		const host = hostIds[url];
+		if (!host || !localVersion || hostUpdateAction(state, localVersion)?.kind !== "update" || attempts[host] === localVersion) continue;
 		attempts[host] = localVersion;
 		localStorage.setItem(AUTO_ATTEMPTS_KEY, JSON.stringify(attempts));
 		void startHostUpdate(url);
