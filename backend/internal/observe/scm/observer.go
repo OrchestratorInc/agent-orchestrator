@@ -790,7 +790,11 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		if reviewModes[key] != ports.ReviewWritePreserve {
 			o.cacheSetTime(o.Cache.LastReviewPollAt, &o.Cache.lastReviewPollOrder, key, now)
 		}
-		o.cacheSetTime(o.Cache.LastPRFetchAt, &o.Cache.lastPRFetchOrder, key, now)
+		// A review-only refresh rebuilt the PR from stored data; only a real
+		// metadata fetch restarts the max-age clock, which queued PRs rely on.
+		if !localOnlyObservations[key] {
+			o.cacheSetTime(o.Cache.LastPRFetchAt, &o.Cache.lastPRFetchOrder, key, now)
+		}
 	}
 	// Per-ref monotonicity (finding #1): build a map of repoKey → candidate
 	// PR keys so the final cursor-advance loop can verify that every ref in

@@ -1970,6 +1970,11 @@ func TestPoll_ReviewOnlyRefreshPreservesLocalCIAndMetadata(t *testing.T) {
 	if len(write.checks) != 1 || write.checks[0].Name != "build" {
 		t.Fatalf("review-only local reconstruction should include current-head checks only: %#v", write.checks)
 	}
+	// No PR metadata was fetched, so the metadata max-age clock must not move:
+	// a queued PR relies on it to have its queue entry read again.
+	if got, ok := obs.Cache.LastPRFetchAt[prKey(testRepo, 1)]; ok {
+		t.Fatalf("LastPRFetchAt advanced to %s on a review-only refresh", got)
+	}
 }
 
 func TestPoll_ReviewFetchFailureDoesNotUpdateReviewDecision(t *testing.T) {
