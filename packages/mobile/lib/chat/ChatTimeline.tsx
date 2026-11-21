@@ -65,7 +65,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, openingRow } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -266,6 +266,8 @@ function Timeline({
 	const latestFollow = useRef<() => void>(() => {});
 	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
+	// Where the person's last drag let go (see `followsAfterRest`).
+	const releasedAt = useRef<Release | undefined>(undefined);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
@@ -355,7 +357,11 @@ function Timeline({
 		else listRef.current?.scrollToEnd({ animated });
 	};
 	// The follow to the newest message that output and measuring rows ask for.
+	// It runs a frame after it was asked for, so it checks again: a drag that
+	// began in between has stopped the follow, and scrolling to the end then
+	// carried the person back mid-fling.
 	const followTail = () => {
+		if (!followsTail.current || dragging.current) return;
 		if (keyboardOffset !== undefined && keyboardMoving.value) {
 			followAfterKeyboard.current = true;
 			return;
@@ -483,7 +489,7 @@ function Timeline({
 	}
 	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
 	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
-	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>, released = false) => {
 		scrollOffset.current = event.nativeEvent.contentOffset.y;
 		// iOS reports the end of the list's own scrolls (the opening one, each
 		// follow) as momentum ending too. Only a drag decides whether to follow;
@@ -493,8 +499,13 @@ function Timeline({
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent, keyboardInset.current);
+		const offset = event.nativeEvent.contentOffset.y;
+		const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+		followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);
+		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
 		setShowJump(!followsTail.current);
+		// A follow that resumes catches up on output that arrived meanwhile.
+		if (followsTail.current) requestAnimationFrame(followTail);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
@@ -547,17 +558,19 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
-							onScrollEndDrag={settle}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
 								// passing the end without a drag, as a jump does, resumes it.
 								scrollOffset.current = event.nativeEvent.contentOffset.y;
-								const tail = atTail(event.nativeEvent, keyboardInset.current);
-								if (tail && !dragging.current) followsTail.current = true;
-								setShowJump(!followsTail.current && !tail);
+								// Whenever the list is not following, the jump to the newest message
+								// is offered, on this path and in `settle`.
+								const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+								if (!dragging.current && resting) followsTail.current = true;
+								setShowJump(!followsTail.current && !resting);
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
@@ -577,7 +590,8 @@ function Timeline({
 								contentHeight.current = height;
 								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(followTail);
+								// Not while the person scrolls: a drag or its fling owns the list.
+								if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
