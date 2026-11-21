@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { useCloudOrg } from "../hooks/useCloudOrg";
@@ -60,6 +60,8 @@ export function useSessionLinkSource(sourceHostId?: string, sourceKind?: "cloud"
 	return useSource(remoteHostId ?? "");
 }
 
+const restoringLinks = new Set<string>();
+
 export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cloud"): (url: string) => boolean {
 	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
@@ -67,7 +69,6 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const restoreSession = useRestoreSession();
-	const restoring = useRef(new Set<string>());
 	return useCallback((url: string) => {
 		const artifact = parseArtifactLink(url);
 		const target = parseSessionLink(url) ?? artifact;
@@ -102,14 +103,18 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		// A terminated session's artifacts are still served, so its artifact links still open.
 		if (resolved.isTerminated && !artifact) {
 			const dedupeKey = `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`;
-			if (restoring.current.has(dedupeKey)) return true;
-			restoring.current.add(dedupeKey);
-			showGlobalToast(`Resuming session ${resolved.sessionId}…`, undefined, { placement: "top-center", dedupeKey });
+			if (restoringLinks.has(dedupeKey)) return true;
+			restoringLinks.add(dedupeKey);
+			const from = window.location.hash;
+			showGlobalToast(`Resuming session ${resolved.sessionId}…`, undefined, { placement: "top-center", durationMs: 0, dedupeKey });
+			const pending = useUiStore.getState().globalToastSequence;
 			void restoreSession(resolved.sessionId, remoteHostId)
 				.catch((error: unknown) => ({ status: "error" as const, message: error instanceof Error ? error.message : "Unable to restore session" }))
 				.then((result) => {
-					restoring.current.delete(dedupeKey);
+					restoringLinks.delete(dedupeKey);
 					if (result.status === "success") {
+						useUiStore.getState().dismissGlobalToast(pending);
+						if (window.location.hash !== from) return;
 						if (remoteHostId) navigateToSession(resolved.projectId, resolved.sessionId, remoteHostId);
 						else navigateToSession(resolved.projectId, resolved.sessionId);
 						return;

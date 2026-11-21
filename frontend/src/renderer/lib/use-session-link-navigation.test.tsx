@@ -84,10 +84,23 @@ describe("useSessionLinkNavigation", () => {
 		expect(mocks.restore).toHaveBeenCalledWith("terminated", undefined);
 		expect(mocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToasts).toEqual([
-			expect.objectContaining({ title: "Resuming session terminated…", dedupeKey: "session-link:project:terminated" }),
+			expect.objectContaining({ title: "Resuming session terminated…", durationMs: 0, dedupeKey: "session-link:project:terminated" }),
 		]);
 		await act(async () => finish({ status: "success" }));
 		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+		expect(useUiStore.getState().globalToasts).toEqual([]);
+	});
+
+	it("does not pull the user away when they moved on before the resume finished", async () => {
+		let finish!: (result: { status: "success" }) => void;
+		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		window.location.hash = "#/projects/project/sessions/session";
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		act(() => { result.current("ao://sessions/project/terminated"); });
+		window.location.hash = "#/projects/other-project/sessions/other-session";
+		await act(async () => finish({ status: "success" }));
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToasts).toEqual([]);
 	});
 
 	it("shows why a terminated session could not resume and stays put", async () => {
