@@ -84,6 +84,69 @@ func TestPrimeDaemonSocketProbeFailsClosed(t *testing.T) {
 	}
 }
 
+func TestPrimeOrdinaryLaunchDaemonSocketCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		help string
+		err  error
+		flag bool
+	}{
+		{"supported", "  --daemon-socket <PATH>\n", nil, true},
+		{"older CLI", "  --session-dir <PATH>\n", nil, false},
+		{"prose only", "See docs for --daemon-socket <PATH>.", nil, false},
+		{"failed help", "  --daemon-socket <PATH>\n", errors.New("synthetic probe failure"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := primeTestPlugin()
+			p.daemonSocketFlag = nil
+			calls := 0
+			p.runCommand = func(_ context.Context, _, _ string, _ map[string]string, args ...string) ([]byte, error) {
+				calls++
+				if !slices.Equal(args, []string{"--help"}) {
+					t.Fatalf("unexpected native call: %v", args)
+				}
+				return []byte(tc.help), tc.err
+			}
+			dataDir := t.TempDir()
+			env := map[string]string{"OPENAI_BASE_URL": "", "OPENAI_API_KEY": "synthetic-project-key"}
+			p.AugmentRuntimeEnv(env, dataDir)
+			wantSocket := filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock")
+			if env["PRIME_AGENT_DAEMON_SOCKET"] != wantSocket || env["OPENAI_BASE_URL"] != "" || env["OPENAI_API_KEY"] != "synthetic-project-key" {
+				t.Fatal("daemon fallback or provider environment changed")
+			}
+			fresh, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: dataDir, Env: env})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resume, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: dataDir, Env: env, Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "ordinary-native-id"}}})
+			if err != nil || !ok {
+				t.Fatalf("ordinary resume: %v, %v", ok, err)
+			}
+			for _, argv := range [][]string{fresh, resume} {
+				if slices.Contains(argv, "--daemon-socket") != tc.flag || slices.Contains(argv, wantSocket) != tc.flag {
+					t.Fatalf("ordinary daemon flag = %v; supported=%v", argv, tc.flag)
+				}
+				if len(argv) < 4 || argv[0] != "sh" || !strings.Contains(argv[2], "unset OPENAI_BASE_URL;") || !strings.Contains(argv[2], "export OPENAI_API_KEY=") || slices.Contains(argv, "synthetic-project-key") {
+					t.Fatalf("provider override handling changed: %v", argv)
+				}
+			}
+			if !slices.Contains(resume, "--resume") || !slices.Contains(resume, "ordinary-native-id") {
+				t.Fatalf("ordinary resume identity lost: %v", resume)
+			}
+			wantCalls := 1
+			if tc.err != nil {
+				wantCalls = 2 // Failed probes must not become a cached capability.
+			}
+			if calls != wantCalls {
+				t.Fatalf("help probes = %d, want %d", calls, wantCalls)
+			}
+			if err := p.requireDaemonSocket(context.Background(), p.resolvedBinary); (err == nil) != tc.flag {
+				t.Fatalf("import compatibility was weakened: %v", err)
+			}
+		})
+	}
+}
+
 func TestPrimeUnsupportedDaemonSocketBlocksNativePreparationAndRestore(t *testing.T) {
 	root, sourceCWD, workspace := t.TempDir(), t.TempDir(), t.TempDir()
 	source := writePrimeNativeFixture(t, root, primeSourceID, sourceCWD, "", primeNativeFixtureRows()...)
