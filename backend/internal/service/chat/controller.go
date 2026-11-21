@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2850,6 +2851,26 @@ func (c *Controller) HandoffInterruptedTurn() string {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
+	return c.InterruptTurn(ctx, "")
+}
+
+// InterruptTurn is Interrupt aimed at the turn the user pressed Stop on.
+//
+// A Stop is aimed at the turn the user saw running, but it can land after that
+// turn ended and a later one started: a slow request, a retry, a second click.
+// Following "whatever runs now" would cancel work nobody asked to stop, so a
+// Stop for a turn that is no longer the running one is refused with
+// ErrNoActiveTurn, and one for a turn that already stopped answers nil without
+// reaching the provider. An empty expectedTurnID keeps the untargeted behaviour
+// for internal callers (handoffs, provider switches) that mean "the current turn".
+func (c *Controller) InterruptTurn(ctx context.Context, expectedTurnID string) error {
+	if expectedTurnID != "" {
+		// Answer the common stale case before cancelling forks or withdrawing steers
+		// that belong to a later turn. The check is repeated under sendMu below.
+		if _, stopped, err := c.stopTarget(ctx, expectedTurnID); err != nil || stopped {
+			return err
+		}
+	}
 	c.mu.Lock()
 	c.interrupts++
 	if c.forkCancel != nil {
@@ -2876,6 +2897,20 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	// lock first is existing work Stop should cancel; a Send that arrives after
 	// this point waits and is therefore post-Stop work that must survive.
 	c.sendMu.Lock()
+	var target domain.ConversationTurn
+	if expectedTurnID != "" {
+		// Read again now that dispatch is complete: no turn can start while sendMu
+		// is held, so a target still running here is the turn in flight, not one a
+		// later turn replaced.
+		var stopped bool
+		var err error
+		target, stopped, err = c.stopTarget(ctx, expectedTurnID)
+		if err != nil || stopped {
+			c.sendMu.Unlock()
+			restoreSteering()
+			return err
+		}
+	}
 	cutoff := c.now()
 	c.mu.Lock()
 	turn := c.pendingTurnID
@@ -2901,6 +2936,9 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		// The list uses the snapshot's visibility and ordering rules, so its first
 		// row is the same running turn whose Working bar the user pressed Stop on.
 		providerTurnID := providerTurnIDs[0]
+		if target.ProviderTurnID != "" && slices.Contains(providerTurnIDs, target.ProviderTurnID) {
+			providerTurnID = target.ProviderTurnID
+		}
 		if err := c.conv.Interrupt(ctx, providerTurnID); err != nil &&
 			!errors.Is(err, ports.ErrChatNoActiveTurn) {
 			c.log.Warn("provider interrupt during reconciliation failed",
@@ -2950,6 +2988,28 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		return fmt.Errorf("interrupt turn %s: %w", turn, err)
 	}
 	return nil
+}
+
+// stopTarget reads the turn a Stop was aimed at. stopped reports a turn that
+// already ended by being stopped, which answers a repeated Stop without reaching
+// the provider. A turn that ended any other way is ErrNoActiveTurn: there is
+// nothing left to stop, and the client should show the turn's real outcome.
+func (c *Controller) stopTarget(ctx context.Context, turnID string) (domain.ConversationTurn, bool, error) {
+	target, err := c.store.TurnByID(ctx, turnID)
+	if err != nil {
+		return domain.ConversationTurn{}, false, err
+	}
+	if target.ConversationID != c.conversation.ID {
+		return domain.ConversationTurn{}, false, domain.ErrNoConversationTurn
+	}
+	switch target.State {
+	case domain.TurnStateRunning, domain.TurnStateQueued:
+		return target, false, nil
+	case domain.TurnStateInterrupted, domain.TurnStateCancelled:
+		return target, true, nil
+	default:
+		return target, false, ErrNoActiveTurn
+	}
 }
 
 // reconcileDurableTurnsLocked settles work the controller can no longer cancel

@@ -2203,3 +2203,111 @@ describe("opening a local chat it has cached", () => {
 		expect(getMock).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("Stop", () => {
+	type StopProps = { turnId?: string };
+	const renderStop = (initialProps: StopProps = { turnId: "turn-1" }) => renderHook(
+		({ turnId }: StopProps) => useConversationCommands("ao-1", undefined, false, Boolean(turnId), turnId),
+		{ initialProps, wrapper },
+	);
+
+	it("names the turn it stops and ignores a second press while that turn winds down", async () => {
+		postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(true));
+		act(() => {
+			result.current.interrupt();
+		});
+
+		const stops = postMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation/interrupt");
+		expect(stops).toEqual([[
+			"/api/v1/sessions/{sessionId}/conversation/interrupt",
+			{ params: { path: { sessionId: "ao-1" } }, body: { turnId: "turn-1" } },
+		]]);
+	});
+
+	it("stops the next turn normally once the stopped one is gone", async () => {
+		postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+		const { result, rerender } = renderStop();
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(true));
+
+		rerender({ turnId: "turn-2" });
+		expect(result.current.stoppingTurn).toBe(false);
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenLastCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/interrupt",
+			{ params: { path: { sessionId: "ao-1" } }, body: { turnId: "turn-2" } },
+		));
+	});
+
+	// The turn ended before Stop landed. That is the answer to Stop, not a failure.
+	it("shows no error when the turn had already ended", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_NO_ACTIVE_TURN");
+		apiErrorMessageMock.mockReturnValue("there is no turn in flight to interrupt");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" }, response: { status: 409 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(result.current.busy).toBe(false));
+		expect(result.current.error).toBeUndefined();
+	});
+
+	it("reports a Stop that failed and lets the user press it again", async () => {
+		apiErrorCodeMock.mockReturnValue("INTERNAL");
+		apiErrorMessageMock.mockReturnValue("session/cancel did not reach the agent");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "INTERNAL" }, response: { status: 500 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.error).toBe("session/cancel did not reach the agent"));
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(false));
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+	});
+
+	it("drops a failed Stop's error once its turn is no longer running", async () => {
+		apiErrorCodeMock.mockReturnValue("INTERNAL");
+		apiErrorMessageMock.mockReturnValue("session/cancel did not reach the agent");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "INTERNAL" }, response: { status: 500 } });
+		const { result, rerender } = renderStop();
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.error).toBeDefined());
+
+		rerender({ turnId: undefined });
+		expect(result.current.error).toBeUndefined();
+	});
+
+	it("drops a steer refusal once the turn it was aimed at is gone", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_TURN_NOT_STEERABLE");
+		apiErrorMessageMock.mockReturnValue("the agent did not collect the guidance");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_TURN_NOT_STEERABLE" } });
+		const { result, rerender } = renderStop();
+		await act(async () => {
+			await result.current.steer("go left").catch(() => {});
+		});
+		await waitFor(() => expect(result.current.steerRefusal).toBeDefined());
+
+		rerender({ turnId: undefined });
+		await waitFor(() => expect(result.current.steerRefusal).toBeUndefined());
+	});
+});

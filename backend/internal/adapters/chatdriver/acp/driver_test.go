@@ -1606,6 +1606,87 @@ waitForCompletion:
 	}
 }
 
+// Stop pressed again while the provider is still winding the turn down is the
+// same request. It used to fail with "session/cancel is already in progress",
+// which reached the user as a 500 although their first Stop was working.
+func TestACPRepeatedInterruptWhileCancellingIsIdempotent(t *testing.T) {
+	cancelReceived := make(chan struct{}, 1)
+	promptReceived := make(chan struct{}, 1)
+	completePrompt := make(chan struct{})
+	responseSent := make(chan error, 1)
+	driver := New(Config{
+		Harness: domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true,
+			ports.ChatCapabilityInterrupt: true,
+		},
+		Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(delayedCancelSpawn(promptReceived, cancelReceived, completePrompt, responseSent))
+
+	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conversation.Close()
+	_ = nextEvent(t, conversation.Events()) // controller.ready
+	ref, err := conversation.SendTurn(context.Background(), ports.ChatUserMessage{Text: "wait"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conversation.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	select {
+	case <-promptReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP prompt request")
+	}
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-cancelReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP cancel notification")
+	}
+
+	for range 3 {
+		if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+			t.Fatalf("repeated Interrupt while cancelling = %v, want nil", err)
+		}
+	}
+	if err := conversation.Interrupt(context.Background(), ""); err != nil {
+		t.Fatalf("repeated untargeted Interrupt while cancelling = %v, want nil", err)
+	}
+
+	close(completePrompt)
+	if err := <-responseSent; err != nil {
+		t.Fatalf("provider prompt response: %v", err)
+	}
+	for {
+		event := nextEvent(t, conversation.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateInterrupted {
+				t.Fatalf("turn state = %q, want interrupted", event.TurnState)
+			}
+			break
+		}
+	}
+	select {
+	case <-cancelReceived:
+		t.Fatal("repeated Stop sent the provider a second session/cancel")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// Once the turn has settled there is genuinely nothing to stop.
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); !errors.Is(err, ports.ErrChatNoActiveTurn) {
+		t.Fatalf("Interrupt after settlement = %v, want ErrChatNoActiveTurn", err)
+	}
+}
+
 func delayedCancelSpawn(
 	promptReceived chan<- struct{},
 	cancelReceived chan<- struct{},

@@ -9003,6 +9003,11 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InterruptConversationRequest'
       responses:
         "204":
           description: No Content
@@ -21543,6 +21548,11 @@ components:
           description: Seconds until the next installer download attempt.
           minimum: 1
           type: integer
+      type: object
+    InterruptConversationRequest:
+      properties:
+        turnId:
+          type: string
       type: object
     InvokeCueRequest:
       properties:

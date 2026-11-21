@@ -210,7 +210,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	useTranscriptTiming(session.id, Boolean(snapshot), hostId);
-	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(snapshot && activeTurn(snapshot)));
+	const currentTurn = snapshot ? activeTurn(snapshot) : undefined;
+	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(currentTurn), currentTurn?.id);
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
@@ -861,6 +862,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
+				stoppingTurn={commands.stoppingTurn}
 				onContinueTurn={() => {
 					const turnId = `${renderSnapshot.conversationId}:${renderSnapshot.activeBranchId ?? ""}:${stoppedTurnId}`;
 					if (continueIntent.current?.turnId !== turnId) {

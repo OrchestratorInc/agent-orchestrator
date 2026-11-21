@@ -518,6 +518,8 @@ export interface ChatWorkspaceProps {
 		content?: Record<string, unknown>,
 	) => Promise<unknown> | void;
 	onInterrupt?: () => void;
+	/** Stop was accepted for the running turn and the agent is still winding it down. */
+	stoppingTurn?: boolean;
 	/**
 	 * Continues the latest turn after the user stopped it, sending
 	 * CONTINUE_STOPPED_TURN_PROMPT as a continuation. Offered on the composer's
@@ -888,6 +890,7 @@ function ChatWorkspaceContent({
 	onDecide,
 	onResolveInput,
 	onInterrupt,
+	stoppingTurn,
 	onContinueTurn,
 	commandError,
 	onResumeAgent,
@@ -2472,6 +2475,7 @@ function ChatWorkspaceContent({
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
 										onInterrupt={turn && !newWorkDisabled && !openingStarting && !accountMoveQueues ? stableInterrupt : undefined}
+										stopping={stoppingTurn}
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
@@ -2551,7 +2555,7 @@ function ChatWorkspaceContent({
 										// has not reached the provider, so there is nothing to steer.
 										onSteer={newWorkDisabled ? undefined : steer}
 										showSteerButton={showSteerButton}
-										canSteer={Boolean(onSteer) && turn?.state === "running"}
+										canSteer={Boolean(onSteer) && turn?.state === "running" && !stoppingTurn}
 										sendPending={sendPending || agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}

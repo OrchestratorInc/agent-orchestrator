@@ -1862,6 +1862,7 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/interrupt", id: "interruptSessionConversationTurn", tag: "conversations",
 			summary:    "Cancel the in-flight turn in a chat session",
 			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.InterruptConversationRequest{}, optionalReqBody: true,
 			resps: []respUnit{
 				{http.StatusNoContent, nil},
 				{http.StatusNotFound, envelope.APIError{}},

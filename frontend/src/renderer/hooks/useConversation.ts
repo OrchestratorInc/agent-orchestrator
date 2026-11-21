@@ -121,6 +121,11 @@ interface ConversationSessionMutationInput {
 	targetSessionId: string;
 }
 
+interface ConversationInterruptMutationInput extends ConversationSessionMutationInput {
+	/** The running turn the user pressed Stop on; the daemon refuses to stop any other. */
+	turnId?: string;
+}
+
 interface ConversationRetryMutationInput extends ConversationSessionMutationInput {
 	requestId: string;
 	sourceTurnId: string;
@@ -927,10 +932,16 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
- * `turnActive` comes from the caller's snapshot: reading the conversation
- * cache here would re-render every consumer on each streamed chunk.
+ * `turnActive` and `activeTurnId` come from the caller's snapshot: reading the
+ * conversation cache here would re-render every consumer on each streamed chunk.
  */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false, turnActive = false) {
+export function useConversationCommands(
+	sessionId: string | undefined,
+	hostId?: string,
+	terminated = false,
+	turnActive = false,
+	activeTurnId?: string,
+) {
 	const queryClient = useQueryClient();
 	const restoreSession = useRestoreSession();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
@@ -1177,16 +1188,21 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	});
 
 	const interrupt = useMutation({
-		mutationFn: async ({ targetSessionId }: ConversationSessionMutationInput) => {
+		mutationFn: async ({ targetSessionId, turnId }: ConversationInterruptMutationInput) => {
 			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/interrupt",
-				{ params: { path: { sessionId: targetSessionId } } },
+				turnId
+					? { params: { path: { sessionId: targetSessionId } }, body: { turnId } }
+					: { params: { path: { sessionId: targetSessionId } } },
 			);
-			if (error) throw error;
+			// Nothing left to stop: the turn already ended, or the one now running is a
+			// later turn this Stop must not touch. That is the answer, not a failure;
+			// the refetch below shows how the turn really ended.
+			if (error && apiErrorCode(error) !== "CHAT_NO_ACTIVE_TURN") throw error;
 		},
 		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
-		// A failed interrupt (e.g. CHAT_NO_ACTIVE_TURN) means the cached turn
-		// state is wrong. Refetch so the UI discovers the real state instead of
+		// After any Stop answer, including "nothing left to stop", the cached turn
+		// state may be wrong. Refetch so the UI discovers the real state instead of
 		// keeping a Working bar the user cannot dismiss.
 		onError: (_error, variables) => refreshSessionInBackground(variables.targetSessionId),
 	});
@@ -1563,11 +1579,29 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		[queryClient, sessionId, stateSessionId],
 	);
+	// The turn this surface already asked to stop. The daemon accepts Stop at once,
+	// but the agent takes a moment to wind the turn down and it shows as running
+	// until then. A second press (or Escape) in that window is the same request, so
+	// it is dropped here instead of reaching the daemon again.
+	const activeStopKey = stateSessionId && activeTurnId ? `${stateSessionId}\u0000${activeTurnId}` : undefined;
+	const stopRequestedRef = useRef<string | undefined>(undefined);
+	const [stopRequestedKey, setStopRequestedKey] = useState<string>();
+	const stoppingTurn = activeStopKey !== undefined && stopRequestedKey === activeStopKey;
+	// A steer refusal is about the turn it was aimed at. Once that turn is gone the
+	// composer keeps its own notice beside the kept draft; this copy would go stale.
+	const steeredTurnRef = useRef(activeTurnId);
+	useEffect(() => {
+		if (steeredTurnRef.current === activeTurnId) return;
+		steeredTurnRef.current = activeTurnId;
+		steer.reset();
+	}, [activeTurnId, steer]);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
 	const sendCode = apiErrorCode(send.error);
 	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) && sendCode !== undefined && !HOST_UNREACHABLE_CODES.has(sendCode) ? send.error : undefined;
-	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
+	// A failed Stop is only news while the turn it was aimed at is still running.
+	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId &&
+		(!interrupt.variables?.turnId || interrupt.variables.turnId === activeTurnId);
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
@@ -1591,6 +1625,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
+			// Sending the draft as a message answers any "send it as a message" refusal.
+			steer.reset();
 			return send.mutateAsync({
 				targetSessionId: sessionId,
 				clientMessageId,
@@ -1624,7 +1660,25 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			action: "accept" | "decline" | "cancel",
 			content?: Record<string, unknown>,
 		) => resolveInput.mutateAsync({ requestId, action, content }),
-		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
+		interrupt: () => {
+			if (!sessionId) return;
+			const key = activeStopKey;
+			if (key) {
+				if (stopRequestedRef.current === key) return;
+				stopRequestedRef.current = key;
+				setStopRequestedKey(key);
+			}
+			interrupt.mutate({ targetSessionId: sessionId, turnId: activeTurnId }, {
+				onError: () => {
+					// The Stop did not land, so the turn is still the user's to stop.
+					if (!key || stopRequestedRef.current !== key) return;
+					stopRequestedRef.current = undefined;
+					setStopRequestedKey(undefined);
+				},
+			});
+		},
+		/** Stop landed for the running turn, which the agent is still winding down. */
+		stoppingTurn,
 		resumeAgent: () => resume.mutateAsync(),
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
