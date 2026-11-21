@@ -34,17 +34,6 @@ func (s *Store) SessionCommitAttribution(ctx context.Context, id domain.SessionI
 	return coAuthor, nil
 }
 
-// SessionAttributionDecided reports whether a session has a recorded trailer
-// choice, with or without a trailer: a spawn records one before its first
-// prompt, so the workspace setup that follows applies that decision.
-func (s *Store) SessionAttributionDecided(ctx context.Context, id domain.SessionID) (bool, error) {
-	decided, err := s.qr.HasSessionCommitAttribution(ctx, string(id))
-	if err != nil {
-		return false, fmt.Errorf("read commit attribution for session %s: %w", id, err)
-	}
-	return decided, nil
-}
-
 // SetSessionPRFooter records whether a session started with the Orchestrator
 // PR footer, so its prompt keeps that choice when it is rebuilt later.
 func (s *Store) SetSessionPRFooter(ctx context.Context, id domain.SessionID, footer bool) error {

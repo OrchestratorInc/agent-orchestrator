@@ -375,7 +375,6 @@ type Store interface {
 	SessionCommitAttribution(ctx context.Context, id domain.SessionID) (string, error)
 	SetSessionPRFooter(ctx context.Context, id domain.SessionID, footer bool) error
 	SessionPRFooter(ctx context.Context, id domain.SessionID) (footer, recorded bool, err error)
-	SessionAttributionDecided(ctx context.Context, id domain.SessionID) (bool, error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
 	CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
 	CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
@@ -510,6 +509,11 @@ type Manager struct {
 	backgroundWorkers sync.WaitGroup
 	asyncChatSpawnsMu sync.Mutex
 	asyncChatSpawns   map[domain.SessionID]*asyncChatSpawnRun
+
+	// spawnAttribution holds each starting session's trailer decision, made
+	// before its first prompt, until workspace setup applies it.
+	spawnAttributionMu sync.Mutex
+	spawnAttribution   map[domain.SessionID]string
 	// provisionObserver hears provision-state writes (SetProvisionObserver).
 	provisionObserver ProvisionObserver
 	// killTeardown bounds Kill's detached teardown. Zero means

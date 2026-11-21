@@ -32,17 +32,6 @@ func (q *Queries) GetSessionPRFooter(ctx context.Context, sessionID string) (sql
 	return pr_footer, err
 }
 
-const hasSessionCommitAttribution = `-- name: HasSessionCommitAttribution :one
-SELECT EXISTS (SELECT 1 FROM session_commit_attribution WHERE session_id = ?)
-`
-
-func (q *Queries) HasSessionCommitAttribution(ctx context.Context, sessionID string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, hasSessionCommitAttribution, sessionID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const upsertSessionCommitAttribution = `-- name: UpsertSessionCommitAttribution :exec
 INSERT INTO session_commit_attribution (session_id, co_author)
 VALUES (?, ?)

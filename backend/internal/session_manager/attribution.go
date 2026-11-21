@@ -98,17 +98,28 @@ func (m *Manager) recordSpawnAttribution(ctx context.Context, projectID domain.P
 	m.recordSpawnAttributionFor(ctx, project, sessionID)
 }
 
-// recordSpawnAttributionFor records the trailer and footer choices for a
-// starting session from the current settings, and returns the trailer.
+// recordSpawnAttributionFor decides the trailer and footer for a starting
+// session from the current settings, records both, and keeps the trailer
+// decision for the workspace setup that follows. That setup applies the kept
+// decision whether or not recording it succeeded, so neither a failed write
+// nor a row left by an earlier attempt can change it. Returns the trailer.
 func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID) string {
 	coAuthor := ""
 	if m.commitTrailerWanted(ctx, project) {
 		coAuthor = attribution.Bot.CoAuthor()
 	}
-	// Recorded even without a trailer: the row marks that this spawn decided,
-	// so workspace setup applies the decision even when the footer could not
-	// be settled. It also clears a trailer an earlier attempt recorded.
-	if m.store != nil && sessionID != "" {
+	if sessionID == "" {
+		return coAuthor
+	}
+	m.spawnAttributionMu.Lock()
+	if m.spawnAttribution == nil {
+		m.spawnAttribution = map[domain.SessionID]string{}
+	}
+	m.spawnAttribution[sessionID] = coAuthor
+	m.spawnAttributionMu.Unlock()
+	if m.store != nil {
+		// Recorded even without a trailer, which also clears one an earlier
+		// attempt recorded, so a recreated worktree gets this decision.
 		if err := m.store.SetSessionCommitAttribution(ctx, sessionID, coAuthor); err != nil {
 			m.logger.Warn("attribution: record session choice", "sessionID", sessionID, "error", err)
 		}
@@ -117,17 +128,14 @@ func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.
 	return coAuthor
 }
 
-// spawnAttributionDecided reports whether this spawn already recorded its
-// trailer choice, independently of whether its footer could be settled.
-func (m *Manager) spawnAttributionDecided(ctx context.Context, sessionID domain.SessionID) bool {
-	if m.store == nil || sessionID == "" {
-		return false
-	}
-	decided, err := m.store.SessionAttributionDecided(ctx, sessionID)
-	if err != nil {
-		m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
-	}
-	return err == nil && decided
+// takeSpawnAttribution returns and forgets the trailer decision a spawn kept
+// for this session.
+func (m *Manager) takeSpawnAttribution(sessionID domain.SessionID) (string, bool) {
+	m.spawnAttributionMu.Lock()
+	defer m.spawnAttributionMu.Unlock()
+	coAuthor, ok := m.spawnAttribution[sessionID]
+	delete(m.spawnAttribution, sessionID)
+	return coAuthor, ok
 }
 
 // recordPRFooterChoice keeps whether a starting session's agents sign PRs, so
@@ -178,18 +186,14 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 	coAuthor := ""
 	switch choice {
 	case attributionFromSettings:
-		// The spawn decided before writing the session's first prompt; use
-		// that, so a settings change since then cannot split the prompt from
-		// the commits. Without one (an import, or a spawn whose decision could
-		// not be saved) decide now.
-		if m.spawnAttributionDecided(ctx, sessionID) {
-			recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
-			if err != nil {
-				m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
-			}
-			coAuthor = recorded
+		// The spawn decided before writing the session's first prompt; apply
+		// that decision, so a settings change since then cannot split the
+		// prompt from the commits. Without one (an import) decide now.
+		if decided, ok := m.takeSpawnAttribution(sessionID); ok {
+			coAuthor = decided
 		} else {
 			coAuthor = m.recordSpawnAttributionFor(ctx, project, sessionID)
+			m.takeSpawnAttribution(sessionID)
 		}
 	case attributionRecorded:
 		recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)

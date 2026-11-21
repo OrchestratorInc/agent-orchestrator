@@ -13,6 +13,3 @@ ON CONFLICT (session_id) DO UPDATE SET pr_footer = excluded.pr_footer;
 
 -- name: GetSessionPRFooter :one
 SELECT pr_footer FROM session_commit_attribution WHERE session_id = ?;
-
--- name: HasSessionCommitAttribution :one
-SELECT EXISTS (SELECT 1 FROM session_commit_attribution WHERE session_id = ?);

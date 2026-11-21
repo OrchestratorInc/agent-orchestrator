@@ -465,6 +465,51 @@ func TestSpawnTrailerDecisionHoldsWhenTheFooterIsUnsettled(t *testing.T) {
 	}
 }
 
+// Workspace setup applies the spawn's own decision even when recording it
+// failed: neither a footer-only row nor a trailer left by an earlier attempt
+// can replace it.
+func TestSpawnDecisionHoldsWhenRecordingTheTrailerFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix git hook scripts")
+	}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name          string
+		earlier       string // a trailer an earlier attempt recorded
+		betaAtSpawn   bool
+		wantInCommits bool
+	}{
+		{"first attempt, beta on, then turned off", "", true, true},
+		{"retry after the beta was turned off", attribution.Bot.CoAuthor(), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			wt := filepath.Join(root, "session", "mer-1")
+			attributionRepo(t, filepath.Join(root, "repo"), wt, "orchestrator/mer-1/root")
+			beta := tc.betaAtSpawn
+			m, st := attributionManager(t, root, &beta)
+			project := st.projects["mer"]
+			project.RepoOriginURL = "https://github.com/o/r"
+			st.projects["mer"] = project
+			if tc.earlier != "" {
+				if err := st.SetSessionCommitAttribution(ctx, "mer-1", tc.earlier); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st.commitAttributionErr = errors.New("disk I/O error")
+
+			if _, _, err := m.buildSpawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1"); err != nil {
+				t.Fatal(err)
+			}
+			beta = !tc.betaAtSpawn
+			m.applyCommitAttribution(ctx, project, "mer-1", wt, attributionFromSettings)
+			if got := strings.Contains(commitMessage(t, wt), "Co-authored-by: "+attribution.Bot.CoAuthor()); got != tc.wantInCommits {
+				t.Fatalf("commit trailer = %v, want the spawn's %v", got, tc.wantInCommits)
+			}
+		})
+	}
+}
+
 // A session with no recorded choice, from before choices were kept, follows
 // the current settings, as it did before.
 func TestPRFooterPromptFollowsSettingsWithoutARecordedChoice(t *testing.T) {

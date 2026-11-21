@@ -73,26 +73,3 @@ func TestSessionPRFooterRoundTrip(t *testing.T) {
 		t.Fatal("recorded a footer choice for a session that does not exist")
 	}
 }
-
-func TestSessionAttributionDecided(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	seedProject(t, s, "mer")
-	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decided, err := s.SessionAttributionDecided(ctx, rec.ID); err != nil || decided {
-		t.Fatalf("no row: decided = %v, %v; want false", decided, err)
-	}
-	// A decision without a trailer still counts.
-	if err := s.SetSessionCommitAttribution(ctx, rec.ID, ""); err != nil {
-		t.Fatal(err)
-	}
-	if decided, err := s.SessionAttributionDecided(ctx, rec.ID); err != nil || !decided {
-		t.Fatalf("after recording no trailer: decided = %v, %v; want true", decided, err)
-	}
-	if got, err := s.SessionCommitAttribution(ctx, rec.ID); err != nil || got != "" {
-		t.Fatalf("trailer = %q, %v; want none", got, err)
-	}
-}
