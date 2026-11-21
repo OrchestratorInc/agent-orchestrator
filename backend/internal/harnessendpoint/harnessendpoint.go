@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -231,13 +232,18 @@ func (s *Store) Save(agentID string, in Input, now time.Time) (Status, error) {
 	// Hold the lock from reading the stored key to writing, so an update that
 	// keeps the key cannot write back one a concurrent save just rotated.
 	defer lockPath(path)()
-	existing, found, err := s.Load(agentID)
-	if err != nil {
-		return Status{}, err
-	}
 	cfg, err := normalize(spec, in)
 	if err != nil {
 		return Status{}, err
+	}
+	existing, found, err := s.Load(agentID)
+	if err != nil {
+		// An unreadable config only blocks an update that must keep its key;
+		// a complete replacement with a new key repairs it.
+		if cfg.APIKey == "" {
+			return Status{}, err
+		}
+		found = false
 	}
 	if cfg.APIKey == "" {
 		if !found {
@@ -294,6 +300,9 @@ func (s *Store) Env(agentID string) (map[string]string, error) {
 	if err != nil || !found {
 		return nil, err
 	}
+	if !secureEndpoint(cfg.BaseURL) {
+		return nil, fmt.Errorf("%s endpoint %q would send its key in cleartext", agentID, cfg.BaseURL)
+	}
 	style := cfg.AuthStyle
 	if _, ok := spec.KeyEnv[style]; !ok {
 		style = spec.DefaultAuthStyle
@@ -329,6 +338,9 @@ func normalize(spec Spec, in Input) (Config, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return Config{}, &ValidationError{Message: "The base URL must be an absolute http:// or https:// URL."}
 	}
+	if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+		return Config{}, &ValidationError{Message: "Use https:// for a remote endpoint. http:// is allowed only for localhost, so the API key never crosses the network in cleartext."}
+	}
 	if parsed.User != nil {
 		return Config{}, &ValidationError{Message: "Put credentials in the API key field, not the base URL."}
 	}
@@ -351,6 +363,30 @@ func normalize(spec Spec, in Input) (Config, error) {
 		APIKey:    apiKey,
 		Model:     model,
 	}, nil
+}
+
+// secureEndpoint reports whether baseURL keeps a key off the network in
+// cleartext: https anywhere, or http to a loopback host.
+func secureEndpoint(baseURL string) bool {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return parsed.Host != ""
+	case "http":
+		return isLoopbackHost(parsed.Hostname())
+	}
+	return false
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // writeFileAtomic writes data owner-only via a same-directory temp file and

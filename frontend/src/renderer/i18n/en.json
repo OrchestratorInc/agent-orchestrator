@@ -2238,7 +2238,7 @@
 	"settings.harness.endpoint.authStyleApiKey": "API key header",
 	"settings.harness.endpoint.model": "Model (optional)",
 	"settings.harness.endpoint.modelPlaceholder": "Use the default model",
-	"settings.harness.endpoint.storageNote": "Stored on this device in Orchestrator's data folder, readable only by your account. The key is never shown again.",
+	"settings.harness.endpoint.storageNote": "Stored in Orchestrator's data folder on the host that runs these sessions, readable only by its owner account. The key is never shown again.",
 	"settings.harness.endpoint.save": "Save",
 	"settings.harness.endpoint.saving": "Saving…",
 	"settings.harness.endpoint.remove": "Remove",

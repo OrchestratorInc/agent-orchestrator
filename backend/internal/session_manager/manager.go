@@ -7401,15 +7401,16 @@ func (m *Manager) chatPreflightEnv(cfg ports.SpawnConfig, projectEnv map[string]
 func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string, harness domain.AgentHarness) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
-	if m.dataDir != "" {
-		overridden := func(key string) bool {
-			for configured := range projectEnv {
-				if configured == key || caseInsensitive && strings.EqualFold(configured, key) {
-					return true
-				}
+	overridden := func(key string) bool {
+		for configured := range projectEnv {
+			if configured == key || caseInsensitive && strings.EqualFold(configured, key) {
+				return true
 			}
-			return false
 		}
+		return false
+	}
+	var endpointEnv map[string]string
+	if m.dataDir != "" {
 		keys, _, err := providerkeys.ForSession(m.dataDir, string(harness))
 		if err != nil {
 			m.logger.Warn("provider environment unavailable", "error", err)
@@ -7433,7 +7434,7 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		// base URL and key replace any AO-stored or withheld provider key;
 		// project configuration still wins.
 		if harness != "" {
-			endpointEnv, err := harnessendpoint.ForDataDir(m.dataDir).Env(string(harness))
+			endpointEnv, err = harnessendpoint.ForDataDir(m.dataDir).Env(string(harness))
 			if err != nil {
 				m.logger.Warn("custom harness endpoint unavailable; launching with native credentials", "harness", harness, "error", err)
 			}
@@ -7472,7 +7473,20 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserURL] = m.agentBrowserURL
 		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
+	beforeAccount := make(map[string]string, len(endpointEnv))
+	for key := range endpointEnv {
+		beforeAccount[key] = env[key]
+	}
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
+	// A bound saved account must never send its credential to a custom
+	// endpoint, so the endpoint's base URL and key go on top again and both
+	// come from one source. A project value the account left alone stands.
+	for key, value := range endpointEnv {
+		if overridden(key) && env[key] == beforeAccount[key] {
+			continue
+		}
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",

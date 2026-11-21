@@ -2238,7 +2238,7 @@
 	"settings.harness.endpoint.authStyleApiKey": "API anahtarı başlığı",
 	"settings.harness.endpoint.model": "Model (isteğe bağlı)",
 	"settings.harness.endpoint.modelPlaceholder": "Varsayılan modeli kullan",
-	"settings.harness.endpoint.storageNote": "Bu cihazda Orchestrator'ın veri klasöründe saklanır ve yalnızca hesabınız tarafından okunabilir. Anahtar bir daha gösterilmez.",
+	"settings.harness.endpoint.storageNote": "Bu oturumları çalıştıran ana bilgisayarda Orchestrator'ın veri klasöründe saklanır ve yalnızca sahibi olan hesap tarafından okunabilir. Anahtar bir daha gösterilmez.",
 	"settings.harness.endpoint.save": "Kaydet",
 	"settings.harness.endpoint.saving": "Kaydediliyor…",
 	"settings.harness.endpoint.remove": "Kaldır",

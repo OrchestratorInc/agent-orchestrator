@@ -130,6 +130,7 @@ func TestSaveValidation(t *testing.T) {
 		"missing url":      {APIKey: "k"},
 		"relative url":     {BaseURL: "gateway.example.com", APIKey: "k"},
 		"bad scheme":       {BaseURL: "ftp://a.example.com", APIKey: "k"},
+		"remote http":      {BaseURL: "http://gateway.example.com", APIKey: "k"},
 		"userinfo in url":  {BaseURL: "https://user:pw@a.example.com", APIKey: "k"},
 		"newline in key":   {BaseURL: "https://a.example.com", APIKey: "k\nX=1"},
 		"unknown style":    {BaseURL: "https://a.example.com", APIKey: "k", AuthStyle: "basic"},
@@ -144,6 +145,58 @@ func TestSaveValidation(t *testing.T) {
 				t.Fatalf("err = %v, want ValidationError", err)
 			}
 		})
+	}
+}
+
+func TestSaveAllowsLoopbackHTTP(t *testing.T) {
+	for _, baseURL := range []string{"http://localhost:4000", "http://127.0.0.1:8080/v1", "http://[::1]:9000"} {
+		store := NewStore(t.TempDir())
+		if _, err := store.Save("claude-code", Input{BaseURL: baseURL, APIKey: "k"}, testNow); err != nil {
+			t.Fatalf("Save(%s): %v", baseURL, err)
+		}
+		if env, err := store.Env("claude-code"); err != nil || env["ANTHROPIC_BASE_URL"] == "" {
+			t.Fatalf("Env(%s) = %v, %v", baseURL, env, err)
+		}
+	}
+}
+
+func TestEnvRefusesStoredCleartextRemoteURL(t *testing.T) {
+	store := NewStore(t.TempDir())
+	path, err := store.path("claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"baseUrl":"http://gateway.example.com","authStyle":"bearer","apiKey":"k"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if env, err := store.Env("claude-code"); err == nil || env != nil {
+		t.Fatalf("Env = %v, %v; want the cleartext URL refused", env, err)
+	}
+}
+
+func TestSaveReplacesCorruptConfigOnlyWithNewKey(t *testing.T) {
+	store := NewStore(t.TempDir())
+	path, err := store.path("claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://a.example.com"}, testNow); err == nil {
+		t.Fatal("an update keeping the key must fail while the stored config is unreadable")
+	}
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://a.example.com", APIKey: "sk-new"}, testNow); err != nil {
+		t.Fatalf("complete replacement: %v", err)
+	}
+	if cfg, found, err := store.Load("claude-code"); err != nil || !found || cfg.APIKey != "sk-new" {
+		t.Fatalf("Load = %+v, %v, %v", cfg, found, err)
 	}
 }
 
