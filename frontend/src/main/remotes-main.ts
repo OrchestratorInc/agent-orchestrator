@@ -388,7 +388,12 @@ export function registerRemotesIpc(
 		const local = await tunnels.localUrl(hostId, url).catch((error: unknown) => {
 			throw new ExpectedIpcError(error instanceof Error ? error.message : String(error));
 		});
-		return local ?? registry.externalUrl(hostId, url);
+		if (local) return local;
+		try {
+			return registry.externalUrl(hostId, url);
+		} catch {
+			return url;
+		}
 	});
 	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => {
 		await requireAccount();

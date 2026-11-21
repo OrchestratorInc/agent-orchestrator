@@ -98,7 +98,7 @@ import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
-import { isHostLocalWebLink } from "../lib/loopback";
+import { ipcErrorReason, isHostLocalWebLink } from "../lib/loopback";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -888,17 +888,13 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
 		if (!session.hostId) return url;
-		// A disconnected host has no other address for it: keep the one shown.
-		return aoBridge.remotes.externalUrl(session.hostId, url).catch((error: unknown) => {
-			if (isHostLocalWebLink(url) && !/^https?:\/\/ao-preview-[0-9a-f]{32}\.localhost[:/]/i.test(url)) throw error;
-			return url;
-		});
+		return aoBridge.remotes.externalUrl(session.hostId, url);
 	};
 
 	const openCurrentPageExternally = async () => {
 		if (!isWebLink(navState.url) || agentPageOnHost) return;
 		const url = await externalURL(navState.url).catch((error: unknown) => {
-			showGlobalToast(t("sessionServers.forwardFailed"), error instanceof Error ? error.message : undefined, "error");
+			showGlobalToast(t("sessionServers.forwardFailed"), ipcErrorReason(error), "error");
 		});
 		if (url) await openLinkInSystemBrowser(url);
 	};
@@ -911,7 +907,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			clearTimeout(copyFeedbackTimeoutRef.current);
 			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
 		} catch (error) {
-			showGlobalToast(t("browser.urlCopyFailed"), error instanceof Error ? error.message : undefined, "top-center");
+			showGlobalToast(t("browser.urlCopyFailed"), ipcErrorReason(error), "top-center");
 		}
 	};
 

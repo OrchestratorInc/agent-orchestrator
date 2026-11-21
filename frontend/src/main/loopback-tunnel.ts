@@ -27,7 +27,7 @@ const MAX_FORWARD_CONNECTIONS = 64;
 const PROBE_TIMEOUT_MS = 3_000;
 const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
 const UNSPECIFIED_URLS = ["*://0.0.0.0/*", "*://[::]/*"];
-const PREVIEW_HOST = /^ao-preview-[0-9a-f]{32}\.localhost\.?$/;
+const PREVIEW_HOST = /^ao-preview-.*\.localhost\.?$/;
 
 class SameHostError extends Error {}
 
@@ -241,9 +241,11 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 			ready.catch(() => {
 				routed.delete(session);
 				session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
-					const blocked = Boolean(hostLocalUrl(details.url));
-					callback({ cancel: blocked });
-					if (blocked) void route(session, hostId).catch(() => undefined);
+					if (!hostLocalUrl(details.url)) return callback({});
+					route(session, hostId).then(() => {
+						const redirectURL = unspecifiedToLocalhost(details.url);
+						callback(redirectURL ? { redirectURL } : {});
+					}, () => callback({ cancel: true }));
 				});
 			});
 			routed.set(session, ready);

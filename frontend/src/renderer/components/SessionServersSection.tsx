@@ -5,6 +5,7 @@ import { useLoopbackReach, usePortForwards } from "../hooks/useHostLoopback";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
+import { ipcErrorReason } from "../lib/loopback";
 import { useUiStore } from "../stores/ui-store";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
@@ -36,7 +37,7 @@ export function SessionServersSection({ session, hostId, visible }: { session: W
 	const rows = [...servers, ...hostForwards.filter((item) => !servers.some((server) => server.port === item.remotePort)).map((item) => ({ port: item.remotePort, command: "" }))];
 	if (rows.length === 0 || !sessionIsActive(session)) return null;
 	const forwardFailed = (error: unknown) =>
-		showGlobalToast(t("sessionServers.forwardFailed"), error instanceof Error ? error.message : undefined, "error");
+		showGlobalToast(t("sessionServers.forwardFailed"), ipcErrorReason(error), "error");
 
 	return (
 		<InspectorSection surface={false} title={t("sessionServers.title")}>
