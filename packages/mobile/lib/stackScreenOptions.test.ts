@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const platform = vi.hoisted(() => ({ OS: "ios", Version: "18.5" as string | number }));
+vi.mock("./FlatBackButton", async () => {
+	const React = await import("react");
+	return { FlatBackButton: (props: object) => React.createElement("FlatBackButton", props) };
+});
 vi.mock("react-native", () => ({ Platform: platform }));
 
 import { largeTitleScreenOptions, stackScreenOptions } from "./stackScreenOptions";
@@ -45,5 +49,19 @@ describe("push transition", () => {
 
 	it("leaves iOS on UIKit's own push", () => {
 		expect(stackScreenOptions(theme)).not.toHaveProperty("animation");
+	});
+});
+
+describe("back button", () => {
+	// Every page's back is the app's flat chevron, as the conversation draws it,
+	// not the system's glass-circled one: the system's is hidden and the
+	// chevron is a header item with the shared glass background off.
+	it("puts the flat chevron where the stack can go back, without glass", () => {
+		const options = stackScreenOptions(theme);
+		expect(options.headerBackVisible).toBe(false);
+		const items = options.unstable_headerLeftItems!({ canGoBack: true });
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({ type: "custom", hidesSharedBackground: true });
+		expect(options.unstable_headerLeftItems!({ canGoBack: false })).toEqual([]);
 	});
 });

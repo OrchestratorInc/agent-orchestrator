@@ -27,6 +27,10 @@ vi.mock("react-native", async () => {
 			React.createElement("SectionList", { ...props, sections }, sections.flatMap(section => section.data.map((item, index) => React.createElement(React.Fragment, { key: `${section.key}:${index}` }, renderItem({ item, index, section }))))),
 	};
 });
+vi.mock("./FlatBackButton", async () => {
+	const React = await import("react");
+	return { FlatBackButton: (props: object) => React.createElement("FlatBackButton", props) };
+});
 vi.mock("./native-header-button", async () => {
 	const React = await import("react");
 	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
@@ -245,9 +249,9 @@ it("leaves by the back button instead of carrying the board's items", () => {
 	fixture.router.back.mockClear();
 	act(() => { renderer = create(<PRsScreen />); });
 	expect(renderer!.root.findAllByType("StackToolbarButton" as never)).toHaveLength(0);
-	const buttons = renderer!.root.findAllByType("NativeHeaderButton" as never);
-	expect(buttons.map((button) => button.props.label)).toEqual(["Back"]);
-	act(() => buttons[0].props.onPress());
+	expect(renderer!.root.findAllByType("NativeHeaderButton" as never)).toHaveLength(0);
+	expect(renderer!.root.findAllByType("FlatBackButton" as never)).toHaveLength(1);
+	act(() => renderer!.root.findByType("FlatBackButton" as never).props.onPress());
 	expect(fixture.router.back).toHaveBeenCalledTimes(1);
 });
 

@@ -21,6 +21,7 @@ import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
+import { SYSTEM_BACK_OPTIONS } from "../lib/headerBack";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { Sidebar } from "../lib/sidebar/Sidebar";
@@ -254,7 +255,7 @@ function Shell() {
 				/>
 				{/* An agent's page, expanded from the conversation. Modal, so iOS
 				    swipes it away; the page titles the bar with its own name. */}
-				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page", ...GLASS_HEADER_OPTIONS, ...SYSTEM_BACK_OPTIONS }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", ...GLASS_HEADER_OPTIONS }} />

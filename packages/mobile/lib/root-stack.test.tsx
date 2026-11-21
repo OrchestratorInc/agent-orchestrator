@@ -5,6 +5,10 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	theme: new Proxy({}, { get: (_target, property) => `#${String(property)}` }),
 }));
+vi.mock("./FlatBackButton", async () => {
+	const React = await import("react");
+	return { FlatBackButton: (props: object) => React.createElement("FlatBackButton", props) };
+});
 vi.mock("react-native", () => ({ Platform: fixtures.platform, View: "View" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");

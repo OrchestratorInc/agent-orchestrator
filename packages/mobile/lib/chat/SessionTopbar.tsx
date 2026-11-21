@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AgentLogo } from "../AgentLogo";
-import { AppSymbol } from "../AppSymbol";
+import { FlatBackButton } from "../FlatBackButton";
 import { Feather } from "../icons";
 import { OrchestratorIcon } from "../orchestrator-icon";
 import type { SessionTopbarAction } from "../sessionTopbar";
@@ -42,9 +42,7 @@ export function SessionTopbar({ title, harness, onBack, onMenu, onNewTab, action
 	const insets = useSafeAreaInsets();
 	return (
 		<View style={[styles.bar, { paddingTop: insets.top, height: insets.top + BAR_HEIGHT }]} testID="session-topbar">
-			<Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={onBack} hitSlop={6} style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]} testID="session-topbar-back">
-				<AppSymbol name="back" size={18} color={t.textSecondary} />
-			</Pressable>
+			<FlatBackButton onPress={onBack} testID="session-topbar-back" />
 			<View style={styles.tab} accessible accessibilityRole="header" accessibilityLabel={title}>
 				<AgentLogo harness={harness} size={16} />
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.title} style={styles.tabTitle}>{title}</Text>

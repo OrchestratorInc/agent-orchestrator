@@ -24,6 +24,10 @@ const fixtures = vi.hoisted(() => ({
 	emulating: false,
 	setEmulated: vi.fn(),
 }));
+vi.mock("./FlatBackButton", async () => {
+	const React = await import("react");
+	return { FlatBackButton: (props: object) => React.createElement("FlatBackButton", props) };
+});
 vi.mock("./native-header-button", async () => {
 	const React = await import("react");
 	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
@@ -359,10 +363,10 @@ describe("Settings", () => {
 	it.each(["ios", "android"])("leaves Settings by the header's back button on %s", async (platform) => {
 		fixtures.platform.OS = platform;
 		const root = await renderSettings();
-		const buttons = root.findAllByType("NativeHeaderButton" as never);
-		expect(buttons.map((button) => button.props.label)).toEqual(platform === "ios" ? ["Back"] : []);
+		expect(root.findAllByType("NativeHeaderButton" as never)).toHaveLength(0);
+		expect(root.findAllByType("FlatBackButton" as never)).toHaveLength(platform === "ios" ? 1 : 0);
 		if (platform === "ios") {
-			act(() => buttons[0].props.onPress());
+			act(() => root.findByType("FlatBackButton" as never).props.onPress());
 			expect(fixtures.back).toHaveBeenCalledOnce();
 		}
 	});
