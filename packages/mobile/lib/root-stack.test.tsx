@@ -35,9 +35,6 @@ vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
-// The sidebar drawer draws with Reanimated; the stack under it is what these tests read.
-vi.mock("./sidebar/Sidebar", () => ({ Sidebar: () => null }));
-vi.mock("./sidebar/SidebarDrawer", () => ({ SidebarDrawer: ({ children }: { children: unknown }) => children }));
 
 import RootLayout, { unstable_settings } from "../app/_layout";
 

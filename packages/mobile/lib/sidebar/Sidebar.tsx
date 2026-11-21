@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useGlobalSearchParams, usePathname, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Alert, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Animated, Easing, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SFSymbol } from "sf-symbols-typescript";
 import { formatTimeTerse } from "../../../product-ui/src/formatting";
@@ -20,6 +20,9 @@ import { useOpenPage } from "../pageNavigation";
 import { STANDALONE_PROJECT } from "../projectFilter";
 import { reviewRouteForSession } from "../reviewView";
 import { useApp } from "../store";
+import { refreshControlColors } from "../refreshControlColors";
+import { UnpairedState } from "../UnpairedState";
+import { useRefreshActions } from "../useRefreshActions";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { THEMES } from "../../../shared/theme/palettes";
 import type { Theme } from "../theme";
@@ -131,11 +134,12 @@ function useSidebarPrefs() {
 // ── The sidebar ───────────────────────────────────────────────────────────────
 
 /**
- * The desktop's left sidebar, top to bottom: the Orchestrator brand (home),
- * Search, the top rows, Pinned, Sessions (agents with no project), Projects with
- * their sessions, and the footer with the account, machines and Settings.
+ * The desktop's left sidebar as the app's home screen, top to bottom: the
+ * Orchestrator brand, Search, the top rows, Pinned, Sessions (agents with no
+ * project), Projects with their sessions, and the footer with the account,
+ * machines and Settings. Every page it opens is pushed over it.
  */
-export function Sidebar({ close }: { close: () => void }) {
+export function Sidebar() {
 	const { theme: t, scheme, style } = useThemeState();
 	const colors = useMemo(() => sidebarPalette(t, scheme, style), [t, scheme, style]);
 	const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -156,8 +160,10 @@ export function Sidebar({ close }: { close: () => void }) {
 
 	useEffect(() => { void loadReadState(); }, []);
 
+	// Home is under every page it opens, so the row of the page on top stays lit.
 	const onSession = pathname.startsWith("/session/");
 	const activeKey = onSession && params.id ? sidebarSessionKey({ id: String(params.id), hostId: params.hostId ? String(params.hostId) : undefined }) : undefined;
+	const { refreshing, onRefresh } = useRefreshActions(app.refreshAll);
 	const environments = app.hostStates.length + (app.cloud ? 1 : 0);
 
 	const tree = useMemo(() => buildSidebarTree({
@@ -188,20 +194,15 @@ export function Sidebar({ close }: { close: () => void }) {
 	}, [prefs.pinnedProjects, tree.projects]);
 
 	const go = useCallback((href: Parameters<typeof router.navigate>[0]) => {
-		close();
 		router.navigate(href);
-	}, [close, router]);
+	}, [router]);
 
-	// Switching sessions replaces the one on screen, as the desktop's main pane
-	// does; from anywhere else the session opens over the board.
+	// A session opens over home, and back returns here.
 	const openSession = useCallback((row: SidebarSessionRow) => {
 		const session = row.session;
 		markRead(row.key, changedAt(session));
-		close();
-		const target = { pathname: "/session/[id]" as const, params: { id: session.id, projectId: session.projectId, hostId: session.hostId ?? app.currentHostId } };
-		if (onSession) router.replace(target);
-		else router.push(target);
-	}, [app.currentHostId, close, onSession, router]);
+		router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, hostId: session.hostId ?? app.currentHostId } });
+	}, [app.currentHostId, router]);
 
 	const newTask = useCallback((projectId?: string, hostId?: string) => {
 		go(projectId ? { pathname: "/spawn", params: { projectId, ...(hostId ? { hostId } : {}) } } : "/spawn");
@@ -215,17 +216,9 @@ export function Sidebar({ close }: { close: () => void }) {
 	const launchOrchestrator = useCallback((node: SidebarProjectNode) => {
 		const row = projectRows.get(node.key);
 		if (!row) return;
-		if (row.action === "open" && row.link?.id) {
-			haptics.select();
-			close();
-			const target = { pathname: "/session/[id]" as const, params: { id: row.link.id, projectId: row.project.id, hostId: node.project.hostId ?? app.currentHostId } };
-			if (onSession) router.replace(target);
-			else router.push(target);
-			return;
-		}
-		close();
+		// Opens a running orchestrator, or starts or resumes one, as the Projects page did.
 		openOrchestrator(row);
-	}, [app.currentHostId, close, onSession, openOrchestrator, projectRows, router]);
+	}, [openOrchestrator, projectRows]);
 
 	const sessionAction = useCallback((row: SidebarSessionRow, id: WorkerActionId) => {
 		const session = row.session;
@@ -248,7 +241,7 @@ export function Sidebar({ close }: { close: () => void }) {
 				return void app.restore(session.id, hostId).then(() => haptics.success(), fail("Couldn't restore the session"));
 			case "openPr": {
 				const route = reviewRouteForSession(session, hostId ?? app.currentHostId);
-				if (route) { close(); openPage(route); }
+				if (route) openPage(route);
 				return;
 			}
 			default:
@@ -258,7 +251,7 @@ export function Sidebar({ close }: { close: () => void }) {
 					{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => void app.kill(session.id, hostId).catch(fail("Couldn't archive the session")) },
 				]);
 		}
-	}, [app, close, openPage, openSession]);
+	}, [app, openPage, openSession]);
 
 	const commitRename = useCallback((row: SidebarSessionRow, name: string) => {
 		setRenamingKey(undefined);
@@ -297,10 +290,10 @@ export function Sidebar({ close }: { close: () => void }) {
 
 	return (
 		<View style={[styles.root, { paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]} testID="sidebar">
-			{/* Brand → home. No fill behind it (DESIGN.md "Brand → home"). */}
-			<Pressable accessibilityRole="button" accessibilityLabel="Go home" onPress={() => go("/")} style={styles.brand} testID="sidebar-brand">
-				<Text style={styles.brandLabel} numberOfLines={1}>Orchestrator</Text>
-			</Pressable>
+			{/* The brand heads home, as it heads the desktop's sidebar. */}
+			<View style={styles.brand} testID="sidebar-brand">
+				<Text accessibilityRole="header" style={styles.brandLabel} numberOfLines={1}>Orchestrator</Text>
+			</View>
 
 			<View style={styles.fixed}>
 				{searching ? (
@@ -326,10 +319,11 @@ export function Sidebar({ close }: { close: () => void }) {
 				)}
 				<NavRow icon="edit" label="New task" onPress={() => newTask()} styles={styles} colors={colors} disabled={!paired} />
 				<NavRow icon="git-pull-request" label="Pull requests" onPress={() => go("/prs")} styles={styles} colors={colors} active={pathname.startsWith("/prs")} />
+				<NavRow icon="layout-grid" label="All workers" onPress={() => go("/board")} styles={styles} colors={colors} disabled={!paired} />
 				<NavRow icon="bell" label="Notifications" onPress={() => go("/notifications")} styles={styles} colors={colors} active={pathname.startsWith("/notifications")} trailing={unread > 0 ? String(unread) : undefined} />
 			</View>
 
-			<ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+			<ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}>
 				{tree.pinned.length > 0 ? (
 					<Section label="Pinned" open={sectionOpen("pinned")} onToggle={() => toggleIn("closedSections", "pinned")} styles={styles} colors={colors}>
 						{tree.pinned.map((row) => sessionRow(row, false))}
@@ -367,7 +361,7 @@ export function Sidebar({ close }: { close: () => void }) {
 					colors={colors}
 				>
 					{!paired ? (
-						<Text style={styles.empty}>Pair a machine or sign in to see your projects.</Text>
+						<UnpairedState />
 					) : projects.length === 0 ? (
 						<Text style={styles.empty}>{searching ? "No matches." : "No projects yet."}</Text>
 					) : null}
@@ -823,7 +817,7 @@ function Footer({ styles, colors, onSettings, onMachines }: { styles: Styles; co
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const makeStyles = (c: Palette) => StyleSheet.create({
-	root: { flex: 1, backgroundColor: c.bg, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.border },
+	root: { flex: 1, backgroundColor: c.bg },
 	brand: { paddingHorizontal: 14, paddingBottom: 12, alignSelf: "flex-start" },
 	brandLabel: { fontFamily: font.semibold, fontSize: 16, lineHeight: 20, letterSpacing: -0.16, color: c.text },
 	fixed: { paddingHorizontal: 8, gap: 2, marginBottom: 12 },

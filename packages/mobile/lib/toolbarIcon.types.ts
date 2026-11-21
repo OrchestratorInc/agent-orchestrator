@@ -62,7 +62,6 @@ export const materialDrawableNames = [
 	"laptop",
 	"lightbulb",
 	"logout",
-	"menu",
 	"mic",
 	"more_horiz",
 	"more_vert",

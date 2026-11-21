@@ -58,7 +58,6 @@ const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	laptop: require("../assets/icons/laptop.xml"),
 	lightbulb: require("../assets/icons/lightbulb.xml"),
 	logout: require("../assets/icons/logout.xml"),
-	menu: require("../assets/icons/menu.xml"),
 	mic: require("../assets/icons/mic.xml"),
 	more_horiz: require("../assets/icons/more_horiz.xml"),
 	more_vert: require("../assets/icons/more_vert.xml"),

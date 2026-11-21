@@ -24,7 +24,6 @@ import { useFabExpanded } from "../../lib/useFabExpanded";
 import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { AddFab, addFabClearance } from "../../lib/AddFab";
 import { space } from "../../lib/tokens";
-import { useSidebarMaybe } from "../../lib/sidebar/sidebarContext";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -45,7 +44,6 @@ function ProjectScreenContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const sidebar = useSidebarMaybe();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
 	const glassInset = useGlassBarInset();
@@ -154,7 +152,7 @@ function ProjectScreenContent() {
 						message="Open it from that machine's project list."
 						// Back down to the board already beneath this page: navigating from
 						// here would stack a second board on top of it.
-						action={<Button title="Open projects" icon="folder" onPress={() => { router.dismissTo("/"); sidebar?.open(); }} />}
+						action={<Button title="Open projects" icon="folder" onPress={() => router.dismissTo("/")} />}
 					/>
 				)
 			) : !row ? (

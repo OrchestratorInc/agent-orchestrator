@@ -51,10 +51,10 @@ describe("project page", () => {
 
 	// Navigating to a tab from a pushed page stacks a second board over the first;
 	// going back down to the one beneath does not.
-	// Projects live in the sidebar now: a project from another machine sends
-	// the user back to the board with the sidebar open on its project list.
-	it("returns to the board and opens the sidebar's project list rather than pushing another page", () => {
-		expect(page).toContain('onPress={() => { router.dismissTo("/"); sidebar?.open(); }}');
+	// Projects are home's list now: a project from another machine sends the
+	// user back home to it rather than pushing another page.
+	it("returns home to the project list rather than pushing another page", () => {
+		expect(page).toContain('onPress={() => router.dismissTo("/")}');
 		expect(page).not.toContain('"/projects"');
 	});
 

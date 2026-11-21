@@ -14,6 +14,7 @@ const rootLayout = "_layout.tsx";
 
 const screenRoutes = [
 	"(tabs)/(workers)/index.tsx",
+	"(tabs)/(workers)/board.tsx",
 	"prs/index.tsx",
 	"artifact/[sessionId].tsx",
 	"artifact-version/[sessionId].tsx",

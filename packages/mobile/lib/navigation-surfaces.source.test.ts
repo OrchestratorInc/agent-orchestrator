@@ -25,19 +25,19 @@ describe("navigation surfaces", () => {
 		expect(layout).toContain("<Stack screenOptions={stackScreenOptions(t)}>");
 	});
 
-	// The board's bar leads with the sidebar button; Pull requests, Notifications
-	// and Settings are the sidebar's, as on the desktop, each opened the same way:
-	// navigated to, so a second tap during the push doesn't stack a copy.
-	it("opens the sidebar from the board's bar and the app's pages from the sidebar", () => {
-		const items = source("./BoardHeaderItems.tsx");
-		expect(items).toContain('<Stack.Toolbar placement="left">');
-		expect(items).toContain("onPress={() => open?.()}");
-		expect(items).not.toContain("router.");
+	// Home is the desktop's sidebar: Pull requests, Notifications, Settings and
+	// the Workers board are its rows, each opened the same way: navigated to,
+	// so a second tap during the push doesn't stack a copy.
+	it("opens the app's pages from home's rows", () => {
+		const home = source("../app/(tabs)/(workers)/index.tsx");
+		expect(home).toContain("return <Sidebar />;");
 		const sidebar = source("./sidebar/Sidebar.tsx");
 		expect(sidebar).toContain('label="Pull requests" onPress={() => go("/prs")}');
 		expect(sidebar).toContain('label="Notifications" onPress={() => go("/notifications")}');
+		expect(sidebar).toContain('label="All workers" onPress={() => go("/board")}');
 		expect(sidebar).toContain('onSettings={() => go("/settings")}');
 		expect(sidebar).toContain("router.navigate(href)");
+		expect(source("./BoardHeaderItems.tsx")).not.toContain("router.");
 	});
 
 	// The session used to render a spinner until the push animation finished, so

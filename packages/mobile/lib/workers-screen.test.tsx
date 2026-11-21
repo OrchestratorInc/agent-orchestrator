@@ -36,7 +36,6 @@ vi.mock("expo-router", async () => {
 		useRouter: () => fixtures.router,
 		// Focused for the whole of a test: the effect runs once, as on mount.
 		useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
-		useIsFocused: () => true,
 		Stack: {
 			SearchBar: host("StackSearchBar"),
 			Toolbar: Object.assign(host("StackToolbar"), {
@@ -123,7 +122,7 @@ vi.mock("./largeTitle", async () => {
 });
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
-import FleetScreen from "../app/(tabs)/(workers)/index";
+import FleetScreen from "../app/(tabs)/(workers)/board";
 import { WorkerBoardList } from "./worker-board-list";
 import { WorkerEnvironmentFilter } from "./worker-environment-filter";
 import { ALL_WORKER_ENVIRONMENTS } from "./worker-controls";
@@ -220,33 +219,21 @@ beforeEach(() => {
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
 
 describe("Workers header", () => {
-	function sidebarButton() {
-		return toolbar("left")!.findAllByType("StackToolbarButton" as never)[0];
-	}
-
-	// The header is the native bar's. It leads with the sidebar button, the
-	// desktop's left sidebar as a drawer, and ends with New task; Settings,
-	// Pull requests and Notifications live in the sidebar.
-	it("leads with the sidebar button and ends with New task", () => {
+	// The board is a page pushed from home. Its bar holds the filter and New
+	// task; Settings, Pull requests and Notifications are home's rows, as they
+	// are the desktop sidebar's.
+	it("ends with New task and keeps the app's pages off the bar", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(sidebarButton().props.accessibilityLabel).toBe("Open sidebar");
-		expect(sidebarButton().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((button) => button.props.accessibilityLabel)).toEqual(["New task"]);
+		expect(renderer.root.findAllByType("StackToolbarButton" as never).map((button) => button.props.accessibilityLabel)).toEqual(["New task"]);
 	});
 
-	it("badges the sidebar button with unread notifications and workers waiting on you", () => {
-		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, notificationsUnread: 2 }));
-		act(() => { renderer = create(<FleetScreen />); });
-		expect(sidebarButton().props.accessibilityLabel).toBe("Open sidebar, 4 need you");
-		expect(sidebarButton().findByType("StackToolbarBadge" as never).props.children).toBe("4");
-	});
-
-	// Pairing starts from the sidebar's footer; there is nothing yet to filter or spawn.
-	it("keeps the sidebar button alone before a machine is paired", () => {
+	// Pairing starts from home's footer; there is nothing yet to filter or spawn.
+	it("keeps the bar empty before a machine is paired", () => {
 		fixtures.configured = false;
 		fixtures.hostStates = [];
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findAllByType("StackToolbarButton" as never).map((button) => button.props.accessibilityLabel)).toEqual(["Open sidebar"]);
+		expect(renderer.root.findAllByType("StackToolbarButton" as never)).toHaveLength(0);
+		expect(toolbar("left")).toBeUndefined();
 	});
 });
 
@@ -284,7 +271,7 @@ describe("Workers filter menu", () => {
 		fixtures.platform = "android";
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("web", "Web", "mac", "Mac")];
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("left")!.findAllByType("StackToolbarMenu" as never)).toHaveLength(0);
+		expect(toolbar("left")).toBeUndefined();
 		expect(toolbar("right")!.props.children[0].props.accessibilityLabel).toBe("Filter workers");
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
 		choose(filterMenu(), "AO");
@@ -367,11 +354,11 @@ describe("Workers filter menu", () => {
 	it("keeps the header items across polls that change only machine state", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
-		const leading = toolbar("left")!.props;
+		const menu = toolbar("left")!.props.children;
 		const trailing = toolbar("right")!.props;
 		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, lastSyncAt: host.lastSyncAt + 8_000, sessions: [...host.sessions] }));
 		act(() => renderer.update(<FleetScreen />));
-		expect(toolbar("left")!.props).toBe(leading);
+		expect(toolbar("left")!.props.children).toBe(menu);
 		expect(toolbar("right")!.props).toBe(trailing);
 	});
 });
