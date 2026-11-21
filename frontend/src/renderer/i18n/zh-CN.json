@@ -1506,6 +1506,8 @@
 	"pr.stack.pending": "仍在 GitHub 上合并。",
 	"pr.stack.blocked": "#{{number}}：{{reason}}",
 	"pr.stack.needsRebase": "需要变基",
+	"pr.stack.behindCount": "落后 {{count}}",
+	"pr.stack.behindTitle": "落后下一层 {{count}} 个提交，需要变基。",
 	"pr.stack.behind": "#{{number}} 落后于其下层 #{{below}}。",
 	"pr.stack.askRebase": "让智能体变基 #{{number}}",
 	"pr.stack.askedRebase": "已请 #{{number}} 的智能体变基。",

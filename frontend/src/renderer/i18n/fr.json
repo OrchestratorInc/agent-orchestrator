@@ -1539,6 +1539,8 @@
 	"pr.stack.pending": "Fusion toujours en cours sur GitHub.",
 	"pr.stack.blocked": "#{{number}} : {{reason}}",
 	"pr.stack.needsRebase": "rebase nécessaire",
+	"pr.stack.behindCount": "{{count}} en retard",
+	"pr.stack.behindTitle": "{{count}} commits de retard sur la couche du dessous. Rebase nécessaire.",
 	"pr.stack.behind": "#{{number}} est en retard sur #{{below}}, la couche en dessous.",
 	"pr.stack.askRebase": "Demander à l’agent de rebaser #{{number}}",
 	"pr.stack.askedRebase": "L’agent de #{{number}} a été invité à rebaser.",

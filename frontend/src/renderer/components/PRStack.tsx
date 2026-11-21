@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CornerDownRight, Plus } from "lucide-react";
+import { CornerDownRight, GitMerge, Plus } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey } from "../hooks/usePRStack";
@@ -80,7 +80,14 @@ function LayerRow({ current, hostId, layer, session }: { current: boolean; hostI
 			) : (
 				<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground"><LayerName layer={layer} /></span>
 			)}
-			{(layer.behindParent ?? 0) > 0 ? <span className="shrink-0 text-xs text-muted-foreground">{t("pr.stack.needsRebase")}</span> : null}
+			{/* How far behind, in the words and mark of the branch's own "commits behind main". */}
+			{(layer.behindParent ?? 0) > 0 ? (
+				<span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" title={t("pr.stack.behindTitle", { count: layer.behindParent })}>
+					<GitMerge aria-hidden="true" className="size-3 shrink-0" />
+					{t("pr.stack.behindCount", { count: layer.behindParent })}
+					<span className="sr-only">{t("pr.stack.needsRebase")}</span>
+				</span>
+			) : null}
 		</li>
 	);
 }

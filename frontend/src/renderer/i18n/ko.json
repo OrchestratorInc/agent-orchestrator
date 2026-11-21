@@ -1524,6 +1524,8 @@
 	"pr.stack.pending": "GitHub에서 아직 병합 중입니다.",
 	"pr.stack.blocked": "#{{number}}: {{reason}}",
 	"pr.stack.needsRebase": "리베이스 필요",
+	"pr.stack.behindCount": "{{count}}개 뒤처짐",
+	"pr.stack.behindTitle": "아래 레이어보다 커밋 {{count}}개 뒤처져 있습니다. 리베이스가 필요합니다.",
 	"pr.stack.behind": "#{{number}}이(가) 아래 레이어 #{{below}}보다 뒤처져 있습니다.",
 	"pr.stack.askRebase": "에이전트에게 #{{number}} 리베이스 요청",
 	"pr.stack.askedRebase": "#{{number}}의 에이전트에게 리베이스를 요청했습니다.",

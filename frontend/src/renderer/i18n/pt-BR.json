@@ -1539,6 +1539,8 @@
 	"pr.stack.pending": "O merge continua no GitHub.",
 	"pr.stack.blocked": "#{{number}}: {{reason}}",
 	"pr.stack.needsRebase": "precisa de rebase",
+	"pr.stack.behindCount": "{{count}} atrás",
+	"pr.stack.behindTitle": "{{count}} commits atrás da camada de baixo. Precisa de rebase.",
 	"pr.stack.behind": "#{{number}} está atrás de #{{below}}, a camada abaixo.",
 	"pr.stack.askRebase": "Pedir ao agente para fazer rebase de #{{number}}",
 	"pr.stack.askedRebase": "O agente de #{{number}} foi solicitado a fazer rebase.",
