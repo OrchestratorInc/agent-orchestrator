@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_LINK_TRACKER, UNREACHABLE_AFTER_FAILURES, UNREACHABLE_AFTER_MS, type LinkTracker, type PhoneNetwork } from "./linkHealth";
-import { NO_CHAT_AGENT_NOTICE, SPAWN_OFFLINE_NOTICE, spawnHostState, spawnNotices, type SpawnNoticeInput } from "./spawnNotices";
+import { errorAfterEdit, NO_CHAT_AGENT_NOTICE, SPAWN_OFFLINE_NOTICE, spawnHostState, spawnNotices, START_DROPPED_NOTICE, type SpawnNoticeInput } from "./spawnNotices";
 
 const base: SpawnNoticeInput = {
 	machine: "ok",
@@ -82,5 +82,19 @@ describe("spawnHostState", () => {
 		expect(spawnNotices({ ...base, machine: spawnHostState(refused, online, now), errorStatus: 401, catalogLoaded: false, catalogError: rescan, agentCount: 0 }))
 			.toEqual(["Your machine rejected this phone. It was removed from that machine, or the password changed. Scan a new code there."]);
 		expect(spawnNotices({ ...base, machine: "rejected", errorStatus: 429 })[0]).toMatch(/^Too many attempts\. /);
+	});
+});
+
+describe("errorAfterEdit", () => {
+	// The notice a dropped Start leaves asks the user to check the details:
+	// an edit is that, so it goes.
+	it("clears the dropped-Start notice once the form is edited", () => {
+		expect(errorAfterEdit(START_DROPPED_NOTICE)).toBeNull();
+	});
+
+	// A failed request's error is the server's answer; it stays until the next Start.
+	it("keeps any other Start error, and no error stays none", () => {
+		expect(errorAfterEdit("Couldn't start the worker. Try again.")).toBe("Couldn't start the worker. Try again.");
+		expect(errorAfterEdit(null)).toBeNull();
 	});
 });

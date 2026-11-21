@@ -28,6 +28,18 @@ export function spawnHostState(
 export const SPAWN_OFFLINE_NOTICE = "This machine is offline. You can start a worker once it reconnects.";
 export const NO_CHAT_AGENT_NOTICE =
 	"No installed agent on this Orchestrator host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent.";
+// A Start whose draft save was dropped: the account changed or the machine was
+// forgotten while it waited. The saver can't tell which, so one line covers both.
+export const START_DROPPED_NOTICE = "This task wasn't started because the account or machine changed. Check the details and press Start again.";
+
+/**
+ * The page's Start error once the form is edited: the dropped-Start notice
+ * goes, since it asked for exactly that; any other error stays until the next
+ * Start, as before.
+ */
+export function errorAfterEdit(error: string | null): string | null {
+	return error === START_DROPPED_NOTICE ? null : error;
+}
 
 export type SpawnNoticeInput = {
 	/** The chosen machine's state (spawnHostState): lost, or refusing this phone. */

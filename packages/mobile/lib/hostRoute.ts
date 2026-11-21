@@ -1,3 +1,4 @@
+import { isCloudHost } from "./cloud/mapping";
 import type { ServerConfig } from "./config";
 import { classifyConnectionFailure, describeConnectionFailure, isPollRejected, type ConnectionErrorCopy } from "./connectionError";
 import { canRepairWithQr } from "./machineRecovery";
@@ -47,6 +48,39 @@ export function initialSpawnHostId({
 	if (routeHostId) return available(routeHostId) ? routeHostId : null;
 	if (available(currentHostId)) return currentHostId!;
 	return hosts[0]?.id ?? null;
+}
+
+/**
+ * Whether the New task page knows enough to pick its machine. A machine
+ * still connecting is waited for before Cloud can become the default, and so
+ * are the pairings the store has not read from the phone yet: the page can
+ * open before they load (reopened after the app was closed, a link), routed
+ * to a machine or not, and the machine picked first is not picked again.
+ * Orchestrator Cloud waited for (routed there, or its draft restored) is
+ * waited for until it has signed in or failed to (`cloudResolved`): it can
+ * load after the machines, and picked before, a machine takes its place.
+ */
+export function spawnHostSelectionReady({
+	routeHostId,
+	configResolved,
+	hosts,
+	connectedMachineCount,
+	cloudResolved,
+}: {
+	routeHostId?: string;
+	configResolved: boolean;
+	hosts: ReadonlyArray<{ hostId: string; loading?: boolean }>;
+	connectedMachineCount: number;
+	cloudResolved?: boolean;
+}): boolean {
+	if (isCloudHost(routeHostId)) return configResolved && cloudResolved === true;
+	if (routeHostId) {
+		const routed = hosts.find((host) => host.hostId === routeHostId);
+		if (!routed) return configResolved;
+		return !routed.loading;
+	}
+	if (!configResolved) return false;
+	return !(connectedMachineCount === 0 && hosts.some((host) => host.loading));
 }
 
 export function spawnHostRequestIsCurrent(

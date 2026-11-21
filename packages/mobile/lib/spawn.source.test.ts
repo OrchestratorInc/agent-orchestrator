@@ -4,6 +4,13 @@ import { describe, expect, it } from "vitest";
 
 const spawn = readFileSync(fileURLToPath(new URL("../app/spawn.tsx", import.meta.url)), "utf8");
 const tray = readFileSync(fileURLToPath(new URL("./chat/ComposerAttachmentTray.tsx", import.meta.url)), "utf8");
+
+/** Both are in `text`, `first` before `then`. */
+function expectBefore(text: string, first: string, then: string) {
+	expect(text).toContain(first);
+	expect(text).toContain(then);
+	expect(text.indexOf(first)).toBeLessThan(text.indexOf(then));
+}
 const composer = readFileSync(fileURLToPath(new URL("./spawn-composer.tsx", import.meta.url)), "utf8");
 const platformControls = ["ios", "android"].map((platform) => readFileSync(fileURLToPath(new URL(`./spawn-composer-controls.${platform}.tsx`, import.meta.url)), "utf8"));
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
@@ -169,5 +176,201 @@ describe("spawn approval mode", () => {
 	it("sends only an approval mode the user picked", () => {
 		expect(spawn).toContain("approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,");
 		expect(spawn).toContain("const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });");
+	});
+});
+
+describe("spawn draft", () => {
+	// Saving waits for the saved draft to be read; state, so what was typed
+	// meanwhile is saved once it is, and the old draft never replaces it.
+	it("saves text typed before the saved draft was read, and does not restore over it", () => {
+		expect(spawn).toContain("const [draftRestored, setDraftRestored] = useState(false);");
+		expect(spawn).toContain("}).finally(() => { if (generation === restoreGeneration.current) setDraftRestored(true); });");
+		expect(spawn).toContain("}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt, selectedHostId]);");
+		expect(spawn).toContain("if (promptRef.current || attachmentsRef.current.length) return;");
+		expect(spawn).not.toContain("draftRestored.current");
+	});
+
+	// A failed read may have left the draft on the phone: an empty composer
+	// saved then would delete it.
+	it("does not save an empty composer over a draft it could not read", () => {
+		expect(spawn).toContain("if (generation === restoreGeneration.current) draftUnread.current = true;");
+		expect(spawn).toContain("if ((draftUnread.current || draftElsewhere.current) && !prompt.trim() && attachments.length === 0) return;");
+	});
+
+	// Opened for machine B while machine A owns the saved draft: restored, A's
+	// words were saved back as B's draft, and an empty page deleted A's.
+	it("keeps another machine's draft off a page routed to this one, and does not save over it", () => {
+		const restore = spawn.slice(spawn.indexOf("const restoreDraft = () => {"), spawn.indexOf("setPrompt(draft.prompt);"));
+		expect(restore).toContain("if (routeHostId && draftHostId !== null && draftHostId !== routeHostId) {\n\t\t\t\tdraftElsewhere.current = true;\n\t\t\t\trestoredHostId.current = null;\n\t\t\t\treturn;");
+		expect(restore.indexOf("draftElsewhere.current = false;")).toBeLessThan(restore.indexOf("if (!draft) return;"));
+		const save = spawn.slice(spawn.indexOf("if (!draftRestored || !accountKnown) return;"), spawn.indexOf("draftSaver.schedule({ prompt, attachments, owner"));
+		expect(save).toContain("if ((draftUnread.current || draftElsewhere.current) && !prompt.trim() && attachments.length === 0) return;\n\t\t// Written here, this page's draft replaces the other machine's.\n\t\tdraftElsewhere.current = false;");
+	});
+
+	// A Cloud draft picked before Cloud loaded landed on a machine (or none) for good.
+	it("waits for Cloud before picking the machine for a Cloud draft", () => {
+		expect(spawn).toContain("const cloudResolved = Boolean(cloud) || (cloudState.status !== \"loading\" && cloudState.status !== \"connecting\");");
+		expect(spawn).toContain("}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);");
+	});
+
+	// A Start sent with a picked account and restored without it sent another
+	// request under a new id, starting the task twice.
+	it("saves and restores a picked agent account for the draft's machine and agent", () => {
+		expect(spawn).toContain("...(accountPick ? { accountId: accountPick, accountHarness: harness } : restoredAccount ? { accountId: restoredAccount.accountId, accountHarness: restoredAccount.harness } : {}),");
+		expect(spawn).toContain("if (picked.accountId && picked.accountHarness) setRestoredAccount({ hostId: restoredHostId.current, harness: picked.accountHarness, accountId: picked.accountId });");
+		const reset = spawn.slice(spawn.indexOf("const accountScope = useRef<string | null>(null);"), spawn.indexOf("}, [restoredAccount, selectedHostId, harness]);"));
+		expectBefore(reset, "if (restoredAccount && selectedHostId === restoredAccount.hostId && harness === restoredAccount.harness) {\n\t\t\tsetAccountPick(restoredAccount.accountId);", "if (moved) setAccountPick(undefined);");
+		const change = spawn.slice(spawn.indexOf("const draftAccountSeen = useRef"), spawn.indexOf("}, [accountKnown, draftAccountId]);"));
+		expect(change).toContain("setRestoredAccount(null);");
+	});
+
+	// Picked under one account and read after another signed in, the file landed in the next account's task.
+	it("drops attachments picked under the account that signed out while they loaded", () => {
+		const add = spawn.slice(spawn.indexOf("const addAttachments = async"), spawn.indexOf("const pickFiles = "));
+		expect(add).toContain("const pickedFor = draftAccountRef.current;");
+		expectBefore(add, "const picked = await pick();\n\t\t\tif (draftAccountRef.current !== pickedFor) return 0;", "const next = await readSpawnAttachments(before, picked);\n\t\t\tif (draftAccountRef.current !== pickedFor) return 0;");
+		expectBefore(add, "if (draftAccountRef.current !== pickedFor) return 0;\n\t\t\tconst merged", "attachmentsRef.current = merged.attachments;");
+	});
+
+	// A save the account change or a forgotten machine dropped is not saved: the
+	// Start stops rather than send a task whose draft has no id on the phone.
+	it("stops a Start whose draft save was dropped, and clears only its own draft once started", () => {
+		const send = spawn.slice(spawn.indexOf("const saved = await saveBeforeStart("), spawn.indexOf("if (projectId === STANDALONE_PROJECT)"));
+		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\thaptics.error();\n\t\t\t\tsetError(START_DROPPED_NOTICE);\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}", "await spawn({ ...request, clientRequestId: sent.id });");
+		expect(send).toContain("void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});");
+		expect(spawn).not.toContain("then(clearSpawnDraft)");
+	});
+
+	// A dropped Start used to stop silently: Start seemed to do nothing. It
+	// says why, sends no task, and the line goes once the form is edited.
+	describe("a Start whose draft save was dropped", () => {
+		const onSpawn = between(spawn, "const onSpawn = async () => {", "// While a request runs, the back swipe is off too");
+		const dropped = between(onSpawn, "if (saved === \"dropped\") {", "}");
+
+		it("shows the notice in the page's Start error line and sends no task", () => {
+			expect(dropped).toContain("setError(START_DROPPED_NOTICE);");
+			expect(dropped).toContain("return;");
+			expect(dropped).not.toContain("spawn(");
+			// The only request a Start sends comes after the dropped check.
+			expect(onSpawn.match(/await spawn\(/g)).toHaveLength(1);
+			expectBefore(onSpawn, "if (saved === \"dropped\") {", "await spawn({ ...request, clientRequestId: sent.id });");
+			expect(spawn).toContain("{error ? <Text accessibilityRole=\"alert\" style={styles.error}>{error}</Text> : null}");
+		});
+
+		it("clears the notice when Start is pressed again, before the next save", () => {
+			expectBefore(onSpawn, "setError(null);", "const saved = await saveBeforeStart(");
+		});
+
+		it("clears the notice on every edit the user makes to the form", () => {
+			expect(spawn).toContain("const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {\n\t\tsetError(errorAfterEdit);\n\t\tchange(...args);\n\t};");
+			const controls = between(spawn, "<SpawnComposerControls", "onSpawn={() => { void onSpawn(); }}");
+			for (const prop of [
+				"onSelectHost={edited(chooseHost)}",
+				"onSelectProject={edited(changeProject)}",
+				"onSelectAccount={edited(setAccountPick)}",
+				"onSelectHarness={edited(selectAgent)}",
+				"onSelectModel={edited(selectModel)}",
+				"onSelectAgentModel={edited(selectAgentModel)}",
+				"onSelectApprovalMode={edited((next: string) => setApprovalChoice(next as ApprovalMode))}",
+				"onSelectEffort={edited(selectEffort)}",
+				"onChoosePhoto={edited(() => { void pickPhotos(); })}",
+				"onChooseFile={edited(() => { void pickFiles(); })}",
+				"onPasteImages={busy ? null : edited(pasteImages)}",
+				"onChangePrompt={edited(setPrompt)}",
+				"onRemove={edited((key: string) => {",
+			]) expect(controls).toContain(prop);
+			// Every handler the controls take goes through it, so a new one can't skip it.
+			const handlers = [...controls.matchAll(/\n\t+(on[A-Z]\w*)=\{(.*)/g)];
+			expect(handlers.length).toBeGreaterThan(10);
+			for (const [, name, value] of handlers) {
+				// Opens the model sheet; the pick it answers with is wrapped below.
+				if (name === "onBrowseModels") continue;
+				expect(value, name).toMatch(/^(busy \? null : )?edited\(/);
+			}
+			expect(spawn).toContain("onSelect: edited((id: string) => selectAgentModel(agentId, id || \"__auto__\")),");
+			// Dictation types into the prompt too.
+			expectBefore(between(spawn, "const voice = useVoiceInput({", "const listening ="), "setError(errorAfterEdit);", "setPrompt((old) =>");
+		});
+
+		it("leaves a Start that saved its draft to send the task as before", () => {
+			const sent = onSpawn.slice(onSpawn.indexOf("if (saved === \"dropped\") {"));
+			expectBefore(sent, "return;\n\t\t\t}\n\t\t\tconst session = await spawn({ ...request, clientRequestId: sent.id });", "router.replace({");
+			expect(sent.slice(sent.indexOf("const session = await spawn(")).includes("START_DROPPED_NOTICE")).toBe(false);
+		});
+	});
+
+	// Saved before the machine is picked, a restored draft keeps its machine.
+	it("keeps the restored draft's machine while the machine is still being picked", () => {
+		expect(spawn).toContain("const owner = selectedHostId === null && !hostSelectionInitialized.current\n\t\t\t? { ...draftOwner, hostId: restoredHostId.current }\n\t\t\t: draftOwner;");
+		expect(spawn).toContain("draftSaver.schedule({ prompt, attachments, owner, selections: draftSelections");
+	});
+
+	// Made once: a saver per render would each stay registered for forgetting.
+	it("makes one draft saver for the page and lets it go when the page closes", () => {
+		expect(spawn).toContain("const [draftSaver] = useState(() => createSpawnDraftSaver());");
+		expect(spawn).not.toContain("useRef(createSpawnDraftSaver())");
+		expect(spawn).toContain("void draftSaver.flush();\n\t\t\tdraftSaver.release();");
+	});
+
+	// On a page kept open after its task started, a new draft saves again.
+	it("stops saving only the draft a Start began a task with", () => {
+		expect(spawn).not.toContain("startedRef");
+		expect(spawn).toContain("if (started && started.prompt === prompt && started.attachments === attachments) return;");
+		expect(spawn).toContain("startedDraft.current = { prompt, attachments: attachmentsRef.current };");
+	});
+
+	// Closed after the daemon took the task but before the draft was cleared,
+	// the restored draft's Start reuses the id and the daemon answers with that task.
+	it("keeps the request id with the draft before the request leaves, and reuses it once restored", () => {
+		const send = spawn.slice(spawn.indexOf("const payload = JSON.stringify(requestFields);"), spawn.indexOf("startedDraft.current = { prompt"));
+		expect(send).toContain("requestMatches(requestRef.current, payload, attachmentsRef.current)");
+		expect(send).toContain("attachments: attachmentsKey(attachmentsRef.current)");
+		expect(send.indexOf("const saved = await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });")).toBeGreaterThan(0);
+		expect(send.indexOf("await saveBeforeStart(")).toBeLessThan(send.indexOf("await spawn({ ...request, clientRequestId: sent.id });"));
+		expect(spawn).toContain("if (draft.request) requestRef.current = draft.request;");
+		// Compared by content: never by the attachments array object.
+		expect(spawn).not.toContain("requestRef.current?.attachments !== attachmentsRef.current");
+	});
+
+	// After a Start that did not land, changed attachments must not be saved
+	// under its id: restored, the next Start would send them with it.
+	it("saves the last Start's id only while the draft has the attachments it sent", () => {
+		expect(spawn).toContain("const current = request && request.attachments === attachmentsKey(attachments) ? request : undefined;");
+		expect(spawn).toContain("...(current ? { request: current } : {})");
+	});
+
+	// A model picked for the Start comes back with the draft, so the next Start
+	// sends the same request and reuses its id instead of starting another task.
+	it("saves and restores what was picked, a model override included", () => {
+		expect(spawn).toContain("...(modelTouched && model ? { model } : {}),");
+		expect(spawn).toContain("...(agentTouched && harness ? { harness } : {}),");
+		expect(spawn).toContain("if (picked.model) { setModel(picked.model); setModelTouched(true); }");
+		expect(spawn).toContain("if (picked.harness) { setHarness(picked.harness); setAgentTouched(true); }");
+		expect(spawn).toContain("if (picked.projectId) setProjectId(picked.projectId);");
+		expect(spawn).toContain("if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);");
+		expect(spawn).toContain("if (picked.effort) setEffort(picked.effort);");
+		// The machine waits for the draft, and goes back to the draft's own.
+		expect(spawn).toContain("if (!draftRestored) return;\n\t\tconst draftHostId = restoredHostId.current;");
+		// Unrouted, the restored draft's machine is waited for before another is picked.
+		expect(spawn).toContain("const awaitedHostId = routeHostId ?? draftHostId ?? undefined;");
+		expect(spawn).toContain("if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;");
+		expect(spawn).toContain("const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;");
+	});
+
+	it("saves the draft for the machine picked and the account signed in", () => {
+		expect(spawn).toContain("const draftOwner = useMemo(() => ({ hostId: selectedHostId, accountId: draftAccountId }), [draftAccountId, selectedHostId]);");
+		// Not before Cloud read who is signed in: saved as no account's, any account would find it.
+		expect(spawn).toContain("if (!draftRestored || !accountKnown) return;");
+	});
+
+	// The page stays mounted through an account change: the last account's
+	// words must not carry over to, or be saved for, the next one.
+	it("empties the composer when the account changes, and loads only the new account's draft", () => {
+		const change = spawn.slice(spawn.indexOf("const draftAccountSeen = useRef"), spawn.indexOf("}, [accountKnown, draftAccountId]);"));
+		expect(change).toContain("if (previous === undefined || previous === draftAccountId) return;");
+		for (const reset of ["void draftSaver.cancel();", "setPrompt(\"\");", "attachmentsRef.current = [];", "setAttachments([]);", "startedDraft.current = null;", "requestRef.current = undefined;"]) {
+			expect(change.indexOf(reset)).toBeGreaterThan(0);
+			expect(change.indexOf(reset)).toBeLessThan(change.indexOf("restoreDraft();"));
+		}
 	});
 });
