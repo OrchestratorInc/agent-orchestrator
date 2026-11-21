@@ -1292,8 +1292,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		if model != "" {
 			cfg.AgentConfig.Model = model
-			if !cfg.EffortOverride && cfg.AgentConfig.Effort == "" {
+			if !cfg.EffortOverride && cfg.AgentConfig.Effort == "" && effort != "" {
 				cfg.AgentConfig.Effort = effort
+				cfg.EffortInherited = true
 			}
 		}
 	}
@@ -2033,6 +2034,12 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
 			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
+		}
+		// Chat sets the level per turn, so a Chat worker can run the level its
+		// orchestrator's own Chat runs on this agent and model. A terminal has
+		// no flag for it, and a project or role level is still not applied.
+		if cfg.EffortInherited && cfg.RequestedMode == domain.SessionModeChat {
+			return resolved, nil
 		}
 		resolved.Effort = ""
 		return resolved, nil

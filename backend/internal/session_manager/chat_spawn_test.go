@@ -368,6 +368,73 @@ func TestGrokChatSpawnUsesOnlyExplicitEffort(t *testing.T) {
 	}
 }
 
+// OpenCode 2 takes a thinking level per Chat turn, not as a launch flag. An
+// orchestrator's own Chat level comes with its model to a Chat worker it
+// spawns on the same agent; a terminal worker cannot take it, and a level
+// from project or role settings is still not applied.
+func TestChatWorkerKeepsOrchestratorEffortOnOpenCode2(t *testing.T) {
+	const parent domain.SessionID = "mer-0"
+	const model = "opencode/deepseek-v4.1-flash-free"
+	for _, tt := range []struct {
+		name       string
+		withParent bool
+		mode       domain.SessionMode
+		roleEffort string
+		requested  ports.AgentConfig
+		override   bool
+		wantEffort string
+		wantErr    error
+	}{
+		{name: "Chat worker gets the orchestrator's level", withParent: true, mode: domain.SessionModeChat, wantEffort: "high"},
+		{name: "terminal worker starts without it", withParent: true, mode: domain.SessionModeTUI},
+		{name: "role level is still not applied", mode: domain.SessionModeChat, roleEffort: "max"},
+		{name: "explicit level is still refused", withParent: true, mode: domain.SessionModeChat,
+			requested: ports.AgentConfig{Effort: "low"}, override: true, wantErr: ports.ErrUnsupportedEffort},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.Worker = domain.RoleOverride{Harness: domain.HarnessOpenCodeV2, AgentConfig: domain.AgentConfig{Effort: tt.roleEffort}}
+			project.Config.Orchestrator = domain.RoleOverride{Harness: domain.HarnessOpenCodeV2}
+			st.projects[string(chatTestProject)] = project
+			cfg := ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, RequestedMode: tt.mode,
+				AgentConfig: tt.requested, EffortOverride: tt.override,
+			}
+			if tt.withParent {
+				st.sessions[parent] = domain.SessionRecord{ID: parent, ProjectID: chatTestProject, Kind: domain.KindOrchestrator,
+					Harness: domain.HarnessOpenCodeV2, Metadata: domain.SessionMetadata{Model: model}}
+				st.conversations[parent] = domain.ConversationRecord{SessionID: parent,
+					Settings: domain.ConversationSettings{Model: model, ReasoningEffort: "high"}}
+				cfg.ParentSessionID = parent
+			}
+
+			rec, _, _, err := m.Spawn(t.Context(), cfg)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Spawn error = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if rec.Metadata.Effort != tt.wantEffort {
+				t.Fatalf("effort metadata = %q, want %q", rec.Metadata.Effort, tt.wantEffort)
+			}
+			if tt.mode == domain.SessionModeChat {
+				if len(launcher.started) != 1 || launcher.started[0].Effort != tt.wantEffort {
+					t.Fatalf("Chat starts = %+v, want one starting with effort %q", launcher.started, tt.wantEffort)
+				}
+			}
+			if tt.withParent && rec.Metadata.Model != model {
+				t.Fatalf("model = %q, want the orchestrator's %q", rec.Metadata.Model, model)
+			}
+		})
+	}
+}
+
 func TestChatSpawnPersistsResolvedEffort(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

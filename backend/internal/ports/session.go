@@ -59,6 +59,10 @@ type SpawnConfig struct {
 	// EffortOverride preserves the distinction between an omitted task override
 	// and an explicit empty value meaning provider default.
 	EffortOverride bool
+	// EffortInherited marks AgentConfig.Effort as the level the parent
+	// orchestrator's own Chat runs on this agent and model. Set by the daemon
+	// only; a Chat worker keeps it even where a launch flag cannot carry one.
+	EffortInherited bool
 	// AgentConfigResolved means AgentConfig already contains the fully merged
 	// project/role/task settings and may intentionally clear inherited values.
 	AgentConfigResolved bool
