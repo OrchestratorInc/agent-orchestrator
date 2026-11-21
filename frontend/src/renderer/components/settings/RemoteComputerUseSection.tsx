@@ -1,30 +1,24 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import type { components } from "../../../api/schema";
 import { useSettings } from "../../hooks/useSettings";
 import { apiClient } from "../../lib/api-client";
 import { apiErrorException } from "../../lib/api-error-exception";
 import { aoBridge } from "../../lib/bridge";
+import { computerUseRemoteQueryKey, fetchComputerUseRemote, REMOTE_ACTIVITY_POLL_MS, type ComputerUseRemoteSettings } from "../../lib/computer-use-remote";
 import { clientForHost } from "../../lib/host-clients";
 import { savedRemoteHosts, subscribeSavedRemoteHosts } from "../../lib/saved-remote-hosts";
+import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
-type RemoteSettings = components["schemas"]["ComputerUseRemoteSettings"];
+type RemoteSettings = ComputerUseRemoteSettings;
 
-export const computerUseRemoteQueryKey = ["computer-use", "remote"] as const;
 const remoteOfferQueryKey = (hostId: string) => ["computer-use", "remote-offer", hostId] as const;
 const THIS_COMPUTER = "local";
 const OFFER_STALE_MS = 15_000;
-
-async function fetchRemoteSettings(): Promise<RemoteSettings> {
-	const { data, error } = await apiClient.GET("/api/v1/computer-use/remote");
-	if (error || !data) throw apiErrorException(error);
-	return data;
-}
 
 /**
  * Computer use across the user's machines, over the remote-host connections
@@ -44,7 +38,12 @@ export function RemoteComputerUseSection({ installed, titleHidden }: { installed
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const { settings: appSettings } = useSettings();
-	const remote = useQuery({ queryKey: computerUseRemoteQueryKey, queryFn: fetchRemoteSettings });
+	const remote = useQuery({
+		queryKey: computerUseRemoteQueryKey,
+		queryFn: fetchComputerUseRemote,
+		// While other computers may use this one, follow who is using it.
+		refetchInterval: (query) => (query.state.data?.allowRemote ? REMOTE_ACTIVITY_POLL_MS : false),
+	});
 	const saved = useSyncExternalStore(subscribeSavedRemoteHosts, savedRemoteHosts, savedRemoteHosts);
 	const connected = saved.filter((host) => host.status === "connected");
 	const offers = useQueries({
@@ -108,6 +107,7 @@ export function RemoteComputerUseSection({ installed, titleHidden }: { installed
 	});
 
 	const allowed = remote.data?.allowRemote ?? false;
+	const activity = allowed ? remote.data?.activity ?? [] : [];
 	const targetLabel = target ? options.find((option) => option.value === target.hostId)?.label ?? target.label : "";
 	const runOnDescription = target && targetChecked && !targetAvailable
 		? <span className="text-error">{t("settings.computerUse.runOnUnavailable", { name: targetLabel })}</span>
@@ -143,6 +143,17 @@ export function RemoteComputerUseSection({ installed, titleHidden }: { installed
 				</SettingsRow>
 				{error?.row === "allow" ? <p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">{error.message}</p> : null}
 			</div>
+			{activity.map((run) => (
+				<SettingsRow
+					key={run.caller}
+					label={t("settings.computerUse.remoteActive", { name: run.name || t("settings.computerUse.anotherComputer") })}
+					description={t("settings.computerUse.remoteActiveStop")}
+				>
+					<Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={() => setAllow(false)}>
+						{t("settings.computerUse.stop")}
+					</Button>
+				</SettingsRow>
+			))}
 			{remote.isError ? (
 				<div className="settings-content-row">
 					<p role="alert" className="text-xs text-error">{remote.error instanceof Error ? remote.error.message : t("settings.computerUse.loadFailed")}</p>

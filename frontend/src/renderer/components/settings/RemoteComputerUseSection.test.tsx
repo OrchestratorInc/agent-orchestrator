@@ -35,7 +35,11 @@ vi.mock("../../hooks/useSettings", () => ({
 
 import { RemoteComputerUseSection } from "./RemoteComputerUseSection";
 
-let remote: { allowRemote: boolean; target?: { hostId: string; label: string; url: string } };
+let remote: {
+	allowRemote: boolean;
+	target?: { hostId: string; label: string; url: string };
+	activity?: { caller: string; name?: string; started: string; lastAt: string }[];
+};
 
 function renderSection(installed = true) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -167,5 +171,18 @@ describe("Let agents on your other computers use this computer", () => {
 		settingsMocks.computerUse = false;
 		renderSection();
 		expect(await screen.findByText(/Also turn on "Let agents use this computer" above/)).toBeInTheDocument();
+	});
+
+	it("shows which computer's agent is using this one, and Stop turns sharing off", async () => {
+		remote = { allowRemote: true, activity: [{ caller: "abc", name: "Build box", started: "2026-11-21T09:00:00Z", lastAt: "2026-11-21T09:01:00Z" }] };
+		apiMocks.put.mockImplementation(async (_path: string, { body }: { body: { enabled: boolean } }) => {
+			remote = { allowRemote: body.enabled, activity: [] };
+			return { data: remote, error: undefined };
+		});
+		renderSection();
+		expect(await screen.findByText("Build box's agent is using this computer")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+		expect(apiMocks.put).toHaveBeenCalledWith("/api/v1/computer-use/remote/allow", { body: { enabled: false } });
+		await waitFor(() => expect(screen.queryByText("Build box's agent is using this computer")).not.toBeInTheDocument());
 	});
 });

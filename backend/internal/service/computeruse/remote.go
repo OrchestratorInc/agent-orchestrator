@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,6 +57,9 @@ const (
 	// the MCP server bounds one sent to an agent.
 	maxRemoteImageBytes = 10 << 20
 	maxRemoteLabelRunes = 120
+	// remoteActiveWindow is how long after its last call another computer
+	// still counts as using this one; a pause longer than this starts a new run.
+	remoteActiveWindow = 2 * time.Minute
 )
 
 var (
@@ -76,6 +80,16 @@ type RemoteTarget struct {
 type RemoteSettings struct {
 	AllowRemote bool          `json:"allowRemote" description:"Agents on the user's other computers may use this computer's Cua Driver."`
 	Target      *RemoteTarget `json:"target,omitempty" description:"The other computer this computer's agents run computer use on; absent runs it here."`
+	// Activity lists the other computers whose agents used this one recently.
+	Activity []RemoteActivity `json:"activity" description:"Other computers whose agents used this computer in the last two minutes, most recent first."`
+}
+
+// RemoteActivity is another computer whose agents are using this one.
+type RemoteActivity struct {
+	Caller  string    `json:"caller" description:"The other computer's random ID."`
+	Name    string    `json:"name,omitempty" description:"The other computer's name, when it sent one."`
+	Started time.Time `json:"started" description:"When this run of calls began."`
+	LastAt  time.Time `json:"lastAt" description:"When its latest call arrived."`
 }
 
 // SetRemoteTargetRequest names the other computer to run computer use on. The
@@ -85,6 +99,7 @@ type SetRemoteTargetRequest struct {
 	Label      string `json:"label"`
 	URL        string `json:"url"`
 	Credential string `json:"credential" description:"The bearer credential this computer uses for the remote host. Stored with mode 0600 and never returned."`
+	CallerName string `json:"callerName,omitempty" description:"This computer's name, shown on the other computer while this computer's agents use it."`
 }
 
 // RemoteOffer is whether this computer currently lets agents on the user's
@@ -97,10 +112,11 @@ type RemoteOffer struct {
 // RemoteCallRequest is one computer-use call from an agent on another
 // computer.
 type RemoteCallRequest struct {
-	Tool      string         `json:"tool"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	SessionID string         `json:"sessionId,omitempty" description:"The calling computer's AO session; with caller it names this computer's screenshot folder and Cua Driver session for the calls."`
-	Caller    string         `json:"caller,omitempty" description:"A random ID the calling computer keeps, so sessions with the same ID on two computers stay apart."`
+	Tool       string         `json:"tool"`
+	Arguments  map[string]any `json:"arguments,omitempty"`
+	SessionID  string         `json:"sessionId,omitempty" description:"The calling computer's AO session; with caller it names this computer's screenshot folder and Cua Driver session for the calls."`
+	Caller     string         `json:"caller,omitempty" description:"A random ID the calling computer keeps, so sessions with the same ID on two computers stay apart."`
+	CallerName string         `json:"callerName,omitempty" description:"The calling computer's name, shown here while its agents use this computer."`
 }
 
 // RemoteImage is a screenshot sent back to the calling computer.
@@ -126,6 +142,9 @@ type remoteState struct {
 	// CallerID tells the other computer which computer's sessions a call is
 	// for. Kept across targets.
 	CallerID string `json:"callerId,omitempty"`
+	// CallerName is this computer's name, shown on the other computer while
+	// its agents use it.
+	CallerName string `json:"callerName,omitempty"`
 }
 
 // remoteStore reads and writes remoteState. The Service's mutex guards it.
@@ -193,7 +212,7 @@ func (r *remoteStore) save(state remoteState) error {
 }
 
 func (s remoteState) view() RemoteSettings {
-	settings := RemoteSettings{AllowRemote: s.AllowRemote}
+	settings := RemoteSettings{AllowRemote: s.AllowRemote, Activity: []RemoteActivity{}}
 	if s.Target != nil {
 		target := *s.Target
 		settings.Target = &target
@@ -215,7 +234,9 @@ func (s *Service) updateRemote(change func(*remoteState) error) (RemoteSettings,
 	if err := s.remote.save(state); err != nil {
 		return RemoteSettings{}, err
 	}
-	return state.view(), nil
+	settings := state.view()
+	settings.Activity = s.recentActivityLocked(time.Now())
+	return settings, nil
 }
 
 func (s *Service) remoteState() (remoteState, error) {
@@ -226,11 +247,55 @@ func (s *Service) remoteState() (remoteState, error) {
 
 // RemoteSettings reports both remote computer-use settings.
 func (s *Service) RemoteSettings(context.Context) (RemoteSettings, error) {
-	state, err := s.remoteState()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, err := s.remote.load()
 	if err != nil {
 		return RemoteSettings{}, err
 	}
-	return state.view(), nil
+	settings := state.view()
+	settings.Activity = s.recentActivityLocked(time.Now())
+	return settings, nil
+}
+
+// noteRemoteCall records that another computer's agent made a call here.
+func (s *Service) noteRemoteCall(caller, name string, at time.Time) {
+	key := strings.TrimSpace(caller)
+	if key == "" {
+		key = "unknown"
+	}
+	if runes := []rune(strings.TrimSpace(name)); len(runes) > maxRemoteLabelRunes {
+		name = string(runes[:maxRemoteLabelRunes])
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activity == nil {
+		s.activity = map[string]RemoteActivity{}
+	}
+	current, ok := s.activity[key]
+	if !ok || at.Sub(current.LastAt) > remoteActiveWindow {
+		current = RemoteActivity{Caller: key, Started: at.UTC()}
+	}
+	if name = strings.TrimSpace(name); name != "" {
+		current.Name = name
+	}
+	current.LastAt = at.UTC()
+	s.activity[key] = current
+}
+
+// recentActivityLocked lists the computers active within remoteActiveWindow,
+// most recent first, and forgets older ones. The caller holds s.mu.
+func (s *Service) recentActivityLocked(now time.Time) []RemoteActivity {
+	recent := []RemoteActivity{}
+	for key, activity := range s.activity {
+		if now.Sub(activity.LastAt) > remoteActiveWindow {
+			delete(s.activity, key)
+			continue
+		}
+		recent = append(recent, activity)
+	}
+	sort.Slice(recent, func(i, j int) bool { return recent[i].LastAt.After(recent[j].LastAt) })
+	return recent
 }
 
 // SetAllowRemote changes whether agents on the user's other computers may use
@@ -262,6 +327,9 @@ func (s *Service) SetRemoteTarget(_ context.Context, request SetRemoteTargetRequ
 	return s.updateRemote(func(state *remoteState) error {
 		state.Target = &target
 		state.Credential = credential
+		if name := strings.TrimSpace(request.CallerName); name != "" {
+			state.CallerName = name
+		}
 		if state.CallerID == "" {
 			state.CallerID = randomID()
 		}
@@ -334,6 +402,7 @@ func (s *Service) ServeRemoteCall(ctx context.Context, request RemoteCallRequest
 	if err := s.requireRemoteAllowed(); err != nil {
 		return RemoteCallResult{}, err
 	}
+	s.noteRemoteCall(request.Caller, request.CallerName, time.Now())
 	result, err := s.callHere(ctx, CallRequest{
 		Tool:      request.Tool,
 		Arguments: request.Arguments,
@@ -406,14 +475,23 @@ func randomID() string {
 	return hex.EncodeToString(raw)
 }
 
-// forwarding reports the other computer this computer's calls go to, if any.
-func (s *Service) forwarding() (*RemoteTarget, string, string, error) {
+// forwarding is where this computer's calls go: the other computer, its
+// credential, and how this computer names itself there. A nil target runs
+// them here.
+type forwarding struct {
+	target     *RemoteTarget
+	credential string
+	caller     string
+	callerName string
+}
+
+func (s *Service) forwarding() (forwarding, error) {
 	state, err := s.remoteState()
 	if err != nil || state.Target == nil {
-		return nil, "", "", err
+		return forwarding{}, err
 	}
 	target := *state.Target
-	return &target, state.Credential, state.CallerID, nil
+	return forwarding{target: &target, credential: state.Credential, caller: state.CallerID, callerName: state.CallerName}, nil
 }
 
 // remoteAgentTools reads the tools the other computer offers.
@@ -432,14 +510,18 @@ func (s *Service) remoteAgentTools(ctx context.Context, target RemoteTarget, cre
 
 // callRemote runs one call on the other computer and saves its screenshots
 // here, under the session's own folder, so the result's paths are local.
-func (s *Service) callRemote(ctx context.Context, target RemoteTarget, credential, caller string, request CallRequest) (CallResult, error) {
+func (s *Service) callRemote(ctx context.Context, target RemoteTarget, credential, caller, callerName string, request CallRequest) (CallResult, error) {
 	scope, err := s.images.scope(request.SessionID)
 	if err != nil {
 		return CallResult{}, err
 	}
-	body := RemoteCallRequest{Tool: strings.TrimSpace(request.Tool), Arguments: request.Arguments, SessionID: request.SessionID, Caller: caller}
+	body := RemoteCallRequest{Tool: strings.TrimSpace(request.Tool), Arguments: request.Arguments, SessionID: request.SessionID, Caller: caller, CallerName: callerName}
+	started := time.Now()
 	var response RemoteCallResult
 	if err := s.remoteRequest(ctx, target, credential, http.MethodPost, "call", body, remoteCallTimeout, &response); err != nil {
+		// The step shows in this session's timeline, with why the other
+		// computer refused it or could not be reached.
+		s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, started, nil, err)
 		return CallResult{}, err
 	}
 	saved := &savedImages{store: s.images, scope: scope, tool: body.Tool, images: []Image{}}
@@ -454,6 +536,7 @@ func (s *Service) callRemote(ctx context.Context, target RemoteTarget, credentia
 		}
 	}
 	s.images.prune(scope)
+	s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, started, saved.images, nil)
 	return CallResult{Tool: body.Tool, Result: replacePaths(response.Result, local), Images: saved.images}, nil
 }
 

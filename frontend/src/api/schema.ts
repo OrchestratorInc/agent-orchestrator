@@ -1408,6 +1408,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/computer-use/sessions/{sessionId}/screenshots/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one screenshot an AO session's computer-use call saved */
+        get: operations["getComputerUseScreenshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/sessions/{sessionId}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List an AO session's computer-use calls, oldest first, with the screenshots each one saved */
+        get: operations["getComputerUseTimeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/computer-use/status": {
         parameters: {
             query?: never;
@@ -6399,7 +6433,25 @@ export interface components {
              */
             screenRecording: "granted" | "missing" | "unknown";
         };
+        ComputerUseRemoteActivity: {
+            /** @description The other computer's random ID. */
+            caller: string;
+            /**
+             * Format: date-time
+             * @description When its latest call arrived.
+             */
+            lastAt: string;
+            /** @description The other computer's name, when it sent one. */
+            name?: string;
+            /**
+             * Format: date-time
+             * @description When this run of calls began.
+             */
+            started: string;
+        };
         ComputerUseRemoteSettings: {
+            /** @description Other computers whose agents used this computer in the last two minutes, most recent first. */
+            activity: components["schemas"]["ComputerUseRemoteActivity"][];
             /** @description Agents on the user's other computers may use this computer's Cua Driver. */
             allowRemote: boolean;
             /** @description The other computer this computer's agents run computer use on; absent runs it here. */
@@ -6433,6 +6485,25 @@ export interface components {
             releaseNotesUrl?: string;
             updateAvailable: boolean;
             version?: string;
+        };
+        ComputerUseTimelineEntry: {
+            /** @description The arguments the agent passed, without the ones AO sets itself. */
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            at: string;
+            error?: string;
+            id: string;
+            ok: boolean;
+            /** @description The other computer the call ran on, chosen under Run computer use on; absent when it ran on this computer. */
+            ranOn?: string;
+            /** @description Screenshot file names, served by GET /api/v1/computer-use/sessions/{sessionId}/screenshots/{name}. */
+            screenshots: string[];
+            tool: string;
+        };
+        ComputerUseTimelineResponse: {
+            entries: components["schemas"]["ComputerUseTimelineEntry"][];
         };
         ConsumeAgentAccountResetCreditRequest: {
             idempotencyKey: string;
@@ -8169,6 +8240,8 @@ export interface components {
             };
             /** @description A random ID the calling computer keeps, so sessions with the same ID on two computers stay apart. */
             caller?: string;
+            /** @description The calling computer's name, shown here while its agents use this computer. */
+            callerName?: string;
             /** @description The calling computer's AO session; with caller it names this computer's screenshot folder and Cua Driver session for the calls. */
             sessionId?: string;
             tool: string;
@@ -8956,6 +9029,8 @@ export interface components {
             viewId: string;
         };
         SetComputerUseRemoteTargetRequest: {
+            /** @description This computer's name, shown on the other computer while this computer's agents use it. */
+            callerName?: string;
             /** @description The bearer credential this computer uses for the remote host. Stored with mode 0600 and never returned. */
             credential: string;
             hostId: string;
@@ -14732,6 +14807,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ComputerUseRemoteSettings"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Screenshot file name from a timeline entry. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseTimeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseTimelineResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

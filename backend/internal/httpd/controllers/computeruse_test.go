@@ -5,118 +5,83 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 )
 
-type remoteComputerUseService struct {
+type timelineComputerUse struct {
 	ComputerUse
-	allowCalls []bool
-	target     *computeruse.SetRemoteTargetRequest
-	cleared    bool
-	call       *computeruse.RemoteCallRequest
-	callErr    error
+	entries     []computeruse.TimelineEntry
+	screenshots map[string]string
+	gotSession  string
 }
 
-func (s *remoteComputerUseService) RemoteSettings(context.Context) (computeruse.RemoteSettings, error) {
-	return computeruse.RemoteSettings{AllowRemote: true, Target: &computeruse.RemoteTarget{HostID: "h", Label: "Mac", URL: "https://h.useao.dev"}}, nil
+func (f *timelineComputerUse) Timeline(_ context.Context, sessionID string) ([]computeruse.TimelineEntry, error) {
+	f.gotSession = sessionID
+	return f.entries, nil
 }
 
-func (s *remoteComputerUseService) SetAllowRemote(_ context.Context, allow bool) (computeruse.RemoteSettings, error) {
-	s.allowCalls = append(s.allowCalls, allow)
-	return computeruse.RemoteSettings{AllowRemote: allow}, nil
-}
-
-func (s *remoteComputerUseService) SetRemoteTarget(_ context.Context, request computeruse.SetRemoteTargetRequest) (computeruse.RemoteSettings, error) {
-	s.target = &request
-	return computeruse.RemoteSettings{Target: &computeruse.RemoteTarget{HostID: request.HostID, Label: request.Label, URL: request.URL}}, nil
-}
-
-func (s *remoteComputerUseService) ClearRemoteTarget(context.Context) (computeruse.RemoteSettings, error) {
-	s.cleared = true
-	return computeruse.RemoteSettings{}, nil
-}
-
-func (s *remoteComputerUseService) RemoteOffer(context.Context) (computeruse.RemoteOffer, error) {
-	return computeruse.RemoteOffer{Offered: true, Platform: "darwin"}, nil
-}
-
-func (s *remoteComputerUseService) ServeRemoteCall(_ context.Context, request computeruse.RemoteCallRequest) (computeruse.RemoteCallResult, error) {
-	s.call = &request
-	if s.callErr != nil {
-		return computeruse.RemoteCallResult{}, s.callErr
+func (f *timelineComputerUse) ScreenshotPath(_ context.Context, _ string, name string) (string, error) {
+	if path, ok := f.screenshots[name]; ok {
+		return path, nil
 	}
-	return computeruse.RemoteCallResult{Tool: request.Tool, Result: map[string]any{}, Images: []computeruse.RemoteImage{}}, nil
+	return "", apierr.NotFound("COMPUTER_USE_SCREENSHOT_NOT_FOUND", "The screenshot is no longer available.")
 }
 
-func TestComputerUseRemoteAllowRequiresBoolean(t *testing.T) {
-	svc := &remoteComputerUseService{}
-	c := &ComputerUseController{Svc: svc}
-	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"yes"}`, `{"enabled":true,"other":1}`} {
-		w := httptest.NewRecorder()
-		c.setAllowRemote(w, httptest.NewRequest(http.MethodPut, "/api/v1/computer-use/remote/allow", strings.NewReader(body)))
-		if w.Code != http.StatusBadRequest || len(svc.allowCalls) != 0 {
-			t.Fatalf("body=%s status=%d calls=%v", body, w.Code, svc.allowCalls)
-		}
+func computerUseRouter(svc ComputerUse) http.Handler {
+	r := chi.NewRouter()
+	(&ComputerUseController{Svc: svc}).Register(r)
+	return r
+}
+
+func TestComputerUseTimelineListsEntries(t *testing.T) {
+	svc := &timelineComputerUse{entries: []computeruse.TimelineEntry{{
+		ID: "1", At: time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC), Tool: "click", OK: true, Screenshots: []string{"a.png"},
+	}}}
+	recorder := httptest.NewRecorder()
+	computerUseRouter(svc).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/computer-use/sessions/ao-1/timeline", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body)
 	}
-	w := httptest.NewRecorder()
-	c.setAllowRemote(w, httptest.NewRequest(http.MethodPut, "/api/v1/computer-use/remote/allow", strings.NewReader(`{"enabled":true}`)))
-	var got computeruse.RemoteSettings
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || !got.AllowRemote {
-		t.Fatalf("status=%d response=%s err=%v", w.Code, w.Body, err)
+	var body ComputerUseTimelineResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if svc.gotSession != "ao-1" || len(body.Entries) != 1 || body.Entries[0].Tool != "click" || body.Entries[0].Screenshots[0] != "a.png" {
+		t.Fatalf("session = %q, body = %+v", svc.gotSession, body)
 	}
 }
 
-// The credential goes in with the target and never comes back out.
-func TestComputerUseRemoteTargetTakesTheCredentialWithoutEchoingIt(t *testing.T) {
-	svc := &remoteComputerUseService{}
-	c := &ComputerUseController{Svc: svc}
-	w := httptest.NewRecorder()
-	c.setRemoteTarget(w, httptest.NewRequest(http.MethodPut, "/api/v1/computer-use/remote/target",
-		strings.NewReader(`{"hostId":"h","label":"Mac","url":"https://h.useao.dev","credential":"aod_secret"}`)))
-	if w.Code != http.StatusOK || svc.target == nil || svc.target.Credential != "aod_secret" {
-		t.Fatalf("status=%d target=%+v", w.Code, svc.target)
+func TestComputerUseScreenshotServesTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shot.png")
+	png := []byte("\x89PNG\r\n\x1a\n0000")
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(w.Body.String(), "aod_secret") {
-		t.Fatalf("response echoes the credential: %s", w.Body)
+	handler := computerUseRouter(&timelineComputerUse{screenshots: map[string]string{"shot.png": path}})
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/computer-use/sessions/ao-1/screenshots/shot.png", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != string(png) {
+		t.Fatalf("status = %d, body = %q", recorder.Code, recorder.Body)
 	}
-
-	w = httptest.NewRecorder()
-	c.clearRemoteTarget(w, httptest.NewRequest(http.MethodDelete, "/api/v1/computer-use/remote/target", nil))
-	if w.Code != http.StatusOK || !svc.cleared {
-		t.Fatalf("clear status=%d cleared=%v", w.Code, svc.cleared)
+	if got := recorder.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("Content-Type = %q", got)
 	}
-}
-
-func TestRemoteComputerUseCallPassesTheServiceAnswerThrough(t *testing.T) {
-	svc := &remoteComputerUseService{}
-	c := &ComputerUseController{Svc: svc}
-
-	w := httptest.NewRecorder()
-	c.remoteCall(w, httptest.NewRequest(http.MethodPost, "/api/v1/remote-computer-use/call", strings.NewReader(`{"tool":"list_windows","sessionId":"ao-1","caller":"abc"}`)))
-	if w.Code != http.StatusOK || svc.call == nil || svc.call.Tool != "list_windows" || svc.call.Caller != "abc" {
-		t.Fatalf("status=%d call=%+v", w.Code, svc.call)
+	if got := recorder.Header().Get("Cache-Control"); got != "private, max-age=31536000, immutable" {
+		t.Fatalf("Cache-Control = %q", got)
 	}
 
-	svc.callErr = apierr.Forbidden("COMPUTER_USE_REMOTE_OFF", "off")
-	w = httptest.NewRecorder()
-	c.remoteCall(w, httptest.NewRequest(http.MethodPost, "/api/v1/remote-computer-use/call", strings.NewReader(`{"tool":"list_windows"}`)))
-	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "COMPUTER_USE_REMOTE_OFF") {
-		t.Fatalf("refused call: status=%d body=%s", w.Code, w.Body)
-	}
-
-	w = httptest.NewRecorder()
-	c.remoteCall(w, httptest.NewRequest(http.MethodPost, "/api/v1/remote-computer-use/call", strings.NewReader(`not json`)))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("bad body: status=%d", w.Code)
-	}
-
-	w = httptest.NewRecorder()
-	c.remoteOffer(w, httptest.NewRequest(http.MethodGet, "/api/v1/remote-computer-use/status", nil))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"offered":true`) {
-		t.Fatalf("offer: status=%d body=%s", w.Code, w.Body)
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/computer-use/sessions/ao-1/screenshots/gone.png", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing screenshot status = %d", recorder.Code)
 	}
 }

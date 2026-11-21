@@ -287,6 +287,17 @@ export function isShownAORender(activity: ConversationActivity): boolean {
 	return aoToolView(activity)?.hidden === true;
 }
 
+/**
+ * One step of the Computer Use timeline, in the words the chat uses for the
+ * same call. A tool the chat has no words for reads as its name.
+ */
+export function computerUseStep(tool: string, args: unknown, failed: boolean, error?: string): { label: string; error?: string } {
+	const copy = computerUseCopy(tool, asRecord(args));
+	const name = tool.replace(/_/g, " ");
+	const label = copy ? (failed ? copy.failed : copy.done) : name.charAt(0).toUpperCase() + name.slice(1);
+	return { label, error: failed ? readableError(error) : undefined };
+}
+
 function computerUseCopy(tool: string, args: Record<string, unknown>): Copy | undefined {
 	switch (tool) {
 		case "list_windows": {

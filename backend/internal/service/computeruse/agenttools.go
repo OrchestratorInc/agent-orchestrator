@@ -60,12 +60,12 @@ type agentToolCache struct {
 // its release. They are read once per driver version. With "Run computer use
 // on" set to another computer, they are that computer's tools.
 func (s *Service) AgentTools(ctx context.Context) ([]AgentTool, error) {
-	target, credential, _, err := s.forwarding()
+	to, err := s.forwarding()
 	if err != nil {
 		return nil, err
 	}
-	if target != nil {
-		return s.remoteAgentTools(ctx, *target, credential)
+	if to.target != nil {
+		return s.remoteAgentTools(ctx, *to.target, to.credential)
 	}
 	return s.localAgentTools(ctx)
 }

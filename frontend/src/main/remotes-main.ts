@@ -389,7 +389,7 @@ export function registerRemotesIpc(
 			method: "PUT",
 			redirect: "error",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ hostId: entry.hostId, label: entry.label, url: entry.url, credential: entry.password }),
+			body: JSON.stringify({ hostId: entry.hostId, label: entry.label, url: entry.url, credential: entry.password, callerName: await deviceName() }),
 			signal: AbortSignal.timeout(8_000),
 		});
 		const body = await response.json().catch(() => ({})) as { message?: string };

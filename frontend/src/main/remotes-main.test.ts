@@ -811,7 +811,7 @@ describe("registerRemotesIpc", () => {
 			expect(calls).toHaveLength(1);
 			expect(calls[0].url).toBe("http://127.0.0.1:3001/api/v1/computer-use/remote/target");
 			expect(calls[0].init.method).toBe("PUT");
-			expect(JSON.parse(String(calls[0].init.body))).toEqual({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", credential: "old" });
+			expect(JSON.parse(String(calls[0].init.body))).toEqual({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", credential: "old", callerName: "Test Mac" });
 			expect(JSON.stringify(result)).not.toContain("old");
 		});
 

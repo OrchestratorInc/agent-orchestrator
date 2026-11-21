@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 
@@ -27,6 +28,9 @@ type ComputerUse interface {
 	RemoteOffer(ctx context.Context) (computeruse.RemoteOffer, error)
 	RemoteAgentTools(ctx context.Context) ([]computeruse.AgentTool, error)
 	ServeRemoteCall(ctx context.Context, request computeruse.RemoteCallRequest) (computeruse.RemoteCallResult, error)
+
+	Timeline(ctx context.Context, sessionID string) ([]computeruse.TimelineEntry, error)
+	ScreenshotPath(ctx context.Context, sessionID, name string) (string, error)
 }
 
 // ComputerUseController owns the /computer-use routes behind Settings and the
@@ -50,6 +54,8 @@ func (c *ComputerUseController) Register(r chi.Router) {
 	r.Put("/computer-use/remote/allow", c.setAllowRemote)
 	r.Put("/computer-use/remote/target", c.setRemoteTarget)
 	r.Delete("/computer-use/remote/target", c.clearRemoteTarget)
+	r.Get("/computer-use/sessions/{sessionId}/timeline", c.timeline)
+	r.Get("/computer-use/sessions/{sessionId}/screenshots/{name}", c.screenshot)
 
 	r.Get("/remote-computer-use/status", c.remoteOffer)
 	r.Get("/remote-computer-use/agent-tools", c.remoteAgentTools)
@@ -208,6 +214,48 @@ func (c *ComputerUseController) remoteCall(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+func (c *ComputerUseController) timeline(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/computer-use/sessions/{sessionId}/timeline")
+		return
+	}
+	entries, err := c.Svc.Timeline(r.Context(), chi.URLParam(r, "sessionId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ComputerUseTimelineResponse{Entries: entries})
+}
+
+// screenshot serves one saved screenshot. A name is never reused, so the
+// response may be cached for good.
+func (c *ComputerUseController) screenshot(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/computer-use/sessions/{sessionId}/screenshots/{name}")
+		return
+	}
+	name := chi.URLParam(r, "name")
+	path, err := c.Svc.ScreenshotPath(r.Context(), chi.URLParam(r, "sessionId"), name)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "COMPUTER_USE_SCREENSHOT_NOT_FOUND", "The screenshot is no longer available.", nil)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, name, info.ModTime(), file)
 }
 
 func writeRemoteSettings(w http.ResponseWriter, r *http.Request) func(computeruse.RemoteSettings, error) {

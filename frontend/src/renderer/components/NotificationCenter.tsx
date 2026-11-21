@@ -26,6 +26,7 @@ import {
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
 import { useAppMenuAction, useAppMenuAvailable } from "../hooks/useAppMenuCommand";
+import { useRemoteComputerUseAlerts } from "../hooks/useRemoteComputerUseAlerts";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -190,6 +191,8 @@ function NotificationWorkspaceState({
 
 export function NotificationRuntime() {
 	const queryClient = useQueryClient();
+	// Another computer's agent starting to use this one raises its own OS notification.
+	useRemoteComputerUseAlerts();
 	const { openPrimary } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();
 	const unreadQuery = useNotificationsQuery("unread");

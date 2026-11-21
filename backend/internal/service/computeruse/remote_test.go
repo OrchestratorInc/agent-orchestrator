@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -67,9 +68,9 @@ func serveRemote(t *testing.T, remote *Service) (*httptest.Server, *[]http.Heade
 	return server, &headers
 }
 
-// screenshotDriver writes a PNG wherever a call asks for its screenshot and
+// recordingScreenshotDriver writes a PNG wherever a call asks for its screenshot and
 // reports its path, as Cua Driver does.
-func screenshotDriver(sent *map[string]any) *fakeDriver {
+func recordingScreenshotDriver(sent *map[string]any) *fakeDriver {
 	driver := &fakeDriver{daemonUp: true}
 	driver.onCall = func(args []string) ([]byte, []byte, error) {
 		if err := json.Unmarshal([]byte(args[2]), sent); err != nil {
@@ -104,7 +105,7 @@ func wantCode(t *testing.T, err error, code string) {
 // tool server reads the path from this computer's disk.
 func TestCallRunsOnTheChosenComputerAndSavesScreenshotsHere(t *testing.T) {
 	var sent map[string]any
-	remote := newTestService(t, screenshotDriver(&sent), "darwin")
+	remote := newTestService(t, recordingScreenshotDriver(&sent), "darwin")
 	if _, err := remote.SetAllowRemote(context.Background(), true); err != nil {
 		t.Fatalf("SetAllowRemote() error = %v", err)
 	}
@@ -341,4 +342,85 @@ func TestRemoteScopeStaysWithinScopeRules(t *testing.T) {
 			t.Errorf("remoteScope(%q, %q) = %q, want %q", tc.caller, tc.session, got, tc.want)
 		}
 	}
+}
+
+// A call that ran on another computer shows in this session's timeline,
+// named after that computer, with its screenshot saved here; one the other
+// computer refused shows too, with why.
+func TestRemoteCallsShowInTheLocalTimeline(t *testing.T) {
+	ctx := context.Background()
+	var sent map[string]any
+	remote := newTestService(t, recordingScreenshotDriver(&sent), "darwin")
+	server, _ := serveRemote(t, remote)
+	local := newTestService(t, &fakeDriver{missing: true}, "linux")
+	setTarget(t, local, server.URL)
+
+	_, err := local.Call(ctx, CallRequest{Tool: "list_windows", SessionID: "ao-12"})
+	wantCode(t, err, "COMPUTER_USE_REMOTE_OFF")
+	if _, err := remote.SetAllowRemote(ctx, true); err != nil {
+		t.Fatalf("SetAllowRemote() error = %v", err)
+	}
+	result, err := local.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9}, SessionID: "ao-12"})
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	entries, err := local.Timeline(ctx, "ao-12")
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("Timeline() = %+v, %v", entries, err)
+	}
+	refused, read := entries[0], entries[1]
+	if refused.OK || refused.RanOn != "Studio Mac" || !strings.Contains(refused.Error, "On Studio Mac:") {
+		t.Fatalf("refused step = %+v", refused)
+	}
+	if !read.OK || read.RanOn != "Studio Mac" || read.Tool != "get_window_state" || len(read.Screenshots) != 1 ||
+		read.Screenshots[0] != filepath.Base(result.Images[0].Path) {
+		t.Fatalf("read step = %+v, images %+v", read, result.Images)
+	}
+	if _, err := local.ScreenshotPath(ctx, "ao-12", read.Screenshots[0]); err != nil {
+		t.Fatalf("ScreenshotPath() error = %v", err)
+	}
+}
+
+// The computer that is used knows which other computers' agents are using
+// it, by the name they send, until they have been quiet for a while.
+func TestUsedComputerSeesWhoIsUsingIt(t *testing.T) {
+	ctx := context.Background()
+	remote := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	if _, err := remote.SetAllowRemote(ctx, true); err != nil {
+		t.Fatalf("SetAllowRemote() error = %v", err)
+	}
+	server, _ := serveRemote(t, remote)
+	local := newTestService(t, &fakeDriver{missing: true}, "linux")
+	if _, err := local.SetRemoteTarget(ctx, SetRemoteTargetRequest{HostID: "host-mac", Label: "Studio Mac", URL: server.URL, Credential: "aod_secret", CallerName: "Build box"}); err != nil {
+		t.Fatalf("SetRemoteTarget() error = %v", err)
+	}
+	if settings, _ := remote.RemoteSettings(ctx); len(settings.Activity) != 0 {
+		t.Fatalf("activity before any call = %+v", settings.Activity)
+	}
+	if _, err := local.Call(ctx, CallRequest{Tool: "list_windows", SessionID: "ao-1"}); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	settings, err := remote.RemoteSettings(ctx)
+	if err != nil || len(settings.Activity) != 1 || settings.Activity[0].Name != "Build box" || settings.Activity[0].Caller == "" {
+		t.Fatalf("activity = %+v, %v", settings.Activity, err)
+	}
+	started := settings.Activity[0].Started
+
+	// A call soon after continues the same run; one after a long pause starts a new one.
+	remote.noteRemoteCall(settings.Activity[0].Caller, "", started.Add(time.Minute))
+	remote.mu.Lock()
+	if got := remote.activity[settings.Activity[0].Caller]; !got.Started.Equal(started) || got.Name != "Build box" {
+		t.Fatalf("continued run = %+v", got)
+	}
+	remote.mu.Unlock()
+	remote.noteRemoteCall(settings.Activity[0].Caller, "", started.Add(10*time.Minute))
+	remote.mu.Lock()
+	if got := remote.activity[settings.Activity[0].Caller]; !got.Started.Equal(started.Add(10 * time.Minute)) {
+		t.Fatalf("new run = %+v", got)
+	}
+	if recent := remote.recentActivityLocked(started.Add(20 * time.Minute)); len(recent) != 0 {
+		t.Fatalf("quiet computer still listed: %+v", recent)
+	}
+	remote.mu.Unlock()
 }

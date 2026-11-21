@@ -4,7 +4,10 @@ import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
-import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
+import { Chat, CheckWaves, Folder, List, MousePointerClick, Package } from "@/components/app-icons";
+import { ComputerUsePanel } from "./ComputerUsePanel";
+import { useComputerUseTimeline } from "../hooks/useComputerUseTimeline";
+import { useSettings } from "../hooks/useSettings";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
 import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
@@ -51,7 +54,7 @@ import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
-import { sessionUiKey } from "../lib/hosts";
+import { isLocal, sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -139,13 +142,14 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.computerUse" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
 	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
 	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "computerUse", labelKey: "inspector.computerUse", icon: <MousePointerClick aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
 	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
@@ -159,7 +163,7 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 };
 
 /**
- * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Side chat · Artifacts).
+ * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Computer use · Side chat · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
 	orchestrator = false,
@@ -228,7 +232,20 @@ export const SessionInspector = memo(function SessionInspector({
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
 	);
+	const computerUseUnseen = useUiStore((state) =>
+		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.computerUseUnseen) : false,
+	);
 	const inspectorQueryClient = useQueryClient();
+	// Computer use runs on this machine only, so only a local session has a
+	// timeline. The tab appears once the session has made a call.
+	const computerUseSessionId = session && !session.cloud && (!hostId || isLocal(hostId)) ? session.id : undefined;
+	const { settings: localSettings } = useSettings(undefined, computerUseSessionId !== undefined);
+	const computerUseTimeline = useComputerUseTimeline(computerUseSessionId, {
+		live: localSettings?.computerUse === true,
+		open: requestedView === "computerUse" && isInspectorVisible,
+	});
+	const computerUseEntries = computerUseTimeline.data ?? [];
+	const hasComputerUse = computerUseEntries.length > 0;
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
 		orchestrator || session?.cloud || session?.needsResume || (session && !sessionWorkspaceReady(session)) ? undefined : session?.id,
@@ -273,12 +290,14 @@ export const SessionInspector = memo(function SessionInspector({
 	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
+		|| (entry.id === "computerUse" && hasComputerUse)
 		|| (entry.id === "subagents" && subagentsView !== undefined)
 		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			&& (entry.id !== "subagents" || subagentsView !== undefined)
+			&& (entry.id !== "computerUse" || hasComputerUse)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
@@ -288,17 +307,19 @@ export const SessionInspector = memo(function SessionInspector({
 	// session the Subagents tab is briefly missing. Show Summary through that gap but
 	// keep the reader's choice, so the tab comes back selected.
 	const awaitingSubagents = requestedView === "subagents" && subagentsView === undefined;
+	// Likewise keep a Computer Use selection while the session's timeline loads.
+	const awaitingComputerUse = requestedView === "computerUse" && computerUseSessionId !== undefined && computerUseTimeline.isPending;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !orchestrator) || awaitingSubagents) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator) || awaitingSubagents || awaitingComputerUse) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [awaitingSubagents, onViewChange, orchestrator, requestedView, sessionLoaded, view]);
+	}, [awaitingComputerUse, awaitingSubagents, onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen) || (entry.id === "computerUse" && computerUseUnseen),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
@@ -326,6 +347,11 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				browserPoppedOut={browserPoppedOut}
+				computerUseView={
+					computerUseSessionId && hasComputerUse ? (
+						<ComputerUsePanel entries={computerUseEntries} key={computerUseSessionId} sessionId={computerUseSessionId} />
+					) : undefined
+				}
 				browserView={
 					session && (!hostId || browserView) ? (
 						<BrowserView

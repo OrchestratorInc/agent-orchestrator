@@ -128,6 +128,17 @@ vi.mock("../lib/platform", () => ({
 	isMacPlatform: () => false,
 	isLinuxPlatform: () => false,
 }));
+// Each test sets the session's computer-use steps; undefined is a timeline not yet read.
+const computerUseTimelineState = vi.hoisted(() => ({ steps: undefined as { id: string }[] | undefined }));
+vi.mock("../hooks/useComputerUseTimeline", () => ({
+	useComputerUseTimeline: () => ({
+		data: computerUseTimelineState.steps,
+		isSuccess: computerUseTimelineState.steps !== undefined,
+		isFetchedAfterMount: computerUseTimelineState.steps !== undefined,
+		isPending: computerUseTimelineState.steps === undefined,
+	}),
+	computerUseScreenshotUrl: (sessionId: string, name: string) => `http://127.0.0.1:3001/${sessionId}/${name}`,
+}));
 vi.mock("../hooks/useWindowFullScreen", () => ({
 	useWindowFullScreen: () => nativeFullScreenMock(),
 }));
@@ -6089,6 +6100,59 @@ describe("SessionView", () => {
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
 		} finally {
 			delete worker.artifactFiles;
+		}
+	});
+
+	it("opens Computer use on the session's first computer-use call", () => {
+		computerUseTimelineState.steps = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
+
+			computerUseTimelineState.steps = [{ id: "1" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("computerUse");
+			expect(inspectorOpen("sess-1")).toBe(true);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBeFalsy();
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
+	it("only badges Computer use for later steps once the user has left it", () => {
+		computerUseTimelineState.steps = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			computerUseTimelineState.steps = [{ id: "1" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+
+			computerUseTimelineState.steps = [{ id: "1" }, { id: "2" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(inspectorOpen("sess-1")).toBe(false);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
+
+			// Opening the inspector back on Computer use clears the badge.
+			act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(false);
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
+	it("does not open Computer use for a session that already had steps when entered", () => {
+		computerUseTimelineState.steps = [{ id: "1" }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			computerUseTimelineState.steps = [{ id: "1" }, { id: "2" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
+		} finally {
+			computerUseTimelineState.steps = undefined;
 		}
 	});
 

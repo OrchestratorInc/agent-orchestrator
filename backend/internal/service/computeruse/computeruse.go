@@ -148,9 +148,10 @@ type Driver interface {
 
 // Service runs Cua Driver for the settings page and the computer-use tools.
 type Service struct {
-	driver Driver
-	images imageStore
-	goos   string
+	driver   Driver
+	images   imageStore
+	timeline timelineLog
+	goos     string
 
 	background context.Context
 	stop       context.CancelFunc
@@ -168,6 +169,9 @@ type Service struct {
 	// remote holds the remote computer-use settings (remote.go), guarded by mu.
 	remote       remoteStore
 	remoteClient *http.Client
+	// activity is which other computers' agents used this one recently, by
+	// caller ID; guarded by mu.
+	activity map[string]RemoteActivity
 }
 
 // SetEnabled supplies the "Let agents use this computer" setting, which Call
@@ -337,12 +341,12 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if !toolNamePattern.MatchString(tool) {
 		return CallResult{}, invalidTool(tool)
 	}
-	target, credential, caller, err := s.forwarding()
+	to, err := s.forwarding()
 	if err != nil {
 		return CallResult{}, err
 	}
-	if target != nil {
-		return s.callRemote(ctx, *target, credential, caller, request)
+	if to.target != nil {
+		return s.callRemote(ctx, *to.target, to.credential, to.caller, to.callerName, request)
 	}
 	return s.callHere(ctx, request)
 }
@@ -374,6 +378,14 @@ func (s *Service) callHere(ctx context.Context, request CallRequest) (CallResult
 	if err != nil {
 		return CallResult{}, err
 	}
+	started := time.Now()
+	result, err := s.run(ctx, binary, scope, tool, request.SessionID, arguments)
+	s.recordCall(scope, tool, request.Arguments, started, result.Images, err)
+	return result, err
+}
+
+// run makes one driver call for Call, which has checked the request.
+func (s *Service) run(ctx context.Context, binary, scope, tool, sessionID string, arguments map[string]any) (CallResult, error) {
 	saved := &savedImages{store: s.images, scope: scope, tool: tool, images: []Image{}}
 	screenshot := saved.requestScreenshotFile(tool, arguments)
 	dropImageFiles(arguments)
@@ -384,7 +396,7 @@ func (s *Service) callHere(ctx context.Context, request CallRequest) (CallResult
 	_, named := arguments["session"]
 	injected := !named && !s.isSessionless(tool)
 	if injected {
-		arguments["session"] = driverSession(request.SessionID)
+		arguments["session"] = driverSession(sessionID)
 	}
 	if tool == "run_steps" {
 		if observed := s.prepareObserve(saved, arguments); observed != "" {
