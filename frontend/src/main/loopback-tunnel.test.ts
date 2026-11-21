@@ -143,6 +143,9 @@ describe("loopback tunnels", () => {
 		const starting = tunnels.forward("h_box", echo);
 		tunnels.stopHost("h_box");
 		await expect(starting).rejects.toThrow(/removed/);
+		const signingOut = tunnels.forward("h_box", echo);
+		tunnels.stopAll();
+		await expect(signingOut).rejects.toThrow(/removed/);
 		expect(tunnels.list()).toEqual([]);
 	});
 

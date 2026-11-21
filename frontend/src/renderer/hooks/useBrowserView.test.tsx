@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
+import { queryClient } from "../lib/query-client";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -237,6 +238,7 @@ describe("useBrowserView", () => {
 		resetConsumedPreviewTriggersForTest();
 		resetClosedTabsForTest();
 		resetNativeViewCacheForTest();
+		queryClient.removeQueries({ queryKey: ["loopback-reach"] });
 	});
 
 	it("ensures a scoped browser view and reports the measured slot bounds", async () => {

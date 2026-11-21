@@ -18,6 +18,7 @@ import type {
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
 import { hostLoopbackUrl } from "../lib/loopback";
+import { fetchLoopbackReach } from "./useHostLoopback";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
@@ -1296,7 +1297,7 @@ export function useBrowserView({
 			const resolved = !origin
 				? Promise.resolve(target)
 				: loopback
-					? aoBridge.remotes.loopbackReach(origin.hostId).then((reach) =>
+					? fetchLoopbackReach(origin.hostId).then((reach) =>
 						reach === "off" ? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target) : loopback)
 					: aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target);
 			void resolved.then((url) => {

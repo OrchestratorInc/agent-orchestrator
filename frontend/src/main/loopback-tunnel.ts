@@ -105,6 +105,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 	const forwards = new Map<string, { forward: PortForward; server: Server; clients: Set<Socket> }>();
 	const pending = new Map<string, Promise<PortForward>>();
 	const removals = new Map<string, number>();
+	let generation = 0;
 	const key = (hostId: string, port: number) => `${hostId}\n${port}`;
 
 	const serveSocks = async (client: Socket, hostId: string): Promise<void> => {
@@ -177,6 +178,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 
 	const startForward = async (hostId: string, remotePort: number): Promise<PortForward> => {
 		const removal = removals.get(hostId);
+		const started = generation;
 		const reached = await reach(hostId);
 		if (reached === "same") throw new Error("This host runs on this computer, so its ports are already on localhost here.");
 		if (reached === "off") throw new Error("Can't reach this host's localhost. Check that the host is online, up to date, and has Share localhost on in Settings → Mobile.");
@@ -198,7 +200,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		});
 		const taken = (await Promise.all([answers("127.0.0.1", remotePort), answers("::1", remotePort)])).some(Boolean);
 		const localPort = taken ? await listen(server, 0) : await listen(server, remotePort).catch(() => listen(server, 0));
-		if (removals.get(hostId) !== removal) {
+		if (removals.get(hostId) !== removal || generation !== started) {
 			server.close();
 			throw new Error("This host was removed.");
 		}
@@ -264,6 +266,10 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		stopHost(hostId: string): void {
 			removals.set(hostId, (removals.get(hostId) ?? 0) + 1);
 			for (const { forward } of [...forwards.values()]) if (forward.hostId === hostId) this.stop(hostId, forward.remotePort);
+		},
+		stopAll(): void {
+			generation++;
+			for (const { forward } of [...forwards.values()]) this.stop(forward.hostId, forward.remotePort);
 		},
 		list: (): PortForward[] => [...forwards.values()].map(({ forward }) => forward),
 	};

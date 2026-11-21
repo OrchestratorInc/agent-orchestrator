@@ -4432,7 +4432,7 @@ function notifyRenderersOfCloudSession(
 	bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
-		for (const { hostId } of loopbackTunnels.list()) loopbackTunnels.stopHost(hostId);
+		loopbackTunnels.stopAll();
 		void cloudAgentProxy.close();
 	}
 	const contents = getShellWebContents();
