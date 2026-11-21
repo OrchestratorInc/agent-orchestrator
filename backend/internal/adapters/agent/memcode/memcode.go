@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -78,7 +79,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	default:
 		args = append(args, "--ask")
 	}
-	return args, nil
+	return providerenv.Command(args, cfg.Env), nil
 }
 
 // GetPromptDeliveryStrategy implements the native TUI adapter contract.
@@ -169,7 +170,7 @@ func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (s
 	if cfg.Config.Model == "" {
 		return "", nil
 	}
-	if cfg.Config.Model == "sol" {
+	if cfg.Config.Model == "sol" && cfg.Env[importedSolPinEnv] == "1" {
 		if !memcodeSolPinned(ctx, cfg.WorkspacePath) {
 			return "", errors.New("memcode sol workspace model was not prepared")
 		}
@@ -184,7 +185,7 @@ func (*Plugin) AfterStartCommandApplied(cfg ports.LaunchConfig, output string) b
 	if model == "" || !emptyComposer(output) {
 		return false
 	}
-	if model == "sol" {
+	if model == "sol" && cfg.Env[importedSolPinEnv] == "1" {
 		return memcodeSolEffortApplied(cfg.WorkspacePath, output)
 	}
 	// Only the newest confirmation in the current viewport is authoritative.

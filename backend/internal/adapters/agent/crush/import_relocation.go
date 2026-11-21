@@ -3,17 +3,14 @@ package crush
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -65,11 +62,7 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 	if err := os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
-	// A failed config pin must not strand a final DB that the next attempt
-	// correctly refuses. The S2 preparer checkpoints only after both succeed.
-	if err := pinCrushImportStore(r.LaunchCWD, dir); err != nil {
-		return err
-	}
+	// Imported restores pin this store with --data-dir; project config remains untouched.
 	if _, err := os.Lstat(target); err == nil {
 		return errors.New("crush import destination database appeared during import")
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -93,41 +86,6 @@ func crushImportIdentity(r ports.ImportedSessionRelocation) (string, string, err
 		return "", "", errors.New("invalid crush source database")
 	}
 	return id.String(), source, nil
-}
-
-// Preserve hook context and models while recording the workspace store. The
-// imported restore's --data-dir also outranks .crushrc/crushrc configuration.
-func pinCrushImportStore(workspace, dir string) error {
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	config := map[string]any{}
-	file, err := root.Open(".crush.json")
-	if err == nil {
-		err = json.NewDecoder(io.LimitReader(file, 4<<20)).Decode(&config)
-		_ = file.Close()
-		if err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	options, ok := config["options"].(map[string]any)
-	if !ok {
-		if value, exists := config["options"]; exists && value != nil {
-			return errors.New("crush workspace options must be an object")
-		}
-		options = map[string]any{}
-	}
-	options["data_directory"] = dir
-	config["options"] = options
-	data, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-	return hookutil.AtomicWriteFile(filepath.Join(workspace, ".crush.json"), data, 0o600)
 }
 
 func copyCrushConversation(ctx context.Context, source, target, id, workspace string) error {

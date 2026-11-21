@@ -32,7 +32,7 @@ func (p *Plugin) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConf
 	if err != nil {
 		return nil, err
 	}
-	argv, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{WorkspacePath: cfg.Session.WorkspacePath, Config: cfg.Config, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools})
+	argv, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{WorkspacePath: cfg.Session.WorkspacePath, Config: cfg.Config, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools, Env: cfg.Env})
 	if err != nil {
 		return nil, err
 	}

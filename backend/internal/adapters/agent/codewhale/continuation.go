@@ -153,9 +153,26 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 		}
 		root = recordedRoot
 	}
-	archive, err := codewhalestore.Read(ctx, root, filepath.Join(root, "sessions", nativeID+".json"))
-	if err != nil {
-		return "", err
+	var archive codewhalestore.Archive
+	if recordedRoot == "" {
+		// Ordinary native restores are not subject to import eligibility limits.
+		// Read only binding metadata, leaving the native CLI to load its history.
+		archive, err = readOrdinaryRestoreBinding(ctx, root, nativeID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if archive.ImportCopy {
+				return "", err
+			}
+			return freshDir, nil
+		}
+	}
+	if recordedRoot != "" || archive.ImportCopy {
+		archive, err = codewhalestore.Read(ctx, root, filepath.Join(root, "sessions", nativeID+".json"))
+		if err != nil {
+			return "", err
+		}
 	}
 	workspace, err := filepath.EvalSymlinks(cfg.WorkspacePath)
 	if err != nil {
@@ -163,9 +180,15 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 	}
 	savedWorkspace, err := filepath.EvalSymlinks(archive.CWD)
 	if err != nil {
+		if recordedRoot == "" && !archive.ImportCopy {
+			return freshDir, nil
+		}
 		return "", err
 	}
 	if archive.ID != nativeID || !sameFilesystemPath(workspace, savedWorkspace) {
+		if recordedRoot == "" && !archive.ImportCopy {
+			return freshDir, nil
+		}
 		return "", errors.New("codewhale restore snapshot does not match its selected workspace")
 	}
 	if !archive.RuntimeBound {
@@ -210,6 +233,95 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 		}
 	}
 	return archive.RuntimeDir, nil
+}
+
+// readOrdinaryRestoreBinding streams past history instead of buffering it or
+// applying the import parser's schema, spawn-depth and snapshot-size budgets.
+// An AO import marker still selects the strict import-validation path.
+func readOrdinaryRestoreBinding(ctx context.Context, root, id string) (codewhalestore.Archive, error) {
+	var archive codewhalestore.Archive
+	profile, err := os.OpenRoot(root)
+	if err != nil {
+		return archive, err
+	}
+	defer func() { _ = profile.Close() }()
+	path := filepath.Join("sessions", id+".json")
+	info, err := profile.Lstat(path)
+	if err != nil {
+		return archive, err
+	}
+	if !info.Mode().IsRegular() {
+		return archive, errors.New("native CodeWhale snapshot is not a regular file")
+	}
+	f, err := profile.Open(path)
+	if err != nil {
+		return archive, err
+	}
+	defer func() { _ = f.Close() }()
+	dec := json.NewDecoder(f)
+	first, err := dec.Token()
+	if err != nil || first != json.Delim('{') {
+		return archive, errors.New("invalid native CodeWhale snapshot")
+	}
+	for dec.More() {
+		if err := ctx.Err(); err != nil {
+			return archive, err
+		}
+		key, err := dec.Token()
+		if err != nil {
+			return archive, err
+		}
+		if key == "metadata" {
+			var meta struct {
+				ID        string `json:"id"`
+				Workspace string `json:"workspace"`
+				Runtime   *struct {
+					Dir   string `json:"data_dir"`
+					Scope string `json:"execution_scope"`
+				} `json:"runtime_store"`
+			}
+			if err := dec.Decode(&meta); err != nil {
+				return archive, err
+			}
+			archive.ID, archive.CWD = meta.ID, meta.Workspace
+			if meta.Runtime != nil {
+				archive.RuntimeBound, archive.RuntimeDir, archive.RuntimeScope = true, meta.Runtime.Dir, meta.Runtime.Scope
+			}
+			continue
+		}
+		if key == "ao_import" {
+			archive.ImportCopy = true
+		}
+		if err := skipNativeRestoreValue(ctx, dec); err != nil {
+			return archive, err
+		}
+	}
+	_, err = dec.Token()
+	return archive, err
+}
+
+func skipNativeRestoreValue(ctx context.Context, dec *json.Decoder) error {
+	depth := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		token, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); ok {
+			switch delimiter {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+		if depth == 0 {
+			return nil
+		}
+	}
 }
 
 func codewhaleRuntimeScope(runtimeDir string) (string, error) {

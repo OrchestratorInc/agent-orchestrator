@@ -7,12 +7,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func TestMemcodeLaunchPinsSDKRouteWithoutChangingCredentials(t *testing.T) {
+func TestMemcodeLaunchPreservesSDKRouteWithoutChangingCredentials(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://unrelated.invalid/v1")
 	env := map[string]string{"OPENAI_BASE_URL": "https://unrelated.invalid/v1", "OPENAI_API_KEY": "synthetic-key", "MEMCODE_ENDPOINT_URL": "http://127.0.0.1:11434/v1"}
 	New().AugmentRuntimeLaunchEnv(env, t.TempDir(), domain.SessionID("ao-1"), "launch-1")
-	if env["OPENAI_BASE_URL"] != "https://api.openai.com/v1" || env["OPENAI_API_KEY"] != "synthetic-key" || env["MEMCODE_ENDPOINT_URL"] != "http://127.0.0.1:11434/v1" {
-		t.Fatal("runtime route isolation changed credentials or custom endpoint")
+	if env["OPENAI_BASE_URL"] != "https://unrelated.invalid/v1" || env["OPENAI_API_KEY"] != "synthetic-key" || env["MEMCODE_ENDPOINT_URL"] != "http://127.0.0.1:11434/v1" {
+		t.Fatal("runtime augmentation changed credentials or custom endpoint")
 	}
 }
 

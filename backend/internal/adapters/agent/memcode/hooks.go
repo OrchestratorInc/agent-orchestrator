@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -74,7 +75,7 @@ func readWitness(data, session, generation string) (witness, error) {
 
 // AugmentRuntimeLaunchEnv implements the native TUI adapter contract.
 func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, data string, id domain.SessionID, generation string) {
-	prepareMemcodeRuntimeEnv(env)
+	providerenv.Capture(env)
 	env["AO_MEMCODE_DATA_DIR"] = data
 	env["AO_MEMCODE_GENERATION"] = generation
 	env["AO_MEMCODE_SESSION"] = string(id)
@@ -129,9 +130,12 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if cfg.Config.Model != "" && cfg.Env["MEMCODE_ENDPOINT_URL"] != "" {
 		return errors.New("memcode custom endpoint models must be selected in the native TUI")
 	}
-	if cfg.Config.Model == "sol" {
+	if cfg.Config.Model == "sol" && cfg.ImportConfigDir != "" {
 		if err := pinMemcodeSol(ctx, cfg.WorkspacePath); err != nil {
 			return err
+		}
+		if cfg.Env != nil {
+			cfg.Env[importedSolPinEnv] = "1"
 		}
 	}
 	instructions := []byte(cfg.SystemPrompt)

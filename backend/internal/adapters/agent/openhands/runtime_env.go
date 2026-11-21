@@ -30,12 +30,12 @@ func importedConversationCommand(cmd []string, cfg ports.RestoreConfig) ([]strin
 
 // importedEndpointCommand fences the ambient SDK fallback only for an imported
 // conversation explicitly launched with an OpenAI model. Fresh/managed sessions,
-// other providers and explicit session endpoints keep their configured routing.
+// other providers and configured session or inherited endpoints keep their routing.
 func importedEndpointCommand(cmd []string, cfg ports.RestoreConfig) []string {
 	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] == "" {
 		return cmd
 	}
-	if _, explicit := cfg.Env["OPENAI_BASE_URL"]; explicit || sessionEnv(cfg.Env, "LLM_BASE_URL") != "" {
+	if _, explicit := cfg.Env["OPENAI_BASE_URL"]; explicit || sessionEnv(cfg.Env, "OPENAI_BASE_URL") != "" || sessionEnv(cfg.Env, "LLM_BASE_URL") != "" {
 		return cmd
 	}
 	model := strings.TrimSpace(cfg.Config.Model)

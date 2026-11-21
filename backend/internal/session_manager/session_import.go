@@ -430,6 +430,12 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64, v
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	return writableTranscriptOwnerMatching(ctx, path, func(_ context.Context, _ int, command string) bool {
 		for _, name := range importedProcessNames {
+			if name == "fx" {
+				if command == "fx" || command == "fx.exe" {
+					return true
+				}
+				continue
+			}
 			if strings.Contains(command, name) {
 				return true
 			}

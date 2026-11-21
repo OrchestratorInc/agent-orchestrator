@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,80 @@ func seedRuntimeOwner(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "owner.json"), []byte(`{"owner_id":"`+runtimeOwnerID+`"}`), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOrdinaryCodeWhaleRestoreDoesNotUseImportEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(map[string]any)
+	}{
+		{"future schema", func(doc map[string]any) { doc["schema_version"] = 2 }},
+		{"child conversation", func(doc map[string]any) { doc["metadata"].(map[string]any)["spawn_depth"] = 1 }},
+		{"null messages", func(doc map[string]any) { doc["messages"] = nil }},
+		{"large history", func(doc map[string]any) {
+			doc["messages"] = []any{map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": strings.Repeat("x", (16<<20)+1)}}}}
+		}},
+		{"moved workspace", func(doc map[string]any) {
+			doc["metadata"].(map[string]any)["workspace"] = filepath.Join(t.TempDir(), "no-longer-present")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir, root, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+			path := writeRestoreSnapshot(t, root, workspace, restoreTestID, "")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(before, &doc); err != nil {
+				t.Fatal(err)
+			}
+			tc.change(doc)
+			body, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runPath := filepath.Join(dataDir, "running.json")
+			if err := runfile.Write(runPath, runfile.Info{PID: 42, Port: 43123, StartedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			env := map[string]string{codewhaleHomeEnv: root, "AO_RUNTIME_LAUNCH_ID": "ordinary", "AO_RUN_FILE": runPath}
+			p := &Plugin{resolvedBinary: "/opt/codewhale"}
+			cfg := ports.WorkspaceHookConfig{DataDir: dataDir, SessionID: "ordinary-ao", WorkspacePath: workspace, NativeSessionID: restoreTestID, Env: env}
+			if err := p.PrepareRuntimeLaunch(t.Context(), cfg); err != nil {
+				t.Fatalf("ordinary restore: %v", err)
+			}
+			want := filepath.Join(dataDir, "agent-runtime", adapterID, "sessions", "ordinary-ao", "launches", "ordinary", "runtime")
+			if env[codewhaleRuntimeDirEnv] != want {
+				t.Fatalf("ordinary runtime=%q want=%q", env[codewhaleRuntimeDirEnv], want)
+			}
+			if id, ok, err := p.ResolveNativeSessionID(t.Context(), ports.NativeSessionResolveConfig{DataDir: dataDir, SessionID: "ordinary-ao", LaunchID: "ordinary"}); err != nil || !ok || id != restoreTestID {
+				t.Fatalf("ordinary identity=%q ok=%v err=%v", id, ok, err)
+			}
+			if after, err := os.ReadFile(path); err != nil || string(after) != string(body) {
+				t.Fatalf("restore changed history: %v", err)
+			}
+			// The same unsupported snapshot is still refused when import-bound,
+			// or when an AO copy marker exists without its recorded binding.
+			if _, err := p.nativeRestoreRuntimeDir(t.Context(), cfg, restoreTestID, root, t.TempDir()); err == nil {
+				t.Fatal("import-bound unsupported history accepted")
+			}
+			doc["ao_import"] = map[string]any{"source_id": restoreTestID, "digest": "invalid"}
+			marked, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, marked, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.nativeRestoreRuntimeDir(t.Context(), cfg, restoreTestID, "", t.TempDir()); err == nil {
+				t.Fatal("import marker bypassed strict restore validation")
+			}
+		})
 	}
 }
 

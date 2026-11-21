@@ -48,4 +48,4 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "prime-agent", "codewhale", "crush", "memcode", "fx", "openhands", "python", "droid", "agy"}
+var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "prime-agent", "codewhale", "crush", "memcode", "fx", "openhands", "droid", "agy"}

@@ -13,9 +13,10 @@ import (
 )
 
 const memcodeWorkspaceConfig = ".memcode/config.json"
+const importedSolPinEnv = "AO_MEMCODE_IMPORTED_SOL_PIN"
 
 // The caller is GetAgentHooks, whose WorkspacePath is the AO launch workspace,
-// after imported history has moved there. Never use the source/import root or
+// only for an imported Sol session after its history has moved there. Never use the source/import root or
 // the provider's global config. Sol's native session effort cannot be persisted;
 // pin the model here so the single confirmed startup command can set effort.
 func pinMemcodeSol(ctx context.Context, workspace string) error {

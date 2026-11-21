@@ -146,14 +146,14 @@ func TestOpenHandsImportedEndpointScope(t *testing.T) {
 		env      map[string]string
 		pin      bool
 	}{
-		{"imported OpenAI ambient fallback", true, "openai/gpt-4.1-mini", nil, true},
+		{"imported OpenAI inherited endpoint", true, "openai/gpt-4.1-mini", nil, false},
 		{"managed OpenAI", false, "openai/gpt-4.1-mini", nil, false},
 		{"explicit project endpoint", true, "openai/gpt-4.1-mini", map[string]string{"OPENAI_BASE_URL": "https://gateway.invalid/v1"}, false},
 		{"explicit clear", true, "openai/gpt-4.1-mini", map[string]string{"OPENAI_BASE_URL": ""}, false},
 		{"explicit native endpoint", true, "openai/gpt-4.1-mini", map[string]string{"LLM_BASE_URL": "https://native-gateway.invalid/v1"}, false},
 		{"other provider", true, "anthropic/claude-sonnet", nil, false},
 		{"unknown saved model", true, "", nil, false},
-		{"explicit process model", true, "", map[string]string{"LLM_MODEL": "openai/gpt-4.1-mini"}, true},
+		{"explicit process model", true, "", map[string]string{"LLM_MODEL": "openai/gpt-4.1-mini"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			metadata := map[string]string{ports.MetadataKeyAgentSessionID: "native"}
@@ -180,6 +180,16 @@ func TestOpenHandsImportedEndpointScope(t *testing.T) {
 			}
 		})
 	}
+	t.Run("no configured endpoint", func(t *testing.T) {
+		t.Setenv("OPENAI_BASE_URL", "")
+		cfg := ports.RestoreConfig{Config: ports.AgentConfig{Model: "openai/gpt-4.1-mini"}, Session: ports.SessionRef{Metadata: map[string]string{
+			ports.MetadataKeyAgentSessionID: "native", ports.MetadataKeyImportSourceNativeID: "source", ports.MetadataKeyImportConfigDir: t.TempDir(),
+		}}}
+		cmd, ok, err := testPlugin().GetRestoreCommand(t.Context(), cfg)
+		if err != nil || !ok || len(cmd) < 2 || cmd[0] != "env" || cmd[1] != "OPENAI_BASE_URL=https://api.openai.com/v1" {
+			t.Fatalf("native default restore = %q, %v, %v", cmd, ok, err)
+		}
+	})
 }
 
 func TestOpenHandsImportedRestorePinsPrivateRootOnEveryOpen(t *testing.T) {

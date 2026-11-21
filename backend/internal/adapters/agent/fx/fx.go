@@ -68,7 +68,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
-	return fxHomeCommand(commandWithOverrides(binary, cfg.Config, cfg.Permissions), cfg.Env)
+	return commandWithOverrides(binary, cfg.Config, cfg.Permissions), nil
 }
 
 // GetPromptDeliveryStrategy tells AO to inject the initial task after startup.
@@ -135,9 +135,12 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd := commandWithOverrides(binary, cfg.Config, cfg.Permissions)
-	cmd, err = fxHomeCommand(append(cmd, "--resume", agentSessionID), cfg.Env)
-	if err != nil {
-		return nil, false, err
+	cmd = append(cmd, "--resume", agentSessionID)
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		cmd, err = fxHomeCommand(cmd, cfg.Env)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	return cmd, true, nil
 }

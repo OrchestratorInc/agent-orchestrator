@@ -26,11 +26,11 @@ func TestMemcodeSolWorkspacePreparationAndConfirmedEffort(t *testing.T) {
 		}
 	}
 	p := New()
-	cfg := ports.LaunchConfig{WorkspacePath: workspace, Config: ports.AgentConfig{Model: "sol"}}
+	cfg := ports.LaunchConfig{WorkspacePath: workspace, Config: ports.AgentConfig{Model: "sol"}, Env: map[string]string{importedSolPinEnv: "1"}}
 	if _, err := p.AfterStartCommand(ctx, cfg); err == nil {
 		t.Fatal("Sol startup accepted before workspace preparation")
 	}
-	if err := p.GetAgentHooks(ctx, ports.WorkspaceHookConfig{WorkspacePath: workspace, DataDir: t.TempDir(), SessionID: "ao-1", Config: cfg.Config}); err != nil {
+	if err := p.GetAgentHooks(ctx, ports.WorkspaceHookConfig{WorkspacePath: workspace, DataDir: t.TempDir(), SessionID: "ao-1", Config: cfg.Config, ImportConfigDir: workspace, Env: cfg.Env}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(workspace, memcodeWorkspaceConfig))
@@ -79,6 +79,34 @@ func TestMemcodeSolWorkspacePreparationAndConfirmedEffort(t *testing.T) {
 		if p.AfterStartCommandApplied(cfg, test.output) != test.want {
 			t.Fatalf("startup confirmation mismatch for %q", test.output)
 		}
+	}
+}
+
+func TestOrdinaryMemcodeSolPreservesProjectConfigAndNativeEffort(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("MEMCODE_ENDPOINT_URL", "")
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".memcode"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("{\n  \"pinned_model\": \"opus\", \"models\": {\"coder\": \"sonnet\"}\n}\n")
+	path := filepath.Join(workspace, memcodeWorkspaceConfig)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	cfg := ports.LaunchConfig{WorkspacePath: workspace, Config: ports.AgentConfig{Model: "sol"}, Env: map[string]string{}}
+	if err := p.GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{WorkspacePath: workspace, DataDir: t.TempDir(), SessionID: "ao-sol", Config: cfg.Config, Env: cfg.Env}); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != string(original) {
+		t.Fatalf("ordinary Sol launch changed project config: %v", err)
+	}
+	if command, err := p.AfterStartCommand(t.Context(), cfg); err != nil || command != "/model sol" {
+		t.Fatalf("ordinary model selection=%q err=%v", command, err)
+	}
+	if !p.AfterStartCommandApplied(cfg, readyTerminal+"\nmodel → sol") || p.AfterStartCommandApplied(cfg, readyTerminal+"\nthinking effort → medium") {
+		t.Fatal("ordinary Sol selection used the imported effort workaround")
 	}
 }
 
