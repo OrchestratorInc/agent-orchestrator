@@ -322,7 +322,7 @@ var catalog = []catalogTool{
 		"Lists sessions with status, agent, branch and project. Read it before you start new work, so you do not duplicate a session that exists.", false,
 		map[string]any{
 			"projectId": stringProp("Only sessions of this project."),
-			"active":    map[string]any{"type": "boolean", "description": "Only sessions that are not terminated."},
+			"active":    map[string]any{"type": "boolean", "description": "true: only sessions that are not terminated. Omit it to include terminated sessions."},
 			"kind":      enumProp("Only this kind.", "worker", "orchestrator"),
 			"limit":     intProp("Sessions per page. Defaults to 50.", 1, 200),
 			"cursor":    stringProp("nextCursor from the previous page."),
@@ -361,7 +361,8 @@ var catalog = []catalogTool{
 	{
 		name: "session_wait", title: "Wait for sessions",
 		desc: "Waits until every listed session stops working: it is idle, needs input, has exited, or failed to start. " +
-			"Use it instead of polling session_list. A timeout does not stop the sessions: timedOut is true and you can call it again.",
+			"Use it instead of polling session_list. A timeout does not stop the sessions: timedOut is true and you can call it again. " +
+			"A session that needs input is in the answer with status needs_input: read pending_list for it.",
 		props: map[string]any{
 			"sessionIds": map[string]any{"type": "array", "minItems": 1, "maxItems": maxWaitSessions, "items": map[string]any{"type": "string"},
 				"description": "Sessions to wait for."},
@@ -418,7 +419,7 @@ var catalog = []catalogTool{
 		call:     callSessionSpawn,
 	},
 	routed("session_send", "Send a message to a session", "Sends a message to another session's agent. The agent reads it as its next instruction.", true,
-		map[string]any{"sessionId": otherSessionProp, "message": stringProp("The message.")},
+		map[string]any{"sessionId": otherSessionProp, "message": stringProp("The message, at most 4096 bytes.")},
 		[]string{"sessionId", "message"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/send",
 			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"senderSessionId": caller} }}),

@@ -1,6 +1,8 @@
 package mcpserver
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -69,9 +71,43 @@ func fixed(status int, payload string) func() (int, string) {
 	return func() (int, string) { return status, payload }
 }
 
+// runMCPOpen keeps stdin open until want replies arrive, as a live client does:
+// the server stops in-flight waits when stdin closes.
+func runMCPOpen(t *testing.T, want int, lines ...string) []mcpReply {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	served := make(chan error, 1)
+	go func() {
+		served <- Serve(context.Background(), inR, outW, NewDaemonClient(), "test")
+		_ = outW.Close()
+	}()
+	go func() {
+		for _, line := range lines {
+			_, _ = io.WriteString(inW, line+"\n")
+		}
+	}()
+	scanner := bufio.NewScanner(outR)
+	scanner.Buffer(make([]byte, 1<<20), 1<<26)
+	var replies []mcpReply
+	for len(replies) < want && scanner.Scan() {
+		var reply mcpReply
+		if err := json.Unmarshal(scanner.Bytes(), &reply); err != nil {
+			t.Fatalf("reply %q: %v", scanner.Text(), err)
+		}
+		replies = append(replies, reply)
+	}
+	_ = inW.Close()
+	go func() { _, _ = io.Copy(io.Discard, outR) }()
+	if err := <-served; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	return replies
+}
+
 func callTool(t *testing.T, tool string, args map[string]any) (string, bool) {
 	t.Helper()
-	replies := runMCP(t, mcpCall(tool, args))
+	replies := runMCPOpen(t, 1, mcpCall(tool, args))
 	if len(replies) != 1 || replies[0].Error != nil || len(replies[0].Result.Content) != 1 {
 		t.Fatalf("reply = %+v", replies)
 	}
@@ -487,7 +523,7 @@ func TestSessionWaitDoesNotBlockOtherRequestsAndCanBeCancelled(t *testing.T) {
 		"GET /api/v1/sessions/ao-2": fixed(200, `{"session":{"id":"ao-2","provisionState":"provisioning"}}`),
 	})
 	started := time.Now()
-	replies := runMCP(t,
+	replies := runMCPOpen(t, 2,
 		mcpCall("session_wait", map[string]any{"sessionIds": []string{"ao-2"}, "timeoutSec": 110}),
 		`{"jsonrpc":"2.0","id":8,"method":"ping"}`,
 		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}`,
@@ -535,5 +571,67 @@ func TestManyTurnsStayValidJSON(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(text), &history); isError || err != nil || history.Total != 20 || len(history.Turns) != 20 {
 		t.Fatalf("isError = %v, err = %v, total = %d, turns = %d, bytes = %d", isError, err, history.Total, len(history.Turns), len(text))
+	}
+}
+
+func TestSessionWaitReturnsForAChatSessionThatNeedsInput(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2":              fixed(200, `{"session":{"id":"ao-2","mode":"chat","status":"needs_input","provisionState":"ready","activity":{"state":"waiting_input"}}}`),
+		"GET /api/v1/sessions/ao-2/conversation": fixed(200, `{"turns":[{"state":"running"}]}`),
+	})
+	text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2"}})
+	if isError || !strings.Contains(text, `"timedOut":false`) || !strings.Contains(text, `"status":"needs_input"`) {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	if got := len(daemon.seen()); got != quietPollsAfterWork {
+		t.Errorf("reads = %d, want %d", got, quietPollsAfterWork)
+	}
+}
+
+func TestSessionWaitDoesNotTrustAFailedTurnRead(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	reads := 0
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2": fixed(200, `{"session":{"id":"ao-2","mode":"chat","provisionState":"ready","activity":{"state":"idle"}}}`),
+		"GET /api/v1/sessions/ao-2/conversation": func() (int, string) {
+			reads++
+			if reads <= 6 {
+				return 500, `{"message":"database is busy","code":"INTERNAL"}`
+			}
+			return 200, `{"turns":[{"state":"completed"}]}`
+		},
+	})
+	if text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2"}}); isError || !strings.Contains(text, `"timedOut":false`) {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	if reads != 6+quietPollsAfterWork {
+		t.Errorf("turn reads = %d, want %d: six failed reads must not count as quiet", reads, 6+quietPollsAfterWork)
+	}
+}
+
+func TestSessionWaitRefusesToWaitForItself(t *testing.T) {
+	daemon := startFakeDaemon(t, nil)
+	text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2", "ao-1"}})
+	if !isError || !strings.Contains(text, "this session") || len(daemon.seen()) != 0 {
+		t.Fatalf("isError = %v, calls = %+v, text = %s", isError, daemon.seen(), text)
+	}
+}
+
+func TestActToolIsRefusedWhenTheCallerHasNoConversation(t *testing.T) {
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"POST /api/v1/sessions/ao-2/kill": fixed(200, `{"ok":true}`),
+	})
+	t.Setenv("AO_SESSION_ID", "btw-launch-side")
+	text, isError := callTool(t, "session_stop", map[string]any{"sessionId": "ao-2"})
+	if !isError || !strings.Contains(text, "permission mode") {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	for _, call := range daemon.seen() {
+		if call.method == "POST" {
+			t.Errorf("a side chat stopped a session: %+v", call)
+		}
 	}
 }

@@ -79,6 +79,8 @@ func (s *server) serveMCP(ctx context.Context, in io.Reader, out io.Writer) erro
 	var waits sync.WaitGroup
 	cancelWait := map[string]context.CancelFunc{}
 	defer waits.Wait()
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	reply := func(resp *mcpResponse) error {
 		if resp == nil {
 			return nil

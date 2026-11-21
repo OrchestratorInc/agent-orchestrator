@@ -97,21 +97,25 @@ func sessionSettled(session map[string]any) bool {
 	return session["activity"] != "active"
 }
 
-func (s *server) chatTurnInFlight(ctx context.Context, id string) (inFlight, known bool) {
+func (s *server) chatTurnInFlight(ctx context.Context, id string) (bool, error) {
 	var conversation struct {
 		Turns []struct {
 			State string `json:"state"`
 		} `json:"turns"`
 	}
 	if err := s.daemon.DoJSON(ctx, http.MethodGet, sessionPath(id, "/conversation?limit=1"), nil, &conversation); err != nil {
-		return false, false
+		return false, err
 	}
 	for _, turn := range conversation.Turns {
 		if turn.State == "queued" || turn.State == "running" {
-			return true, true
+			return true, nil
 		}
 	}
-	return false, true
+	return false, nil
+}
+
+func notFound(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not_found")
 }
 
 func waitSessionIDs(args map[string]any) ([]string, error) {
@@ -125,6 +129,9 @@ func waitSessionIDs(args map[string]any) ([]string, error) {
 	}
 	if len(ids) == 0 || len(ids) > maxWaitSessions {
 		return nil, fmt.Errorf("sessionIds must list 1 to %d sessions", maxWaitSessions)
+	}
+	if caller := callerSession(); slices.Contains(ids, caller) {
+		return nil, fmt.Errorf("sessionIds lists this session (%s), which works for as long as this call runs; list only other sessions", caller)
 	}
 	return ids, nil
 }
@@ -152,7 +159,7 @@ func callSessionWait(ctx context.Context, s *server, args map[string]any) (any, 
 					break
 				}
 				round = append(round, map[string]any{"id": id, "error": err.Error()})
-				if !strings.Contains(err.Error(), "NOT_FOUND") {
+				if !notFound(err) {
 					quiet[id], done = 0, false
 				}
 				continue
@@ -160,11 +167,23 @@ func callSessionWait(ctx context.Context, s *server, args map[string]any) (any, 
 			summary := sessionSummary(response.Session)
 			round = append(round, summary)
 			busy, exact := !sessionSettled(summary), false
-			if summary["activity"] == "active" {
+			activity := summary["activity"]
+			if activity == "active" {
 				worked[id] = true
 			}
-			if !busy && summary["mode"] == "chat" && summary["isTerminated"] != true {
-				if busy, exact = s.chatTurnInFlight(ctx, id); busy {
+			switch {
+			case busy:
+			case activity == "waiting_input" || activity == "blocked":
+				exact = true
+			case summary["mode"] == "chat" && summary["isTerminated"] != true:
+				inFlight, err := s.chatTurnInFlight(ctx, id)
+				switch {
+				case err == nil:
+					busy, exact = inFlight, true
+				case !notFound(err):
+					busy = true
+				}
+				if inFlight {
 					worked[id] = true
 				}
 			}
