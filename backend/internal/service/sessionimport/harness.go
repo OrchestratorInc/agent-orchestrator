@@ -36,6 +36,7 @@ type harnessImporter struct {
 
 // Keep entries immutable after package initialization: scans read them in parallel.
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
+	domain.HarnessKimi:       {root: kimiRoot, discover: discoverKimi, read: readKimiTranscript, mode: domain.SessionModeChat},
 	domain.HarnessAider:      {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessClaudeCode: {root: claudeRoot, discover: walkSources(domain.HarnessClaudeCode, "projects", jsonlKey), read: readClaudeTranscript},
 	// Archived Codex threads are not resumable without unarchiving them in Codex.
@@ -88,3 +89,5 @@ func importTitle(text string) string {
 	}
 	return text
 }
+
+func kimiRoot(home string) string { return envOr("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code")) }

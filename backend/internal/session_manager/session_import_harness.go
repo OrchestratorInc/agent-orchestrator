@@ -19,6 +19,7 @@ type importedHarnessHooks struct {
 }
 
 var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
+	domain.HarnessKimi:       {configEnvKey: "KIMI_CODE_HOME"},
 	domain.HarnessClaudeCode: {configEnvKey: "CLAUDE_CONFIG_DIR"},
 	domain.HarnessCline:      {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
 	domain.HarnessCodex:      {configEnvKey: "CODEX_HOME"},
