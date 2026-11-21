@@ -34,7 +34,10 @@ import (
 var aoBin string
 
 func TestMain(m *testing.M) {
-	if os.Getenv("AO_CLI_BATCH_HELPER") == "1" {
+	// Re-executed test helpers only run their selected test and do not need
+	// the AO binary. In particular, the Windows env-prefix helper runs with
+	// an empty PATH to keep any Unix env utility out of the fixture.
+	if os.Getenv("AO_CLI_BATCH_HELPER") == "1" || os.Getenv("AO_AGENT_PROCESS_ENV_HELPER") == "1" {
 		os.Exit(m.Run())
 	}
 	dir, err := os.MkdirTemp("", "ao-e2e-bin")
