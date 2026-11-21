@@ -28,7 +28,7 @@ ao serve [flags]
 {"status":"ready","port":3001,"pid":12345,"url":"http://127.0.0.1:3001","reused":false,"runFile":"/Users/you/.ao/running.json","dataDir":"/Users/you/.ao/data"}
 ```
 
-`reused` is `true` when an existing daemon was found. Failures exit 1 with the reason on stderr; bad flags exit 2.
+`reused` is `true` when an existing daemon was found. With `--foreground`, the object is printed only when serve reuses or follows a daemon. When it runs its own daemon in the process it prints nothing, so scripts should use the default background mode to read the result. Failures exit 1 with the reason on stderr; bad flags exit 2.
 
 ## Notes
 

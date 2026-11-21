@@ -239,7 +239,12 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 	// an `ao stop` after install returns reaches a watcher, not a starting
 	// serve that would take the stopped daemon's place.
 	marker := serveAttachMarker(cfg.RunFilePath, os.Getpid())
-	_ = os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		return fmt.Errorf("create run-file dir: %w", err)
+	}
+	if err := os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write attach marker: %w", err)
+	}
 	defer func() { _ = os.Remove(marker) }()
 	if res == nil {
 		env := serveEnv(os.Environ(), opts.port, telemetryOptedOut(cfg.DataDir), Version)

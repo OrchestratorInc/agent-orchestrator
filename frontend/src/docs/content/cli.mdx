@@ -108,7 +108,7 @@ With `--json`, `ao serve` prints one object. Scripts can rely on these fields; n
 }
 ```
 
-`reused` is `true` when an existing daemon was found. A failure exits 1 with the reason on stderr; a bad flag exits 2.
+`reused` is `true` when an existing daemon was found. With `--foreground`, the object is printed only when `ao serve` reuses or follows a daemon. When it runs its own daemon in the process it prints nothing, so scripts should read the result from the default background mode. A failure exits 1 with the reason on stderr; a bad flag exits 2.
 
 When you open the desktop app, it swaps in its own daemon on the same data directory, which keeps running after the app quits. Stop it with `ao stop`.
 

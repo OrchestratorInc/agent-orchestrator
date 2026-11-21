@@ -573,3 +573,26 @@ func TestServeForegroundWritesAttachMarkerWhileWatching(t *testing.T) {
 		t.Fatalf("attach marker left behind after exit: %v", err)
 	}
 }
+
+// On a fresh home the run file's directory does not exist yet.
+func TestServeForegroundCreatesMarkerDirOnFreshHome(t *testing.T) {
+	h := newForegroundHarness(t)
+	fresh := filepath.Join(t.TempDir(), "fresh", ".ao")
+	h.cfg.runFile = filepath.Join(fresh, "running.json")
+	t.Setenv("AO_RUN_FILE", h.cfg.runFile)
+	marker := serveAttachMarker(h.cfg.runFile, os.Getpid())
+	seen := false
+	h.atTick = 1
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	_, err := h.runWithDaemon(func() {
+		_, statErr := os.Stat(marker)
+		seen = statErr == nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("no attach marker while the daemon ran on a fresh home")
+	}
+}
