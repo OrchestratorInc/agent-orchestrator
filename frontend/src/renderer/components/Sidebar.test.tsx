@@ -2813,6 +2813,23 @@ describe("Sidebar", () => {
 		);
 	});
 
+	it("nests a stacked session under the session whose PR it is based on", () => {
+		renderSidebar({
+			workspaces: [{
+				...workspace,
+				sessions: [
+					{ ...session, id: "proj-1-top", title: "settings page", prs: [sidebarPR({ number: 8, stackParent: 7 })] },
+					{ ...session, id: "proj-1-base", title: "fix login", prs: [sidebarPR({ number: 7 })] },
+				],
+			}],
+		});
+		const rows = within(screen.getByTestId("session-list-proj-1")).getAllByRole("button", { name: /^Open / });
+		expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual(["Open fix login", "Open settings page"]);
+		expect(rows[0]).toHaveTextContent("Bottom of a PR stack");
+		expect(rows[1]).toHaveTextContent("Stacked on #7");
+		expect(screen.getAllByTestId("sidebar-stack-elbow")).toHaveLength(1);
+	});
+
 	it("renames a session inline by double-clicking its name", async () => {
 		const user = userEvent.setup();
 		const workspaceWithSession = { ...workspace, sessions: [session] };

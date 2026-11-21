@@ -2702,6 +2702,8 @@
 	"shell.couldNotRemoveProjectNamed": "Не удалось удалить {{name}}",
 	"shell.removeProjectRetry": "Повторить",
 	"shell.renameSession": "Переименовать {{title}}",
+	"shell.stackBase": "Нижний PR стека",
+	"shell.stackedOn": "Поверх #{{number}}",
 	"shell.rename": "Переименовать",
 	"shell.openDashboard": "Открыть панель управления",
 	"shell.copied": "Скопировано в буфер обмена",

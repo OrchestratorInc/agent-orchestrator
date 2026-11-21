@@ -2622,6 +2622,8 @@
 	"shell.couldNotRemoveProjectNamed": "{{name}} kaldırılamadı",
 	"shell.removeProjectRetry": "Yeniden dene",
 	"shell.renameSession": "{{title}} öğesini yeniden adlandır",
+	"shell.stackBase": "PR yığınının en altı",
+	"shell.stackedOn": "#{{number}} üzerine yığılı",
 	"shell.rename": "Yeniden adlandır",
 	"shell.openDashboard": "Kontrol panelini aç",
 	"shell.copied": "Panoya kopyalandı",

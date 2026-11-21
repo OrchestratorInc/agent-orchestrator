@@ -2225,6 +2225,8 @@
 	"shell.couldNotRemoveProjectNamed": "无法移除 {{name}}",
 	"shell.removeProjectRetry": "重试",
 	"shell.renameSession": "重命名{{title}}",
+	"shell.stackBase": "PR 堆栈的底层",
+	"shell.stackedOn": "堆叠在 #{{number}} 上",
 	"shell.rename": "重命名",
 	"shell.openDashboard": "打开仪表盘",
 	"shell.copied": "已复制到剪贴板",
