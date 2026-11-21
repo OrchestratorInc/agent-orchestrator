@@ -12,6 +12,14 @@
 //                                             (several dialogs can be open at once;
 //                                              the report waits for the last one)
 //
+// Child (subagent) sessions share this event bus. They are tracked from
+// `session.created` (`info.parentID`) and never reported as the session
+// identity: their start/prompt/stop events are dropped, while their tool and
+// permission traffic is attributed to the parent session so subagent work still
+// reads as activity and a child dialog still surfaces. AO persists the reported
+// id as the native restore handle, so forwarding a child id would make
+// restoration resume the wrong conversation.
+//
 // The opencode-native session id (and prompt/model where known) is piped to the
 // hook command as JSON on stdin, run with cwd set to the worktree so AO can
 // correlate the opencode session to its AO session. Every invocation is
@@ -42,6 +50,10 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
   // into that dialog instead of reaching the agent.
   const openAsks = new Set<string>()
   let askCounter = 0
+  // Subagent sessions are children of the session the user started. They are
+  // never adopted as currentSessionID: AO treats the reported id as the native
+  // session to restore, and a child id would resume the subagent conversation.
+  const childSessions = new Set<string>()
   // The model of the most recent assistant message, forwarded for context.
   let currentModel: string | null = null
   // AO fences each provider generation with AO_RUNTIME_LAUNCH_ID; carry it in
@@ -130,6 +142,22 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
     return typeof id === "string" && id.length > 0 ? id : null
   }
 
+  function isChildSession(sessionID: string | null | undefined): boolean {
+    return !!sessionID && childSessions.has(sessionID)
+  }
+
+  // Resolve the session id AO may see. Child (subagent) traffic is folded onto
+  // the parent id so it still counts as activity without leaking the child's
+  // native id; it returns null when no parent is known yet, in which case the
+  // child event has no safe target. Non-child ids pass through unchanged so
+  // AO's supported new-native-session flows keep working.
+  function reportSessionID(sessionID: string | null | undefined): string | null {
+    if (!sessionID) return null
+    if (!childSessions.has(sessionID)) return sessionID
+    if (!currentSessionID || childSessions.has(currentSessionID)) return null
+    return currentSessionID
+  }
+
   // Report a user prompt, preferring the one that carries the prompt text.
   // message.updated can arrive before message.part.updated with no text, so an
   // early empty report must NOT dedup away the later text report — otherwise the
@@ -152,6 +180,12 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
           case "session.created": {
             const session = (event as any).properties?.info
             if (!session?.id) break
+            // Nested subagents carry their immediate parent's id. Any session
+            // with a parent is a child and must never become the identity.
+            if (session.parentID) {
+              childSessions.add(session.id)
+              break
+            }
             if (switchedSession(session.id)) {
               callHookSync("session-start", { session_id: session.id })
             }
@@ -161,6 +195,9 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
           case "message.updated": {
             const msg = (event as any).properties?.info
             if (!msg) break
+            // Child prompt/assistant messages are subagent traffic: never adopt
+            // the child id and never report its prompt as the parent's.
+            if (isChildSession(msg.sessionID)) break
             if (msg.sessionID && switchedSession(msg.sessionID)) {
               callHookSync("session-start", { session_id: msg.sessionID })
             }
@@ -180,6 +217,7 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
             const part = (event as any).properties?.part
             if (!part?.messageID) break
             const msg = messageStore.get(part.messageID)
+            if (msg && isChildSession(msg.sessionID)) break
             if (msg?.role === "user" && part.type === "text") {
               const sessionID = msg.sessionID ?? currentSessionID
               const prompt = part.text ?? ""
@@ -201,7 +239,9 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
             const props = (event as any).properties
             if (props?.status?.type !== "idle") break
             const sessionID = props?.sessionID ?? currentSessionID
-            if (!sessionID) break
+            // A child finishing says nothing about the parent's turn — never
+            // stop the parent on subagent completion.
+            if (!sessionID || isChildSession(sessionID)) break
             callHookSync("stop", { session_id: sessionID, model: currentModel ?? "", last_assistant_message: lastAssistantText })
             assistantMessages.clear()
             lastAssistantText = ""
@@ -213,7 +253,7 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
 
           case "permission.asked":
           case "question.asked": {
-            const sessionID = (event as any).properties?.sessionID ?? currentSessionID
+            const sessionID = reportSessionID((event as any).properties?.sessionID ?? currentSessionID)
             if (!sessionID) break
             const ask = askID((event as any).properties) ?? `ask-${++askCounter}`
             openAsks.add(ask)
@@ -230,7 +270,7 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
             // OpenCode 2 plugin). While a dialog remains open there is no
             // report: the session stays blocked and AO refuses sends, whose
             // keystrokes would otherwise type into the still-open dialog.
-            const sessionID = (event as any).properties?.sessionID ?? currentSessionID
+            const sessionID = reportSessionID((event as any).properties?.sessionID ?? currentSessionID)
             if (!sessionID) break
             if (openAsks.size > 0) {
               const ask = askID((event as any).properties)
@@ -256,12 +296,16 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
       }
     },
     "tool.execute.before": async (input) => {
-      callHookSync("active", { session_id: input.sessionID, model: currentModel ?? "" })
+      const sessionID = reportSessionID(input.sessionID)
+      if (!sessionID) return
+      callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
     },
     "tool.execute.after": async (input) => {
       // Tool completion is still activity; session.status(idle) owns the
       // transition back to idle after the turn finishes.
-      callHookSync("active", { session_id: input.sessionID, model: currentModel ?? "" })
+      const sessionID = reportSessionID(input.sessionID)
+      if (!sessionID) return
+      callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
     },
   }
 }

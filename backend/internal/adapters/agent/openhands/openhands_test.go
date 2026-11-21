@@ -19,6 +19,8 @@ func testPlugin() *Plugin {
 }
 
 func TestLaunchAndRestore(t *testing.T) {
+	// An exported LLM_API_KEY would add --override-with-envs.
+	t.Setenv("LLM_API_KEY", "")
 	p := testPlugin()
 	ctx := context.Background()
 	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{Prompt: "-fix this", NativeSessionID: "ignored", Permissions: ports.PermissionModeBypassPermissions})
@@ -74,7 +76,18 @@ func TestModelOverride(t *testing.T) {
 	}
 }
 
+func TestProviderKeyEnablesOpenHandsEnvironmentOverride(t *testing.T) {
+	t.Setenv("LLM_API_KEY", "test-secret")
+	cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{})
+	want := []string{"openhands", "--override-with-envs"}
+	if err != nil || !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("launch = %q, %v; want %q", cmd, err, want)
+	}
+}
+
 func TestPermissions(t *testing.T) {
+	// An exported LLM_API_KEY would add --override-with-envs.
+	t.Setenv("LLM_API_KEY", "")
 	for _, tc := range []struct {
 		mode ports.PermissionMode
 		want string
@@ -372,5 +385,23 @@ func TestSettingsPathHonorsPersistenceDir(t *testing.T) {
 	t.Setenv("OPENHANDS_PERSISTENCE_DIR", dir)
 	if got, want := settingsPath(), filepath.Join(dir, "agent_settings.json"); got != want {
 		t.Fatalf("settingsPath = %q, want %q", got, want)
+	}
+}
+
+// The flag follows the key the session will see, not the daemon's: a project
+// key enables it, and a project that blanks the key keeps the saved settings.
+func TestOpenHandsEnvironmentOverrideFollowsTheSessionEnvironment(t *testing.T) {
+	t.Setenv("LLM_API_KEY", "")
+	cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{Env: map[string]string{"LLM_API_KEY": "project-key"}})
+	if want := []string{"openhands", "--override-with-envs"}; err != nil || !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("launch with a project key = %q, %v; want %q", cmd, err, want)
+	}
+	t.Setenv("LLM_API_KEY", "daemon-key")
+	cmd, ok, err := testPlugin().GetRestoreCommand(t.Context(), ports.RestoreConfig{
+		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "id"}},
+		Env:     map[string]string{"LLM_API_KEY": ""},
+	})
+	if want := []string{"openhands", "--resume", "id"}; err != nil || !ok || !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("restore with the key blanked = %q, %v, %v; want %q", cmd, ok, err, want)
 	}
 }

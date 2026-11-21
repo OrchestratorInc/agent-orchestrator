@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from "expo-router";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ScrollViewProps } from "react-native";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactElement, type RefObject } from "react";
+import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewProps } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import { SafeAreaListener } from "react-native-safe-area-context";
 import {
@@ -25,10 +25,15 @@ import { usePressFeedback } from "./pressFeedback";
 import { refreshControlColors } from "./refreshControlColors";
 import { Spinner } from "./Spinner";
 import { useApp } from "./store";
+import type { MachineFreshness } from "./machineFreshness";
+import { useMachineFreshness } from "./useMachineFreshness";
 import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
+import { MenuRowWidthScope, type MenuRowWidths } from "./useMenuRowWidth";
+import { ARCHIVE_CLOUD_SESSION_CONFIRM } from "./cloud/sessionMenu";
+import { isCloudHost } from "./cloud/mapping";
 import { ARCHIVE_SESSION_CONFIRM } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
@@ -96,8 +101,16 @@ export const BOARD_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 
  * does — same grouping, same ordering, same swipe and long-press actions —
  * rather than a second list that would drift from this one. Callers scope the
  * sessions; this owns how they are presented and acted on.
+ *
+ * Its rows share one width (see `MenuRowWidthScope`), so a row mounted in a
+ * later render batch is sized on its first frame. A screen that remounts the
+ * board passes `rowWidths` to keep that width across the remount.
  */
-export function WorkerBoardList({
+export function WorkerBoardList({ rowWidths, ...props }: ComponentProps<typeof WorkerBoard> & { rowWidths?: MenuRowWidths }) {
+	return <MenuRowWidthScope widths={rowWidths}><WorkerBoard {...props} /></MenuRowWidthScope>;
+}
+
+function WorkerBoard({
 	sessions,
 	query = "",
 	listRef,
@@ -114,6 +127,7 @@ export function WorkerBoardList({
 	identityKey,
 	archiveSources = NO_ARCHIVE_SOURCES,
 	archiveFooter = false,
+	onEmptyChange,
 	onScroll,
 }: {
 	sessions: DashboardSession[];
@@ -166,11 +180,19 @@ export function WorkerBoardList({
 	 * yet" copy is not, so it keeps the plain Archive row.
 	 */
 	archiveFooter?: boolean;
+	/**
+	 * Told whether `ListEmptyComponent` is what the board shows (with Archive
+	 * beneath it or not), so a page whose empty state offers its own way to
+	 * start a task can leave its floating one out: one way at a time.
+	 */
+	onEmptyChange?(empty: boolean): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projects, allProjects, currentHostId, connection, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
+	// Each machine's dot beside its name on the rows; only drawn where rows name their machine.
+	const freshness = useMachineFreshness();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	// The rows are memoised on their session, so a live text-size change would
 	// leave them drawn at the old size's measurements, cut into fragments,
@@ -254,6 +276,20 @@ export function WorkerBoardList({
 	// is at minus that, and offset 0 leaves the first rows under the bar. Measured
 	// with the empty board's height below; zero where nothing covers the list.
 	const restingTop = useRef(0);
+	// The list's scroll, kept off React state so a scroll re-renders the pill
+	// alone (it follows the header up), never the whole board. Null until the
+	// list first scrolls, which is its resting top.
+	const scrollY = useRef<number | null>(null);
+	const scrollListeners = useRef(new Set<() => void>());
+	const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+		scrollY.current = event.nativeEvent.contentOffset.y;
+		scrollListeners.current.forEach((listener) => listener());
+		onScroll?.(event);
+	}, [onScroll]);
+	// The page's header rows (its title spacer, the stale banner, the machine
+	// chips): the pill rests below them rather than over the chips (#7982).
+	const [headerHeight, setHeaderHeight] = useState(0);
+	const measureHeader = useCallback((event: LayoutChangeEvent) => setHeaderHeight(event.nativeEvent.layout.height), []);
 	// One request per pill tap, so the scroll runs in the commit that installs the
 	// new order and only then. A flag read on the next snapshot change instead
 	// stayed armed when a tap changed nothing, then jumped the list on some later,
@@ -419,12 +455,14 @@ export function WorkerBoardList({
 
 	const confirmDeleteSession = useCallback((session: DashboardSession) => {
 		haptics.warning();
+		// A cloud session's attached files go with it, which its copy says.
+		const copy = isCloudHost(sessionHostId(session)) ? ARCHIVE_CLOUD_SESSION_CONFIRM : ARCHIVE_SESSION_CONFIRM;
 		Alert.alert(
-			ARCHIVE_SESSION_CONFIRM.title,
-			ARCHIVE_SESSION_CONFIRM.message,
+			copy.title,
+			copy.message,
 			[
-				{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
-				{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
+				{ text: copy.cancel, style: "cancel" },
+				{ text: copy.confirm, style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
 			],
 		);
 	}, [kill]);
@@ -509,9 +547,10 @@ export function WorkerBoardList({
 		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
-			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine} />;
+			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine}
+			freshness={freshness.get(sessionHostId(item.session) ?? currentHostId ?? "")} />;
 	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, showMachine, projectNameFor,
-		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
+		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline, freshness]);
 
 	// An empty board's message is centred in what the bars leave of the page.
 	// Grown to the list's frame, as `flexGrow` grows it, an iOS list inset for
@@ -530,20 +569,25 @@ export function WorkerBoardList({
 	// bar; an offset there moved it a whole header lower, onto the rows, and
 	// jumped it as the bar's height changed during the pull.
 	const spinnerOffset = Platform.OS === "android" ? overlayTopInset : undefined;
+	const showsEmpty = listData.length === 0 || archiveOnly;
+	// Before paint, so a page that hides its own New task while the list is
+	// empty settles on the first frame instead of the one after.
+	useLayoutEffect(() => { onEmptyChange?.(showsEmpty); }, [onEmptyChange, showsEmpty]);
 	// The Archive footer is sized the same way, so it rests just above the tab bar.
-	const contentContainerStyle = insetsForBars && visibleHeight && (listData.length === 0 || archiveOnly)
+	const contentContainerStyle = insetsForBars && visibleHeight && showsEmpty
 		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
 		: { flexGrow: 1, paddingBottom: contentBottomInset };
 
 	// The header grows to the space left, so the empty state centres in it and
 	// Archive rests at the bottom; opened, its rows follow beneath.
+	const measuredHeader = ListHeaderComponent ? <View onLayout={measureHeader}>{ListHeaderComponent}</View> : ListHeaderComponent;
 	const header = archiveOnly ? (
 		<View style={styles.archiveOnly}>
-			{ListHeaderComponent}
+			{measuredHeader}
 			{ListEmptyComponent}
 			<ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />
 		</View>
-	) : ListHeaderComponent;
+	) : measuredHeader;
 
 	return (
 		<View style={styles.listWrap}>
@@ -574,15 +618,16 @@ export function WorkerBoardList({
 					// The next archive page loads as its end comes into view.
 					onEndReached={archiveOpen || searching ? pagedArchive.loadMore : undefined}
 					onEndReachedThreshold={1.5}
-					onScroll={onScroll}
-					scrollEventThrottle={onScroll ? 16 : undefined}
+					onScroll={handleScroll}
+					scrollEventThrottle={16}
 				/>
 			</LayoutAnimationConfig>
 			{/* After the list, never before it: iOS's large title follows the page's
 			    first subviews down to a scroll view, and a view ahead of the list
 			    left the title expanded over the rows as they scrolled. */}
 			{insetsForBars ? <SafeAreaListener pointerEvents="none" style={StyleSheet.absoluteFill} onChange={measureVisible} /> : null}
-		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} top={overlayTopInset + space.sm} onPress={showLatest} /> : null}
+		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} overlayTopInset={overlayTopInset} headerHeight={headerHeight}
+			restingTop={restingTop} scrollY={scrollY} scrollListeners={scrollListeners} onPress={showLatest} /> : null}
 		</View>
 	);
 }
@@ -590,6 +635,8 @@ export function WorkerBoardList({
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
 	showMachine: boolean;
+	/** The row's machine's freshness: a dot beside its name, and a dimmed row once it can't be reached. */
+	freshness?: MachineFreshness;
 	actions: {
 		renameStart(id: string | undefined): void;
 		rename(id: string, title: string, hostId?: string): Promise<void>;
@@ -600,10 +647,13 @@ type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 };
 
 // Bind once per changed session, not once per whole-board context publication.
-const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, ...props }: BoundWorkerRowProps) {
+const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, freshness, ...props }: BoundWorkerRowProps) {
 	const session = props.session;
 	const rowKey = hostedSessionKey(session);
-	const machine = useMemo(() => showMachine ? sessionMachineIdentity(session) : undefined, [session, showMachine]);
+	const machine = useMemo(() => {
+		const identity = showMachine ? sessionMachineIdentity(session) : undefined;
+		return identity && freshness ? { ...identity, freshness } : identity;
+	}, [session, showMachine, freshness]);
 	const handlers = useMemo(() => ({
 		onRenameStart: () => actions.renameStart(rowKey),
 		onRenameCancel: () => actions.renameStart(undefined),
@@ -613,12 +663,40 @@ const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, ...p
 		onResume: () => { void actions.recover(session, "resume"); },
 		onRestore: () => { void actions.recover(session, "restore"); },
 	}), [actions, session, rowKey]);
-	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} {...handlers} />;
+	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} unreachable={freshness === "unreachable"} {...handlers} />;
 });
+
+/**
+ * Where the "N updated" pill floats, from the list's top: just below the page's
+ * header rows while they are on screen, so it never covers the machine chips,
+ * and just below the bar once they have scrolled up under it.
+ *
+ * The header is the list's first content, so its bottom sits `headerHeight -
+ * scrollY` from the list's top on both platforms: iOS's list rests at minus
+ * the bars' inset, Android's at 0 with the bar's spacer inside the header.
+ */
+export function updatesPillTop({ overlayTopInset, headerHeight, scrollY }: { overlayTopInset: number; headerHeight: number; scrollY: number }): number {
+	return Math.max(overlayTopInset, headerHeight - scrollY) + space.sm;
+}
 
 // News that arrived while the board was held still. Tapping re-sorts and goes
 // to the top, where the news now is.
-function UpdatesPill({ count, top, onPress }: { count: number; top: number; onPress: () => void }) {
+function UpdatesPill({ count, overlayTopInset, headerHeight, restingTop, scrollY, scrollListeners, onPress }: {
+	count: number;
+	overlayTopInset: number;
+	headerHeight: number;
+	restingTop: RefObject<number>;
+	scrollY: RefObject<number | null>;
+	scrollListeners: RefObject<Set<() => void>>;
+	onPress: () => void;
+}) {
+	const subscribe = useCallback((listener: () => void) => {
+		const listeners = scrollListeners.current;
+		listeners.add(listener);
+		return () => { listeners.delete(listener); };
+	}, [scrollListeners]);
+	const top = useSyncExternalStore(subscribe, () =>
+		updatesPillTop({ overlayTopInset, headerHeight, scrollY: scrollY.current ?? -restingTop.current }));
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button", { tone: "onAccent" });

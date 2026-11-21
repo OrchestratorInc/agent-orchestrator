@@ -1,4 +1,4 @@
-import { Copy, FolderOpen, Globe, SquareTerminal, X } from "lucide-react";
+import { Copy, FolderOpen, Globe, SquareTerminal, X } from "@/components/app-icons";
 import { useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -63,9 +63,9 @@ export function SessionFileTab({
 }) {
 	const { t } = useTranslation();
 	const name = `${basename(path)}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-	// The close button takes the file icon's slot on hover, matching the other
-	// tabs. A dirty file keeps an always-visible dot in that slot; the dot swaps
-	// to the cross on hover.
+	// The close button sits over the title's end, matching the other tabs. A
+	// dirty file keeps an always-visible dot there; the dot swaps to the cross
+	// on hover.
 	const closeAction = (
 		<Pressable
 			aria-label={t("files.closeTab", { name })}
@@ -80,10 +80,10 @@ export function SessionFileTab({
 				<>
 					<span
 						aria-hidden="true"
-						className="size-2 rounded-full bg-foreground group-hover:hidden group-has-[:focus-visible]:hidden"
+						className="size-2 rounded-full bg-foreground group-hover:hidden focus-visible-in-group:hidden"
 						data-testid="unsaved-tab-indicator"
 					/>
-					<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-has-[:focus-visible]:block" />
+					<X aria-hidden="true" className="hidden size-icon-sm group-hover:block focus-visible-in-group:block" />
 				</>
 			) : <X className="size-icon-sm" aria-hidden="true" />}
 		</Pressable>
@@ -92,6 +92,7 @@ export function SessionFileTab({
 		<TerminalTabFrame
 			action={closeAction}
 			actionPinned={dirty}
+			onClose={onClose}
 			active={active}
 			buttonProps={{
 				"aria-label": name,

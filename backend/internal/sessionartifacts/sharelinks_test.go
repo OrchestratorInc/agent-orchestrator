@@ -68,3 +68,49 @@ func TestShareLinksApply(t *testing.T) {
 		t.Fatalf("nil ShareLinks set %v", got)
 	}
 }
+
+// A record kept by artifact ID follows the file to its new path.
+func TestShareLinksApplyByArtifactID(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ShareLinksFile), []byte(`{
+		"[\"https://cp.test\",\"sess-1\",\"\",\"art-1\"]": {"shareId": "a", "url": "https://share.test/a"},
+		"[\"https://cp.test\",\"sess-1\",\"old.html\"]": {"shareId": "b", "url": "https://share.test/b"}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := []domain.SessionArtifactFile{
+		{ID: "art-1", Path: "final/renamed.html"},
+		{ID: "art-2", Path: "old.html"},
+		{Path: "untracked.html"},
+	}
+	NewShareLinks(dir, "https://cp.test").Apply("sess-1", files)
+	if files[0].ShareURL != "https://share.test/a" || files[1].ShareURL != "https://share.test/b" || files[2].ShareURL != "" {
+		t.Fatalf("share URLs = %q, %q, %q", files[0].ShareURL, files[1].ShareURL, files[2].ShareURL)
+	}
+}
+
+// A record's access says who its link opens for; anything else is not recorded.
+func TestShareLinksApplyAccess(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ShareLinksFile), []byte(`{
+		"[\"https://cp.test\",\"sess-1\",\"\",\"art-1\"]": {"shareId": "a", "url": "https://share.test/a", "access": "restricted"},
+		"[\"https://cp.test\",\"sess-1\",\"public.html\"]": {"shareId": "b", "url": "https://share.test/b", "access": "anyone"},
+		"[\"https://cp.test\",\"sess-1\",\"odd.html\"]": {"shareId": "c", "url": "https://share.test/c", "access": "everyone"},
+		"[\"https://cp.test\",\"sess-1\",\"old.html\"]": {"shareId": "d", "url": "https://share.test/d"}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := []domain.SessionArtifactFile{
+		{ID: "art-1", Path: "private.html"},
+		{Path: "public.html"},
+		{Path: "odd.html"},
+		{Path: "old.html"},
+	}
+	NewShareLinks(dir, "https://cp.test").Apply("sess-1", files)
+	want := []string{"restricted", "anyone", "", ""}
+	for i, file := range files {
+		if file.ShareURL == "" || file.ShareAccess != want[i] {
+			t.Fatalf("%s: url %q access %q, want access %q", file.Path, file.ShareURL, file.ShareAccess, want[i])
+		}
+	}
+}

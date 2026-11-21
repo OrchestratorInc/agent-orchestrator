@@ -2,7 +2,6 @@ import { createContext, useContext, useLayoutEffect, useRef, useState, type Comp
 import { createPortal } from "react-dom";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
-import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { NotificationCenter } from "./NotificationCenter";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 
@@ -129,13 +128,17 @@ export function PageTopbarTitle({
 	);
 }
 
-/** Right-aligned action cluster. Controls inside never start a window drag. */
+/**
+ * Right-aligned action cluster. Controls inside never start a window drag
+ * (styles.css punches them out of the header's drag region), but the cluster
+ * itself stays draggable: it is the band's full height, so a no-drag container
+ * would kill drag and double-click-to-zoom in every gap between its controls.
+ */
 export function PageTopbarActions({ className, children, ...props }: ComponentProps<"div">) {
 	return (
 		<div
 			className={cn("workspace-topbar-actions shrink-0", className)}
 			data-testid="workspace-topbar-actions"
-			style={noDragStyle}
 			{...props}
 		>
 			{children}
@@ -161,7 +164,7 @@ export function SessionTabsTopbar({
 }: {
 	className?: string;
 	tabs: ReactNode;
-	/** Sits right after the last tab (e.g. New terminal); the previous top bar puts it with the actions. */
+	/** Sits right after the last tab (e.g. New terminal). */
 	tabsTrailing?: ReactNode;
 	actions?: ReactNode;
 	clearanceRef?: Ref<HTMLDivElement>;
@@ -172,7 +175,6 @@ export function SessionTabsTopbar({
 	/** Native fullscreen hides the panel-owned controls outside this subtree. */
 	fullscreen?: boolean;
 }) {
-	const simplifiedTopbar = useSimplifiedTopbar();
 	return (
 		<PageTopbarFrame className={cn("items-stretch bg-sidebar", className)}>
 			<div className="session-topbar-surface flex min-w-0 flex-1" data-testid="session-workspace-topbar">
@@ -183,7 +185,7 @@ export function SessionTabsTopbar({
 					style={{ width: regionWidth }}
 				>
 					{tabs}
-					{tabsTrailing && simplifiedTopbar ? (
+					{tabsTrailing ? (
 						<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-testid="session-tab-strip-action">
 							{tabsTrailing}
 						</div>
@@ -195,12 +197,7 @@ export function SessionTabsTopbar({
 						data-testid="session-action-region"
 						data-fullscreen={fullscreen || undefined}
 					>
-						{hideActions ? null : (
-							<>
-								{tabsTrailing && !simplifiedTopbar ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabsTrailing}</div> : null}
-								{actions}
-							</>
-						)}
+						{hideActions ? null : actions}
 						{fullscreen ? <NotificationCenter style={noDragStyle} /> : null}
 					</div>
 				) : null}

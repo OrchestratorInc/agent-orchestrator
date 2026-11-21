@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { cn } from "../lib/utils";
-import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
@@ -35,7 +34,6 @@ export function CenterPanelShell({
 }) {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const isFullScreen = useWindowFullScreen();
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const isMac = isMacPlatform();
 	const isLinux = isLinuxPlatform();
 	const align = titlebarAlign && isMac;
@@ -44,9 +42,12 @@ export function CenterPanelShell({
 	// With the sidebar closed the traffic lights and nav cluster float over the
 	// panel's top-left corner, so the band stays even when the page has no bar.
 	const reservesTopbarBand = topbar || titlebarClearance;
-	// The floating bar is the Developer Mode preview; otherwise the previous bar.
-	const floatingTopbar = simplifiedTopbar && align && !isFullScreen;
+	// On macOS the top bar floats on the window chrome, except in native fullscreen.
+	const floatingTopbar = align && !isFullScreen;
 	const bare = floatingTopbar && !reservesTopbarBand;
+	// Tabs are pills on every macOS bar, the fullscreen one included; only the
+	// band's layout differs.
+	const pillTabs = align && (isFullScreen || reservesTopbarBand);
 
 	return (
 		<div
@@ -56,6 +57,7 @@ export function CenterPanelShell({
 				// The top bar floats on the window chrome; the panel starts below it.
 				floatingTopbar && reservesTopbarBand && "center-panel-shell--floating-topbar",
 				bare && "center-panel-shell--bare",
+				pillTabs && "center-panel-shell--tab-pills",
 				titlebarClearance && "center-panel-shell--titlebar-clearance",
 				titlebarClearance && isFullScreen && "center-panel-shell--titlebar-clearance-fullscreen",
 				linuxTitlebarClearance && "center-panel-shell--titlebar-clearance-linux",

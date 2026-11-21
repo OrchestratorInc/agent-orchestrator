@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight } from "@/components/app-icons";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { composeMenuCloseAutoFocus, useMenuReturnTarget } from "./menu-focus";

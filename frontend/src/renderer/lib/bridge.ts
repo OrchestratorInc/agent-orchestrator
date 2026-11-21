@@ -1,11 +1,24 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { createWebSideCloseBridge } from "./web-side-close";
+import { SIDE_CLOSE_PROTOCOL_VERSION } from "../../shared/side-close";
 export type { FeatureBuild } from "../../main/feature-builds";
 
+
+async function desktopIssueArtifactRequired(): Promise<never> {
+	throw new Error("Open the desktop app to add an issue artifact.");
+}
 
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		triage: {
+			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+		},
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -22,17 +35,22 @@ export const aoBridge: AoBridge =
 			showPrivacyGuide: async () => undefined,
 			updatePrivacyGuide: async () => false,
 			closePrivacyGuide: async () => undefined,
+			getAppPrivacy: async () => undefined,
+			requestAppPrivacy: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
 		getRepositoryBranch: async () => undefined,
 		getGitHubLogin: async (_repoPath?: string) => "",
+		findArtifactIssues: desktopIssueArtifactRequired,
+		publishIssueArtifact: desktopIssueArtifactRequired,
 		listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 		refreshGitHubOwners: async () => [],
 		checkGitHubRepositoryAvailability: async () => ({ available: true }),
 			getPathForFile: () => "",
 			onOpenFolderPath: () => () => undefined,
+			onOpenSessionDeepLink: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
@@ -47,6 +65,7 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			reportSessionsShown: () => undefined,
 			setMenuAvailability: () => undefined,
 			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
@@ -70,6 +89,7 @@ export const aoBridge: AoBridge =
 		},
 		theme: {
 			set: async () => undefined,
+			systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
@@ -127,17 +147,30 @@ export const aoBridge: AoBridge =
 		cloudShare: {
 			available: async () => false,
 			inspect: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			list: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
+			hostLinks: async () => [],
 			publish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			cancel: async () => undefined,
+			setAccess: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			grants: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			invite: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			removeGrant: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
 			unpublish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			onProgress: () => () => undefined,
 		},
@@ -152,6 +185,9 @@ export const aoBridge: AoBridge =
 			},
 			onFrameNavigated: () => () => undefined,
 		},
+		artifactSnapshot: {
+			request: async () => false,
+		},
 		daemon: {
 			getStatus: async () => ({
 				state: "stopped",
@@ -163,7 +199,14 @@ export const aoBridge: AoBridge =
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+		sideChats: import.meta.env.VITE_NO_ELECTRON === "1" ? createWebSideCloseBridge() : {
+			protocolVersion: SIDE_CLOSE_PROTOCOL_VERSION,
+			mode: "desktop",
+			capture: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			requestClose: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			getCloseState: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			onCloseStateChanged: () => () => {},
+		},
 		editorHandoff: {
 			pathAction: async () => { throw new Error("Desktop app is required to open local paths."); },
 			getState: async () => ({
@@ -196,6 +239,10 @@ export const aoBridge: AoBridge =
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
+			getLifetimeSessions: async () => null,
+			takeLaunchStart: async () => null,
+			takeResourceSummary: async () => null,
+			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			onPolicy: () => () => false,
@@ -227,6 +274,8 @@ export const aoBridge: AoBridge =
 			}),
 			historySuggestions: async () => [],
 			historyFavicon: async () => undefined,
+			userBrowser: async () => null,
+			openInUserBrowser: async () => ({ name: "", chrome: false }),
 			clear: async (viewId: string) => ({
 				viewId,
 				url: "",
@@ -380,6 +429,11 @@ export const aoBridge: AoBridge =
 			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 		},
+		cliShadow: {
+			inspect: async () => ({ kind: "unknown" as const }),
+			replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
+			reveal: async () => undefined,
+		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
 			set: async () => undefined,
@@ -414,9 +468,8 @@ export const aoBridge: AoBridge =
 		// which is the truth there.
 		remotes: {
 			list: async () => [],
-			importAccountHost: async () => undefined,
-			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => { throw new Error("remote hosts need the desktop app"); },
+			syncAccountHosts: async () => undefined,
+			linkAccountHost: async () => { throw new Error("remote hosts need the desktop app"); },
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
@@ -438,26 +491,31 @@ export const aoBridge: AoBridge =
 			},
 			localAuthAvailable: async () => false,
 			localRegister: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			localLogin: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			onOpenSharedArtifact: () => () => undefined,
+			takePendingSharedArtifact: async () => null,
+			openSharedArtifactWindow: async () => undefined,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
+			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {
 			request: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			requestBinary: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			cancelBinary: () => undefined,
 			openStream: async () => {
-				throw new Error("AO Cloud event streams require the desktop app.");
+				throw new Error("Orchestrator Cloud event streams require the desktop app.");
 			},
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

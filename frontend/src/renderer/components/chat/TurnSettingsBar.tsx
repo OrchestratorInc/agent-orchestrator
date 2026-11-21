@@ -18,7 +18,7 @@
  */
 
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -35,10 +35,12 @@ import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
+import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
 	ApprovalMode,
@@ -134,6 +136,7 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen = false,
 	agentSwitch,
 	beforePicker,
+	afterPicker,
 	modelsLoading,
 	lastModel,
 	unsetModelLabel,
@@ -187,6 +190,8 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
+	/** Right after the model control, in either picker, such as the usage-limit sign. */
+	afterPicker?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
@@ -248,11 +253,15 @@ export function TurnSettingsBar({
 	const approvalNote = approvalModeLimits?.requested
 		? `${approvalCopy[approvalModeLimits.requested].label} isn't available for ${approvalModeLimits.model}; using ${approvalLabel}.`
 		: undefined;
+	// Every row of the approval menu reports its pick as one: a Cloud chat keeps
+	// its approval mode unless the change says it came from this menu.
+	const pickApprovalMode = (mode: ApprovalMode) => onChange?.({ ...settings, approvalMode: mode }, "approvalMode");
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
 	const grouped = partitionConfigOptions(displayConfigOptions, harness !== "agy");
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
+	const settingsProblem = [error, rememberPermissionsError].filter(Boolean).join(" · ") || undefined;
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
 		const providerId = harness === "agy" && optionId === AGY_MODEL_EFFORT
@@ -537,6 +546,8 @@ export function TurnSettingsBar({
 						/>
 					) : null}
 
+					{afterPicker}
+
 					{standaloneExecutionMode && onChangeConfigOption ? (
 						<ExecutionModePicker
 							option={standaloneExecutionMode}
@@ -544,6 +555,22 @@ export function TurnSettingsBar({
 							disabled={optionDisabled}
 							onChange={applyOption}
 						/>
+					) : null}
+
+					{/* In the row's free space beside the pickers, so an error never makes the composer taller.
+					    The icon always keeps its room, and the whole message opens on hover or keyboard focus. */}
+					{settingsProblem ? (
+						<TooltipProvider>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<p role="alert" tabIndex={0} className="ml-1 flex min-w-3.5 flex-1 cursor-default items-center gap-1.5 overflow-hidden text-xs text-destructive">
+										<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />
+										<span className="min-w-0 truncate">{settingsProblem}</span>
+									</p>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="max-w-80">{settingsProblem}</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
 					) : null}
 				</div>
 
@@ -607,7 +634,7 @@ export function TurnSettingsBar({
 											description={approvalUnavailable(mode) ?? approvalCopy[mode].description}
 											active={mode === (settings.approvalMode ?? "default")}
 											disabled={Boolean(approvalUnavailable(mode))}
-											onSelect={() => onChange({ ...settings, approvalMode: mode })}
+											onSelect={() => pickApprovalMode(mode)}
 										/>
 									) : (
 									<OptionMenuItem
@@ -615,7 +642,7 @@ export function TurnSettingsBar({
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
 										disabled={Boolean(approvalUnavailable(mode))}
-										onSelect={() => onChange({ ...settings, approvalMode: mode }, "approvalMode")}
+										onSelect={() => pickApprovalMode(mode)}
 										className={cn("text-xs")}
 									>
 										<span
@@ -656,14 +683,6 @@ export function TurnSettingsBar({
 					</div>
 				) : null}
 			</div>
-			{rememberPermissionsError ? (
-				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
-			) : null}
-			{error ? (
-				<p role="alert" className="px-1 text-xs leading-snug text-destructive">
-					{error}
-				</p>
-			) : null}
 		</div>
 	);
 }
@@ -791,7 +810,7 @@ function ModelEffortPicker({
 
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
@@ -900,6 +919,7 @@ function ClubbedConfigPicker({
 				<EffortPicker
 					{...acpEffortMenuProps(primaryEffort)}
 					disabled={disabled}
+					triggerVariant="ghost"
 					triggerClassName={TRIGGER_CLASS}
 					onChange={(value) => onChange(primaryEffort.id, { value })}
 				/>
@@ -929,7 +949,7 @@ function ClubbedConfigPicker({
 
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
@@ -1039,7 +1059,7 @@ function restoreComposerFocus(event: Event) {
 	const trigger = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker'][data-shortcut-opened]");
 	if (!trigger) return;
 	delete trigger.dataset.shortcutOpened;
-	const composer = document.querySelector<HTMLElement>('[aria-label="Message the agent"]');
+	const composer = queryShown<HTMLElement>('[aria-label="Message the agent"]');
 	if (!composer || composer.getAttribute("aria-disabled") === "true") return;
 	event.preventDefault();
 	composer.focus();
@@ -1111,7 +1131,7 @@ function ExecutionModePicker({
 }) {
 	return (
 		<OptionMenu>
-			<OptionMenuTrigger
+			<OptionMenuTrigger variant="ghost"
 				showCaret={false}
 				disabled={disabled}
 				aria-label="Model mode for the next turn"
@@ -1207,7 +1227,7 @@ function ConfigOptionPicker({
 	onChange: (value: ChatConfigOptionValue) => void;
 	disabled?: boolean;
 	footer?: ReactNode;
-	leadIcon?: LucideIcon;
+	leadIcon?: AppIcon;
 	/** Set on the permission control only. */
 	showCaret?: boolean;
 	groupClaude?: boolean;
@@ -1420,7 +1440,7 @@ function permissionLook(harness: string | undefined, mode: ApprovalMode): Approv
 	return mode === "default" ? "bypass-permissions" : mode === "accept-edits" ? "default" : mode;
 }
 
-function permissionIcon(mode: ApprovalMode | undefined): LucideIcon {
+function permissionIcon(mode: ApprovalMode | undefined): AppIcon {
 	if (mode === "bypass-permissions") return ShieldAlert;
 	if (mode === "accept-edits") return PencilLine;
 	if (mode === "auto") return ShieldCheck;
@@ -1471,7 +1491,7 @@ export function ComposerMenuRow({
 	disabled,
 	onSelect,
 }: {
-	icon: LucideIcon;
+	icon: AppIcon;
 	title: string;
 	description?: string;
 	checked?: boolean;
@@ -1584,7 +1604,7 @@ function Picker({
 	/** The current choice will not hold for the next message: marked red. */
 	alert?: boolean;
 	/** Set on the permission control: marked with this. */
-	leadIcon?: LucideIcon;
+	leadIcon?: AppIcon;
 	/** Show the menu caret. Only the permission control does: it reads as a select. */
 	showCaret?: boolean;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
@@ -1596,7 +1616,7 @@ function Picker({
 }) {
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={showCaret}
 					aria-label={title}
 					title={title}

@@ -31,6 +31,7 @@ vi.mock("./hosts", () => ({
 	setActiveHost: vi.fn(),
 }));
 vi.mock("./account", () => ({ loadAccount: async () => null }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ org: null, projects: [], sessions: [], connections: [], chatHarnesses: [], client: {}, upsertSession: () => {}, refreshSessions: async () => {}, refresh: async () => {} }) }));
 vi.mock("./accountHosts", () => ({ syncAccountHosts: vi.fn(), cancelAccountHostSync: vi.fn() }));
 vi.mock("./installId", () => ({ primeInstallId: vi.fn() }));
 vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null, trackFeature: vi.fn() }));
@@ -56,7 +57,7 @@ let renderer: ReactTestRenderer | undefined;
 function OpenChat() {
 	const app = useApp();
 	const listed = app.sessions.find((row) => row.id === "chat");
-	const view = sessionRouteView({ listed, paired: app.paired, connection: app.connection, loading: app.loading, lookup: { state: "pending" }, routeHostId: "a", currentHostId: app.currentHostId });
+	const view = sessionRouteView({ listed, paired: app.paired, unreachable: app.unreachable, connection: app.connection, error: app.error, errorStatus: app.errorStatus, loading: app.loading, lookup: { state: "pending" }, routeHostId: "a", currentHostId: app.currentHostId });
 	frames.push({ view: view.kind, machine: app.machine, config: app.config?.endpointKind ?? null });
 	return null;
 }

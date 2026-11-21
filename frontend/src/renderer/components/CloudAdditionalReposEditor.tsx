@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { Plus, X } from "@/components/app-icons";
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -24,7 +24,7 @@ export function additionalReposProblemMessage(t: TFunction, problem: ReturnType<
 		case "duplicate":
 			return t("cloudRepos.problemDuplicate", { defaultValue: "{{name}} is listed twice.", name });
 		case "reserved":
-			return t("cloudRepos.problemReserved", { defaultValue: "{{name}} would check out into the folder {{folder}}, which AO uses itself.", name, folder: problem.folder });
+			return t("cloudRepos.problemReserved", { defaultValue: "{{name}} would check out into the folder {{folder}}, which Orchestrator uses itself.", name, folder: problem.folder });
 		case "hidden":
 			return t("cloudRepos.problemHidden", { defaultValue: "{{name}} would check out into the hidden folder {{folder}}, which is not allowed.", name, folder: problem.folder });
 		case "folder":
@@ -141,7 +141,7 @@ export function CloudAdditionalReposEditor({
 					</Button>
 				</div>
 			))}
-			<Button ref={addButtonRef} type="button" variant="outline" size="sm" disabled={!canAdd} onClick={add}>
+			<Button ref={addButtonRef} type="button" variant="secondary" size="sm" disabled={!canAdd} onClick={add}>
 				<Plus aria-hidden="true" className="size-icon-sm" />
 				{t("cloudRepos.add", { defaultValue: "Add a repository" })}
 			</Button>

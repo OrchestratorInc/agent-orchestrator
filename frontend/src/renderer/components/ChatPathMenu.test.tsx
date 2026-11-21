@@ -104,7 +104,7 @@ describe("chat path menus", () => {
 		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
 		chat(`\`${reference}\``, source);
 		fireEvent.contextMenu(screen.getByRole("button"));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open in AO", "Copy path"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open in Orchestrator", "Copy path"]);
 		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
 		expect(copy).toHaveBeenCalledExactlyOnceWith("/other-project/src/a file.ts");
 		expect(getState).not.toHaveBeenCalled();
@@ -117,11 +117,11 @@ describe("chat path menus", () => {
 		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
 		const openFile = chat("[source](src/a%20file.ts#L12)", { remoteHost: true });
 		fireEvent.contextMenu(screen.getByRole("link"));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open in AO", "Copy path"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open in Orchestrator", "Copy path"]);
 		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
 		expect(copy).toHaveBeenCalledWith("src/a file.ts");
 		fireEvent.contextMenu(screen.getByRole("link"));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Open in AO" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Open in Orchestrator" }));
 		expect(openFile).toHaveBeenCalledWith("src/a file.ts");
 		expect(getState).not.toHaveBeenCalled();
 		expect(action).not.toHaveBeenCalled();
@@ -164,8 +164,8 @@ describe("chat path menus", () => {
 	it.each(["inline", "link"])("offers Open in AO without a browser action for %s paths", async (kind) => {
 		const openFile = chat(kind === "inline" ? "`src/a file.ts:12`" : "[source](<src/a file.ts:12>)");
 		fireEvent.contextMenu(kind === "inline" ? screen.getByRole("button") : screen.getByRole("link"));
-		expect(screen.queryByRole("menuitem", { name: "Open in ao browser" })).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitem", { name: "Open in AO" }));
+		expect(screen.queryByRole("menuitem", { name: "Open in Orchestrator Browser" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Open in Orchestrator" }));
 		expect(openFile).toHaveBeenCalledExactlyOnceWith(...(kind === "inline" ? ["src/a file.ts", 12] : ["src/a file.ts"]));
 	});
 

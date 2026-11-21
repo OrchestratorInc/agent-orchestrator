@@ -46,47 +46,53 @@ type Target string
 
 // The exhaustive set of installable targets. No other value is ever accepted.
 const (
-	TargetTmux        Target = "tmux"
-	TargetGH          Target = "gh"
-	TargetClaude      Target = "claude"
-	TargetClaudeCode  Target = "claude-code"
-	TargetCodex       Target = "codex"
-	TargetCursor      Target = "cursor"
-	TargetOpencode    Target = "opencode"
-	TargetOpencodeV2  Target = "opencode-v2"
-	TargetAider       Target = "aider"
-	TargetCopilot     Target = "copilot"
-	TargetGrok        Target = "grok"
-	TargetKimi        Target = "kimi"
-	TargetPi          Target = "pi"
-	TargetAmp         Target = "amp"
-	TargetAuggie      Target = "auggie"
-	TargetDroid       Target = "droid"
-	TargetCrush       Target = "crush"
-	TargetCline       Target = "cline"
-	TargetGoose       Target = "goose"
-	TargetQwen        Target = "qwen"
-	TargetGemini      Target = "gemini"
-	TargetContinue    Target = "continue"
-	TargetDevin       Target = "devin"
-	TargetKiro        Target = "kiro"
-	TargetKilocode    Target = "kilocode"
-	TargetVibe        Target = "vibe"
-	TargetMuse        Target = "muse"
-	TargetAgy         Target = "agy"
-	TargetAutohand    Target = "autohand"
-	TargetKimchi      Target = "kimchi"
-	TargetPrimeAgent  Target = "prime-agent"
-	TargetOMP         Target = "omp"
-	TargetFX          Target = "fx"
-	TargetUnreal      Target = "unreal-agent"
-	TargetCodewhale   Target = "codewhale"
-	TargetMiMoCode    Target = "mimo-code"
-	TargetDeepSeek    Target = "deepseek-harness"
-	TargetOpenHands   Target = "openhands"
-	TargetCommandCode Target = "command-code"
-	TargetMemcode     Target = "memcode"
-	TargetHermes      Target = "hermes"
+	TargetTmux            Target = "tmux"
+	TargetGH              Target = "gh"
+	TargetClaude          Target = "claude"
+	TargetClaudeCode      Target = "claude-code"
+	TargetCodex           Target = "codex"
+	TargetCursor          Target = "cursor"
+	TargetOpencode        Target = "opencode"
+	TargetOpencodeV2      Target = "opencode-v2"
+	TargetAider           Target = "aider"
+	TargetCopilot         Target = "copilot"
+	TargetGrok            Target = "grok"
+	TargetKimi            Target = "kimi"
+	TargetPi              Target = "pi"
+	TargetAmp             Target = "amp"
+	TargetAuggie          Target = "auggie"
+	TargetDroid           Target = "droid"
+	TargetCrush           Target = "crush"
+	TargetCline           Target = "cline"
+	TargetGoose           Target = "goose"
+	TargetQwen            Target = "qwen"
+	TargetGemini          Target = "gemini"
+	TargetContinue        Target = "continue"
+	TargetDevin           Target = "devin"
+	TargetKiro            Target = "kiro"
+	TargetKilocode        Target = "kilocode"
+	TargetVibe            Target = "vibe"
+	TargetMuse            Target = "muse"
+	TargetAgy             Target = "agy"
+	TargetAutohand        Target = "autohand"
+	TargetKimchi          Target = "kimchi"
+	TargetPrimeAgent      Target = "prime-agent"
+	TargetOMP             Target = "omp"
+	TargetFX              Target = "fx"
+	TargetUnreal          Target = "unreal-agent"
+	TargetCodewhale       Target = "codewhale"
+	TargetMiMoCode        Target = "mimo-code"
+	TargetMiniMaxCode     Target = "minimax-code"
+	TargetDeepSeek        Target = "deepseek-harness"
+	TargetOpenHands       Target = "openhands"
+	TargetCommandCode     Target = "command-code"
+	TargetMastraCode      Target = "mastra-code"
+	TargetDockerAgent     Target = "docker-agent"
+	TargetMemcode         Target = "memcode"
+	TargetHermes          Target = "hermes"
+	TargetStakpak         Target = "stakpak"
+	TargetOpenInterpreter Target = "open-interpreter"
+	TargetTau             Target = "tau"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -102,8 +108,8 @@ var agentTargets = []Target{
 	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen, TargetGemini,
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
-	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetMemcode, TargetHermes,
+	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetMiniMaxCode, TargetDeepSeek, TargetOpenHands,
+	TargetCommandCode, TargetMastraCode, TargetDockerAgent, TargetMemcode, TargetHermes, TargetStakpak, TargetOpenInterpreter, TargetTau,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -342,7 +348,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status    `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string    `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string    `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -1489,6 +1495,12 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 			strings.Contains(out.String(), "The existing installation was not changed.") {
 			message = fmt.Sprintf("Autohand could not start the downloaded CLI; the existing installation was not changed. Its startup check can time out on a busy machine. Let other updates finish, then retry. (%v)", runErr)
 		}
+		// Cursor's update service accepts anonymous requests but rejects a
+		// stale or revoked saved login, which `cursor-agent status` still
+		// reports as logged in. Without a stored login the update succeeds.
+		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
+			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
+		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
@@ -1848,7 +1860,7 @@ func (s *Service) planTmux() Plan {
 	case "windows":
 		return Plan{
 			Target: TargetTmux, Unsupported: true,
-			Reason: "tmux is not required on Windows; AO uses the built-in ConPTY terminal runtime instead.",
+			Reason: "tmux is not required on Windows; Orchestrator uses the built-in ConPTY terminal runtime instead.",
 		}
 	case "darwin":
 		return s.planBrew(TargetTmux, "tmux")
@@ -2029,7 +2041,7 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			if privatePrefix != "" {
 				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
 			} else {
-				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; Orchestrator will not use sudo.", prefix)
 			}
 			return plan
 		}
@@ -2048,7 +2060,7 @@ func minimumNodeVersionForTarget(target Target) [3]int {
 		return [3]int{20, 0, 0}
 	case TargetClaudeCode, TargetQwen, TargetAutohand:
 		return [3]int{22, 0, 0}
-	case TargetPi:
+	case TargetPi, TargetMiniMaxCode:
 		return [3]int{22, 19, 0}
 	default:
 		return [3]int{16, 0, 0}
@@ -2097,7 +2109,7 @@ func (s *Service) planOpencode() Plan {
 	}
 	return Plan{
 		Target: TargetOpencode, Unsupported: true, Method: "manual",
-		Reason: "AO does not automatically execute opencode's mutable remote installer script.",
+		Reason: "Orchestrator does not automatically execute opencode's mutable remote installer script.",
 	}
 }
 
@@ -2150,7 +2162,7 @@ func (p requestPlanner) planHomebrew(target Target, pkg string, cask bool) Plan 
 			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: "Homebrew's installation prefix could not be resolved."}
 		}
 		if !homebrew.PrefixWritable {
-			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: fmt.Sprintf("Homebrew's prefix %s is not writable by the current user. Repair Homebrew ownership; AO will not use sudo.", prefix)}
+			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: fmt.Sprintf("Homebrew's prefix %s is not writable by the current user. Repair Homebrew ownership; Orchestrator will not use sudo.", prefix)}
 		}
 		if cask {
 			installed = homebrewPackageInstalled(homebrew.Casks, pkg)
@@ -2223,7 +2235,7 @@ func (s *Service) planLinuxPackage(target Target, pkgFor func(mgr string) string
 		argv := linuxInstallArgv(mgr, pkgFor(mgr))
 		return Plan{
 			Target: target, Command: argv, Manager: mgr, NeedsRoot: true, Unsupported: true,
-			Reason: "AO cannot ask for your administrator password. Run the command below in a terminal.",
+			Reason: "Orchestrator cannot ask for your administrator password. Run the command below in a terminal.",
 		}
 	}
 	return Plan{

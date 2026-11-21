@@ -2,12 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentMachineDraft } from "./environmentEditor";
 import type { Host } from "./hosts";
 
+// What persistManualHostEdit saves: the typed route, as plain as it was unless a test says otherwise.
+const savedAsTyped = vi.hoisted(() => async (host: Host, config: { host: string; httpPort: string }, _name: string, index: number): Promise<Host> => ({
+	...host,
+	endpoints: host.endpoints.map((endpoint, i) => i === index ? { ...endpoint, host: config.host.trim(), port: Number(config.httpPort) } : endpoint),
+}));
+
 const fixtures = vi.hoisted(() => ({
 	activeHostMetadata: vi.fn<() => Promise<{ id: string } | null>>(async () => null),
 	loadHosts: vi.fn<() => Promise<Host[]>>(async () => []),
 	forgetServer: vi.fn(async () => {}),
 	forgetPairedHost: vi.fn(async () => {}),
-	persist: vi.fn(async () => ({})),
+	persist: vi.fn(savedAsTyped),
+
 	updateHostAppearance: vi.fn(async () => {}),
 }));
 
@@ -42,7 +49,7 @@ const b: Host = { ...a, id: "b", name: "B", token: "b-token", lastConnected: 1 }
 
 beforeEach(() => {
 	for (const mock of Object.values(fixtures)) mock.mockReset();
-	fixtures.persist.mockResolvedValue({});
+	fixtures.persist.mockImplementation(savedAsTyped);
 });
 
 describe("forgetting a machine", () => {
@@ -103,9 +110,16 @@ describe("saving a machine", () => {
 		expect(fixtures.updateHostAppearance).toHaveBeenCalledOnce();
 	});
 
+	// The address decides TLS when the route is saved, so the change is read
+	// from what was saved rather than from the draft.
+	it("counts a route that answered over TLS this time as changed", async () => {
+		fixtures.persist.mockImplementationOnce(async (host: Host) => ({ ...host, endpoints: [{ ...host.endpoints[0], secure: true }] }));
+		expect(await saveEnvironmentMachine(a, draft(), "ios")).toEqual({ routeChanged: true });
+	});
+
 	it("puts a rejected password against the password field", async () => {
 		fixtures.persist.mockRejectedValue(new (ApiError as unknown as new (status: number) => Error)(401));
-		await expect(saveEnvironmentMachine(a, draft({ password: "wrong" }), "ios")).rejects.toEqual(new MachineSaveError("That password was rejected. Check it and try again.", "password"));
+		await expect(saveEnvironmentMachine(a, draft({ password: "wrong" }), "ios")).rejects.toEqual(new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password"));
 	});
 
 	it("puts another machine answering, or nothing answering, against the address", async () => {
@@ -116,5 +130,32 @@ describe("saving a machine", () => {
 		const unreachable = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }), "ios").catch((error: MachineSaveError) => error);
 		expect(unreachable).toBeInstanceOf(MachineSaveError);
 		expect(unreachable).toMatchObject({ field: "host" });
+	});
+
+	it("says to type http:// when a Tailscale name on another port does not answer over HTTPS", async () => {
+		fixtures.persist.mockRejectedValueOnce(new TypeError("Network request failed"));
+		const failed = await saveEnvironmentMachine(a, draft({ host: "my-pc.tail1234.ts.net", httpPort: "3011" }), "android").catch((error: MachineSaveError) => error);
+		expect(failed).toMatchObject({ field: "host", message: expect.stringContaining("enter http://my-pc.tail1234.ts.net:3011.") });
+	});
+
+	// A storage failure on the icon has no HTTP status, which used to read as
+	// "unreachable": the machine was blamed for a local write, and a route that
+	// had already been saved was never reported.
+	it("reports an icon that failed to save as such, with the route it did save", async () => {
+		fixtures.updateHostAppearance.mockRejectedValueOnce(new Error("storage full"));
+		const moved = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }, "cloud"), "ios");
+		expect(moved.routeChanged).toBe(true);
+		expect(moved.appearanceError).toBeInstanceOf(MachineSaveError);
+		expect(moved.appearanceError).toMatchObject({ field: "host", message: "The connection was saved, but the icon couldn't be. Try Save again." });
+
+		fixtures.updateHostAppearance.mockRejectedValueOnce(new Error("storage full"));
+		const iconOnly = await saveEnvironmentMachine(a, draft({}, "cloud"), "ios");
+		expect(iconOnly).toMatchObject({ routeChanged: false, appearanceError: { field: "host", message: "The icon couldn't be saved. Try again." } });
+	});
+
+	it("names the port it tried when Port was left empty", async () => {
+		fixtures.persist.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(500));
+		const failed = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9", httpPort: "" }), "ios").catch((error: MachineSaveError) => error);
+		expect(failed).toMatchObject({ field: "host", message: expect.stringContaining("10.0.0.9:3011 answered") });
 	});
 });

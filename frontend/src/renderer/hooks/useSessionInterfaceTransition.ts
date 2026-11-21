@@ -7,9 +7,10 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
-import { apiErrorMessage, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { interfaceTransitionPollDelay } from "../../../../packages/shared/session/interface-transition-poll";
+import { apiErrorCode, apiErrorMessage, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
-import type { CloudCpInterfaceTransition } from "../lib/cloud-cp";
+import { CloudCpAuthError, type CloudCpInterfaceTransition } from "../lib/cloud-cp";
 import { conversationQueryKey } from "./useConversation";
 import { useCloudCp } from "./useCloudCp";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -41,7 +42,14 @@ function mutationContext(target: InterfaceTransitionMutationTarget): SessionInte
 	return target.targetCloudOrgId ? { orgId: target.targetCloudOrgId } : target.targetHostId ?? null;
 }
 
-type StartInterfaceTransitionMutationInput = StartInterfaceTransitionInput & InterfaceTransitionMutationTarget;
+/**
+ * A transition's start. targetHarness, Cloud only, also switches the session's
+ * agent (an agent switch); the local daemon switches agents through its own
+ * provider switch instead.
+ */
+export type StartInterfaceTransitionRequest = StartInterfaceTransitionInput & { targetHarness?: string };
+
+type StartInterfaceTransitionMutationInput = StartInterfaceTransitionRequest & InterfaceTransitionMutationTarget;
 
 type AcknowledgeInterfaceTransitionNoticeMutationInput =
 	InterfaceTransitionMutationTarget & {
@@ -142,7 +150,81 @@ const cancellablePhases = new Set<SessionInterfaceTransition["phase"]>([
 	"draining",
 ]);
 
-const nativeSessionReadinessPoll = 1_000;
+const liveTransitionPoll = 250;
+
+// A missing or not-yet-current native identity is transient while the
+// terminal's session-start hook is arriving, and a missing workspace clears
+// once Retry start sets it up. Only those readiness states are rechecked.
+const readinessReasonCodes = new Set([
+	"NATIVE_SESSION_MISSING",
+	"NATIVE_SESSION_UNVERIFIED",
+	"WORKSPACE_UNAVAILABLE",
+]);
+
+type InterfaceTransitionPollQuery = {
+	state: {
+		data?: SessionInterfaceTransitionStatus;
+		dataUpdateCount: number;
+		dataUpdatedAt: number;
+		error: unknown;
+		errorUpdateCount: number;
+	};
+};
+
+// Budgets are keyed on the Query, not held in a hook ref: every mounted
+// observer of a key runs its own refetchInterval timer, and one count per
+// key is what keeps a second observer from refilling the first one's budget.
+const pollBudgets = new WeakMap<
+	InterfaceTransitionPollQuery,
+	{ dataUpdatedAt: number; failureBase: number; readinessKey: string; readinessBase: number }
+>();
+
+function sessionGone(error: unknown): boolean {
+	if (apiErrorCode(error) === "SESSION_NOT_FOUND") return true;
+	const status = typeof error === "object" && error !== null ? (error as { status?: unknown }).status : undefined;
+	return status === 404 || status === 410;
+}
+
+/**
+ * The status poll cadence, on the schedule mobile uses (see
+ * packages/shared/session/interface-transition-poll.ts): a live handoff polls
+ * until it settles, failures back off 1/2/4/8s and stop after five when no
+ * handoff is live, and a readiness recheck stops after ten answers per state.
+ * Any data that lands (a poll, a manual recheck, or an accepted start)
+ * clears the failure count, and a new phase or reason opens a fresh readiness
+ * window, so a newly started transition never inherits a spent budget.
+ */
+export function interfaceTransitionRefetchInterval(query: InterfaceTransitionPollQuery): number | false {
+	const { state } = query;
+	const status = state.data;
+	const readinessKey = `${status?.transition?.phase ?? ""}|${status?.reasonCode ?? ""}`;
+	let budget = pollBudgets.get(query);
+	if (!budget) {
+		budget = { dataUpdatedAt: state.dataUpdatedAt, failureBase: state.dataUpdateCount > 0 ? state.errorUpdateCount : 0, readinessKey, readinessBase: state.dataUpdateCount };
+		pollBudgets.set(query, budget);
+	}
+	if (budget.dataUpdatedAt !== state.dataUpdatedAt) {
+		budget.dataUpdatedAt = state.dataUpdatedAt;
+		budget.failureBase = state.errorUpdateCount;
+	}
+	if (budget.readinessKey !== readinessKey) {
+		budget.readinessKey = readinessKey;
+		budget.readinessBase = state.dataUpdateCount;
+	}
+	const consecutiveFailures = state.errorUpdateCount - budget.failureBase;
+	// Sign-in-required failures cannot recover through timer retries.
+	if (state.error instanceof CloudCpAuthError) return false;
+	const delay = interfaceTransitionPollDelay({
+		blocked: interfaceTransitionNeedsRestart(status?.transition),
+		live: interfaceTransitionIsActive(status?.transition),
+		livePollMs: liveTransitionPoll,
+		readinessPending: Boolean(status?.reasonCode && readinessReasonCodes.has(status.reasonCode)),
+		readinessAttempts: state.dataUpdateCount - budget.readinessBase,
+		consecutiveFailures,
+		sessionGone: consecutiveFailures > 0 && sessionGone(state.error),
+	});
+	return delay ?? false;
+}
 
 export function interfaceTransitionIsActive(transition?: SessionInterfaceTransition): boolean {
 	return Boolean(transition && activePhases.has(transition.phase));
@@ -226,22 +308,10 @@ function useSessionInterfaceTransitionStatusQuery(
 			if (error) throw error;
 			return data as SessionInterfaceTransitionStatus;
 		},
-		refetchInterval: (state) => {
-			const status = state.state.data;
-			if (interfaceTransitionNeedsRestart(status?.transition)) return false;
-			if (interfaceTransitionIsActive(status?.transition)) return 250;
-			// A missing or not-yet-current native identity is transient while the
-			// terminal's session-start hook is arriving, and a missing workspace
-			// clears once Retry start sets it up. Recheck only those readiness
-			// states so supported switches enable without polling permanently
-			// unsupported harnesses or ordinary idle sessions.
-			return status?.reasonCode === "NATIVE_SESSION_MISSING" ||
-				status?.reasonCode === "NATIVE_SESSION_UNVERIFIED" ||
-				status?.reasonCode === "WORKSPACE_UNAVAILABLE"
-				? nativeSessionReadinessPoll
-				: false;
-		},
-		retry: 1,
+		refetchInterval: interfaceTransitionRefetchInterval,
+		// The poll schedule owns retries; a per-fetch retry would double every
+		// attempt the failure budget counts.
+		retry: false,
 	});
 }
 
@@ -296,6 +366,7 @@ export function useSessionInterfaceTransition(
 			targetSessionId,
 			targetHostId,
 			targetCloudOrgId,
+			targetHarness,
 			...input
 		}: StartInterfaceTransitionMutationInput) => {
 			if (targetCloudOrgId) {
@@ -306,6 +377,7 @@ export function useSessionInterfaceTransition(
 						targetMode: input.targetMode, policy: input.policy,
 						...(input.model ? { model: input.model } : {}),
 						...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+						...(targetHarness ? { targetHarness } : {}),
 					},
 				);
 				return {
@@ -519,7 +591,7 @@ export function useSessionInterfaceTransition(
 		settling,
 		isLoading: query.isLoading,
 		statusError: query.error ? apiErrorMessage(query.error) : undefined,
-		start: (input: StartInterfaceTransitionInput) => {
+		start: (input: StartInterfaceTransitionRequest) => {
 			if (!sessionId) return Promise.reject(new Error("No session is selected."));
 			return start.mutateAsync({ ...input, targetSessionId: sessionId, targetHostId: hostId, targetCloudOrgId: cloudOrgId });
 		},

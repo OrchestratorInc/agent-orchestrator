@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
+	cloudCreateStandaloneAgent: vi.fn(),
+	seedCreatedStandaloneAgent: vi.fn(),
 	cloudDeleteSession: vi.fn(),
 	cloudRenameSession: vi.fn(),
 	cloudSendSessionMessage: vi.fn(),
@@ -32,6 +34,10 @@ const h = vi.hoisted(() => ({
 	cloudOrgId: "org-1",
 	cloudBaseUrl: "https://cloud-a.example.test",
 	cloudUserId: "user-1",
+	cloudMaxAttachmentBytes: undefined as number | undefined,
+	cloudUpload: vi.fn(),
+	// Projects the host's already-loaded project list has.
+	listedProjects: [] as string[],
 }));
 
 vi.mock("../hooks/useChatPermissionModes", async (importOriginal) => {
@@ -109,6 +115,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudSessionsQuery: () => ({ data: [] }),
 	cloudSessionsQueryKey: ["cloud-sessions"] as const,
 	seedCreatedFreestyleSession: vi.fn(),
+	seedCreatedStandaloneAgent: h.seedCreatedStandaloneAgent,
+	useCachedProjectListed: (projectId?: string) => Boolean(projectId) && h.listedProjects.includes(projectId ?? ""),
 }));
 
 vi.mock("../hooks/useCloudOrg", () => ({
@@ -120,17 +128,24 @@ vi.mock("../hooks/useCloudCp", () => ({
 		baseUrl: h.cloudBaseUrl,
 		userId: h.cloudUserId,
 		client: {
-			createSession: h.cloudCreateSession, listUserAgentModels: h.cloudListUserAgentModels, listUserProviderConnections: h.cloudListProviderConnections,
+			createSession: h.cloudCreateSession, createStandaloneAgent: h.cloudCreateStandaloneAgent,
+			listUserAgentModels: h.cloudListUserAgentModels, listUserProviderConnections: h.cloudListProviderConnections,
 			deleteSession: h.cloudDeleteSession, renameSession: h.cloudRenameSession, sendSessionMessage: h.cloudSendSessionMessage, getSession: h.cloudGetSession,
 		},
 	}),
 }));
 
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider }),
+	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider, maxAttachmentBytes: h.cloudMaxAttachmentBytes }),
 }));
 
-import { TaskComposer, useTaskLaunch } from "./TaskComposer";
+// A Cloud task's files upload to its session through the main process's binary channel.
+vi.mock("../lib/cloud-attachments", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/cloud-attachments")>(),
+	uploadCloudAttachment: h.cloudUpload,
+}));
+
+import { resetKeptTaskPreparationsForTests, TaskComposer, useTaskLaunch } from "./TaskComposer";
 import { CloudCpError } from "../lib/cloud-cp";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
@@ -139,6 +154,8 @@ import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { cacheAgentModels, clearCachedAgentModels } from "../lib/agent-model-cache";
 import { useUiStore } from "../stores/ui-store";
 import { subscribeCloudSessionEvents } from "../lib/cloud-cp/session-events-hub";
+import { standaloneAgentProjectId } from "../lib/cloud-standalone-agents";
+import { CLOUD_STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import type { CloudCpStreamEvent } from "../../main/cloud-cp-proxy";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
@@ -257,6 +274,8 @@ afterEach(() => {
 	h.agentCatalog = undefined;
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
+	h.cloudCreateStandaloneAgent.mockReset();
+	h.seedCreatedStandaloneAgent.mockReset();
 	h.cloudDeleteSession.mockReset().mockResolvedValue(undefined);
 	h.cloudRenameSession.mockReset();
 	h.cloudSendSessionMessage.mockReset();
@@ -270,6 +289,10 @@ afterEach(() => {
 	h.cloudOrgId = "org-1";
 	h.cloudBaseUrl = "https://cloud-a.example.test";
 	h.cloudUserId = "user-1";
+	h.cloudMaxAttachmentBytes = undefined;
+	h.cloudUpload.mockReset();
+	h.listedProjects.length = 0;
+	resetKeptTaskPreparationsForTests();
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -324,6 +347,16 @@ describe("TaskComposer", () => {
 		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.post).not.toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "local" }));
+	});
+
+	it("opens the Cloud harness view from a cloud project's no-agent message", async () => {
+		const queryClient = cloudFixture("", {}, []);
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "cloud" }));
 	});
 
 	it("offers the agent default after a stale saved model is rejected without retrying the spawn", async () => {
@@ -382,6 +415,8 @@ describe("TaskComposer", () => {
 			: { data: {} });
 		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
 		await screen.findByText("No agent is ready on this host. Configure one there first.");
+		// A remote host's agents are set up on that host, not in this computer's Settings.
+		expect(screen.queryByRole("button", { name: "Open Agent Harnesses" })).not.toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.remotePost.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
 	});
@@ -1415,7 +1450,7 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("File attachments are not supported for cloud tasks yet.");
 		expect(onCreated).not.toHaveBeenCalled();
 		expect(h.post).not.toHaveBeenCalled();
-		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { project_id: "cloud-1" });
+		expect(h.capture).toHaveBeenCalledWith("ao.tasks.create_failed", { project_id: "cloud-1" });
 	});
 
 	it("starts a cloud task in the default session mode, as a local task does", async () => {
@@ -1429,6 +1464,37 @@ describe("TaskComposer", () => {
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("starts a Cloud standalone agent as the one session of a project of its own", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(providerConnectionsQueryKey, [
+			{ id: "claude-connection", provider: "claude-code", label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: {} },
+		]);
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code"] } }
+			: { data: { agent: "claude-code", selectionMode: "catalog", models: [{ id: "claude-sonnet-test", label: "Sonnet", isDefault: true }], allowCustom: true } });
+		const project = { id: "agent-1", displayName: "Do the work", standaloneAgent: true };
+		h.cloudCreateStandaloneAgent.mockResolvedValue({ project, session: { id: "session-1" } });
+		const onCreated = vi.fn();
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId={CLOUD_STANDALONE_WORKSPACE_ID} onCreated={onCreated} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(h.cloudCreateStandaloneAgent).toHaveBeenCalledWith(
+			"org-1",
+			expect.objectContaining({ harness: "claude-code", prompt: "Do the work", displayName: "Do the work", interfaceMode: "chat" }),
+			{ idempotencyKey: expect.any(String) },
+		));
+		const body = h.cloudCreateStandaloneAgent.mock.calls[0][1];
+		expect(body).not.toHaveProperty("projectId");
+		expect(body).not.toHaveProperty("kind");
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(h.post).not.toHaveBeenCalled();
+		expect(h.seedCreatedStandaloneAgent).toHaveBeenCalledWith(expect.anything(), h.cloudBaseUrl, "org-1", project);
+		expect(standaloneAgentProjectId("session-1")).toBe("agent-1");
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
 	});
 
 	it("starts a cloud task in the terminal when the control plane has no Chat for its agent, as local does", async () => {
@@ -1844,6 +1910,23 @@ describe("TaskComposer", () => {
 		});
 	});
 
+	it("starts Docker Agent in Chat without a terminal fallback", async () => {
+		h.agentCatalog = { agents: [agentReadiness("docker-agent", "Docker Agent")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: ["docker-agent"] } };
+			if (path.includes("/models")) return { data: { agent: "docker-agent", selectionMode: "catalog", models: [], allowCustom: false } };
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ error: { code: "CHAT_DRIVER_UNAVAILABLE", message: "Docker Agent unavailable" } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "docker-agent"));
+		fireEvent.change(task(), { target: { value: "Edit workspace" } });
+		fireEvent.click(startTask());
+		await screen.findByText("Docker Agent unavailable");
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ harness: "docker-agent", mode: "chat" });
+		expect(screen.queryByRole("button", { name: "Create as Terminal UI" })).not.toBeInTheDocument();
+	});
+
 	it("reports a standalone create failure", async () => {
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
 		h.post.mockResolvedValue({ error: { code: "SESSION_CREATE_FAILED", message: "no session" } });
@@ -1852,7 +1935,7 @@ describe("TaskComposer", () => {
 		fireEvent.change(task(), { target: { value: "Say hello" } });
 		fireEvent.click(screen.getByText("Start task"));
 		expect(await screen.findByRole("alert")).toHaveTextContent("no session");
-		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { scope: "standalone" });
+		expect(h.capture).toHaveBeenCalledWith("ao.tasks.create_failed", { scope: "standalone" });
 	});
 
 	it("reports dirty then clears it on unmount", () => {
@@ -2256,6 +2339,95 @@ describe("TaskComposer", () => {
 		expect(await screen.findByTitle("Provider temporarily unavailable")).toBeInTheDocument();
 	});
 
+	it("submits a directly entered Mastra Code model", async () => {
+		const agent = "mastra-code";
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: {
+				agentId: agent,
+				selectionMode: "text",
+				models: [],
+				allowCustom: true,
+				customModelEntry: "direct",
+			} };
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "custom-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		const search = await screen.findByRole("searchbox", { name: "Search model" });
+		await userEvent.type(search, "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		fireEvent.change(task(), { target: { value: "Use the selected native model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
+			"/api/v1/sessions",
+			expect.objectContaining({ body: expect.objectContaining({ harness: agent, model: "private/model-id" }) }),
+		));
+	});
+
+	it("returns a directly entered Mastra Code model to the native default", async () => {
+		const agent = "mastra-code";
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
+			: { data: { status: "ok", project: { config: {} } } });
+		h.post.mockResolvedValueOnce({ data: { session: { id: "default-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		await userEvent.type(await screen.findByRole("searchbox", { name: "Search model" }), "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Use project or agent default" }));
+		expect(picker).not.toHaveTextContent("private/model-id");
+		fireEvent.change(task(), { target: { value: "Use the native default model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.anything()));
+		expect(h.post.mock.calls.at(-1)?.[1]?.body?.model ?? "").toBe("");
+	});
+
+	// Other direct-entry harnesses keep the local catalog-only picker.
+	it.each([
+		["codex", "Codex"],
+		["claude-code", "Claude Code"],
+	] as const)("keeps local %s on its catalog when direct entry is advertised", async (agent, label) => {
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
+			: { data: { status: "ok", project: { config: {} } } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		// An empty catalog may offer no search at all; where search is offered,
+		// a typed model ID must still not become a custom choice.
+		const search = screen.queryByRole("searchbox", { name: "Search model" });
+		if (search) await userEvent.type(search, "private/model-id");
+		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
+	});
+
+	it("refuses direct model entry when the catalog explicitly disables it", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "codex", selectionMode: "catalog", models: [], allowCustom: true, customModelEntry: "none" } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
+	});
+
 	it("does not render free text when models must be configured in the agent", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
@@ -2283,6 +2455,39 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(localModelReads().length).toBeGreaterThan(0));
 		await userEvent.click(picker);
 		expect(await screen.findByText("Configure the model in OpenCode, then refresh.")).toBeInTheDocument();
+	});
+
+	it("accepts a model ID for Open Interpreter when it has no model catalog", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "open-interpreter", selectionMode: "text", models: [], customModelEntry: "direct", allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "open-interpreter", config: {} } } });
+		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		const modelInput = screen.getByRole("searchbox");
+		expect(modelInput).toHaveAttribute("placeholder", "Enter model ID…");
+		await userEvent.type(modelInput, "openai/gpt-4o");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “openai/gpt-4o” as a custom model" }));
+		expect(picker).toHaveTextContent("openai/gpt-4o");
+		fireEvent.change(task(), { target: { value: "Check this repo" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
+		expect(h.post.mock.calls[0][1].body.model).toBe("openai/gpt-4o");
+	});
+
+	it("lists the Open Interpreter native catalog and keeps direct entry available", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "open-interpreter", selectionMode: "catalog", models: [{ id: "gpt-6-sol", label: "GPT-6 Sol" }], customModelEntry: "direct", allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "open-interpreter", config: {} } } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		expect(screen.getByRole("menuitem", { name: "GPT-6 Sol" })).toBeInTheDocument();
+		await userEvent.type(screen.getByRole("searchbox"), "custom/model");
+		expect(screen.getByRole("menuitem", { name: "Use “custom/model” as a custom model" })).toBeInTheDocument();
 	});
 
 	it("uses the project worker model as the new task model default", async () => {
@@ -4075,7 +4280,7 @@ describe("TaskComposer local saved choices", () => {
 describe("useTaskLaunch agent choices", () => {
 	function Choices() {
 		const task = useTaskLaunch({ projectId: "proj-1" });
-		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.id}</li>)}</ul>;
+		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.unavailable ? `${agent.id}: ${agent.unavailable}` : agent.id}</li>)}</ul>;
 	}
 
 	it("offers locally only agents that can start, never an \"Auth unknown\" one", async () => {
@@ -4084,12 +4289,24 @@ describe("useTaskLaunch agent choices", () => {
 			agentReadiness("claude-code", "Claude Code"),
 			agentReadiness("amp", "Amp", { authentication: "unknown" }),
 			agentReadiness("fx", "fx", { authentication: "configured" }),
-			agentReadiness("goose", "Goose", { authentication: "unauthorized" }),
 			agentReadiness("crush", "Crush", { installation: "unknown" }),
 			agentReadiness("aider", "Aider", { installation: "not_installed" }),
 		] };
 		render(<Wrap><Choices /></Wrap>);
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort()).toEqual(["claude-code", "fx"]));
+	});
+
+	it("offers a chat agent that is not installed, and any agent not signed in, dimmed for setup", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("codex", "Codex", { installation: "not_installed" }),
+			agentReadiness("goose", "Goose", { authentication: "unauthorized" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["claude-code", "codex: Not installed", "goose: Not signed in"]));
 	});
 });
 
@@ -4183,6 +4400,152 @@ describe("useTaskLaunch Cloud start on send", () => {
 		const [first, second] = h.cloudCreateSession.mock.calls.map((call) => call[2]);
 		expect(first?.idempotencyKey).toEqual(expect.any(String));
 		expect(second).toEqual(first);
+	});
+
+	// A refusal the page treats as uncertain keeps the send pinned and retries
+	// it as it was, so a task with files that cannot start must be refused as final.
+	it("refuses files on a Cloud task that starts in the terminal as final, creating nothing", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f1", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		// The page has no interface switch: the default session interface in Settings decides it.
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// An agent Cloud runs only in the terminal starts there whatever the default says.
+	it("says to choose another agent when the task's agent has no Chat on Cloud", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudChatHarnesses = [];
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f6", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task only in Chat, which Codex doesn't run in on Cloud. Choose another agent, or remove the files." });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	it("refuses files as final where the control plane takes none", async () => {
+		const queryClient = freestyleFixture();
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f2", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// A file small enough to read inline is still over a lower Cloud limit.
+	it("holds a file already read inline to the Cloud per-file limit", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 1;
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f8", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENT_TOO_LARGE" });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// Its session was deleted again, so nothing is left to retry: the page
+	// hands the brief and files back with the reason.
+	it("returns a Cloud task whose files did not upload as final, once its session is deleted", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f3", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("This file type is not allowed."));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f3", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "s-f3");
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_TASK_FILES_UNDELIVERED", message: "This file type is not allowed." });
+		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-f3"])).toBeUndefined();
+	});
+
+	// A session the cleanup could not delete may still take the brief: the
+	// failure stays uncertain, so the page retries it with the same request id.
+	it("keeps a Cloud task with files uncertain while its session may still exist", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f4", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("Couldn’t reach Orchestrator Cloud. Check the connection and try again."));
+		h.cloudDeleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f4", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toBeInstanceOf(Error);
+		expect(outcome).not.toMatchObject({ name: "TaskCreateError" });
+		expect((outcome as { code?: string }).code).toBeUndefined();
+	});
+
+	// A control plane's refusal of the brief is final only once the session
+	// is gone: while the cleanup could not delete it, the page keeps the send
+	// and retries it with the same request id, which continues that session.
+	it("keeps a refused brief uncertain while its session may still exist", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f7", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockResolvedValue({ id: "file-1" });
+		h.cloudSendSessionMessage.mockRejectedValue(new CloudCpError("This session's sandbox runs an older AO worker that cannot receive attached files.", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" }));
+		h.cloudDeleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f7", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toBeInstanceOf(Error);
+		expect(outcome).not.toMatchObject({ name: "TaskCreateError" });
+		expect((outcome as { code?: string }).code).toBeUndefined();
+		expect((outcome as { status?: number }).status).toBeUndefined();
+	});
+
+	// Its own project comes with its session, so a start the files did not
+	// reach would leave that project behind: it starts without them.
+	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		let standalone!: ReturnType<typeof useTaskLaunch>;
+		function StandaloneLauncher() {
+			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
+			return <p>{standalone.canSubmit ? "ready" : "loading"}</p>;
+		}
+		render(<Wrap queryClient={queryClient}><StandaloneLauncher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
+		expect(h.cloudCreateStandaloneAgent).not.toHaveBeenCalled();
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(h.cloudUpload).not.toHaveBeenCalled();
 	});
 
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {
@@ -4316,6 +4679,145 @@ describe("useTaskLaunch on the new chat page", () => {
 		});
 		// Answered, the send releases it as any send does.
 		expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+	});
+
+	it("prepares a listed project's worktree before the project read answers", async () => {
+		h.listedProjects.push("proj-1");
+		h.get.mockImplementation(() => new Promise(() => {}));
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+			? { data: { taskPreparation: "proj-1-7" } }
+			: { data: {} });
+		function Launcher() {
+			const task = useTaskLaunch({ projectId: "proj-1" });
+			return <p>{task.preparedSessionId || "unprepared"}</p>;
+		}
+		render(<Wrap><Launcher /></Wrap>);
+		await screen.findByText("proj-1-7");
+		expect(h.post).toHaveBeenCalledWith("/api/v1/projects/{id}/tasks/prepare", { params: { path: { id: "proj-1" } } });
+	});
+
+	it("offers the next visit the worktree a page left unused", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+		h.delete.mockResolvedValue({});
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+			? { data: { taskPreparation: "proj-1-7" } }
+			: { data: {} });
+		function Launcher() {
+			const task = useTaskLaunch({ projectId: "proj-1" });
+			return <p>{task.preparedSessionId || "unprepared"}</p>;
+		}
+		const first = render(<Wrap><Launcher /></Wrap>);
+		await screen.findByText("proj-1-7");
+		first.unmount();
+		expect(h.delete).not.toHaveBeenCalled();
+
+		render(<Wrap><Launcher /></Wrap>);
+		await screen.findByText("proj-1-7");
+		const prepares = h.post.mock.calls.filter(([path]) => path === "/api/v1/projects/{id}/tasks/prepare");
+		expect(prepares).toHaveLength(1);
+		expect(h.delete).not.toHaveBeenCalled();
+	});
+
+	it("keeps the newer left worktree when an older request answers late", async () => {
+		const now = vi.spyOn(Date, "now");
+		try {
+			now.mockReturnValue(1_000_000);
+			h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+			h.delete.mockResolvedValue({});
+			let answerFirst!: (token: string) => void;
+			let prepares = 0;
+			h.post.mockImplementation(async (path: string) => {
+				if (path !== "/api/v1/projects/{id}/tasks/prepare") return { data: {} };
+				prepares += 1;
+				if (prepares === 1) return new Promise((done) => { answerFirst = (token) => done({ data: { taskPreparation: token } }); });
+				return { data: { taskPreparation: "proj-1-8" } };
+			});
+			function Launcher() {
+				const task = useTaskLaunch({ projectId: "proj-1" });
+				return <p>{task.preparedSessionId || "unprepared"}</p>;
+			}
+			// The first page leaves while its request is still out.
+			const first = render(<Wrap><Launcher /></Wrap>);
+			await waitFor(() => expect(prepares).toBe(1));
+			first.unmount();
+
+			// A later page gets its own preparation and leaves it unused.
+			now.mockReturnValue(1_000_000 + 60_000);
+			const second = render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-8");
+			second.unmount();
+
+			// The first request answers last.
+			await act(async () => { answerFirst("proj-1-7"); });
+			expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+			expect(h.delete).not.toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-8" } } });
+
+			render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-8");
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("counts a kept worktree's reuse window from the page's last use of it", async () => {
+		const now = vi.spyOn(Date, "now");
+		try {
+			now.mockReturnValue(1_000_000);
+			h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+			h.delete.mockResolvedValue({});
+			h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+				? { data: { taskPreparation: "proj-1-7" } }
+				: { data: {} });
+			let used: ((token: string, at: number) => void) | undefined;
+			function Launcher() {
+				const task = useTaskLaunch({ projectId: "proj-1" });
+				used = task.notePreparationUsed;
+				return <p>{task.preparedSessionId || "unprepared"}</p>;
+			}
+			const first = render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-7");
+			// The page read the worktree's files three minutes in, which restarted
+			// the host's expiry, then left.
+			used?.("proj-1-7", 1_000_000 + 3 * 60_000);
+			first.unmount();
+
+			// Six minutes after it was made, but three after its last use.
+			now.mockReturnValue(1_000_000 + 6 * 60_000);
+			render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-7");
+			const prepares = h.post.mock.calls.filter(([path]) => path === "/api/v1/projects/{id}/tasks/prepare");
+			expect(prepares).toHaveLength(1);
+			expect(h.delete).not.toHaveBeenCalled();
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("releases a left worktree too old to offer and prepares a new one", async () => {
+		const now = vi.spyOn(Date, "now");
+		try {
+			now.mockReturnValue(1_000_000);
+			h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+			h.delete.mockResolvedValue({});
+			let next = 7;
+			h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+				? { data: { taskPreparation: `proj-1-${next++}` } }
+				: { data: {} });
+			function Launcher() {
+				const task = useTaskLaunch({ projectId: "proj-1" });
+				return <p>{task.preparedSessionId || "unprepared"}</p>;
+			}
+			const first = render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-7");
+			first.unmount();
+
+			now.mockReturnValue(1_000_000 + 4 * 60_000);
+			render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-8");
+			expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+		} finally {
+			now.mockRestore();
+		}
 	});
 });
 

@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, PanelLeft } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";

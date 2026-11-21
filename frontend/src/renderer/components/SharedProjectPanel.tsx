@@ -1,4 +1,4 @@
-import { ChevronDown, GitPullRequest, Users } from "lucide-react";
+import { ChevronDown, GitPullRequest, Users } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
@@ -9,7 +9,6 @@ import { prDisplayKey, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { cn } from "../lib/utils";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { PRSummaryCard } from "./SessionInspector";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
@@ -69,9 +68,8 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
-				<TopbarButton
+				<Button variant="quiet" type="button" size="sm"
 					aria-label={`${title}: ${summary}`}
-					className="topbar-control--labeled"
 					data-priority="secondary"
 					data-shared-project-button=""
 					title={`${title}: ${summary}`}
@@ -85,7 +83,7 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 					</span>
 					<span data-compact-label="">{summary}</span>
 					<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 transition-transform", open && "rotate-180")} />
-				</TopbarButton>
+				</Button>
 			</PopoverTrigger>
 			<PopoverContent
 				align="end"

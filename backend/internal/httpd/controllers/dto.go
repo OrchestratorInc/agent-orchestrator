@@ -18,11 +18,37 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
+
+// ConversationFindParam identifies the chat whose retained text is searched.
+type ConversationFindParam struct {
+	ConversationID string `path:"conversationId" required:"true"`
+}
+
+// ConversationFindQuery defines a literal query, reading anchor and cursor.
+type ConversationFindQuery struct {
+	Query              string `query:"query" description:"Case-insensitive literal substring in displayed message text (maximum 512 characters)."`
+	Cursor             string `query:"cursor,omitempty" description:"Opaque continuation bound to query and transcript revision."`
+	AnchorMessageID    string `query:"anchorMessageId,omitempty" description:"Start at or after this visible message when cursor is absent."`
+	AnchorBlock        int    `query:"anchorBlock,omitempty" minimum:"0"`
+	AnchorOffset       int    `query:"anchorOffset,omitempty" minimum:"0"`
+	AnchorSequence     int64  `query:"anchorSequence,omitempty" minimum:"0" description:"Fallback position when the anchor message was removed."`
+	FallbackToPrevious bool   `query:"fallbackToPrevious,omitempty" description:"Choose the preceding match if a removed anchor has no following match."`
+}
+
+// ConversationFindWindowQuery locates bounded context around one match.
+type ConversationFindWindowQuery struct {
+	Sequence int64 `query:"sequence" required:"true" minimum:"1"`
+}
+
+// ConversationFindResponse returns occurrence positions and complete counts.
+type ConversationFindResponse chatsvc.FindResult
 
 // CreateReportRequest is the local caller-to-daemon report submission contract.
 // SessionID attributes the report; like the rest of AO's unauthenticated
@@ -152,11 +178,71 @@ type StartAgentAuthResponse struct {
 	Terminal      ShellTerminalResponse `json:"terminal"`
 }
 
-// StartAgentUILoginRequest selects a fixed native login method. The optional
-// credential is passed to stdin and never returned in operation responses.
+// StartAgentUILoginRequest selects a reviewed login method. Credentials are
+// never returned in operation responses; model is required by some key flows.
 type StartAgentUILoginRequest struct {
 	Method string `json:"method"`
 	Secret string `json:"secret,omitempty"`
+	Model  string `json:"model,omitempty"`
+	// Device also publishes a provider key to the OS user environment; when
+	// omitted the key keeps its current setting.
+	Device *bool `json:"device,omitempty"`
+	// Provider is the catalog provider a provider_key login configures.
+	Provider string `json:"provider,omitempty"`
+}
+
+// CatalogProviderParam names one provider in a harness's own catalog.
+type CatalogProviderParam struct {
+	Provider string `path:"provider" description:"Provider ID from the harness's catalog."`
+}
+
+// RecordAgentSignInResponse names the AO-saved key the daemon stopped passing
+// the harness after its sign-in, if any.
+type RecordAgentSignInResponse struct {
+	ReleasedKey string `json:"releasedKey,omitempty"`
+}
+
+// ListCatalogProvidersResponse lists the key-only providers in a harness's
+// own provider catalog.
+type ListCatalogProvidersResponse struct {
+	Providers []agentauth.CatalogProvider `json:"providers"`
+}
+
+// ListCatalogModelsResponse lists a catalog provider's model IDs.
+type ListCatalogModelsResponse struct {
+	Models []string `json:"models"`
+}
+
+// ProviderKeyNameParam names one reviewed provider environment variable.
+type ProviderKeyNameParam struct {
+	Name string `path:"name" description:"Provider environment variable, such as ANTHROPIC_API_KEY."`
+}
+
+// ListProviderKeysResponse lists display-safe provider key state.
+type ListProviderKeysResponse struct {
+	Keys []agentauth.ProviderKey `json:"keys"`
+}
+
+// SaveProviderKeyRequest stores a key, or keeps the saved one when secret is
+// omitted, and sets whether it is published to the OS user environment.
+type SaveProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
+	Device bool   `json:"device"`
+}
+
+// CheckProviderKeyRequest checks secret, or the saved key when omitted.
+type CheckProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
+}
+
+// AgentLoginActionRequest selects a fixed navigation action, or a digit 1-9
+// for a recognized numbered native login menu. It never carries terminal
+// bytes or credentials.
+type AgentLoginActionRequest struct {
+	Action string `json:"action" enum:"previous,next,select,1,2,3,4,5,6,7,8,9"`
+	// Option is the label the user chose for a numbered action; the daemon
+	// refuses the action when the menu now offers something else there.
+	Option string `json:"option,omitempty" maxLength:"256"`
 }
 
 // SubmitAgentUILoginCodeRequest supplies a one-time native fallback code.
@@ -297,6 +383,7 @@ type ListSessionsQuery struct {
 	Kind             string `query:"kind,omitempty" enum:"worker,orchestrator" description:"Session kind filter. worker keeps every session that is not an orchestrator."`
 	Limit            int    `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned."`
 	Cursor           string `query:"cursor,omitempty" description:"Opaque cursor returned by the previous page. Requires limit."`
+	PRState          string `query:"prState,omitempty" enum:"open,draft,merged,closed" description:"Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total."`
 }
 
 // CleanupSessionsQuery is the query string accepted by POST /api/v1/sessions/cleanup.
@@ -522,12 +609,21 @@ type SessionView struct {
 
 // SessionArtifactView is one inferred file artifact for a session.
 type SessionArtifactView struct {
-	Path       string                     `json:"path"`
-	Name       string                     `json:"name"`
-	Kind       domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
-	Size       int64                      `json:"size"`
-	UpdatedAt  time.Time                  `json:"updatedAt"`
-	PreviewURL string                     `json:"previewUrl,omitempty"`
+	// ID is the artifact's identity. It stays the same when the file is
+	// renamed or moved; empty for a file AO has not tracked yet.
+	ID        string                     `json:"id,omitempty"`
+	Path      string                     `json:"path"`
+	Name      string                     `json:"name"`
+	Kind      domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
+	Size      int64                      `json:"size"`
+	UpdatedAt time.Time                  `json:"updatedAt"`
+	// Registered is set on a file the agent registered with ao artifact add. A
+	// session with no registered file falls back to showing its root files.
+	Registered bool `json:"registered,omitempty"`
+	// PreviousPaths are the paths the artifact had before a rename, most
+	// recent last, so a link that names one still opens it.
+	PreviousPaths []string `json:"previousPaths,omitempty"`
+	PreviewURL    string   `json:"previewUrl,omitempty"`
 	// RawURL fetches this artifact's raw bytes on the artifact preview
 	// origin — a distinct host from the workspace preview origin, so a
 	// workspace-relative path can never collide with an artifact-relative
@@ -539,6 +635,23 @@ type SessionArtifactView struct {
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
 	ShareURL  string `json:"shareUrl,omitempty"`
+	// ShareAccess is who ShareURL opens for, as last recorded: restricted or
+	// anyone. Empty when not recorded; the link list then says.
+	ShareAccess string `json:"shareAccess,omitempty" enum:"restricted,anyone"`
+}
+
+// RegisterArtifactsRequest is the body of POST
+// /api/v1/sessions/{sessionId}/artifact-registrations.
+type RegisterArtifactsRequest struct {
+	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+}
+
+// RegisterArtifactsResponse reports what a registration did, so the agent can
+// see what stays unlisted.
+type RegisterArtifactsResponse struct {
+	Registered     []string `json:"registered" description:"The requested paths, relative to the artifact directory."`
+	OtherFiles     int      `json:"otherFiles" description:"How many of the session's files are not registered."`
+	OtherRootFiles []string `json:"otherRootFiles" description:"The unregistered files at the root of the artifact directory."`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -551,6 +664,15 @@ type ListSessionsResponse struct {
 	// same project and kind filters would have matched, so a client can show
 	// the archive's size without downloading it.
 	Archived *SessionArchiveSummary `json:"archived,omitempty"`
+	// PRState echoes the prState filter the list applied, so a client can tell
+	// a daemon that filtered from one that ignored the parameter.
+	PRState domain.PRState `json:"prState,omitempty" enum:"open,draft,merged,closed"`
+	// Total is present with prState: how many sessions match across all pages.
+	Total *int `json:"total,omitempty"`
+	// Version is present with prState and names the whole filtered list (its
+	// sessions and when each PR reached the state). Equal versions mean the
+	// same list, so one page tells a client whether anything moved.
+	Version string `json:"version,omitempty"`
 }
 
 // SessionArchiveSummary sizes the archive behind an active-only session list.
@@ -571,8 +693,11 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau"`
 	Branch          string                 `json:"branch,omitempty"`
+	// BaseBranch starts the session's branch from this branch instead of the
+	// project's default, to stack its work on another pull request.
+	BaseBranch string `json:"baseBranch,omitempty" maxLength:"255"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
 	// Omitted resolves to the daemon-owned preference, which defaults to Chat for
@@ -590,6 +715,9 @@ type SpawnSessionRequest struct {
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
 	Effort string `json:"effort,omitempty" maxLength:"32"`
+	// AccountID is the subscription account the agent starts on. Empty uses the
+	// provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -600,6 +728,9 @@ type SpawnSessionRequest struct {
 	// `ao spawn --name` always sets it; other clients (e.g. the desktop new-task
 	// dialog) may omit it and fall back to the session id in the read model.
 	DisplayName string `json:"displayName,omitempty" maxLength:"100"`
+	// DisplayNameExplicit says displayName was deliberately chosen, so it wins
+	// over a terminal program's title. Omit it for a name derived from the prompt.
+	DisplayNameExplicit bool `json:"displayNameExplicit,omitempty"`
 	// Attachments are files pasted or dropped into the task brief. Each carries
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
@@ -619,8 +750,20 @@ type AttachmentInput struct {
 	// derive the on-disk file extension. Explicitly blocked types are rejected.
 	MimeType string `json:"mimeType,omitempty"`
 	// Data is the raw file bytes, standard base64-encoded, without any
-	// "data:...;base64," prefix.
-	Data string `json:"data"`
+	// "data:...;base64," prefix. For small files; a large one is streamed
+	// first through POST /api/v1/attachment-uploads and named by UploadID.
+	Data string `json:"data,omitempty"`
+	// UploadID names a file streamed in through POST /api/v1/attachment-uploads,
+	// in place of Data.
+	UploadID string `json:"uploadId,omitempty"`
+}
+
+// AttachmentUploadResponse is the body of POST /api/v1/attachment-uploads.
+type AttachmentUploadResponse struct {
+	// UploadID is what an attachment names, as uploadId, in place of inline data.
+	UploadID string `json:"uploadId"`
+	// Bytes is the size of the file as written.
+	Bytes int64 `json:"bytes"`
 }
 
 // SessionResponse is the { session } body shared by session reads and updates.
@@ -640,8 +783,8 @@ type SpawnSessionResponse struct {
 // StageSessionAttachmentsRequest attaches files to a session that is already
 // running, for a caller that will name the returned paths in its next message.
 type StageSessionAttachmentsRequest struct {
-	// Attachments each carry their bytes as standard base64 (no data: URL prefix).
-	// The same count, size, and blocked-type rules as spawn apply.
+	// Attachments each carry their bytes as standard base64 (no data: URL
+	// prefix) or name an upload. The same count and blocked-type rules as spawn apply.
 	Attachments []AttachmentInput `json:"attachments"`
 }
 
@@ -1301,7 +1444,29 @@ type RollbackSessionResponse struct {
 
 // DeleteSessionQuery is the query string accepted by DELETE /api/v1/sessions/{sessionId}.
 type DeleteSessionQuery struct {
-	Cleanup bool `query:"cleanup,omitempty" description:"When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete."`
+	Cleanup       bool `query:"cleanup,omitempty" description:"When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete."`
+	KeepArtifacts bool `query:"keepArtifacts,omitempty" description:"When true, the session's artifact files are kept, view only, and listed by GET /api/v1/kept-artifacts until they are deleted one by one. Otherwise they are deleted with the session."`
+}
+
+// ListKeptArtifactsResponse is the body of GET /api/v1/kept-artifacts.
+type ListKeptArtifactsResponse struct {
+	Sets []KeptArtifactsView `json:"sets"`
+}
+
+// KeptArtifactsView is one set of artifacts no session or project lists: a
+// session deleted with its artifacts kept, or a session in a removed project.
+// Its files are view only; DELETE /api/v1/sessions/{sessionId}/artifact-files
+// deletes one.
+type KeptArtifactsView struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	// ProjectID is the session's project; absent when it has none any more.
+	ProjectID domain.ProjectID `json:"projectId,omitempty"`
+	Title     string           `json:"title"`
+	// SessionDeleted is set when the session itself was deleted; otherwise
+	// its project was removed.
+	SessionDeleted bool                  `json:"sessionDeleted"`
+	At             time.Time             `json:"at" description:"When the session was deleted, or last updated."`
+	ArtifactFiles  []SessionArtifactView `json:"artifactFiles"`
 }
 
 // DeleteSessionResponse is the body of DELETE /api/v1/sessions/{sessionId}.
@@ -1355,12 +1520,15 @@ type SendSessionMessageResponse struct {
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
 // An omitted agent tells the orchestrator to use the project's worker default.
 type DelegateTaskRequest struct {
-	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
-	ProjectID       domain.ProjectID    `json:"projectId"`
-	Brief           string              `json:"brief" maxLength:"102400"`
-	Branch          string              `json:"branch,omitempty" maxLength:"255"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
-	Model           string              `json:"model,omitempty" maxLength:"256"`
+	ClientRequestID string           `json:"clientRequestId,omitempty" maxLength:"128"`
+	ProjectID       domain.ProjectID `json:"projectId"`
+	Brief           string           `json:"brief" maxLength:"102400"`
+	Branch          string           `json:"branch,omitempty" maxLength:"255"`
+	// BaseBranch starts the worker from this branch instead of the project's
+	// default, to stack its work on another pull request.
+	BaseBranch string              `json:"baseBranch,omitempty" maxLength:"255"`
+	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,fake"`
+	Model      string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
 	Effort *string `json:"effort,omitempty" maxLength:"64"`
@@ -1370,6 +1538,9 @@ type DelegateTaskRequest struct {
 	// Mode is omitted for the daemon-owned default. The UI sends tui only when
 	// the user explicitly accepts the fallback after Chat preflight fails.
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"tui,chat"`
+	// AccountID is the subscription account the worker starts on. Empty uses
+	// the provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path
@@ -1404,6 +1575,10 @@ type SessionPRFacts struct {
 	Mergeability   domain.Mergeability   `json:"mergeability" enum:"unknown,mergeable,conflicting,blocked,unstable"`
 	ReviewComments bool                  `json:"reviewComments"`
 	UpdatedAt      time.Time             `json:"updatedAt"`
+	// StackParent is the number of the open PR whose branch this PR targets.
+	// Absent when the PR's base branch has no open PR in a live session, e.g.
+	// the default branch.
+	StackParent int `json:"stackParent,omitempty"`
 }
 
 // SessionPRSummary is the concise desktop SCM read model returned by GET
@@ -1434,13 +1609,81 @@ type SessionPRSummary struct {
 	ObservedAt       time.Time                    `json:"observedAt,omitempty"`
 	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
 	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
+
+	// Description is the PR body as markdown. It is untrusted provider content
+	// and must be sanitized when rendered.
+	Description          string `json:"description,omitempty"`
+	DescriptionTruncated bool   `json:"descriptionTruncated,omitempty"`
+	// Labels, RequestedReviewers and Commits are empty until DetailsObservedAt
+	// is present, and empty afterwards only when the PR has none.
+	Labels             []SessionPRLabel             `json:"labels"`
+	RequestedReviewers []SessionPRRequestedReviewer `json:"requestedReviewers"`
+	// Commits are the newest commits, oldest first; CommitCount is the total.
+	Commits           []SessionPRCommit `json:"commits"`
+	CommitCount       int               `json:"commitCount"`
+	DetailsObservedAt *time.Time        `json:"detailsObservedAt,omitempty"`
+	// Threads are the stored review threads with their comments, threads and
+	// comments oldest first. Bodies are untrusted provider markdown.
+	Threads []SessionPRThread `json:"threads,omitempty"`
+	// Conversation is the newest top-level conversation comments, oldest
+	// first; empty until DetailsObservedAt is present.
+	Conversation []SessionPRComment `json:"conversation,omitempty"`
+}
+
+// SessionPRThread is one review thread on a session PR.
+type SessionPRThread struct {
+	ID       string             `json:"id"`
+	Path     string             `json:"path,omitempty"`
+	Line     int                `json:"line,omitempty"`
+	Resolved bool               `json:"resolved"`
+	Comments []SessionPRComment `json:"comments"`
+}
+
+// SessionPRComment is one review-thread or conversation comment on a session PR.
+type SessionPRComment struct {
+	ID        string     `json:"id"`
+	Author    string     `json:"author"`
+	IsBot     bool       `json:"isBot"`
+	Body      string     `json:"body"`
+	URL       string     `json:"url,omitempty"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+}
+
+// SessionPRLabel is one label on a session PR.
+type SessionPRLabel struct {
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// SessionPRRequestedReviewer is a user or team whose review is requested.
+type SessionPRRequestedReviewer struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	IsTeam    bool   `json:"isTeam,omitempty"`
+}
+
+// SessionPRCommit is one commit on a session PR's branch.
+type SessionPRCommit struct {
+	SHA         string     `json:"sha"`
+	Headline    string     `json:"headline"`
+	Author      string     `json:"author,omitempty"`
+	CommittedAt *time.Time `json:"committedAt,omitempty"`
 }
 
 // SessionPRCISummary is the CI status block for a session PR summary.
 type SessionPRCISummary struct {
 	State         domain.CIState          `json:"state" enum:"unknown,pending,passing,failing"`
 	FailingChecks []SessionPRFailingCheck `json:"failingChecks"`
-	AutoInjectCI  bool                    `json:"autoInjectCI"`
+	// Checks lists every check on the head commit, failing first.
+	Checks       []SessionPRCheck `json:"checks"`
+	AutoInjectCI bool             `json:"autoInjectCI"`
+}
+
+// SessionPRCheck is one CI check on a session PR's head commit.
+type SessionPRCheck struct {
+	Name   string               `json:"name"`
+	Status domain.PRCheckStatus `json:"status" enum:"unknown,queued,in_progress,passed,failed,skipped,cancelled"`
+	URL    string               `json:"url,omitempty"`
 }
 
 // SessionPRFailingCheck is one failed or cancelled CI check for a PR.
@@ -1549,7 +1792,67 @@ func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 		ObservedAt:       in.ObservedAt,
 		CIObservedAt:     in.CIObservedAt,
 		ReviewObservedAt: in.ReviewObservedAt,
+
+		Description:          in.Description,
+		DescriptionTruncated: in.DescriptionTruncated,
+		Labels:               newSessionPRLabels(in.Labels),
+		RequestedReviewers:   newSessionPRRequestedReviewers(in.RequestedReviewers),
+		Commits:              newSessionPRCommits(in.Commits),
+		CommitCount:          in.CommitCount,
+		DetailsObservedAt:    optionalTime(in.DetailsObservedAt),
+		Threads:              newSessionPRThreads(in.Threads),
+		Conversation:         newSessionPRComments(in.Conversation),
 	}
+}
+
+func newSessionPRThreads(in []contract.PullRequestThread) []SessionPRThread {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SessionPRThread, 0, len(in))
+	for _, th := range in {
+		comments := newSessionPRComments(th.Comments)
+		if comments == nil {
+			comments = []SessionPRComment{}
+		}
+		out = append(out, SessionPRThread{ID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, Comments: comments})
+	}
+	return out
+}
+
+func newSessionPRComments(in []contract.PullRequestCommentEntry) []SessionPRComment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SessionPRComment, 0, len(in))
+	for _, c := range in {
+		out = append(out, SessionPRComment{ID: c.ID, Author: c.Author, IsBot: c.IsBot, Body: c.Body, URL: c.URL, CreatedAt: optionalTime(c.CreatedAt)})
+	}
+	return out
+}
+
+func newSessionPRLabels(in []contract.PullRequestLabel) []SessionPRLabel {
+	out := make([]SessionPRLabel, 0, len(in))
+	for _, label := range in {
+		out = append(out, SessionPRLabel{Name: label.Name, Color: label.Color})
+	}
+	return out
+}
+
+func newSessionPRRequestedReviewers(in []contract.PullRequestRequestedReviewer) []SessionPRRequestedReviewer {
+	out := make([]SessionPRRequestedReviewer, 0, len(in))
+	for _, reviewer := range in {
+		out = append(out, SessionPRRequestedReviewer{Login: reviewer.Login, AvatarURL: reviewer.AvatarURL, IsTeam: reviewer.IsTeam})
+	}
+	return out
+}
+
+func newSessionPRCommits(in []contract.PullRequestCommit) []SessionPRCommit {
+	out := make([]SessionPRCommit, 0, len(in))
+	for _, commit := range in {
+		out = append(out, SessionPRCommit{SHA: commit.SHA, Headline: commit.Headline, Author: commit.Author, CommittedAt: optionalTime(commit.CommittedAt)})
+	}
+	return out
 }
 
 func optionalTime(value time.Time) *time.Time {
@@ -1564,7 +1867,11 @@ func newSessionPRCISummary(in sessionsvc.PRCISummary) SessionPRCISummary {
 	for _, ch := range in.FailingChecks {
 		checks = append(checks, SessionPRFailingCheck{Name: ch.Name, Status: ch.Status, Conclusion: ch.Conclusion, URL: ch.URL})
 	}
-	return SessionPRCISummary{State: in.State, FailingChecks: checks, AutoInjectCI: in.AutoInjectCI}
+	all := make([]SessionPRCheck, 0, len(in.Checks))
+	for _, ch := range in.Checks {
+		all = append(all, SessionPRCheck{Name: ch.Name, Status: ch.Status, URL: ch.URL})
+	}
+	return SessionPRCISummary{State: in.State, FailingChecks: checks, Checks: all, AutoInjectCI: in.AutoInjectCI}
 }
 
 func newSessionPRReviewSummary(in sessionsvc.PRReviewSummary) SessionPRReviewSummary {
@@ -2012,6 +2319,104 @@ type ListUsageSessionsQuery struct {
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Optional project id filter for dashboard cards."`
 }
 
+// UsageReportQuery selects the usage page's window.
+type UsageReportQuery struct {
+	Days      int              `query:"days,omitempty" minimum:"1" maximum:"90" description:"Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7."`
+	Offset    int              `query:"offset,omitempty" minimum:"0" description:"Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0."`
+	TimeZone  string           `query:"tz,omitempty" description:"IANA time zone that days and hours are bucketed in. Defaults to UTC."`
+	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
+}
+
+// UsagePriceOverride is the user's own price for one stored model ID: rates in USD per million tokens, or a catalog model to price as.
+type UsagePriceOverride struct {
+	ModelID    string `json:"modelId" required:"true" maxLength:"256" description:"Model ID as usage rows store it."`
+	Input      string `json:"inputUsdPerMillion,omitempty" description:"Decimal USD per million uncached input tokens. Set with output."`
+	Output     string `json:"outputUsdPerMillion,omitempty" description:"Decimal USD per million output tokens. Set with input."`
+	CacheRead  string `json:"cacheReadUsdPerMillion,omitempty" description:"Decimal USD per million cache-read tokens. Defaults to the input price."`
+	CacheWrite string `json:"cacheWriteUsdPerMillion,omitempty" description:"Decimal USD per million cache-write tokens. Defaults to the input price."`
+	PriceAs    string `json:"priceAs,omitempty" maxLength:"256" description:"Catalog model to price as, provider/model, in place of rates."`
+}
+
+// UsagePricesResponse is the saved model prices and the catalog models a model can price as.
+type UsagePricesResponse struct {
+	Overrides []UsagePriceOverride `json:"overrides" required:"true"`
+	Models    []string             `json:"models" required:"true" description:"Catalog models a model can price as, provider/model."`
+}
+
+// UsagePricesRequest replaces the whole set of model prices.
+type UsagePricesRequest struct {
+	Overrides []UsagePriceOverride `json:"overrides" required:"true"`
+}
+
+// UsageLimitHistoryRequest turns keeping limit readings on or off.
+type UsageLimitHistoryRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UsageLimitHistoryResponse is whether limit readings are now kept.
+type UsageLimitHistoryResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// UsageLimitWindowsQuery is the period of limit readings to read.
+type UsageLimitWindowsQuery struct {
+	Days int `query:"days,omitempty" minimum:"1" maximum:"14" description:"Days of readings to read; they are kept for 14. Defaults to 7."`
+}
+
+// UsageLimitWindowsResponse is each login's five-hour and weekly windows over a period, built only from the limit readings AO took itself.
+type UsageLimitWindowsResponse struct {
+	Since          time.Time                `json:"since"`
+	Until          time.Time                `json:"until"`
+	FirstReadingAt *time.Time               `json:"firstReadingAt,omitempty"`
+	Logins         []domain.UsageLimitLogin `json:"logins"`
+}
+
+// UsageReportResponse is token and estimated-cost usage over a window, by day or by hour in the requested time zone.
+type UsageReportResponse struct {
+	Days       int                          `json:"days"`
+	TimeZone   string                       `json:"timeZone"`
+	Resolution string                       `json:"resolution" enum:"day,hour"`
+	Since      time.Time                    `json:"since"`
+	Until      time.Time                    `json:"until"`
+	Periods    []string                     `json:"periods" description:"Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour."`
+	Rows       []UsageReportRowResponse     `json:"rows"`
+	Sessions   []UsageReportSessionResponse `json:"sessions"`
+}
+
+// UsageReportRowResponse is one period's usage for one harness, model and speed tier.
+type UsageReportRowResponse struct {
+	Period              string `json:"period"`
+	Harness             string `json:"harness"`
+	Model               string `json:"model"`
+	Speed               string `json:"speed" description:"standard, priority, fast, flex, ultrafast, or unknown."`
+	Events              int64  `json:"events"`
+	PricedEvents        int64  `json:"pricedEvents"`
+	InputTokens         int64  `json:"inputTokens" description:"Uncached input that was not written to the cache."`
+	CacheReadTokens     int64  `json:"cacheReadTokens"`
+	CacheWriteTokens    int64  `json:"cacheWriteTokens"`
+	OutputTokens        int64  `json:"outputTokens"`
+	InputCostNanos      int64  `json:"inputCostNanos"`
+	CacheReadCostNanos  int64  `json:"cacheReadCostNanos"`
+	CacheWriteCostNanos int64  `json:"cacheWriteCostNanos"`
+	OutputCostNanos     int64  `json:"outputCostNanos"`
+	CostNanos           int64  `json:"costNanos"`
+	PremiumNanos        int64  `json:"premiumNanos" description:"Part of costNanos above standard rates, from priority, fast or ultrafast processing."`
+	CacheSavingsNanos   int64  `json:"cacheSavingsNanos" description:"What cache reads saved against paying input rates for those tokens."`
+}
+
+// UsageReportSessionResponse is one session's usage over the report window.
+type UsageReportSessionResponse struct {
+	SessionID    string    `json:"sessionId"`
+	ProjectID    string    `json:"projectId,omitempty"`
+	Harness      string    `json:"harness"`
+	Title        string    `json:"title"`
+	Events       int64     `json:"events"`
+	PricedEvents int64     `json:"pricedEvents"`
+	Tokens       int64     `json:"tokens"`
+	CostNanos    int64     `json:"costNanos"`
+	LastUsedAt   time.Time `json:"lastUsedAt"`
+}
+
 // EstimatedCostResponse is a nano-USD estimate reused at every usage summary
 // scope. Coverage stays an API fact for aggregation, catalog backfills, and
 // contextual disclosure; it is never a pricing label or a mathematical
@@ -2151,45 +2556,6 @@ type SystemMemoryResponse struct {
 type MemoryPressureResponse struct {
 	PressureRaw    float64 `json:"pressureRaw" minimum:"0"`
 	PressureSource string  `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
-}
-
-// UsageTotalsResponse is the canonical telemetry aggregate for one scope.
-//
-// Provider-specific counters are no longer projected here: they live verbatim
-// in each event's bounded provider usage object, where a field the provider
-// adds later survives without a schema change on this boundary.
-type UsageTotalsResponse struct {
-	InputTokens         *int64                 `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
-	CachedInputTokens   *int64                 `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens."`
-	UncachedInputTokens *int64                 `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache. Includes cache writes."`
-	OutputTokens        *int64                 `json:"outputTokens" minimum:"0" description:"Total output, including provider-specific subsets such as reasoning output."`
-	ProcessedTokens     *int64                 `json:"processedTokens" minimum:"0" description:"Canonical input plus output. Null when either component is unknown."`
-	CacheReadTokens     *int64                 `json:"cacheReadTokens" minimum:"0" description:"Deprecated compatibility alias for cachedInputTokens."`
-	EstimatedCost       *EstimatedCostResponse `json:"estimatedCost"`
-}
-
-// UsageModelResponse is telemetry grouped by model. The billing provider is a
-// pricing input rather than a product distinction: each event was costed
-// against its own provider's rates before reaching this aggregate, so one model
-// stays one row even when more than one provider served it.
-type UsageModelResponse struct {
-	ModelID string              `json:"modelId"`
-	Totals  UsageTotalsResponse `json:"totals"`
-}
-
-// UsageHarnessResponse groups model telemetry under one AO harness.
-type UsageHarnessResponse struct {
-	Harness string               `json:"harness"`
-	Totals  UsageTotalsResponse  `json:"totals"`
-	Models  []UsageModelResponse `json:"models"`
-}
-
-// SessionUsageResponse is detailed telemetry for the session inspector.
-type SessionUsageResponse struct {
-	SessionID  domain.SessionID       `json:"sessionId"`
-	Incomplete bool                   `json:"incomplete"`
-	Totals     UsageTotalsResponse    `json:"totals"`
-	Harnesses  []UsageHarnessResponse `json:"harnesses"`
 }
 
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
@@ -2459,12 +2825,25 @@ type UpdateShellTerminalRequest struct {
 // ShellTerminalResponse is one standalone shell terminal. HandleID is what the
 // client opens on the terminal mux, exactly as it would a session's pane.
 type ShellTerminalResponse struct {
-	HandleID   string    `json:"handleId"`
-	ProjectID  string    `json:"projectId,omitempty"`
-	SessionID  string    `json:"sessionId,omitempty"`
-	WorkingDir string    `json:"workingDir"`
-	Title      string    `json:"title"`
-	CreatedAt  time.Time `json:"createdAt"`
+	HandleID   string `json:"handleId"`
+	ProjectID  string `json:"projectId,omitempty"`
+	SessionID  string `json:"sessionId,omitempty"`
+	WorkingDir string `json:"workingDir"`
+	Title      string `json:"title"`
+	// TerminalTitle is present only when the running program's title should
+	// label the tab instead of Title.
+	TerminalTitle string     `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	EndedAt       *time.Time `json:"endedAt,omitempty" description:"When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached."`
+	ResumeHarness string     `json:"resumeHarness,omitempty" description:"For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes."`
+}
+
+// ReopenShellTerminalRequest is the body of POST /api/v1/shell-terminals/{handleId}/reopen.
+type ReopenShellTerminalRequest struct {
+	Shell       string `json:"shell,omitempty" description:"Shell to launch, as for opening a shell terminal."`
+	ResumeAgent bool   `json:"resumeAgent,omitempty" description:"Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed."`
+	Cols        int    `json:"cols,omitempty" description:"Initial terminal columns, as for opening a shell terminal."`
+	Rows        int    `json:"rows,omitempty" description:"Initial terminal rows. See cols."`
 }
 
 // ListShellTerminalsResponse is the body of GET /api/v1/shell-terminals.
@@ -2627,6 +3006,12 @@ type PRIDParam struct {
 type MergePRRequest struct {
 	PRURL           string `json:"prUrl" minLength:"1"`
 	ExpectedHeadSHA string `json:"expectedHeadSha" minLength:"40"`
+	// Method is the merge strategy; squash when omitted.
+	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
+	// AllowNoChecks lets a PR that nothing checks merge, once the provider
+	// confirms nothing has started checking its head for a couple of minutes.
+	// Without it, a PR with no checks waits as it always has.
+	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
 }
 
 // MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
@@ -2636,6 +3021,155 @@ type MergePRResponse struct {
 	Method         string         `json:"method"`
 	State          domain.PRState `json:"state" enum:"merged"`
 	StateChangedAt time.Time      `json:"stateChangedAt"`
+}
+
+// ChangePRStateRequest is the body of POST /api/v1/prs/{id}/state.
+type ChangePRStateRequest struct {
+	PRURL  string `json:"prUrl" minLength:"1"`
+	Action string `json:"action" enum:"close,reopen,ready,draft"`
+}
+
+// ChangePRStateResponse is the body of POST /api/v1/prs/{id}/state (200).
+type ChangePRStateResponse struct {
+	OK             bool           `json:"ok"`
+	PRNumber       int            `json:"prNumber"`
+	State          domain.PRState `json:"state" enum:"open,draft,closed"`
+	StateChangedAt time.Time      `json:"stateChangedAt"`
+}
+
+// PRStackLayerResponse is one pull request of a stack.
+type PRStackLayerResponse struct {
+	Number         int            `json:"number"`
+	Title          string         `json:"title"`
+	URL            string         `json:"url"`
+	State          domain.PRState `json:"state" enum:"draft,open,merged,closed"`
+	HeadBranch     string         `json:"headBranch"`
+	HeadSHA        string         `json:"headSha"`
+	CI             string         `json:"ci,omitempty"`
+	ReviewDecision string         `json:"reviewDecision,omitempty"`
+	Mergeability   string         `json:"mergeability,omitempty"`
+	// NoChecks says an unknown ci means nothing checks the layer's head, not
+	// that its checks weren't read.
+	NoChecks bool `json:"noChecks,omitempty"`
+	// SessionID is the AO session tracking this layer, when one does.
+	SessionID domain.SessionID `json:"sessionId,omitempty"`
+}
+
+// LoadPRDetailsRequest names the tracked PR whose details to read.
+type LoadPRDetailsRequest struct {
+	PRURL string `json:"prUrl"`
+}
+
+// PRStackResponse is a provider-native stack, bottom layer first.
+type PRStackResponse struct {
+	Number     int                    `json:"number"`
+	URL        string                 `json:"url"`
+	BaseBranch string                 `json:"baseBranch"`
+	Open       bool                   `json:"open"`
+	Layers     []PRStackLayerResponse `json:"layers"`
+}
+
+// PRStackParentResponse is the open pull request a PR could be stacked on.
+type PRStackParentResponse struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+// PRStackQuery is the query of GET /api/v1/prs/{id}/stack.
+type PRStackQuery struct {
+	PRURL string `query:"prUrl" required:"true" description:"The pull request's URL."`
+}
+
+// GetPRStackResponse is the body of GET and POST /api/v1/prs/{id}/stack. Neither
+// field is set for a pull request with no stack and nothing to stack on.
+type GetPRStackResponse struct {
+	Stack  *PRStackResponse       `json:"stack,omitempty"`
+	Parent *PRStackParentResponse `json:"parent,omitempty"`
+}
+
+// AddPRToStackRequest is the body of POST /api/v1/prs/{id}/stack.
+type AddPRToStackRequest struct {
+	PRURL string `json:"prUrl" minLength:"1"`
+}
+
+// PRStackHead pins one layer to the commit the user saw.
+type PRStackHead struct {
+	Number  int    `json:"number"`
+	HeadSHA string `json:"headSha" minLength:"40"`
+}
+
+// MergePRStackRequest is the body of POST /api/v1/prs/{id}/stack/merge. It names
+// every unmerged layer up to this pull request, so a change stops the merge.
+type MergePRStackRequest struct {
+	PRURL         string        `json:"prUrl" minLength:"1"`
+	ExpectedHeads []PRStackHead `json:"expectedHeads" minItems:"1"`
+	// Method is the merge strategy; squash when omitted.
+	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
+	// AllowNoChecks lets layers that nothing checks land, as MergePRRequest's does.
+	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
+}
+
+// MergePRStackResponse is the body of POST /api/v1/prs/{id}/stack/merge (200).
+type MergePRStackResponse struct {
+	OK       bool   `json:"ok"`
+	PRNumber int    `json:"prNumber"`
+	Numbers  []int  `json:"numbers"`
+	Method   string `json:"method"`
+	// Status says whether the layers landed, joined the merge queue, or are
+	// still landing on the provider.
+	Status         string    `json:"status" enum:"merged,enqueued,pending"`
+	StateChangedAt time.Time `json:"stateChangedAt"`
+}
+
+// PostPRCommentRequest is the body of POST /api/v1/prs/{id}/comments. Without
+// threadId it posts a top-level conversation comment; with it, a reply in that
+// review thread.
+//
+// Attachments are the comment's files. Body links each one by its index, as
+// "![shot.png](attachment:0)" or "[log.txt](attachment:1)", and every file
+// must be linked. They are stored with the PR's provider only when the comment
+// posts, and removed again if it fails; on GitHub that is a commit under
+// refs/ao/attachments/ in the PR's repository, which needs write access.
+type PostPRCommentRequest struct {
+	PRURL       string                `json:"prUrl" minLength:"1"`
+	Body        string                `json:"body" minLength:"1"`
+	ThreadID    string                `json:"threadId,omitempty"`
+	Attachments []PRCommentAttachment `json:"attachments,omitempty" maxItems:"10"`
+}
+
+// PRCommentAttachment is one file of a PR comment. Data is the file's bytes,
+// standard base64-encoded without a "data:" prefix, at most 10 MiB decoded and
+// 25 MiB for all of a comment's files. Allowed types are PNG, JPEG, GIF, WebP,
+// MP4, QuickTime, WebM, PDF, plain text/log, JSON, CSV, and ZIP; the declared
+// type, the name's extension, and the file's content must agree. An empty or
+// application/octet-stream contentType is taken from the extension.
+type PRCommentAttachment struct {
+	Name        string `json:"name" minLength:"1"`
+	ContentType string `json:"contentType"`
+	Data        string `json:"data" minLength:"1"`
+}
+
+// PostPRCommentResponse is the body of POST /api/v1/prs/{id}/comments (200).
+type PostPRCommentResponse struct {
+	OK        bool      `json:"ok"`
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// PRAttachmentAccessQuery is the query of GET /api/v1/prs/{id}/attachment-access.
+type PRAttachmentAccessQuery struct {
+	PRURL string `query:"prUrl" required:"true" description:"The pull request's URL."`
+}
+
+// PRAttachmentAccessResponse is the body of GET
+// /api/v1/prs/{id}/attachment-access (200): whether files can be attached to
+// the PR's comments, and where they would be stored (on GitHub, the PR's
+// repository). Reason says why not when allowed is false.
+type PRAttachmentAccessResponse struct {
+	Allowed  bool   `json:"allowed"`
+	Location string `json:"location,omitempty"`
+	Reason   string `json:"reason,omitempty" enum:"no_write_access,unsupported"`
 }
 
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.
@@ -2696,6 +3230,8 @@ type LinkPreviewResponse struct {
 	ImageURL    string `json:"imageUrl,omitempty"`
 	SiteName    string `json:"siteName,omitempty"`
 	FaviconURL  string `json:"faviconUrl,omitempty"`
+	// FaviconDarkURL is the page's icon for a dark color scheme, when it names one.
+	FaviconDarkURL string `json:"faviconDarkUrl,omitempty"`
 }
 
 // MobileStatusResponse is the body of the Connect Mobile status/enable/disable/
@@ -2732,12 +3268,40 @@ type MobileStatusResponse struct {
 	// TailscaleHost is this machine's 100.64.0.0/10 Tailscale address, or "" when
 	// Tailscale is not up. The renderer encodes it into the pairing QR when the
 	// user selects the Tailscale tab, and shows a hint instead when it is empty.
-	TailscaleHost string              `json:"tailscaleHost"`
-	Port          int                 `json:"port"`
-	Password      string              `json:"password"`
-	Warning       string              `json:"warning"`
-	SecurePairing SecurePairingStatus `json:"securePairing"`
-	KeepAwake     KeepAwakeStatus     `json:"keepAwake"`
+	TailscaleHost            string              `json:"tailscaleHost"`
+	Port                     int                 `json:"port"`
+	Password                 string              `json:"password"`
+	Warning                  string              `json:"warning"`
+	SecurePairing            SecurePairingStatus `json:"securePairing"`
+	KeepAwake                KeepAwakeStatus     `json:"keepAwake"`
+	RequireDeviceCredentials bool                `json:"requireDeviceCredentials"`
+	PasswordLastUsedAt       *time.Time          `json:"passwordLastUsedAt,omitempty"`
+}
+
+// PairingCodeResponse is a one-time pairing code.
+type PairingCodeResponse struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// PairDeviceRequest names the device being paired. Both fields are optional.
+type PairDeviceRequest struct {
+	Name     string `json:"name,omitempty" description:"Name shown in the host's device list."`
+	Platform string `json:"platform,omitempty" description:"The device's platform, such as ios, android, darwin, win32 or linux."`
+}
+
+// PairDeviceResponse carries the device's own token, which is shown once.
+type PairDeviceResponse struct {
+	HostID   string `json:"hostId"`
+	DeviceID string `json:"deviceId"`
+	Token    string `json:"token"`
+	// Credential is what the device presented. Only the password stays usable as a fallback.
+	Credential string `json:"credential" enum:"pairing-code,password"`
+}
+
+// SetRequireDeviceCredentialsRequest turns the pairing password off or on.
+type SetRequireDeviceCredentialsRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // KeepAwakeStatus describes the macOS-only option that stops the machine from
@@ -2896,15 +3460,17 @@ type ResolveFileReferenceResponse sessionsvc.FileReferenceResolution
 // ConversationFileReferenceRequest carries bounded, user-supplied captured code.
 type ConversationFileReferenceRequest ports.ChatFileReference
 
-// ConversationExcerptReferenceRequest attaches verified selected transcript
-// text to the next message.
+// ConversationExcerptReferenceRequest attaches a captured snapshot, or a legacy
+// verified transcript reference, to the next message.
 type ConversationExcerptReferenceRequest struct {
-	ID             string `json:"id,omitempty"`
-	Order          int64  `json:"order,omitempty"`
-	ConversationID string `json:"conversationId"`
-	MessageID      string `json:"messageId"`
-	Revision       int64  `json:"revision"`
-	Text           string `json:"text"`
+	Snapshot       *domain.ChatExcerptSnapshot `json:"snapshot,omitempty"`
+	ID             string                      `json:"id,omitempty"`
+	Order          int64                       `json:"order,omitempty"`
+	ConversationID string                      `json:"conversationId"`
+	MessageID      string                      `json:"messageId"`
+	Revision       int64                       `json:"revision"`
+	Text           string                      `json:"text"`
+	Comment        string                      `json:"comment,omitempty" maxLength:"4096"`
 }
 
 // ProviderSwitchRequest switches an idle session to another provider. See
@@ -2919,6 +3485,7 @@ type ProviderSwitchRequest struct {
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	Force          bool   `json:"force,omitempty"`
 	// Message is sent to the new agent as its first turn once the switch
 	// completes, in the same request. Attachments are sent separately.
 	Message *SendConversationMessageRequest `json:"message,omitempty"`
@@ -2927,8 +3494,13 @@ type ProviderSwitchRequest struct {
 // ProviderSwitchResponse reports a completed switch, and the send of a message
 // that came with it.
 type ProviderSwitchResponse struct {
-	Status  string                           `json:"status"`
-	Message *SendConversationMessageResponse `json:"message,omitempty"`
+	Status                  string                           `json:"status"`
+	Message                 *SendConversationMessageResponse `json:"message,omitempty"`
+	StoppedTurn             bool                             `json:"stoppedTurn,omitempty"`
+	CancelledQueuedMessages int                              `json:"cancelledQueuedMessages,omitempty"`
+	FailedPendingApprovals  bool                             `json:"failedPendingApprovals,omitempty"`
+	SettingsUpdated         bool                             `json:"settingsUpdated,omitempty"`
+	Warnings                []string                         `json:"warnings,omitempty"`
 }
 
 // SessionHistoryQuery pages GET /api/v1/sessions/{sessionId}/history.
@@ -3035,8 +3607,10 @@ type EditConversationMessageRequest struct {
 }
 
 // ConversationContentSummaryResponse is a lightweight attachment/resource chip.
-// Image bytes and embedded resource text never leave the durable server record.
+// Image bytes and ordinary embedded resource text stay in the server record;
+// captured excerpts expose the context the user attached.
 type ConversationContentSummaryResponse struct {
+	Snapshot        *domain.ChatExcerptSnapshot       `json:"snapshot,omitempty"`
 	FileReference   *ConversationFileReferenceRequest `json:"fileReference,omitempty"`
 	AnnotationID    string                            `json:"annotationId,omitempty"`
 	AnnotationOrder int64                             `json:"annotationOrder,omitempty"`
@@ -3044,14 +3618,14 @@ type ConversationContentSummaryResponse struct {
 	MIMEType        string                            `json:"mimeType,omitempty"`
 	URI             string                            `json:"uri,omitempty"`
 	Name            string                            `json:"name,omitempty"`
-	// Text is exposed only for verified chat excerpts, so the timeline can show
-	// what the user referred to without exposing internal resource URIs.
-	Text string `json:"text,omitempty"`
+	// Text is the readable chat excerpt, separate from captured raw source.
+	Text    string `json:"text,omitempty"`
+	Comment string `json:"comment,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
-	// verified transcript message without exposing the internal excerpt URI.
+	// original transcript message without exposing the internal excerpt URI.
 	SourceConversationID string `json:"sourceConversationId,omitempty"`
 	SourceMessageID      string `json:"sourceMessageId,omitempty"`
-	SourceRevision       int64  `json:"sourceRevision,omitempty"`
+	SourceRevision       *int64 `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its
@@ -3221,7 +3795,7 @@ type ConversationTurnResponse struct {
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
-	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing"`
+	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
@@ -3241,6 +3815,12 @@ type ConversationTurnResponse struct {
 	// list is right here. It also keeps the changed-file view and the timeline from
 	// disagreeing, which two independently-timed fetches would eventually do.
 	Diff *ConversationTurnDiffResponse `json:"diff,omitempty"`
+	// Artifacts are the session artifact files this turn created or edited, as
+	// the daemon saw them in the artifact directory when the turn ended. Unlike
+	// Diff it does not depend on the provider, so it lists files an agent wrote
+	// through a shell command. Absent for a turn the daemon did not watch from its
+	// start, or one that changed no artifact.
+	Artifacts *ConversationTurnArtifactsResponse `json:"artifacts,omitempty"`
 	// Plan is the agent's plan for this turn, or absent when it made none. The
 	// provider re-sends the whole plan on every change, so this is the current answer
 	// rather than a history of one: the earlier versions are the same plan with fewer
@@ -3276,6 +3856,19 @@ type ConversationPlanResponse struct {
 type ConversationPlanStepResponse struct {
 	Text   string `json:"text"`
 	Status string `json:"status" enum:"pending,in_progress,completed"`
+}
+
+// ConversationTurnArtifactsResponse lists the session artifacts a turn changed.
+type ConversationTurnArtifactsResponse struct {
+	Files []ConversationTurnArtifactResponse `json:"files"`
+}
+
+// ConversationTurnArtifactResponse is one session artifact file a turn changed.
+type ConversationTurnArtifactResponse struct {
+	// Path is relative to the session's artifact directory, slash-separated, as
+	// the session's artifactFiles list it.
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified"`
 }
 
 // ConversationTurnDiffResponse is a turn's changed-file summary.
@@ -3398,9 +3991,12 @@ type ConversationSnapshotResponse struct {
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`
-	SessionID                  string `json:"sessionId"`
-	Harness                    string `json:"harness,omitempty"`
-	Mode                       string `json:"mode" enum:"chat,tui"`
+	// BatchedDeliveries links each queued turn AO batched into another turn's
+	// provider input. The turns list leaves those turns out.
+	BatchedDeliveries []domain.ConversationBatchedDelivery `json:"batchedDeliveries,omitempty"`
+	SessionID         string                               `json:"sessionId"`
+	Harness           string                               `json:"harness,omitempty"`
+	Mode              string                               `json:"mode" enum:"chat,tui"`
 	// Controller is reported separately from history so a client can tell "no
 	// messages yet" apart from "the agent is not running".
 	Controller     string `json:"controller" enum:"connecting,ready,busy,recovering,hibernated,stopped"`
@@ -3673,6 +4269,45 @@ type ConversationBranchIDParam struct {
 	BranchID string `path:"branchId" description:"Conversation branch identifier, from a snapshot branch navigation point."`
 }
 
+// RollbackConversationRequest is the optional body of a conversation rollback.
+// RestoreFiles also puts the worktree back to how it was before the turn; a
+// client sets it only after showing the user which files will change, and sends
+// that preview's PlanID with it. Without it only the conversation is rolled
+// back, which is all an older client promises.
+type RollbackConversationRequest struct {
+	RestoreFiles bool `json:"restoreFiles,omitempty"`
+	// PlanID is the planId of the preview the user confirmed, required with
+	// RestoreFiles. If the files changed since, the rollback is refused with
+	// CHAT_ROLLBACK_FILES_CHANGED and nothing changes.
+	PlanID string `json:"planId,omitempty"`
+}
+
+// RollbackPreviewResponse says what rolling back to a turn would do to the
+// worktree.
+type RollbackPreviewResponse struct {
+	// FilesRestorable is false when AO cannot put the files back; Reason says why,
+	// and a rollback then changes only the conversation.
+	FilesRestorable bool   `json:"filesRestorable"`
+	Reason          string `json:"reason,omitempty"`
+	// Files lists every path a restore changes; TotalFiles counts them.
+	Files      []RollbackFileChange `json:"files"`
+	TotalFiles int                  `json:"totalFiles"`
+	// CommitsSince counts commits made on the branch after the turn. A restore
+	// leaves them in place, so their changes come back as uncommitted edits.
+	CommitsSince int `json:"commitsSince"`
+	// PlanID identifies this list of files; a rollback that restores them sends it
+	// back. Empty when the files cannot be restored.
+	PlanID string `json:"planId,omitempty"`
+}
+
+// RollbackFileChange is one file a rollback would restore.
+type RollbackFileChange struct {
+	Path string `json:"path"`
+	// Change is restored (deleted since, comes back), reverted (edited since, its
+	// earlier contents come back) or removed (created since, deleted).
+	Change string `json:"change" enum:"restored,reverted,removed"`
+}
+
 // RollbackConversationResponse reports what an undo discarded.
 type RollbackConversationResponse struct {
 	// TurnsDiscarded counts the turns the agent no longer remembers, including the
@@ -3716,7 +4351,8 @@ type SettingsResponse struct {
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// ComputerUse gives new chat sessions the computer-use tools.
-	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	ComputerUse    bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
 	// CloudEnabled reports whether the cloud offering is available: on for
@@ -3763,6 +4399,11 @@ type UpdateComputerUseRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+// UpdateAccountHandoffRequest turns the usage-limit account handoff on or off.
+type UpdateAccountHandoffRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 // UpdateChatHibernationRequest flips the daemon-owned idle Chat gate.
 type UpdateChatHibernationRequest struct {
 	Enabled *bool `json:"enabled"`
@@ -3793,12 +4434,14 @@ func capabilityNames(caps ports.ChatCapabilities) []string {
 // TriggerReviewRequest is the optional body of the review trigger route. An
 // empty harness keeps the project's configured reviewer; setting one overrides
 // it for this pass only, without editing project config, so one session's choice
-// cannot change what another session in the project runs.
+// cannot change what another session in the project runs. A pass-only override
+// reviewer retires from the session's reviewer pane once its pass ends.
 type TriggerReviewRequest struct {
-	Harness       domain.ReviewerHarness       `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
-	AgentConfig   domain.AgentConfig           `json:"agentConfig,omitempty"`
-	InterfaceMode domain.ReviewerInterfaceMode `json:"interfaceMode,omitempty" enum:"chat,tui"`
-	PRURL         string                       `json:"prUrl,omitempty" description:"Restrict the pass to this pull request, attaching it to the session first if AO does not track it yet (never from another active session). Omit to review every eligible PR on the session."`
+	Harness            domain.ReviewerHarness       `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
+	AgentConfig        domain.AgentConfig           `json:"agentConfig,omitempty"`
+	InterfaceMode      domain.ReviewerInterfaceMode `json:"interfaceMode,omitempty" enum:"chat,tui"`
+	PRURL              string                       `json:"prUrl,omitempty" description:"Restrict the pass to this pull request, attaching it to the session first if AO does not track it yet (never from another active session). Omit to review every eligible PR on the session."`
+	RequesterSessionID domain.SessionID             `json:"requesterSessionId,omitempty" description:"Agent session that requested the pass and should receive its final outcome."`
 	// Source labels who asked for the pass. Omitted means a person (manual).
 	Source string `json:"source,omitempty" enum:"manual,agent" description:"Who requested the pass: manual (a person, the default) or agent (an AO session through the CLI)."`
 	// RejectReviewedHead is the CLI's same-commit policy. Omitting it keeps the
@@ -3830,14 +4473,16 @@ type RequestRereviewResponse struct {
 	OK bool `json:"ok"`
 }
 
-// MobileDeviceResponse is one row of the desktop's mobile-device roster: the
-// stored registration plus whether that phone is running the app right now.
+// MobileDeviceResponse is one row of the device list: a device with its own token,
+// a phone on the pairing password, or the account's devices.
 type MobileDeviceResponse struct {
-	InstallID            string    `json:"installId"`
+	ID                   string    `json:"id" description:"What DELETE /api/v1/mobile/devices/{id} takes."`
+	Kind                 string    `json:"kind" enum:"device,password,account" description:"device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token."`
+	InstallID            string    `json:"installId" description:"The phone's install id, or empty for a device that never registered for notifications."`
 	Token                string    `json:"token,omitempty"`
-	Platform             string    `json:"platform,omitempty" enum:"ios,android"`
+	Platform             string    `json:"platform,omitempty"`
 	DeviceName           string    `json:"deviceName,omitempty"`
-	Live                 bool      `json:"live" description:"True when the phone's app is open and polling."`
+	Live                 bool      `json:"live" description:"True when the device is connected, or the phone's app is open and polling."`
 	NotificationsEnabled bool      `json:"notificationsEnabled" description:"True when this device has a push token registered."`
 	CreatedAt            time.Time `json:"createdAt"`
 	LastSeenAt           time.Time `json:"lastSeenAt"`
@@ -3848,10 +4493,9 @@ type MobileDevicesResponse struct {
 	Devices []MobileDeviceResponse `json:"devices"`
 }
 
-// InstallIDParam is the {installId} path parameter for mobile-device roster
-// routes.
-type InstallIDParam struct {
-	InstallID string `path:"installId" description:"The device's stable install id."`
+// MobileDeviceIDParam is the {id} path parameter for the device list routes.
+type MobileDeviceIDParam struct {
+	ID string `path:"id" description:"The row's id from the device list."`
 }
 
 // CreateConversationSideChatRequest opens an independent launch-scoped side chat.
@@ -3966,7 +4610,16 @@ type AgentAccountResponse struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	// Device marks the computer's own login, which AO launches with the CLI's
 	// config folder untouched.
-	Device  bool   `json:"device"`
+	Device bool `json:"device"`
+	// Kind is how the account signs its CLI in: a subscription, a subscription
+	// setup token, an API key, or a metered (per-token) sign-in such as
+	// Anthropic Console. API key and metered accounts bill per token, have no
+	// limits, and are never moved to or from at a usage limit.
+	Kind domain.AgentAccountKind `json:"kind" enum:"subscription,setup_token,api_key,metered"`
+	// Name is the label of an API key account; KeyHint is its key's last four
+	// characters. The key itself is never sent.
+	Name    string `json:"name,omitempty"`
+	KeyHint string `json:"keyHint,omitempty"`
 	Email   string `json:"email,omitempty"`
 	Plan    string `json:"plan,omitempty"`
 	Default bool   `json:"default"`
@@ -3975,9 +4628,14 @@ type AgentAccountResponse struct {
 	SignedIn  bool       `json:"signedIn"`
 	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
-	// Problem says why identity or limits could not be read.
-	Problem string                     `json:"problem,omitempty"`
-	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
+	// Problem is the error text of a failed identity or limits check, kept as
+	// detail; ProblemKind says what failed, for the app's own wording.
+	Problem     string                         `json:"problem,omitempty"`
+	ProblemKind domain.AgentAccountProblemKind `json:"problemKind,omitempty" enum:"slow,rate_limited,unavailable,cli_missing,other_login,other_org"`
+	Limits      *domain.AgentAccountLimits     `json:"limits,omitempty"`
+	SameLoginAs string                         `json:"sameLoginAs,omitempty"`
+	OrgID       string                         `json:"orgId,omitempty"`
+	OrgName     string                         `json:"orgName,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.
@@ -3985,22 +4643,59 @@ type AgentAccountsResponse struct {
 	Accounts []AgentAccountResponse `json:"accounts"`
 }
 
-// StartAgentAccountLoginRequest asks to add an account of a provider.
+// StartAgentAccountLoginRequest asks to add an account of a provider. Without
+// a method, the CLI's own sign-in runs in a terminal; with one, it runs in the
+// background and the app follows it as a UI login (its authOperationId). A
+// setup token is saved at once.
 type StartAgentAccountLoginRequest struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// Method is the sign-in method; Secret its credential when it takes one
+	// (a setup token, an OpenAI API key or access token).
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+	// Name labels a new account that has no email of its own.
+	Name string `json:"name,omitempty"`
+}
+
+// SignInAgentAccountAgainRequest picks how a saved account signs in again,
+// with a method that makes its own kind of account. An empty body opens the
+// CLI's own sign-in in a terminal.
+type SignInAgentAccountAgainRequest struct {
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+}
+
+// AddAgentAccountAPIKeyRequest adds an account that launches the provider's
+// CLI with an API key. The key is checked with the provider before it is saved.
+type AddAgentAccountAPIKeyRequest struct {
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude"`
+	// Name labels the account; empty shows a default label.
+	Name   string `json:"name,omitempty"`
+	APIKey string `json:"apiKey"`
+}
+
+// ReplaceAgentAccountAPIKeyRequest saves a new key for an API key account.
+type ReplaceAgentAccountAPIKeyRequest struct {
+	APIKey string `json:"apiKey"`
 }
 
 // StartAgentAccountLoginResponse is a sign-in running in a terminal.
 type StartAgentAccountLoginResponse struct {
-	OperationID   string                            `json:"operationId"`
-	Provider      domain.AgentAccountProvider       `json:"provider" enum:"claude,codex"`
-	ShellTerminal CodexAccountLoginTerminalResponse `json:"shellTerminal"`
+	// OperationID verifies or cancels the sign-in; empty when Account is set.
+	OperationID string                      `json:"operationId,omitempty"`
+	Provider    domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// ShellTerminal is a sign-in running in a terminal. AuthOperationID is one
+	// running in the background, read and answered through the harness's
+	// /auth/operations routes. Account is the account a setup token saved.
+	ShellTerminal   *CodexAccountLoginTerminalResponse `json:"shellTerminal,omitempty"`
+	AuthOperationID string                             `json:"authOperationId,omitempty"`
+	Account         *AgentAccountResponse              `json:"account,omitempty"`
 }
 
 // VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
 // is refused and its account names the existing one.
 type VerifyAgentAccountLoginResponse struct {
-	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch"`
+	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch,not_subscription"`
 	Account *AgentAccountResponse     `json:"account,omitempty"`
 }
 
@@ -4056,4 +4751,76 @@ type SwitchSessionAgentAccountRequest struct {
 	// StopTurn cancels a turn in progress, for an agent stuck waiting on the old
 	// account's limit. Otherwise the move waits for the turn to finish.
 	StopTurn bool `json:"stopTurn,omitempty"`
+}
+
+// SessionImportRequest carries opaque handles returned by the local preview.
+type SessionImportRequest struct {
+	IDs []string `json:"ids" minItems:"1" maxItems:"500"`
+}
+
+// SessionImportResponse retains an outcome for every selected history.
+type SessionImportResponse struct {
+	Results []sessionimport.Result `json:"results"`
+}
+
+// SessionForkOptionsResponse is the body of GET /sessions/{sessionId}/fork-options.
+type SessionForkOptionsResponse struct {
+	Allowed       bool                `json:"allowed"`
+	Refusal       *SessionForkRefusal `json:"refusal,omitempty"`
+	SuggestedName string              `json:"suggestedName,omitempty"`
+	// AnyTurn is true when every finished turn can be forked.
+	AnyTurn bool `json:"anyTurn,omitempty"`
+	// ForkedFrom is set when this session is itself a fork.
+	ForkedFrom *SessionForkOrigin `json:"forkedFrom,omitempty"`
+	// Forks are the sessions forked from this one.
+	Forks []SessionForkSummary `json:"forks,omitempty"`
+	// SourcePRs are a fork's original's pull requests, shown read-only.
+	SourcePRs []SessionForkSourcePR `json:"sourcePRs,omitempty"`
+}
+
+// SessionForkSummary is one session forked from another.
+type SessionForkSummary struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	Title     string           `json:"title"`
+	Exists    bool             `json:"exists"`
+}
+
+// SessionForkSourcePR is one of a fork's original's pull requests.
+type SessionForkSourcePR struct {
+	URL    string `json:"url"`
+	Number int    `json:"number"`
+	Merged bool   `json:"merged"`
+	Closed bool   `json:"closed"`
+}
+
+// SessionForkRefusal says why a session can't be forked right now.
+type SessionForkRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// SessionForkOrigin is the session a fork was copied from.
+type SessionForkOrigin struct {
+	SessionID    domain.SessionID `json:"sessionId"`
+	Title        string           `json:"title"`
+	TurnID       string           `json:"turnId,omitempty"`
+	SourceExists bool             `json:"sourceExists"`
+	// TextHandoff is true when the fork's agent couldn't copy the original's
+	// conversation and was given it as text instead.
+	TextHandoff bool `json:"textHandoff,omitempty"`
+}
+
+// ForkSessionRequest is the body of POST /sessions/{sessionId}/fork.
+type ForkSessionRequest struct {
+	// ClientRequestID makes a retried click return the same fork.
+	ClientRequestID string `json:"clientRequestId" minLength:"1"`
+	// TurnID forks the session as it was at that turn. Empty forks the
+	// latest finished turn.
+	TurnID string `json:"turnId,omitempty"`
+}
+
+// ForkSessionResponse is the body of POST /sessions/{sessionId}/fork.
+type ForkSessionResponse struct {
+	SessionID   domain.SessionID `json:"sessionId"`
+	DisplayName string           `json:"displayName"`
 }

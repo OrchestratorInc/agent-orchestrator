@@ -1,7 +1,8 @@
 import { clearPreviousAccount, getAccountAccessToken, loadAccount, loadPreviousAccount, type Account } from "./account";
 import { ignoredAccountHosts, moveIgnoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
-import { isTailscaleHost } from "./connectionError";
+import { endpointKindForHost } from "./connectionFields";
 import { forgetPairedHost } from "./disconnect";
+import { noteRequestAnswered } from "./answeredRequests";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
 import { isQuickTunnelHost } from "./staleTunnel";
@@ -12,19 +13,14 @@ const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https:/
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
 // Tunnels are a quick tunnel's name or AO Cloud's fixed address,
-// h-<20 hex>.<zone>, over https. Anything else, a custom domain included, is
-// kept beside the pairing's tunnel rather than in its place.
-function isTunnelAddress(url: URL): boolean {
-	const name = url.hostname.toLowerCase();
-	return url.protocol === "https:" && (isQuickTunnelHost(name) || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
-}
-
+// h-<20 hex>.<zone>, over https (see isTunnelHost). Anything else, a custom
+// domain included, is kept beside the pairing's tunnel rather than in its place.
 function endpoint(raw: string): Endpoint | null {
 	try {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale" : isTunnelAddress(url) ? "tunnel" : "lan",
+			kind: endpointKindForHost(url.hostname, url.protocol === "https:"),
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",
@@ -64,7 +60,9 @@ async function syncFetch(url: string, init: RequestInit, timeoutMs: number, sign
 	if (signal.aborted) controller.abort();
 	const timer = setTimeout(abort, timeoutMs);
 	try {
+		const startedAt = Date.now();
 		const response = await fetch(url, { ...init, signal: controller.signal });
+		noteRequestAnswered(startedAt);
 		// Keep cancellation and the timeout alive until the body finishes too.
 		const body: unknown = response.ok && init.method !== "PUT" ? await response.json() : undefined;
 		return { ok: response.ok, status: response.status, body };
@@ -166,14 +164,21 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 			// Connecting saves the machine's advertised routes beside the listed
 			// address. Keep them while that address is still one of them: resetting
 			// to the listed address alone restarted the connection on every sync.
-			if (existing && existing.accountUserId === account.id && existing.token === item.token &&
-				existing.endpoints.some((candidate) => JSON.stringify(candidate) === JSON.stringify(address))) return;
+			const routesCurrent = !!existing && existing.accountUserId === account.id && existing.token === item.token &&
+				existing.endpoints.some((candidate) => JSON.stringify(candidate) === JSON.stringify(address));
+			// The name follows the account's label until the phone renames the
+			// machine. A machine saved before labels were tracked takes the
+			// label once: its name can't be told apart from a stale one.
+			const label = item.label.trim();
+			const followsAccount = !existing || existing.accountLabel === undefined || existing.name === existing.accountLabel;
+			const name = label && followsAccount ? label : existing?.name ?? item.label;
+			const accountLabel = label || existing?.accountLabel;
+			if (routesCurrent && existing.name === name && existing.accountLabel === accountLabel) return;
 			await saveHost({
-				// Directory labels seed new machines; a phone's chosen name and icon
-				// remain local preferences when remote credentials/routes rotate.
-				id: item.hostId, name: existing?.name ?? item.label, platform: existing?.platform ?? "unknown",
+				// The icon is a phone preference and survives rotated credentials and routes.
+				id: item.hostId, name, accountLabel, platform: existing?.platform ?? "unknown",
 				appearance: existing?.appearance,
-				endpoints: [address], token: item.token,
+				endpoints: routesCurrent ? existing.endpoints : [address], token: item.token,
 				lastConnected: existing?.lastConnected ?? 0,
 				accountUserId: account.id,
 			} satisfies Host);

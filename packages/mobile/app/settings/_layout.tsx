@@ -1,13 +1,11 @@
 import { Stack } from "expo-router";
-import { Platform } from "react-native";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../../lib/stackScreenOptions";
 import { useTheme } from "../../lib/ThemeProvider";
 
 // A link straight to a Settings page opens it over the Settings list, so its
 // back button returns to the list. Without this, the page would be the only
-// one in the stack and back would leave Settings. Android's list is a tab, so
-// a page opens alone over it there, and back returns to the tab.
-export const unstable_settings = Platform.OS === "ios" ? { initialRouteName: "index" } : {};
+// one in the stack and back would leave Settings.
+export const unstable_settings = { initialRouteName: "index" };
 
 // Settings is a page pushed over the board, like every other page, and its
 // own pages push and go back the same way, with the system's edge swipe.
@@ -24,6 +22,10 @@ export default function SettingsLayout() {
 			{/* A machine's page renames itself to the machine once it loads. */}
 			<Stack.Screen name="machine/[id]/index" options={{ title: "Machine" }} />
 			<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />
+			{/* Orchestrator Cloud's machine row opens its page; a coding agent's
+			    page renames itself to the agent. */}
+			<Stack.Screen name="cloud/index" options={{ title: "Orchestrator Cloud" }} />
+			<Stack.Screen name="cloud/agent/[agent]" options={{ title: "Coding agent" }} />
 		</Stack>
 	);
 }
