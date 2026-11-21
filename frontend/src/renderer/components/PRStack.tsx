@@ -92,6 +92,10 @@ function LayerRow({ current, hostId, layer, session }: { current: boolean; hostI
 	);
 }
 
+function rebaseRequestKey(layer: PRStackLayer, below: PRStackLayer): string {
+	return `${layer.number}:${layer.headSha ?? ""}:${below.headSha ?? ""}`;
+}
+
 /**
  * The next layer to rebase onto the one below it. Its agent does the rebase, as
  * the session's own "Update from base" does; a layer AO doesn't track, or a
@@ -100,8 +104,8 @@ function LayerRow({ current, hostId, layer, session }: { current: boolean; hostI
 function StackRebaseRow({ hostId, stack }: { hostId?: string; stack: PRStack }) {
 	const { t } = useTranslation();
 	const next = stackLayerToRebase(stack);
-	// Asked once per head: the push that rebases it moves the head, and the layer
-	// above becomes the next to rebase.
+	// Asked once per layer, head, and parent head: the rebase push moves the
+	// head, and a parent that moves again needs a fresh request.
 	const [asked, setAsked] = useState<string>();
 	const ask = useMutation({
 		mutationFn: async ({ layer, below }: { layer: PRStackLayer; below: PRStackLayer }) => {
@@ -110,13 +114,13 @@ function StackRebaseRow({ hostId, stack }: { hostId?: string; stack: PRStack }) 
 				body: { message: stackRebaseMessage(layer, below) },
 			});
 			if (error) throw apiErrorException(error, t("pr.stack.askRebaseFailed", { number: layer.number }));
-			return layer.headSha;
+			return rebaseRequestKey(layer, below);
 		},
 		onSuccess: (head) => setAsked(head),
 	});
 	if (!next) return null;
 	const { layer, below } = next;
-	const sent = asked === layer.headSha;
+	const sent = asked === rebaseRequestKey(layer, below);
 	return (
 		<div className="flex min-w-0 flex-col gap-1 px-1.5" data-testid="pr-stack-rebase">
 			<p className="m-0 text-xs leading-normal text-muted-foreground" role="status">

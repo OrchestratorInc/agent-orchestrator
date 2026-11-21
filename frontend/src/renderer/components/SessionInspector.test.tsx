@@ -1340,6 +1340,28 @@ describe("SessionInspector PR section", () => {
       expect(row.queryByRole("button", { name: "Ask agent to rebase #2" })).not.toBeInTheDocument();
     });
 
+    it("asks again when the layer below moves after a request, and never confirms for a layer it didn't ask", async () => {
+      postMock.mockImplementation(async () => ({ data: {} }));
+      const view = serveStack(stackOf(layer(1, "open"), layer(2, "open", { behindParent: 3, sessionId: "sess-2" }), layer(3, "open", { headSha: "head-2", sessionId: "sess-3" })));
+      const restack = async (info: unknown) => {
+        const respond = getMock.getMockImplementation()!;
+        getMock.mockImplementation(async (path: string, ...rest: unknown[]) => path === "/api/v1/prs/{id}/stack" ? { data: info } : respond(path, ...rest));
+        await view.queryClient.invalidateQueries();
+      };
+      let row = within(await screen.findByTestId("pr-stack-rebase"));
+      await userEvent.click(row.getByRole("button", { name: "Ask agent to rebase #2" }));
+      expect(await row.findByText("Asked the agent on #2 to rebase.")).toBeInTheDocument();
+      // #1 moves again while #2's head is unchanged: a fresh request is needed.
+      await restack(stackOf(layer(1, "open", { headSha: "head-1b" }), layer(2, "open", { behindParent: 1, sessionId: "sess-2" }), layer(3, "open", { headSha: "head-2", sessionId: "sess-3" })));
+      row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(await row.findByRole("button", { name: "Ask agent to rebase #2" })).toBeInTheDocument();
+      // #2 rebases; #3 still shares #2's old head and is next, never asked.
+      await restack(stackOf(layer(1, "open"), layer(2, "open", { headSha: "head-2b", sessionId: "sess-2" }), layer(3, "open", { behindParent: 1, headSha: "head-2", sessionId: "sess-3" })));
+      row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(await row.findByRole("button", { name: "Ask agent to rebase #3" })).toBeInTheDocument();
+      expect(row.queryByText("Asked the agent on #3 to rebase.")).not.toBeInTheDocument();
+    });
+
     it("offers only GitHub's rebase for a layer AO doesn't track, and nothing once every layer is current", async () => {
       serveStack(stackOf(layer(1, "open"), layer(2, "open", { behindParent: 1 })));
       const row = within(await screen.findByTestId("pr-stack-rebase"));
