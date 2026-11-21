@@ -595,6 +595,32 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	return identity, true
 }
 
+// AccountHome is the home a session of harness runs its CLI under on
+// accountID, or, when accountID is empty, on the account BindSession would
+// start a new session on: the default, or another signed-in account when the
+// default is known to be unusable. It binds nothing. "" is the computer's own
+// login.
+func (s *Service) AccountHome(ctx context.Context, harness domain.AgentHarness, accountID string) (string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", nil
+	}
+	var account domain.AgentAccount
+	var err error
+	if id := strings.TrimSpace(accountID); id == "" {
+		account, err = s.newSessionAccount(ctx, p)
+	} else {
+		account, err = s.find(ctx, id)
+	}
+	if err != nil {
+		return "", err
+	}
+	if account.Device() {
+		return "", nil
+	}
+	return account.Home, nil
+}
+
 // DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.
 func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarness) (map[string]string, error) {
 	p, ok := domain.AgentAccountProviderFor(harness)
