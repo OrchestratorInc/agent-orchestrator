@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
@@ -73,7 +74,7 @@ type commandSpec struct {
 func (s commandSpec) command(ctx context.Context, binary, workingDir string, env map[string]string) *exec.Cmd {
 	merged := make(map[string]string, len(env)+len(s.env))
 	maps.Copy(merged, env)
-	applyEnvOverrides(merged, s.env, runtime.GOOS == "windows")
+	agentbase.ApplyEnvOverrides(merged, s.env, runtime.GOOS == "windows")
 	cmd := modelCommand(ctx, binary, s.args, workingDir, merged)
 	if s.killTree {
 		aoprocess.ConfigureTreeCancellation(cmd)
@@ -82,22 +83,6 @@ func (s commandSpec) command(ctx context.Context, binary, workingDir string, env
 		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
 	}
 	return cmd
-}
-
-// applyEnvOverrides copies overrides into env. Windows env keys are
-// case-insensitive and exec keeps the last duplicate, so there a caller key
-// differing only in case is dropped first to let the override win.
-func applyEnvOverrides(env, overrides map[string]string, caseInsensitive bool) {
-	for key, value := range overrides {
-		if caseInsensitive {
-			for existing := range env {
-				if existing != key && strings.EqualFold(existing, key) {
-					delete(env, existing)
-				}
-			}
-		}
-		env[key] = value
-	}
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.

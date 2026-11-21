@@ -4,6 +4,7 @@ package modelcatalog
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,7 +71,14 @@ wait`)
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for processRunning(pid) {
+	for {
+		running, err := processRunning(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !running {
+			break
+		}
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatalf("wrapped binary %d outlived discovery", pid)
@@ -81,15 +89,22 @@ wait`)
 
 // processRunning reports whether pid is alive and not a zombie. An orphan's
 // zombie can linger where PID 1 does not reap, and kill(pid, 0) still succeeds
-// for it.
-func processRunning(pid int) bool {
+// for it. A failed inspection is an error, never proof the process stopped.
+func processRunning(pid int) (bool, error) {
 	if syscall.Kill(pid, 0) != nil {
-		return false
+		return false, nil
 	}
 	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
-		return false
+		// ps exits non-zero when pid has gone since the kill check.
+		if syscall.Kill(pid, 0) != nil {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect process %d: %w", pid, err)
 	}
 	state := strings.TrimSpace(string(out))
-	return state != "" && !strings.HasPrefix(state, "Z")
+	if state == "" {
+		return false, fmt.Errorf("inspect process %d: ps printed no state", pid)
+	}
+	return !strings.HasPrefix(state, "Z"), nil
 }
