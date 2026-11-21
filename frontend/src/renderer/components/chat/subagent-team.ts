@@ -20,6 +20,9 @@ const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";
 
+/** OpenCode 2's launch. ACP carries no tool name, so its driver names the call `subagent`. */
+LAUNCH_TOOLS.add("subagent");
+
 /**
  * What Claude returns from a launch when the report is not in the result. Both are
  * notes to the model ("never quote this"), so they are never shown as a report.
