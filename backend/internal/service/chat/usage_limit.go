@@ -87,9 +87,44 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	if err == nil {
 		s.autoResumeMu.Lock()
 		delete(s.autoResumeRetryAt, turnID)
+		s.noteAutoResumeArmedLocked()
 		s.autoResumeMu.Unlock()
 	}
 	return err
+}
+
+// noteAutoResumeArmedLocked records that a turn was armed: the resume loop is
+// no longer idle, a scan already running cannot mark it idle when it ends, and
+// the loop is woken to scan at once. The caller holds autoResumeMu.
+func (s *Service) noteAutoResumeArmedLocked() {
+	s.autoResumeIdle = false
+	s.autoResumeArms++
+	if s.autoResumeWake != nil {
+		select {
+		case s.autoResumeWake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// AutoResumeArmed signals, coalesced, that a turn was armed for auto-resume,
+// so a resume loop waiting out an idle interval scans again at once.
+func (s *Service) AutoResumeArmed() <-chan struct{} {
+	s.autoResumeMu.Lock()
+	defer s.autoResumeMu.Unlock()
+	if s.autoResumeWake == nil {
+		s.autoResumeWake = make(chan struct{}, 1)
+	}
+	return s.autoResumeWake
+}
+
+// AutoResumeIdle reports whether the last scan found no armed turn and none is
+// being resumed. Only SetTurnAutoResume arms a turn, and it wakes the loop, so
+// an idle loop can scan rarely without missing a deadline.
+func (s *Service) AutoResumeIdle() bool {
+	s.autoResumeMu.Lock()
+	defer s.autoResumeMu.Unlock()
+	return s.autoResumeIdle && len(s.autoResumeInFlight) == 0
 }
 
 func validateUsageLimitSession(record domain.SessionRecord) error {
@@ -233,6 +268,7 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		return nil
 	}
 	s.autoResumeScanning = true
+	armsAtStart := s.autoResumeArms
 	s.autoResumeMu.Unlock()
 	sources, err := store.AutoResumeTurns(ctx)
 	armed := make(map[string]bool, len(sources))
@@ -245,6 +281,9 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		s.autoResumeMu.Unlock()
 		return errors.Join(err, ctx.Err())
 	}
+	// A turn armed while this scan ran may be missing from sources; only a
+	// scan that started after the last arm can call the loop idle.
+	s.autoResumeIdle = len(sources) == 0 && s.autoResumeArms == armsAtStart
 	for id := range s.autoResumeRetryAt {
 		if !armed[id] {
 			delete(s.autoResumeRetryAt, id)

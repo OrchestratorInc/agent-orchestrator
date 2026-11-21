@@ -74,6 +74,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				awake: {
+					pushes: false,
+					onState: () => () => undefined,
+				},
 				triage: {
 					launch: async () => ({ ok: true }),
 				},
@@ -93,6 +97,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
+						findArtifactIssues: async () => [],
+						publishIssueArtifact: async () => { throw new Error("GitHub is unavailable in this test."); },
 						listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
@@ -143,6 +149,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				theme: {
 					set: async () => undefined,
+					systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
@@ -173,8 +180,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -263,6 +270,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setCloudUser: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
+					takeLaunchStart: async () => null,
+					takeResourceSummary: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -485,6 +494,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,
@@ -1085,6 +1097,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				awake: {
+					pushes: false,
+					onState: () => () => undefined,
+				},
 				triage: {
 					launch: async () => ({ ok: true }),
 				},
@@ -1104,6 +1120,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
+						findArtifactIssues: async () => [],
+						publishIssueArtifact: async () => { throw new Error("GitHub is unavailable in this test."); },
 						listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
@@ -1154,6 +1172,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				theme: {
 					set: async () => undefined,
+					systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
@@ -1180,8 +1199,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -1270,6 +1289,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setCloudUser: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
+					takeLaunchStart: async () => null,
+					takeResourceSummary: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -1480,6 +1501,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,

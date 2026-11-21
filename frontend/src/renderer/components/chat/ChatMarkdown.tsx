@@ -329,7 +329,7 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 					<CopyButton text={code} label="Copy code" />
 				</div>
 			</div>
-			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
+			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
 				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} />
 				</code>
@@ -728,9 +728,32 @@ export function ArtifactPathCode({ text, children, unlisted = children }: { text
 	}, [children, href, path, unlisted]);
 }
 
+function InlineSessionReference({ id, node, fallback }: { id: string; node?: HastElement; fallback: ReactNode }) {
+	const workspaces = useChatLinkWorkspaces();
+	const target = useMemo(() => {
+		let match: { href: string; title: string } | undefined;
+		for (const workspace of workspaces) {
+			const session = workspace.sessions.find((entry) => entry.id === id);
+			if (!session) continue;
+			if (match) return undefined;
+			match = { href: `ao://sessions/${encodeURIComponent(workspace.id)}/${encodeURIComponent(id)}`, title: session.title || id };
+		}
+		return match;
+	}, [workspaces, id]);
+	const href = target?.href;
+	const title = target?.title;
+	return useMemo(() => {
+		if (!href) return fallback;
+		// A displayed title represents the entire source token when quoted.
+		const mapping = title === id ? { "data-excerpt-kind": "inline-code" } : { "data-excerpt-block": "" };
+		return <SessionLabelLink href={href}><span {...excerptElementProps(node)} {...mapping}>{title}</span></SessionLabelLink>;
+	}, [href, title, id, fallback, node]);
+}
+
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
 	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
+	const safeOrigin = useContext(SafeOriginContent);
 	const insideLink = useContext(InsideMarkdownLink);
 	const insideArtifactLink = useContext(InsideArtifactLink);
 	const text = typeof children === "string" ? children : undefined;
@@ -747,6 +770,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	);
 	if (insideLink) return code;
 	if (!file) {
+		if (!safeOrigin && openSession && text && /^[^\s/\\]+-\d+$/u.test(text)) return <InlineSessionReference id={text} node={node} fallback={code} />;
 		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
@@ -845,7 +869,7 @@ const COMPONENTS: Components = {
 	// Wide tables scroll inside their own container so the conversation column
 	// never scrolls sideways.
 	table: ({ children }) => (
-		<div className="my-2.5 overflow-x-auto rounded-lg border border-border">
+		<div data-no-swipe-nav="" className="my-2.5 overflow-x-auto rounded-lg border border-border">
 			<table className="w-full border-collapse text-xs">{children}</table>
 		</div>
 	),

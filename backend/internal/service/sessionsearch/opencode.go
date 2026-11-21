@@ -357,7 +357,7 @@ func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.Sessio
 	}
 	defer store.close()
 
-	previous, hadPrevious, err := s.store.GetSessionSearchSource(ctx, sourceKey)
+	previous, hadPrevious, err := s.sourceState(ctx, sourceKey)
 	if err != nil {
 		s.log.Warn("session search source read failed", "source", sourceKey, "error", err)
 		return false

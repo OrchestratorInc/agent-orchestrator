@@ -65,6 +65,13 @@ describe("SessionAccountSummary on a Cloud session", () => {
 		expect(cloud.switchSessionAgentAccount).toHaveBeenCalledWith("org-1", "s-1", { accountId: "a-2" });
 	});
 
+	it("shows a single account as text, not a picker", async () => {
+		cloud.listAgentAccounts.mockResolvedValue({ agentAccounts: [account("a-1", "work@example.com")] });
+		renderSummary(session());
+		expect(await screen.findByText("work@example.com")).toBeInTheDocument();
+		expect(screen.queryByRole("combobox", { name: "Account" })).not.toBeInTheDocument();
+	});
+
 	it("asks before stopping a working agent's turn", async () => {
 		const user = userEvent.setup();
 		renderSummary(session({ activity: { state: "active" } } as Partial<WorkspaceSession>));

@@ -206,6 +206,7 @@ type SessionsController struct {
 	Activity                 ActivityRecorder
 	PRRefresh                PRRefresher
 	NativeSessions           ports.AgentNativeSessionResolver
+	TerminalReplies          ports.AgentResolver // adapters whose Stop hook omits the reply
 	DataDir                  string
 	Usage                    UsageHookRecorder
 	Attachments              *attachmentstore.Store
@@ -2595,6 +2596,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 			sig.RunningSubagentIDs = &running
 		}
 	}
+	if sig.Event == "stop" && sig.SubagentID == "" && sig.FinalAssistantMessage == "" {
+		sig.FinalAssistantMessage = c.terminalTurnReply(r.Context(), sessionID(r), sig.ExpectedHarness, sig.AgentSessionID)
+	}
 	var activityErr error
 	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "" || sig.SubagentID != "") {
 		activityErr = c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), sig)
@@ -2740,6 +2744,26 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: string(signal.State)})
+}
+
+// terminalTurnReply reads a main Stop's missing reply from the harness's
+// native history, for adapters that keep it (ports.AgentTerminalReplyReader).
+// The harness only selects the reader: the history it reads is located from
+// AO's own data for this session, never from a hook-supplied path.
+func (c *SessionsController) terminalTurnReply(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, nativeID string) string {
+	if c.TerminalReplies == nil || harness == "" || c.DataDir == "" {
+		return ""
+	}
+	agent, ok := c.TerminalReplies.Agent(harness)
+	if !ok {
+		return ""
+	}
+	reader, ok := agent.(ports.AgentTerminalReplyReader)
+	if !ok {
+		return ""
+	}
+	reply := reader.TerminalTurnReply(ctx, ports.TerminalReplyConfig{DataDir: c.DataDir, SessionID: id, NativeSessionID: nativeID})
+	return capActivityText(domain.SanitizeControlChars(strings.TrimSpace(reply)), 16<<10)
 }
 
 // capActivityMeta bounds an optional activity correlation string; overlong
