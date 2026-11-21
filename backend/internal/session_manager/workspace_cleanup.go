@@ -512,7 +512,7 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 				if err := cleaner.CleanupWorkspace(ctx, ports.WorkspaceHookConfig{DataDir: m.dataDir,
 					WorkspacePath: rec.Metadata.WorkspacePath, SessionID: string(rec.ID),
 					NativeSessionID: ref.NativeSessionID, ImportConfigDir: ref.ConfigDir}); err != nil {
-					return fmt.Errorf("delete %s: clean imported Kimi authentication: %w", id, err)
+					m.logger.Warn("delete: imported Kimi authentication cleanup failed; preserving unverified files", "sessionID", id, "error", err)
 				}
 			}
 		}
