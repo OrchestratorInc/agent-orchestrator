@@ -22,6 +22,8 @@ export type CloudActionContext = {
 	refreshSessions(): Promise<void>;
 	/** Lists a standalone agent's own project at once, so its session reads as standalone from the first frame. */
 	upsertProject?(project: CloudProject): void;
+	/** The list writes for a request starting now, which drop an answer that lands after the account or organization changed. */
+	scoped?(): Pick<CloudActionContext, "upsertSession" | "upsertProject">;
 };
 
 /**
@@ -74,6 +76,9 @@ export function spawnCloudWorker(context: CloudActionContext, request: CloudSpaw
 
 async function spawnWorker(context: CloudActionContext, request: CloudSpawnRequest): Promise<DashboardSession> {
 	const orgId = orgOf(context);
+	// Taken before the create goes out: its answer is listed only while this
+	// account and organization are still the ones shown.
+	const writes = context.scoped?.() ?? context;
 	if (!request.standalone && !request.projectId) throw new Error("Pick a cloud project first.");
 	if (request.attachments?.length) throw new Error("Cloud tasks can't take attachments yet. Remove them, or describe the files in the prompt.");
 	// A standalone agent has no project whose worker settings name an agent.
@@ -98,14 +103,14 @@ async function spawnWorker(context: CloudActionContext, request: CloudSpawnReque
 		// The agent and its own project come back together; the project is
 		// listed now so the new session reads as standalone at once.
 		const created = await withInterfaceFallback(body, key, (input, idempotencyKey) => context.client.createStandaloneAgent(orgId, input, idempotencyKey));
-		context.upsertProject?.(created.project);
-		context.upsertSession(created.session);
+		writes.upsertProject?.(created.project);
+		writes.upsertSession(created.session);
 		void context.refreshSessions();
 		return cloudStandaloneAgentRow(created.session);
 	}
 	const input: CreateCloudSessionInput = { projectId: request.projectId ?? "", kind: "worker", ...body };
 	const created = await withInterfaceFallback(input, key, (next, idempotencyKey) => context.client.createSession(orgId, next, idempotencyKey));
-	context.upsertSession(created.session);
+	writes.upsertSession(created.session);
 	void context.refreshSessions();
 	return cloudSessionRow(created.session);
 }

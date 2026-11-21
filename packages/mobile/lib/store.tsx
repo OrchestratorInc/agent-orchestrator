@@ -384,7 +384,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	cloudActionsRef.current = {
 		client: cloudState.client, org: cloudState.org, projects: cloudState.projects, connections: cloudState.connections,
 		chatHarnesses: cloudState.chatHarnesses, sessions: cloudState.sessions, upsertSession: cloudState.upsertSession, refreshSessions: cloudState.refreshSessions,
-		upsertProject: cloudState.upsertProject,
+		upsertProject: cloudState.upsertProject, scoped: cloudState.scoped,
 	};
 	const refreshCloudRef = useRef(cloudState.refresh);
 	refreshCloudRef.current = cloudState.refresh;

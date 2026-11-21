@@ -156,6 +156,31 @@ describe("board actions on cloud rows", () => {
 		await expect(spawnCloudWorker(context(), { standalone: true, attachments: [{}] })).rejects.toThrow(/attachments/);
 	});
 
+	it("lists a create's answer only through the writes taken before it was sent", async () => {
+		const scopedWrites = { upsertSession: vi.fn(), upsertProject: vi.fn() };
+		const scoped = vi.fn(() => scopedWrites);
+		let answer!: (value: unknown) => void;
+		const createStandaloneAgent = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+		const ctx = context({ scoped, upsertProject: vi.fn() }, { createStandaloneAgent: createStandaloneAgent as never });
+		const pending = spawnCloudWorker(ctx, { standalone: true, prompt: "x", harness: "codex" });
+		// Taken before the answer: the provider drops them if the organization changes meanwhile.
+		await vi.waitFor(() => expect(createStandaloneAgent).toHaveBeenCalled());
+		expect(scoped).toHaveBeenCalledTimes(1);
+		answer({ project: project({ id: "a1", standaloneAgent: true }), session: session({ id: "new", projectId: "a1" }) });
+		await pending;
+		expect(scopedWrites.upsertProject).toHaveBeenCalledWith(expect.objectContaining({ id: "a1" }));
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "new" }));
+		expect(ctx.upsertProject).not.toHaveBeenCalled();
+		expect(ctx.upsertSession).not.toHaveBeenCalled();
+
+		// A project's worker goes the same way.
+		const createSession = vi.fn(async () => ({ session: session({ id: "w1" }) }));
+		const projectCtx = context({ scoped }, { createSession: createSession as never });
+		await spawnCloudWorker(projectCtx, { projectId: "p1", prompt: "x", harness: "codex" });
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "w1" }));
+		expect(projectCtx.upsertSession).not.toHaveBeenCalled();
+	});
+
 	it("refuses what a cloud task cannot take, in words a person can act on", async () => {
 		await expect(spawnCloudWorker(context(), { projectId: "p1", attachments: [{}] })).rejects.toThrow(/attachments/);
 		await expect(spawnCloudWorker(context(), {})).rejects.toThrow(/cloud project/);

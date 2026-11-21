@@ -213,6 +213,25 @@ describe("CloudProvider", () => {
 		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
 	});
 
+	it("drops a scoped write that lands after the organization changed", async () => {
+		await mount();
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		const session = { id: "s-a", orgId: "a", projectId: "a-agent" } as never;
+		// Same organization: the writes land.
+		act(() => { const writes = latest!.scoped(); writes.upsertProject(agent); writes.upsertSession(session); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+		expect(latest?.sessions.map((item) => item.id)).toEqual(["s-a"]);
+
+		// Taken in "a", then a 403 re-resolves to "b" before the create answers.
+		const late = latest!.scoped();
+		fixtures.client.getMe.mockImplementation(async () => me("b"));
+		await reResolve();
+		expect(latest?.org?.id).toBe("b");
+		act(() => { late.upsertProject({ ...agent, id: "a-agent-2" }); late.upsertSession({ id: "s-a-2", orgId: "a", projectId: "a-agent-2" } as never); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["b-p"]);
+		expect(latest?.sessions).toEqual([]);
+	});
+
 	it("comes back to ready when retried from an error, though it kept its organization", async () => {
 		await mount();
 		fixtures.client.getMe.mockImplementation(async () => { throw new Error("offline"); });

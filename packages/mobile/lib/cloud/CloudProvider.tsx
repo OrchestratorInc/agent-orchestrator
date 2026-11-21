@@ -19,6 +19,12 @@ import type { CloudMe, CloudOrganization, CloudProject, CloudProviderConnection,
 
 export type CloudStatus = "loading" | "signed-out" | "connecting" | "ready" | "error";
 
+/** List writes bound to the account and organization they were taken under. */
+export type CloudScopedWrites = {
+	upsertSession(session: CloudSession): void;
+	upsertProject(project: CloudProject): void;
+};
+
 export type CloudState = {
 	status: CloudStatus;
 	account: Account | null;
@@ -56,6 +62,12 @@ export type CloudState = {
 	upsertSession(session: CloudSession): void;
 	/** Put a project the phone just created (a standalone agent's) into the list without waiting for a read. */
 	upsertProject(project: CloudProject): void;
+	/**
+	 * The list writes for a request starting now. They do nothing once the
+	 * account or organization has changed, so a late answer can't land in
+	 * another organization's lists.
+	 */
+	scoped(): CloudScopedWrites;
 	/** A cloud screen is on view: poll at the live rate until the returned release runs. */
 	watch(): () => void;
 };
@@ -420,11 +432,19 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		});
 	}, []);
 
+	const scoped = useCallback((): CloudScopedWrites => {
+		const own = generation.current;
+		return {
+			upsertSession: (session) => { if (own === generation.current) upsertSession(session); },
+			upsertProject: (project) => { if (own === generation.current) upsertProject(project); },
+		};
+	}, [upsertProject, upsertSession]);
+
 	const value = useMemo<CloudState>(() => ({
 		status, account, me, org, error, client,
 		projects, projectsLoaded, projectsError, sessions, sessionsLoaded, sessionsError, connections, connectionsLoaded, notificationsUnread,
 		chatHarnesses: me?.chatHarnesses ?? NO_CHAT_HARNESSES,
-		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, upsertProject, watch,
-	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsError, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsError, sessionsLoaded, signIn, signOut, status, upsertProject, upsertSession, watch]);
+		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, upsertProject, scoped, watch,
+	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsError, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, scoped, sessions, sessionsError, sessionsLoaded, signIn, signOut, status, upsertProject, upsertSession, watch]);
 	return <CloudContext.Provider value={value}>{children}</CloudContext.Provider>;
 }
