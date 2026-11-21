@@ -33,9 +33,9 @@ import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { useComposerSnapshot } from "./composerSnapshot";
+import { useChatPushTiming } from "./chatPushTiming";
 import { useKeepUnchanged } from "../keepUnchanged";
 import { useStableFunctionProps } from "../useStableFunctionProps";
-import { useAfterPush } from "../useAfterPush";
 import { KeyboardFollower } from "./KeyboardFollower";
 import { KeyboardMotionScope } from "./keyboardMotion";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -65,7 +65,6 @@ import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
-import { usePushSettled } from "../usePushSettled";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { space } from "../tokens";
@@ -122,10 +121,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, machine, session.id);
-	// See `awaitingConversation`: only a conversation the page opened without is held.
-	const pushSettled = usePushSettled();
-	const [openedWithSnapshot] = useState(() => Boolean(conversation.snapshot));
-	const holdArrivingSnapshot = !pushSettled && !openedWithSnapshot && Boolean(conversation.snapshot);
+	// When the conversation may draw during the push: an uncached one is held
+	// until the slide settles (see `awaitingConversation`), a small cached one
+	// mounts its timeline a frame after the push starts, a large cached one once
+	// the slide settles. See useChatPushTiming.
+	const { holdArrivingSnapshot, timelineMounted } = useChatPushTiming(conversation.snapshot);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -550,9 +550,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The composer's view of the conversation: unchanged while a reply streams,
 	// so the composer does not re-render with every word (see composerSnapshot).
 	const composerSnapshot = useComposerSnapshot(conversation.snapshot, startupView?.openingTurnId);
-	// The transcript is drawn a frame after the page: rendered with it, it held
-	// the push back by its whole first render (see useAfterPush).
-	const pushed = useAfterPush();
 	const composerChanges = useMemo(
 		() => changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined,
 		[changeSummary, filesNavigation.openChanges],
@@ -854,7 +851,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// A conversation that arrives while the page is still sliding in waits for
 	// the slide to finish: mounting the timeline mid-push stalled the UI thread
 	// for hundreds of milliseconds, so the slide froze and then jumped to its
-	// end. One already cached renders with the page, before the slide starts.
+	// end. One already cached renders the page at once and its timeline after:
+	// a frame later if small, once the slide settles if large (see
+	// useChatPushTiming).
 	const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;
 	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
@@ -963,7 +962,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<TurnArtifactsContext.Provider value={turnArtifacts}>
 				<TurnRecoveryContext.Provider value={turnRecovery}>
-				{pushed ? <ChatTimeline
+				{timelineMounted ? <ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
 					onLoadOlder={conversation.loadOlder}

@@ -13,6 +13,10 @@ import { useEffect, useState } from "react";
  * committed 40 ms after the tap instead of stalling 180–440 ms, with fewer
  * janky frames over the push. Waiting for the whole slide (transitionEnd)
  * instead delayed the transcript by ~600 ms and was janky as it popped in.
+ *
+ * A body too large to mount within a frame waits for the slide instead
+ * (`usePushSettled`); the chat page picks between the two by transcript size
+ * in `useChatPushTiming`.
  */
 export function useAfterPush(): boolean {
 	const [ready, setReady] = useState(false);
