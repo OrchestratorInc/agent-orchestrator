@@ -1,0 +1,122 @@
+---
+title: Use Orchestrator from your coding agent
+description: Step-by-step instructions a coding agent can follow to install Orchestrator, add a repository, and start a worker with the ao CLI.
+---
+
+This page is for a coding agent asked to "set up Orchestrator" or "install orchestrator.inc", and for the person working with it. Every step uses a command that exists today. Run them in order, and stop at a step only a human can do.
+
+If the desktop app is already installed, [Set up with your coding agent](/guides/agent-setup) also shows how to ask an agent inside Orchestrator to do the setup.
+
+<Callout type="info" title="Coming soon">
+	A one-line installer and an `ao setup` command are coming. Until then, follow the steps below. The same steps are at [orchestrator.inc/install.md](https://orchestrator.inc/install.md).
+</Callout>
+
+## 1. Install the desktop app
+
+The desktop app runs the local daemon that the `ao` CLI talks to, and it bundles `ao`.
+
+On macOS, use the official Homebrew cask. It installs the app and puts `ao` on your `PATH`:
+
+```bash
+brew install --cask agent-orchestrator
+```
+
+On Windows, use winget:
+
+```powershell
+winget install --id OrchestratorInc.AgentOrchestrator -e
+```
+
+On Linux, or without a package manager, download a package from [Installation](/installation) and install it. On Linux, prefer the `.deb` or `.rpm` package (it needs `sudo`), because an AppImage doesn't give you a usable `ao`.
+
+## 2. Find `ao`
+
+If `ao` isn't on your `PATH`, call the bundled copy by its full path:
+
+| Platform | Bundled `ao` |
+| --- | --- |
+| macOS | `/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao` |
+| Windows | `resources\daemon\ao.exe` inside the app's install folder |
+| Linux `.deb` / `.rpm` | `resources/daemon/ao` inside the app's install folder |
+
+Use the bundled `ao`, not the legacy npm package `@aoagents/ao`, which is frozen at `0.10.3`. To put the bundled `ao` on the `PATH` on macOS, or on Linux with a `.deb` or `.rpm` install, a person can turn on **Developer mode** in **Settings → General** and choose **Link** beside **Global ao command**. See [Run the CLI](/cli#run-the-cli).
+
+An AppImage install can't be linked, and its bundled `ao` isn't at a fixed path. On Linux, install the `.deb` or `.rpm` package instead when an agent needs `ao`.
+
+## 3. Start the app and check the daemon
+
+Open the desktop app. On macOS you can do it from a terminal by its path:
+
+```bash
+open "/Applications/Agent Orchestrator.app"
+```
+
+If the app was installed for one user only, it is in `~/Applications/Agent Orchestrator.app` instead. On macOS, once `ao` works, `ao start` also opens the installed app. On Linux and Windows, open the installed app from the desktop's app menu: `ao start` looks only for the app locations it installs itself, and may download a fresh copy instead. Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
+
+Then check that its daemon is ready:
+
+```bash
+ao status --json
+```
+
+Continue when `state` is `ready`. `stopped` means the app isn't running yet; the daemon can take a few seconds to start, so check again before you give up. `ao doctor --json` lists any failing checks, including Git, agent harnesses, and GitHub.
+
+## 4. Pick a coding agent
+
+List the agents Orchestrator supports, with fresh install and sign-in checks:
+
+```bash
+ao agent ls --refresh
+```
+
+Each row shows the agent `ID`, whether it is installed, and whether it is signed in. Add `--json` for machine-readable output. Pick an agent that shows `installed` and either `authorized` or `configured (unverified)`. `configured (unverified)` means a credential exists but hasn't been checked yet, and agents in that state usually work. In `--json` output, that is an `authStatus` of `authorized` or `configured`. The agent you're running in is a good choice if it's listed. If none is ready, see [steps only a human can do](#steps-only-a-human-can-do).
+
+## 5. Add the repository
+
+Register a local Git repository as a project, and set which agent runs its workers and its orchestrator:
+
+```bash
+ao project add --path /absolute/path/to/repo --worker-agent <agent-id> --orchestrator-agent <agent-id>
+```
+
+The command prints the project ID. Run `ao project ls --json` to list projects again later.
+
+A repository with no `origin` remote has no default branch Orchestrator can find. Set one, or sessions can't start:
+
+```bash
+ao project set-config <project-id> --default-branch main
+```
+
+## 6. Start the orchestrator or a worker
+
+Start the project's orchestrator, as the app does when a person adds a project there. It plans the work and starts workers:
+
+```bash
+ao spawn --project <project-id> --kind orchestrator --name "Orchestrator"
+```
+
+Or start a single worker session with a task:
+
+```bash
+ao spawn --project <project-id> --name "Fix flaky login test" --agent <agent-id> --prompt "Fix the flaky login test and open a pull request."
+```
+
+`--name` is required and is what the sidebar shows. Each worker gets its own worktree and branch. Follow the sessions in the desktop app, or with `ao session ls`.
+
+## Steps only a human can do
+
+Some steps need a browser or a person's account. Ask the person to do them, then run the check again.
+
+| Step | Ask the person to | Check with |
+| --- | --- | --- |
+| Sign in to a coding agent | Open **Settings → Harness** in the app, select the agent, and choose **Login** (or **Install** first). Or run the agent's own login command in a terminal, for example `codex login`, or `claude` and then `/login`. | `ao agent ls --refresh` |
+| Sign in to GitHub | Run `gh auth login` in a terminal and finish the browser sign-in. | `gh auth status` |
+| Approve the macOS first launch | If macOS blocks the app, right-click it in Finder, choose **Open**, and confirm. | `ao status --json` |
+
+## Next
+
+<Cards>
+	<Card title="CLI reference" description="Every ao command and flag." href="/cli" />
+	<Card title="Installation" description="Downloads, package managers, and where ao is." href="/installation" />
+	<Card title="Troubleshooting" description="Diagnose daemon, agent, and session problems." href="/troubleshooting" />
+</Cards>
