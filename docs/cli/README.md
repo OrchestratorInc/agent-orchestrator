@@ -8,7 +8,7 @@ The offline `ao triage` exception resolves agent executables and launches a loca
 agent without the daemon, as described below.
 
 When using the CLI directly from a shell, make sure the daemon is running first
-by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
+by opening the desktop app, running `ao serve`, or installing `ao service install`. Product commands such as
 `ao agent ls` and `ao spawn` call the loopback daemon and will fail with a
 "daemon is not running" error if no `running.json` points at a live process. From
 a source checkout, build and run the local binary explicitly, for example:
@@ -30,6 +30,8 @@ Product commands use daemon HTTP routes. The offline `ao triage` diagnostic laun
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `ao start`                    | Open the desktop application, downloading a release if necessary; the app supervises its daemon.                                                                        |
 | `ao stop`                     | Gracefully stop the daemon via loopback `POST /shutdown` after verifying daemon identity.                                         |
+| `ao serve` / `--json`         | Reuse the daemon serving this data dir, or start the hidden `ao daemon` detached (headless, no `AO_OWNER`) and wait for `/readyz`; `--foreground` runs or watches it in process. |
+| `ao service install/status/uninstall` | Keep `ao serve --foreground` running as a launchd user agent (macOS) or systemd user unit (Linux); never needs sudo. |
 | `ao status` / `--json`        | Report daemon state from `running.json`, process liveness, `/healthz`, and `/readyz`.                                             |
 | `ao doctor` / `--json`        | Check config, data directory, DB-file presence, daemon state, `git`, and (on Darwin/Linux) `tmux`; on Windows conpty is built in. |
 | `ao completion <shell>`       | Generate completions for `bash`, `zsh`, `fish`, or `powershell`.                                                                  |

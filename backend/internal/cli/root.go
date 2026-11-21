@@ -89,6 +89,7 @@ type Deps struct {
 	HTTPClient            *http.Client
 	Executable            func() (string, error)
 	StartProcess          func(processStartConfig) error
+	StartDetached         func(processStartConfig) (startedProcess, error)
 	ProcessAlive          func(pid int) bool
 	LookPath              func(file string) (string, error)
 	ResolveAgentBinary    func(context.Context, string) (string, error)
@@ -122,6 +123,7 @@ func DefaultDeps() Deps {
 		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
 		Executable:            os.Executable,
 		StartProcess:          startProcess,
+		StartDetached:         startDetachedProcess,
 		ProcessAlive:          processalive.Alive,
 		PIDMayBeHidden:        pidMayBeHidden,
 		LookPath:              exec.LookPath,
@@ -177,6 +179,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.StartProcess == nil {
 		d.StartProcess = def.StartProcess
+	}
+	if d.StartDetached == nil {
+		d.StartDetached = def.StartDetached
 	}
 	if d.ProcessAlive == nil {
 		d.ProcessAlive = def.ProcessAlive
@@ -250,6 +255,8 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newStartCommand(ctx))
 	root.AddCommand(newStopCommand(ctx))
 	root.AddCommand(newStatusCommand(ctx))
+	root.AddCommand(newServeCommand(ctx))
+	root.AddCommand(newServiceCommand(ctx))
 	root.AddCommand(newRemoteHostCommand(ctx))
 	root.AddCommand(newDoctorCommand(ctx))
 	root.AddCommand(newTriageCommand(ctx))
@@ -299,11 +306,11 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 		return false
 	}
 	switch commandPath {
-	// "ao daemon"/"ao start" are supervisor-driven bootstrapping, and
+	// "ao daemon"/"ao start"/"ao serve" are supervisor-driven bootstrapping, and
 	// "ao completion"/"ao help" are shell setup and self-documentation.
 	// "ao pty-host", "ao browser-host", "ao agent-process", and "ao mcp" are internal runtime
 	// processes. None reflect user activity.
-	case "ao triage", "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
+	case "ao triage", "ao daemon", "ao start", "ao serve", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
 		return true

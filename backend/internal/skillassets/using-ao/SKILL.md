@@ -31,6 +31,8 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | `remote-host` | Link this machine to the user's Orchestrator account, or turn its remote access on or off | Setting up a VM or other headless machine so the user's desktops and phones can use it | [commands/remote-host.md](commands/remote-host.md) |
 | `start` | Fetch (if needed) and open the Orchestrator desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the Orchestrator daemon | Shutting down Orchestrator | [commands/stop.md](commands/stop.md) |
+| `serve` | Run the Orchestrator daemon without the desktop app, or reuse the running one | Starting Orchestrator headless (servers, scripts, setting up for a user) | [commands/serve.md](commands/serve.md) |
+| `service` | Install, check, or remove a user service that keeps `ao serve` running across reboots | Keeping Orchestrator running without the app | [commands/service.md](commands/service.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |
 | `triage` | Collect diagnostics and draft a problem report, even offline | Reporting a bug | [commands/triage.md](commands/triage.md) |
 | `doctor` | Run local health checks | Diagnosing Orchestrator setup problems | [commands/doctor.md](commands/doctor.md) |
