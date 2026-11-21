@@ -81,7 +81,6 @@ func TestPrimeImportPrelaunchAdoptionAndReopenMakeNoMessengerWrites(t *testing.T
 		return fmt.Sprintf("prime-generation-%d", generation)
 	}
 	targetRoot := filepath.Join(m.dataDir, "agent-runtime", "prime-agent", "sessions")
-	target := filepath.Join(targetRoot, forkID+".jsonl")
 	trace := filepath.Join(t.TempDir(), "native-forks")
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 	// Only the provider subprocess is synthetic. The real Prime preparer,
@@ -92,8 +91,9 @@ func TestPrimeImportPrelaunchAdoptionAndReopenMakeNoMessengerWrites(t *testing.T
 		"shift 3; socket=; root=; workspace=; source=\n" +
 		"while [ \"$#\" -gt 0 ]; do case \"$1\" in --daemon-socket) socket=$2;; --session-dir) root=$2;; --cwd) workspace=$2;; --fork) source=$2;; *) exit 21;; esac; shift 2; done\n" +
 		"[ \"$socket\" = \"$PRIME_AGENT_DAEMON_SOCKET\" ] && [ \"$socket\" = " + quote(filepath.Join(filepath.Dir(targetRoot), "daemon.sock")) + " ] || exit 21\n" +
-		"[ \"$root\" = " + quote(targetRoot) + " ] && [ \"$workspace\" = " + quote(workspace) + " ] && [ \"$source\" = " + quote(source) + " ] || exit 22\n" +
-		"cat > " + quote(target) + " <<'PRIME_SYNTHETIC_NATIVE'\n" +
+		"[ \"$root\" = \"$PRIME_AGENT_SESSION_DIR\" ] && [ \"$workspace\" = " + quote(workspace) + " ] && [ \"$source\" = " + quote(source) + " ] || exit 22\n" +
+		"case \"$root\" in " + quote(filepath.Join(targetRoot, ".ao-import-attempt-")) + "*) ;; *) exit 22;; esac\n" +
+		"cat > \"$root/" + forkID + ".jsonl\" <<'PRIME_SYNTHETIC_NATIVE'\n" +
 		header(forkID, workspace, source) + rows + "PRIME_SYNTHETIC_NATIVE\n" +
 		"printf 'fork\\n' >> " + quote(trace) + "\n"
 	if err := os.WriteFile(filepath.Join(bin, "prime-agent"), []byte(script), 0o700); err != nil {
@@ -113,6 +113,10 @@ func TestPrimeImportPrelaunchAdoptionAndReopenMakeNoMessengerWrites(t *testing.T
 	}
 	if result.Session.Metadata.AgentSessionID != forkID || result.Session.Metadata.ProviderConversationID != forkID || result.Session.Metadata.ImportSource.NativeID != sourceID || result.Session.Metadata.ImportSource.ResumeNativeID != forkID {
 		t.Fatalf("manager did not adopt the prepared native id: %#v", result.Session.Metadata)
+	}
+	target := result.Session.Metadata.ImportSource.ResumeTranscriptPath
+	if result.Session.Metadata.ImportSource.ResumeConfigDir != targetRoot || filepath.Dir(filepath.Dir(target)) != targetRoot || !strings.HasPrefix(filepath.Base(filepath.Dir(target)), ".ao-import-attempt-") || filepath.Base(target) != forkID+".jsonl" {
+		t.Fatalf("prepared fork escaped its owned output directory: %q", target)
 	}
 	if len(agent.restores) != 1 || agent.restores[0].Session.Metadata[ports.MetadataKeyAgentSessionID] != forkID || agent.restores[0].Session.WorkspacePath != workspace {
 		t.Fatalf("first native argv used the wrong identity/workspace: %#v", agent.restores)
