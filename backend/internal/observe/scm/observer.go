@@ -1551,7 +1551,11 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 			// updated set are left to the terminal-reconciliation pass — do not
 			// promote them here or reconciliation will skip them (it checks
 			// candidateKeys to avoid double-fetching).
-			if !hasCursor || listedPRs == nil || listedPRs[key] {
+			// A queued PR is the exception: its place moves as other entries
+			// land or leave, which changes neither the PR listing nor its head
+			// checks, so it gets the same bounded refresh here.
+			queued := s.known.MergeQueue != nil && !s.known.Merged && !s.known.Closed
+			if !hasCursor || listedPRs == nil || listedPRs[key] || queued {
 				last := o.Cache.LastPRFetchAt[key]
 				if last.IsZero() || now.Sub(last) > DefaultPRMaxAge {
 					candidate = true
@@ -1934,9 +1938,30 @@ func (o *Observer) prepareForPersistence(obs ports.SCMObservation, local domain.
 	if opts.reviewFetched && obs.Review.Partial != local.ReviewPartial {
 		obs.Changed.Review = true
 	}
+	// Local queue actions write the queue entry but keep the last provider
+	// metadata hash, so a fresh read that undoes that write (GitHub ejected the
+	// PR, or the position moved back) can match the hash and be skipped.
+	if !opts.preserveLocalMetadataHash && mergeQueueChanged(obs.PR, local) {
+		obs.Changed.Metadata = true
+	}
 	obs.PR.State = firstNonEmpty(obs.PR.State, normalizePRState(obs.PR.Draft, obs.PR.Merged, obs.PR.Closed))
 	obs.ObservedAt = firstTime(obs.ObservedAt, now)
 	return obs
+}
+
+// mergeQueueChanged reports whether an observation's merge queue membership or
+// position differs from the stored PR's. The time estimate is left to the hash.
+func mergeQueueChanged(obs ports.SCMPRObservation, local domain.PullRequest) bool {
+	if obs.MergeQueueRequired != local.MergeQueueRequired {
+		return true
+	}
+	if (obs.MergeQueue == nil) != (local.MergeQueue == nil) {
+		return true
+	}
+	if obs.MergeQueue == nil {
+		return false
+	}
+	return obs.MergeQueue.State != local.MergeQueue.State || obs.MergeQueue.Position != local.MergeQueue.Position
 }
 
 func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.SessionRecord, obs ports.SCMObservation, local domain.PullRequest, opts persistenceOptions, now time.Time) (domain.PullRequest, []domain.PullRequestCheck, []domain.PullRequestReview, []domain.PullRequestReviewThread, []domain.PullRequestComment) {
