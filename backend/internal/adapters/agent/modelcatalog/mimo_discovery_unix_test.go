@@ -4,6 +4,7 @@ package modelcatalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -109,7 +110,8 @@ func processRunning(pid int) (bool, error) {
 	return !strings.HasPrefix(state, "Z"), nil
 }
 
-// processGone reports whether kill(pid, 0) finds no process.
+// processGone reports whether kill(pid, 0) finds no process. Only ESRCH says
+// so: EPERM means a process exists that we may not signal.
 func processGone(pid int) bool {
-	return syscall.Kill(pid, 0) != nil
+	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
 }
