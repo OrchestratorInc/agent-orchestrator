@@ -10,8 +10,8 @@ function job(overrides: Partial<InstallJob>): InstallJob {
 	return { target: "codex", status: "installing", method: "npm", startedAt, ...overrides } as InstallJob;
 }
 
-function DoneProbe({ value }: { value: InstallJob }) {
-	return <span>{useInstallJustFinished(value) ? "done" : "not done"}</span>;
+function DoneProbe({ value, verified }: { value: InstallJob; verified?: boolean }) {
+	return <span>{useInstallJustFinished(value, verified) ? "done" : "not done"}</span>;
 }
 
 afterEach(() => {
@@ -98,6 +98,29 @@ describe("useInstallJustFinished", () => {
 
 	it("does not replay Done for a job that had finished before the page opened", () => {
 		render(<DoneProbe value={job({ status: "succeeded" })} />);
+		expect(screen.getByText("not done")).toBeInTheDocument();
+	});
+
+	it("starts Done when a slow check after the install confirms it", () => {
+		vi.useFakeTimers();
+		const { rerender } = render(<DoneProbe value={job({ status: "verifying" })} verified={false} />);
+		rerender(<DoneProbe value={job({ status: "succeeded" })} verified={false} />);
+		expect(screen.getByText("not done")).toBeInTheDocument();
+		// The check outlasts Done's own display time.
+		act(() => vi.advanceTimersByTime(INSTALL_DONE_VISIBLE_MS + 1_000));
+		rerender(<DoneProbe value={job({ status: "succeeded" })} verified />);
+		expect(screen.getByText("done")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(INSTALL_DONE_VISIBLE_MS - 1));
+		expect(screen.getByText("done")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.getByText("not done")).toBeInTheDocument();
+	});
+
+	it("never shows Done when the check after the install does not confirm it", () => {
+		vi.useFakeTimers();
+		const { rerender } = render(<DoneProbe value={job({ status: "verifying" })} verified={false} />);
+		rerender(<DoneProbe value={job({ status: "succeeded" })} verified={false} />);
+		act(() => vi.advanceTimersByTime(INSTALL_DONE_VISIBLE_MS * 2));
 		expect(screen.getByText("not done")).toBeInTheDocument();
 	});
 

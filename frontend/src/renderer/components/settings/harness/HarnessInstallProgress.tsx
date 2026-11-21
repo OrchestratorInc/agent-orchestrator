@@ -11,8 +11,10 @@ export const INSTALL_DONE_VISIBLE_MS = 4_000;
 
 /** True for a few seconds after a job this page saw running succeeds, so the
  * bar finishes full instead of vanishing. A job that had already finished
- * when the page opened shows nothing. */
-export function useInstallJustFinished(job?: Pick<InstallJob, "status" | "startedAt">): boolean {
+ * when the page opened shows nothing. With `verified`, the few seconds start
+ * only once the check after the install confirms it, however long that takes,
+ * and never if it does not. */
+export function useInstallJustFinished(job?: Pick<InstallJob, "status" | "startedAt">, verified = true): boolean {
 	const watched = useRef<string | undefined>(undefined);
 	const [doneFor, setDoneFor] = useState<string | undefined>(undefined);
 	const key = job?.startedAt ?? undefined;
@@ -22,12 +24,16 @@ export function useInstallJustFinished(job?: Pick<InstallJob, "status" | "starte
 			watched.current = key;
 			return;
 		}
-		if (status !== "succeeded" || !key || watched.current !== key) return;
+		if (status !== "succeeded" || !key || watched.current !== key || !verified) return;
 		watched.current = undefined;
 		setDoneFor(key);
+	}, [status, key, verified]);
+	// Its own effect, so nothing that changes mid-way can leave Done showing.
+	useEffect(() => {
+		if (!doneFor) return;
 		const timer = window.setTimeout(() => setDoneFor(undefined), INSTALL_DONE_VISIBLE_MS);
 		return () => window.clearTimeout(timer);
-	}, [status, key]);
+	}, [doneFor]);
 	return Boolean(doneFor && doneFor === key && job?.status === "succeeded");
 }
 

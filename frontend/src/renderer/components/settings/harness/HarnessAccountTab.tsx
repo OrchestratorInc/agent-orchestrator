@@ -73,7 +73,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	// The running job's steps stay in the Installation card until it finishes on
 	// Done. Done waits for the check after the install to find it installed;
 	// until then the card says it is verifying.
-	const justFinished = useInstallJustFinished(job) && isInstalled;
+	const justFinished = useInstallJustFinished(job, isInstalled) && isInstalled;
 	const stage = justFinished ? "done" : details.installCheckPending ? "verifying" : installStage(job);
 	// Progress reads as a solid state, not a greyed-out action.
 	const progress = (label: string) => <span role="status"><Button type="button" size="default" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{label}</Button></span>;
