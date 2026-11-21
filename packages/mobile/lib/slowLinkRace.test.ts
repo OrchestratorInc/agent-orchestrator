@@ -176,6 +176,42 @@ describe("a link known to be slow", () => {
 		await raceWithSlowLinkRetry([lan], "h_paired", probe, () => now);
 		expect(timeouts.at(-1)).toBeUndefined();
 	});
+
+	it("still retries a tunnel that fails fast while it is still resolving", async () => {
+		vi.useFakeTimers();
+		// Mark the machine slow: its quick probe times out and the slow one answers.
+		const marking = vi.fn(async (endpoint: Endpoint, _signal: AbortSignal, options?: { timeoutMs?: number }) => {
+			if (options?.timeoutMs === undefined) throw new ProbeTimeoutError(endpoint);
+			return { hostId: "h_slow_tunnel" };
+		});
+		await raceWithSlowLinkRetry([tunnel], "h_slow_tunnel", marking);
+		// The next connect races slow at once, against a tunnel whose new name
+		// does not resolve on the first try.
+		const fetchMock = vi.fn(async () => fetchMock.mock.calls.length === 1
+			? Promise.reject(new TypeError("Network request failed"))
+			: { ok: true, json: async () => ({ hostId: "h_slow_tunnel", apiVersion: 1 }) });
+		vi.stubGlobal("fetch", fetchMock);
+		const outcome = raceWithSlowLinkRetry([tunnel], "h_slow_tunnel");
+		await vi.advanceTimersByTimeAsync(TUNNEL_PROBE_RETRY_DELAY_MS + 100);
+		await expect(outcome).resolves.toMatchObject({ ok: true, endpoint: tunnel, hostId: "h_slow_tunnel" });
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("still gives a timed-out endpoint only its one slow try", async () => {
+		const marking = vi.fn(async (endpoint: Endpoint, _signal: AbortSignal, options?: { timeoutMs?: number }) => {
+			if (options?.timeoutMs === undefined) throw new ProbeTimeoutError(endpoint);
+			return { hostId: "h_slow_dead" };
+		});
+		await raceWithSlowLinkRetry([tunnel], "h_slow_dead", marking);
+		vi.useFakeTimers();
+		const fetchMock = slowIdentity(120_000, "h_slow_dead");
+		vi.stubGlobal("fetch", fetchMock);
+		let settled: unknown;
+		void raceWithSlowLinkRetry([tunnel], "h_slow_dead").then((result) => { settled = result; });
+		await vi.advanceTimersByTimeAsync(SLOW_LINK_PROBE_TIMEOUT_MS + 100);
+		expect(settled).toMatchObject({ ok: false, reason: "none-reachable" });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe("the connection in use", () => {

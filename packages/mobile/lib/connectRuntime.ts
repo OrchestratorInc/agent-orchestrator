@@ -235,10 +235,13 @@ export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], host
 	// A machine that last answered only on the slow race goes straight to it:
 	// the quick race would spend PROBE_TIMEOUT_MS failing first on every
 	// resume. The longer limit is only a ceiling, so a link that got fast
-	// again still answers at once.
+	// again still answers at once. Unlike the second race below, a tunnel that
+	// fails fast (a rotated hostname still resolving) keeps its propagation
+	// retry here: nothing comes after this race to give it one.
 	const knownSlow = hostId !== "" && now() - (slowLinkAt.get(hostId) ?? -Infinity) < SLOW_LINK_MEMORY_MS;
 	if (knownSlow) {
-		const outcome = await raceEndpoints(endpoints, hostId, slow);
+		const outcome = await raceEndpoints(endpoints, hostId, (endpoint, signal) =>
+			probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, endOnTimeout: true }));
 		if (!outcome.ok) slowLinkAt.delete(hostId);
 		return outcome;
 	}
