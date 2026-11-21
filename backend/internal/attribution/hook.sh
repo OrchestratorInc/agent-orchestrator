@@ -88,29 +88,35 @@ commit_args() {
 	fi | awk '$0 == "commit" { seen = 1 } seen { print }'
 }
 
-# commit_option prints the value of `git commit` option $1 (--cleanup or
-# --template, which also matches -t). Like git, the last occurrence wins.
-# Returns 0 with the value when it was given, 1 when it certainly was not,
-# and 2 when that cannot be told.
+# commit_option prints the value of `git commit` option $1 (cleanup or
+# template; -t is template too). Like git, a long option may be abbreviated
+# to any prefix and the last occurrence wins. Returns 0 with the value when
+# it was given, 1 when it certainly was not, and 2 when that cannot be told.
 commit_option() {
 	[ "$args_read" = 1 ] || return 2
 	# Split by ps, any value holding a space (a message, a path) can spell
 	# an option, so one that ps shows is not trusted.
 	if [ "$args_exact" != 1 ]; then
-		case $1 in
-		--cleanup) pattern='^--cleanup(=|$)' ;;
-		*) pattern='^(--template(=|$)|-[A-Za-z]*t)' ;;
-		esac
-		printf '%s\n' "$args" | grep -Eq -- "$pattern" && return 2
+		printf '%s\n' "$args" | awk -v opt="$1" '
+			/^--./ { name = substr($0, 3); sub(/=.*/, "", name); if (index(opt, name) == 1) { found = 1; exit } }
+			opt == "template" && /^-[A-Za-z]*t/ { found = 1; exit }
+			END { exit !found }
+		' && return 2
 		return 1
 	fi
 	printf '%s\n' "$args" | awk -v opt="$1" '
 		$0 == "--" { exit }
 		want { value = $0; found = 1; want = 0; next }
-		$0 == opt { want = 1; next }
-		index($0, opt "=") == 1 { value = substr($0, length(opt) + 2); found = 1; next }
-		opt == "--template" && $0 == "-t" { want = 1; next }
-		opt == "--template" && $0 ~ /^-t./ { value = substr($0, 3); found = 1; next }
+		/^--./ {
+			name = substr($0, 3)
+			eq = index(name, "=")
+			if (eq) name = substr(name, 1, eq - 1)
+			if (index(opt, name) != 1) next
+			if (eq) { value = substr($0, eq + 3); found = 1 } else want = 1
+			next
+		}
+		opt == "template" && $0 == "-t" { want = 1; next }
+		opt == "template" && $0 ~ /^-t./ { value = substr($0, 3); found = 1; next }
 		END { if (found) print value; exit !found }
 	'
 }
@@ -120,7 +126,7 @@ commit_option() {
 # may have been given but cannot be read. Every check treats unknown as the
 # mode that strips the most, so an unclear case leaves the trailer off.
 cleanup_mode() {
-	value=$(commit_option --cleanup)
+	value=$(commit_option cleanup)
 	case $? in
 	0) printf '%s\n' "$value" ;;
 	1) git config --get commit.cleanup 2>/dev/null ;;
@@ -129,19 +135,32 @@ cleanup_mode() {
 }
 
 # editor_maybe reports whether this commit may open an editor on a -m or -F
-# message (-e or --edit), or whether that cannot be told. A short option
-# cluster holding an "e" counts, so a doubt never adds the trailer early.
+# message (-e or --edit, which git also takes abbreviated, as --ed), or
+# whether that cannot be told, so a doubt never adds the trailer early.
 editor_maybe() {
 	[ "$args_read" = 1 ] || return 0
-	# Short options are read like git does: letters up to one that takes a
-	# value (m, F, t, c, C), which is the rest of the word or the next one,
-	# so -em'...' asks for the editor and an "e" inside a value does not.
+	if [ "$args_exact" != 1 ]; then
+		# Split by ps, word boundaries are unknown: any word that could be
+		# the flag counts, wherever it is.
+		printf '%s\n' "$args" | grep -Eq -- '^--e(d(i(t)?)?)?$|^-[A-Za-z]*e'
+		return
+	fi
+	# Exact arguments are read like git reads them. A short option cluster
+	# runs up to a letter that takes a value (m, F, t, c, C), which is the
+	# rest of the word or the next one, so -em'...' asks for the editor and
+	# an "e" inside a value does not. A long option that takes a value and
+	# has no "=" takes the next word, whatever its abbreviation.
 	printf '%s\n' "$args" | awk '
+		BEGIN { n = split("message file template cleanup author date trailer reuse-message reedit-message fixup squash pathspec-from-file", valued, " ") }
 		skip { skip = 0; next }
 		$0 == "--" { exit }
-		$0 == "--edit" { found = 1; exit }
-		$0 ~ /^--(message|file|template|cleanup|author|date|trailer|reuse-message|reedit-message|fixup|squash|pathspec-from-file)$/ { skip = 1; next }
-		/^--/ { next }
+		/^--./ {
+			name = substr($0, 3)
+			if (index(name, "=")) next
+			if (index("edit", name) == 1) { found = 1; exit }
+			for (i = 1; i <= n; i++) if (index(valued[i], name) == 1) { skip = 1; break }
+			next
+		}
 		/^-./ {
 			for (i = 2; i <= length($0); i++) {
 				c = substr($0, i, 1)
@@ -223,7 +242,7 @@ snapshot_template() {
 	full=$(message_text "$1")
 	# git's own baseline: the -t file, else commit.template. Used alone only
 	# when the command line was read, so a -t cannot hide behind it.
-	tpl=$(commit_option --template)
+	tpl=$(commit_option template)
 	case $? in
 	0)
 		case "$tpl" in /*) ;; *) tpl=$PWD/${GIT_PREFIX-}$tpl ;; esac

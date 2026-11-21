@@ -366,6 +366,11 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 		{"commit.cleanup=strip, the message spells --cleanup=verbatim", "", "strip", "true", []string{"-m", "# x --cleanup=verbatim"}, "", false, false, ""},
 		// Reported: -e in a short-option cluster with an attached -m value.
 		{"-em with an attached # line", "", "", "true", []string{"-em# placeholder"}, "", false, false, ""},
+		// A -m inside the message does not hide a later -e.
+		{"-e after a -m value that spells -m", "", "", "true", []string{"-m", "# placeholder -m", "-e"}, "", false, false, ""},
+		// git takes long options abbreviated.
+		{"--edi on a -m holding only a # line", "", "", "true", []string{"--edi", "-m", "# placeholder"}, "", false, false, ""},
+		{"--clean=strip over commit.cleanup=verbatim", "", "verbatim", "true", []string{"--clean=strip", "-m", "# placeholder"}, "", false, false, ""},
 		{"an e inside a -m value is not -e", "", "", "true", []string{"-m", "-e is just text"}, "-e is just text", false, false, ""},
 		// Like git, the last --cleanup wins.
 		{"--cleanup given twice, the last is strip", "", "", "true", []string{"--cleanup=verbatim", "--cleanup=strip", "-m", "# Placeholder"}, "", false, false, ""},
