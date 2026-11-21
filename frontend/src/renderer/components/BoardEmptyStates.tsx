@@ -44,14 +44,17 @@ export function BoardWelcome() {
 }
 
 // The center owns the prominent actions while the header keeps quiet copies.
-export function ProjectBoardEmpty({ actions }: { actions: ReactNode }) {
+export function ProjectBoardEmpty({ actions, offer }: { actions: ReactNode; offer?: ReactNode }) {
 	const { t } = useTranslation();
 	return (
 		<div className="flex h-full min-h-0 items-center justify-center overflow-y-auto" data-testid="project-board-empty">
-			<div className="flex w-full max-w-preview-content flex-col items-center pb-empty-offset-y text-center">
-				<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{t("board.empty.title")}</h2>
-				<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t("board.empty.body")}</p>
-				{actions}
+			<div className="flex w-full max-w-xl flex-col items-center px-4 pb-empty-offset-y text-center">
+				<div className="flex w-full max-w-preview-content flex-col items-center">
+					<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{t("board.empty.title")}</h2>
+					<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t("board.empty.body")}</p>
+					{actions}
+				</div>
+				{offer}
 			</div>
 		</div>
 	);

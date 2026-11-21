@@ -449,7 +449,7 @@ func cursorWorkspaceTrustBase(cfg ports.WorkspaceHookConfig) (string, error) {
 	if strings.TrimSpace(cfg.DataDir) != "" {
 		return cursorDataDir(cfg.DataDir), nil
 	}
-	return "", errors.New("AO data dir is required for Cursor workspace trust")
+	return "", errors.New("the Orchestrator data dir is required for Cursor workspace trust")
 }
 
 func cursorWorkspaceTrustPath(base, workspacePath string) string {

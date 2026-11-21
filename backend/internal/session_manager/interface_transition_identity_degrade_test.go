@@ -9,6 +9,9 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // TestInterfaceTransitionHermesWithoutIdentityPairDegradesToFreshChat covers
@@ -114,9 +117,15 @@ func TestInterfaceTransitionHermesWithDeclaredPairKeepsStrictHandoff(t *testing.
 // resume identity — found only when resumeFound is set.
 type hermesDegradedTransitionAgent struct {
 	fakeAgent
-	resumeFound  bool
-	preparedIDs  []string
-	restoreCalls int
+	resumeFound   bool
+	preparedIDs   []string
+	restoreCalls  int
+	launchPrompts []string
+}
+
+func (a *hermesDegradedTransitionAgent) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
+	a.launchPrompts = append(a.launchPrompts, cfg.Prompt)
+	return a.fakeAgent.GetLaunchCommand(ctx, cfg)
 }
 
 func (a *hermesDegradedTransitionAgent) PrepareNativeTerminalResume(_ context.Context, _, _, nativeConversationID, _ string) (bool, error) {
@@ -243,6 +252,54 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
 	awaitDegradedMarker(t, store, transition.ID, degradedTerminalFreshMarkerText)
 }
 
+// A Chat that already ran the session's prompt must not hand it to the fresh
+// terminal, or the agent starts the task again. A Chat that never accepted
+// anything still owes that prompt to the terminal. Either way the session keeps
+// its prompt. (Guard reused from OrchestratorInc/agent-orchestrator#7725 by
+// Meraj-08.)
+func TestInterfaceTransitionHermesFreshTUIReplaysPromptOnlyIfChatNeverRanIt(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		conversation *domain.ConversationRecord
+		want         string
+	}{
+		{name: "chat ran the prompt", conversation: &domain.ConversationRecord{LatestSequence: 4}},
+		{name: "chat accepted nothing", conversation: &domain.ConversationRecord{}, want: "original task"},
+		{name: "chat never started", want: "original task"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeChat)
+			useFastInterfaceTransitionTimings(manager)
+			agent := &hermesDegradedTransitionAgent{}
+			manager.agents = singleAgent{agent: agent}
+			rec := store.sessions["session-1"]
+			rec.Harness = domain.HarnessHermes
+			rec.Metadata.Prompt = "original task"
+			store.sessions["session-1"] = rec
+			if tc.conversation != nil {
+				store.conversations = map[domain.SessionID]domain.ConversationRecord{"session-1": *tc.conversation}
+			}
+
+			transition, err := manager.StartInterfaceTransition(context.Background(), "session-1",
+				domain.SessionModeTUI, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled := awaitTransition(t, store, transition.ID)
+			if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+				t.Fatalf("phase = %s, code = %s, error = %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
+			}
+			// The last build is the real launch; the first is the preflight's.
+			if got := agent.launchPrompts[len(agent.launchPrompts)-1]; got != tc.want {
+				t.Fatalf("fresh terminal prompt = %q, want %q (builds: %q)", got, tc.want, agent.launchPrompts)
+			}
+			if got := store.sessions["session-1"].Metadata.Prompt; got != "original task" {
+				t.Fatalf("session prompt = %q, want it kept", got)
+			}
+		})
+	}
+}
+
 // awaitDegradedMarker polls the transition outbox until the degraded boundary
 // turn has been delivered, then asserts it was delivered exactly once with the
 // expected text.
@@ -280,5 +337,128 @@ func TestInterfaceTransitionNonHermesChatToTUIStillRequiresHandoffCapability(t *
 	}
 	if len(store.transitions) != 0 || runtime.created != 0 || len(chat.relayMessages) != 0 {
 		t.Fatal("unsupported Chat→TUI handoff mutated session or controllers")
+	}
+}
+
+// hermesMessagedChatOrchestrator is a hermes Chat worker whose conversation
+// already carries a real turn, backed by the real SQLite store: the Chat has
+// messages, so its root branch is not untouched. The adapter (via
+// hermesDegradedTransitionAgent with resumeFound=false) cannot resolve the
+// native terminal, mirroring upstream issue #7724's unresumable conversation.
+func hermesMessagedChatOrchestrator(t *testing.T) (*Manager, *sqlite.Store, *transitionRuntime, *transitionChat, *[]string, domain.SessionID) {
+	t.Helper()
+	ctx := context.Background()
+	store := sqlitetest.MustOpenAt(t, t.TempDir())
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "proj", Path: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	created, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "proj", Kind: domain.KindWorker, Harness: domain.HarnessHermes, Mode: domain.SessionModeChat,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath:          t.TempDir(),
+			Branch:                 "ao/session",
+			ProviderConversationID: "reserved-chat-id",
+			ControllerGeneration:   "chat-generation",
+		},
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := store.CreateConversation(ctx, "chat-conversation", domain.ConversationScopeSession,
+		created.ProjectID, created.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One real message: the Chat is not untouched.
+	if err := store.AdoptProviderTurn(ctx, conversation.ID, created.ID, "chat-generation", "turn-1", "provider-turn-1", now); err != nil {
+		t.Fatal(err)
+	}
+	log := &[]string{}
+	runtime := &transitionRuntime{fakeRuntime: &fakeRuntime{}, log: log}
+	chat := &transitionChat{
+		log: log, supportsChat: true,
+		armed:   make(chan domain.SessionInterfaceTransitionPolicy, 1),
+		aborted: make(chan struct{}, 1),
+	}
+	manager := New(Deps{
+		Runtime: runtime, Agents: singleAgent{agent: &hermesDegradedTransitionAgent{}},
+		Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{}, Chat: chat,
+		Lifecycle: &sqliteTransitionLifecycle{store: store},
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	useFastInterfaceTransitionTimings(manager)
+	manager.browserCapabilities = &recordingBrowserAuthority{authority: browsersvc.NewAuthority()}
+	return manager, store, runtime, chat, log, created.ID
+}
+
+// TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI covers
+// upstream issue #7724: a hermes Chat whose conversation carries real messages
+// and whose native conversation cannot be resumed must still switch to the
+// terminal through the degraded fresh-TUI path. It used to fail the controller
+// epoch commit with SESSION_CHANGED ("release untouched Chat provider ...:
+// empty root proof changed") because the commit required the untouched-Chat
+// release proof, leaving the session stuck in Chat with every retry failing.
+// The fresh TUI must start, the degraded boundary must be recorded, and the
+// messaged Chat conversation must stay archived exactly as it was.
+func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *testing.T) {
+	manager, store, runtime, _, log, id := hermesMessagedChatOrchestrator(t)
+	ctx := context.Background()
+
+	status, err := manager.InterfaceTransitionStatus(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Supported {
+		t.Fatalf("degraded hermes Chat→TUI must keep the switch enabled for a messaged Chat: %+v", status)
+	}
+
+	transition, err := manager.StartInterfaceTransition(ctx, id,
+		domain.SessionModeTUI, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := settleSQLiteTransition(t, store, transition.ID)
+	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase = %s, code = %s, error = %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
+	}
+	if settled.DegradedKind != domain.SessionInterfaceTransitionDegradedIdentityReset {
+		t.Fatalf("degradedKind = %q, want identity-reset", settled.DegradedKind)
+	}
+	if settled.NativeConversationID != "" {
+		t.Fatalf("native conversation = %q, want empty for a fresh TUI", settled.NativeConversationID)
+	}
+	current, _, err := store.GetSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if domain.NormalizeSessionMode(current.Mode) != domain.SessionModeTUI {
+		t.Fatalf("mode = %s, want tui", current.Mode)
+	}
+	if runtime.created != 1 {
+		t.Fatalf("terminal runtime created %d times, want 1", runtime.created)
+	}
+	if got := fmt.Sprint(*log); got != "[prepare:chat:drain stop:chat start:tui]" {
+		t.Fatalf("controller order = %s", got)
+	}
+	// The messaged Chat conversation stays archived untouched: same root
+	// branch, same provider binding, its turn history intact.
+	conversation, err := store.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ProviderConversationID != "reserved-chat-id" || after.ProviderScopeID == "" {
+		t.Fatalf("archived Chat root was disturbed: %+v", after)
+	}
+	if hasTurns, err := store.HasConversationTurns(ctx, conversation.ID); err != nil {
+		t.Fatal(err)
+	} else if !hasTurns {
+		t.Fatal("archived Chat lost its turn history")
 	}
 }

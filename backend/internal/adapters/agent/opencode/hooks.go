@@ -72,10 +72,10 @@ const (
 //go:embed assets/ao-activity.ts
 var opencodePluginSource string
 
-// opencodeManagedEvents are the three normalized activity events the embedded
-// plugin reports. They are defined here (not parsed from the file) so tests can
+// opencodeManagedEvents are the normalized activity events the embedded plugin
+// reports. They are defined here (not parsed from the file) so tests can
 // assert the plugin wires every one via the `ao hooks opencode <event>` command.
-var opencodeManagedEvents = []string{"session-start", "user-prompt-submit", "active", "stop", "permission-blocked"}
+var opencodeManagedEvents = []string{"session-start", "user-prompt-submit", "active", "stop", "permission-blocked", "permission-resolved"}
 
 // GetAgentHooks installs AO's opencode activity plugin into the worktree-local
 // .opencode/plugins/ directory, and materializes the using-ao skill into
@@ -106,7 +106,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 			return fmt.Errorf("opencode.GetAgentHooks: %w", err)
 		}
 		if !managed {
-			return fmt.Errorf("opencode.GetAgentHooks: refusing to overwrite non-AO file at %s — move it so AO can install its plugin", pluginPath)
+			return fmt.Errorf("opencode.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s — move it so Orchestrator can install its plugin", pluginPath)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("opencode.GetAgentHooks: stat plugin: %w", err)
@@ -125,6 +125,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return fmt.Errorf("opencode.GetAgentHooks: gitignore: %w", err)
 	}
 	if err := InstallUsingAOSkill(cfg.WorkspacePath); err != nil {
+		return fmt.Errorf("opencode.GetAgentHooks: %w", err)
+	}
+	if err := hookutil.InstallBugTriageSkill(SkillsDir(cfg.WorkspacePath)); err != nil {
 		return fmt.Errorf("opencode.GetAgentHooks: %w", err)
 	}
 	if err := seedPluginDependencyStub(cfg.WorkspacePath); err != nil {
@@ -232,6 +235,9 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	if err := UninstallUsingAOSkill(workspacePath); err != nil {
 		return fmt.Errorf("opencode.UninstallHooks: %w", err)
 	}
+	if err := hookutil.UninstallBugTriageSkill(SkillsDir(workspacePath)); err != nil {
+		return fmt.Errorf("opencode.UninstallHooks: %w", err)
+	}
 	return nil
 }
 
@@ -260,12 +266,13 @@ func opencodeSkillDir(workspacePath string) string {
 	return filepath.Join(workspacePath, opencodePluginDirName, opencodeSkillSubDir, skillassets.SkillName)
 }
 
-func opencodeSkillsDir(workspacePath string) string {
+// SkillsDir returns the workspace folder opencode discovers skills in.
+func SkillsDir(workspacePath string) string {
 	return filepath.Join(workspacePath, opencodePluginDirName, opencodeSkillSubDir)
 }
 
 func opencodeSkillMarkerPath(workspacePath string) string {
-	return filepath.Join(opencodeSkillsDir(workspacePath), opencodeSkillMarkerFile)
+	return filepath.Join(SkillsDir(workspacePath), opencodeSkillMarkerFile)
 }
 
 // InstallUsingAOSkill materializes the embedded shared using-ao skill into
@@ -275,20 +282,20 @@ func InstallUsingAOSkill(workspacePath string) error {
 	skillDir := opencodeSkillDir(workspacePath)
 	if info, err := os.Stat(skillDir); err == nil {
 		if !info.IsDir() {
-			return fmt.Errorf("refusing to overwrite non-directory at %s — move it so AO can install using-ao", skillDir)
+			return fmt.Errorf("refusing to overwrite non-directory at %s — move it so Orchestrator can install using-ao", skillDir)
 		}
 		managed, err := isAOManagedSkill(workspacePath)
 		if err != nil {
 			return err
 		}
 		if !managed {
-			return fmt.Errorf("refusing to overwrite non-AO skill at %s — move it so AO can install using-ao", skillDir)
+			return fmt.Errorf("refusing to overwrite non-Orchestrator skill at %s — move it so Orchestrator can install using-ao", skillDir)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat skill dir: %w", err)
 	}
 
-	skillsParent := opencodeSkillsDir(workspacePath)
+	skillsParent := SkillsDir(workspacePath)
 	if err := os.MkdirAll(skillsParent, 0o750); err != nil {
 		return fmt.Errorf("create skills dir: %w", err)
 	}

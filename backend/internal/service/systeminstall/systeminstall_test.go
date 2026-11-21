@@ -95,7 +95,7 @@ func (s *installJobStoreFake) InterruptActiveAgentInstallJobs(_ context.Context,
 			continue
 		}
 		record.Status = string(StatusInterrupted)
-		record.Error = "AO restarted before this job completed."
+		record.Error = "Orchestrator restarted before this job completed."
 		record.FinishedAt = &interruptedAt
 		record.UpdatedAt = interruptedAt
 		s.records[target] = record
@@ -745,6 +745,51 @@ func TestAutohandStartupFailureExplainsRecoveryWithoutClaimingSuccess(t *testing
 			}
 			if tc.wantHint {
 				for _, want := range []string{"existing installation was not changed", "startup check", "retry", "exit status 1"} {
+					if !strings.Contains(job.Error, want) {
+						t.Fatalf("error = %q, want %q", job.Error, want)
+					}
+				}
+			} else if job.Error != "exit status 1" {
+				t.Fatalf("unrelated error was rewritten: %q", job.Error)
+			}
+		})
+	}
+}
+
+func TestCursorRejectedLoginUpdateExplainsRecovery(t *testing.T) {
+	// The exact output of `cursor-agent update` when Cursor rejects the
+	// stored login (reproduced with 2026.04.16 and 2026.11.10 builds).
+	const rejected = "Checking for updates...\nError: Update failed: [unauthenticated] Error\n"
+	for _, tc := range []struct {
+		name     string
+		target   Target
+		output   string
+		wantHint bool
+	}{
+		{name: "rejected login", target: TargetCursor, output: rejected, wantHint: true},
+		{name: "other cursor failure", target: TargetCursor, output: "Checking for updates...\nError: Update failed: Download failed (curl exit 6)\n"},
+		{name: "other harness", target: TargetGrok, output: rejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService("darwin", "sh")
+			t.Cleanup(s.stop)
+			s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+				_, _ = io.WriteString(stdout, tc.output)
+				return errors.New("exit status 1")
+			})
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				t.Fatal("a failed update must not be verified")
+				return VerifyResult{}, nil
+			})
+			plan := Plan{Target: tc.target, Method: "official-installer", Command: []string{"/home/test/.local/bin/cursor-agent", "update"}}
+			job := &Job{Target: tc.target, Status: StatusInstalling}
+			s.jobs[tc.target] = job
+			s.runAgentOperation(t.Context(), plan, AgentOperationUpdate, job, nil)
+			if job.Status != StatusFailed || job.Output != tc.output {
+				t.Fatalf("job = %+v, want failure with original diagnostics", job)
+			}
+			if tc.wantHint {
+				for _, want := range []string{"rejected the CLI's saved login", "Log out of Cursor, update, then log in again", "exit status 1"} {
 					if !strings.Contains(job.Error, want) {
 						t.Fatalf("error = %q, want %q", job.Error, want)
 					}
@@ -2064,5 +2109,63 @@ func TestStatus_CuaDriverWithoutShellOffersTheOneLiner(t *testing.T) {
 	job, err := newTestService("darwin", "bash").Status(context.Background(), TargetCuaDriver)
 	if err != nil || job.Status == StatusUnsupported {
 		t.Fatalf("with bash: job = %+v, err = %v", job, err)
+	}
+}
+
+func TestAgentInstallReportsLiveOutputWithoutDuplicatingDiagnostics(t *testing.T) {
+	s := newTestService("linux", "bash")
+	t.Cleanup(s.stop)
+	s.jobStore = newInstallJobStoreFake()
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, _ ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
+		reporter, ok := stdout.(ports.InstallScriptDownloadReporter)
+		if !ok {
+			t.Error("script runner stdout does not take download progress as data")
+		} else {
+			reporter.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: time.Minute})
+		}
+		_, _ = io.WriteString(stdout, "[installer] Retrying download in 1s (attempt 2/3).\n")
+		close(started)
+		<-release
+		return ports.InstallScriptResult{}, errors.New("download failed")
+	})
+	if _, err := s.StartAgent(context.Background(), TargetCursor, "official-installer"); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	deadline := time.Now().Add(5 * time.Second)
+	job, err := s.Status(context.Background(), TargetCursor)
+	published := func(job Job) bool {
+		return strings.Contains(job.Output, "attempt 2/3") && job.Progress != nil && job.Progress.DownloadAttempt == 2
+	}
+	for err == nil && !published(job) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		job, err = s.Status(context.Background(), TargetCursor)
+	}
+	if err != nil || job.Status != StatusInstalling || !published(job) {
+		t.Fatalf("live job = %+v, error = %v", job, err)
+	}
+	// The retry reaches clients as data; the English log line is not the detail.
+	// The delay counts down from a minute while the poll above waits.
+	if got := *job.Progress; got.DownloadAttempts != 3 || got.RetryInSeconds < 1 || got.RetryInSeconds > 60 || got.Detail != "" {
+		t.Fatalf("live progress = %+v, want attempt 2 of 3 retrying within a minute with no detail", got)
+	}
+	jobs, err := s.AgentJobs(context.Background())
+	if err != nil || len(jobs) != 1 || jobs[0].Output != job.Output {
+		t.Fatalf("live jobs = %+v, error = %v", jobs, err)
+	}
+	// Let the worker finish before checking the persisted output.
+	release <- struct{}{}
+	waitForStatus(t, s, TargetCursor, StatusFailed)
+	// The in-memory job reaches failed before the record is persisted.
+	s.workers.Wait()
+	job, _ = s.Status(context.Background(), TargetCursor)
+	if strings.Count(job.Output, "attempt 2/3") != 1 {
+		t.Fatalf("duplicated diagnostics: %q", job.Output)
+	}
+	record, _, err := s.jobStore.GetAgentInstallJob(context.Background(), string(TargetCursor))
+	if err != nil || record.Output != job.Output {
+		t.Fatalf("persisted output = %q, error = %v", record.Output, err)
 	}
 }

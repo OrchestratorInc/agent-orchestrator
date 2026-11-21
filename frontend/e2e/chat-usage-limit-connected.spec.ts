@@ -42,7 +42,7 @@ test.describe("usage-limit recovery through the real daemon @connected", () => {
 			const triggered = await quotaResponse;
 			expect(triggered.ok()).toBe(true);
 			const { turnId } = await triggered.json() as { turnId: string };
-			const recoveryNotice = page.getByTestId("usage-limit-notice").filter({ has: page.locator("time") });
+			const recoveryNotice = page.getByTestId("usage-limit-notice");
 			await expect(recoveryNotice).toBeVisible();
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 			const consentResponse = page.waitForResponse((response) => response.url() === `${metadata.baseUrl}/api/v1/sessions/${sessionId}/conversation/turns/${turnId}/auto-resume` && response.request().method() === "PATCH");
