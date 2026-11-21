@@ -460,6 +460,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// an OS that wrongly says there is no network (#8282).
 	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
 	const phoneNetworkReportedAtRef = useRef(0);
+	// Set while the offline reconnect loop runs: restarts its short retry steps
+	// after a network change the listener does not race for itself.
+	const wakeRecoveryRef = useRef<(() => void) | null>(null);
 	const trustedNetwork = useCallback(
 		() => trustedPhoneNetwork(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now()),
 		[],
@@ -792,22 +795,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// offline, its report never changes, so this probe is the only way back.
 		// Soon at first, then less often (see recoveryDelayMs), one attempt at a
 		// time: a race on a slow link can take 15 s, and starting another would
-		// throw that one away.
+		// throw that one away. Only tries that ran use up a step, and any change
+		// in the phone's network report starts the steps again: otherwise the
+		// short ones were spent while the phone had no network at all, and the
+		// network that finally came up waited the full 15 s.
 		let stopped = false;
+		let running = false;
 		let attempt = 0;
+		let reportedAt = phoneNetworkReportedAtRef.current;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const schedule = () => {
+			if (phoneNetworkReportedAtRef.current !== reportedAt) {
+				reportedAt = phoneNetworkReportedAtRef.current;
+				attempt = 0;
+			}
 			timer = setTimeout(async () => {
 				if (stopped) return;
 				if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
+					running = true;
 					await reloadConfig().catch(() => null);
+					running = false;
+					attempt += 1;
 				}
-				attempt += 1;
 				if (!stopped) schedule();
 			}, recoveryDelayMs(attempt));
 		};
+		// A try in flight reschedules from the new report once it settles.
+		const wake = () => {
+			if (stopped || running) return;
+			clearTimeout(timer);
+			schedule();
+		};
+		wakeRecoveryRef.current = wake;
 		schedule();
-		return () => { stopped = true; clearTimeout(timer); };
+		return () => {
+			stopped = true;
+			clearTimeout(timer);
+			if (wakeRecoveryRef.current === wake) wakeRecoveryRef.current = null;
+		};
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
 
 	// Nothing re-picks a path while the current one answers, so once the app
@@ -1119,11 +1144,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			phoneNetworkRef.current = next;
 			// Only a change resets the clock: Android repeats an unchanged report,
 			// and each repeat would otherwise discard the answers that overrule it.
-			if (previous.connected !== next.connected || previous.internet !== next.internet || previous.type !== next.type) {
-				phoneNetworkReportedAtRef.current = Date.now();
-			}
+			const changed = previous.connected !== next.connected || previous.internet !== next.internet || previous.type !== next.type;
+			if (changed) phoneNetworkReportedAtRef.current = Date.now();
 			publishLink();
-			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
+			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) {
+				// A network the OS never calls connected (an unvalidated Wi-Fi after
+				// airplane mode) races nothing here; the reconnect loop's short
+				// first step is its quickest way back.
+				if (changed) wakeRecoveryRef.current?.();
+				return;
+			}
 			// reloadConfig keeps the same config object when the winning endpoint
 			// is unchanged, which would leave the poll waiting out its interval, or
 			// on a request still hanging on the network the phone left. Start a

@@ -392,3 +392,24 @@ it("races the selected machine's endpoints again when Retry finds no config", as
 	expect(state.sessions).toHaveBeenCalled();
 	expect(current.connection).toBe("open");
 });
+
+// #8369 review: after airplane mode, an Android Wi-Fi the OS never validates
+// keeps reporting not connected, so the network listener races nothing and the
+// reconnect loop is the only way back. Its short first steps must not have been
+// spent while the phone had no network at all.
+it("retries soon after the network report changes, even after a long stretch offline", async () => {
+	state.resolve.mockResolvedValue(null);
+	await mount();
+	expect(current.config).toBeNull();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	const races = state.resolve.mock.calls.length;
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	// No network at all: nothing worth trying.
+	expect(state.resolve.mock.calls.length).toBe(races);
+
+	state.resolve.mockImplementation(async () => ({ hostId: "a", host: "a.test", httpPort: "3011", muxPort: "3011", password: "secret" }));
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+	expect(state.resolve.mock.calls.length).toBe(races + 1);
+	expect(current.connection).toBe("open");
+});
