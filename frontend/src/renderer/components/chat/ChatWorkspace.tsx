@@ -50,11 +50,12 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 	type ReactNode,
+	type Ref,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
-import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, Reorder, usePresence, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
 import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
@@ -6086,6 +6087,62 @@ function useLiveRowStep(group: TimelineGroup, paused: boolean): ConversationActi
 }
 
 /**
+ * The live row inside its AnimatePresence: it fades out as the turn settles and
+ * is then removed. An effect removes it, not a motion exit: a chat kept alive
+ * in a hidden <Activity> (KeepRecentAlive) whose turn settles while hidden, or
+ * in the render that shows it again, never started motion's exit, so the row
+ * stayed under the finished answer with its timer still counting. Effects run
+ * again when the chat is shown, so this one always ends the row.
+ */
+function LiveRowPresence({ reducedMotion, className, children, ref }: {
+	reducedMotion: boolean;
+	className?: string;
+	children: ReactNode;
+	/** PopChild measures the leaving row through this. */
+	ref?: Ref<HTMLDivElement>;
+}) {
+	const [isPresent, safeToRemove] = usePresence();
+	const row = useRef<HTMLDivElement | null>(null);
+	const setRow = useCallback((node: HTMLDivElement | null) => {
+		row.current = node;
+		if (typeof ref === "function") ref(node);
+		else if (ref) ref.current = node;
+	}, [ref]);
+	// AnimatePresence hands each render a new callback, so the timer reads the
+	// latest one instead of restarting whenever the turn re-renders.
+	const remove = useRef(safeToRemove);
+	useLayoutEffect(() => {
+		remove.current = safeToRemove;
+	});
+	useEffect(() => {
+		if (isPresent) return;
+		const duration = reducedMotion ? 0 : LIVE_ROW_EXIT_MS;
+		// A script animation, as motion's exit was: restoreSettle hides the row for
+		// a moment as the turn settles, which would cancel a CSS transition.
+		const fade = duration > 0 && typeof row.current?.animate === "function"
+			? row.current.animate([{ opacity: 1 }, { opacity: 0 }], { duration, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" })
+			: undefined;
+		const timer = window.setTimeout(() => remove.current?.(), duration);
+		return () => {
+			window.clearTimeout(timer);
+			fade?.cancel();
+		};
+	}, [isPresent, reducedMotion]);
+	return (
+		<div
+			ref={setRow}
+			className={className}
+			// Kept in the DOM while it fades, but it never outlasts the turn.
+			data-turn-live-row=""
+		>
+			{children}
+		</div>
+	);
+}
+
+const LIVE_ROW_EXIT_MS = 120;
+
+/**
  * One turn, and the memo boundary that keeps a poll from re-rendering the whole
  * conversation. A turn is the right granularity because it is what changes: while
  * the agent works, one group grows and every other group is finished history.
@@ -6483,18 +6540,15 @@ const TurnGroup = memo(function TurnGroup({
 			    that takes its place sits where it was instead of waiting for a collapse. */}
 			<AnimatePresence initial={false} mode="popLayout">
 				{workingRow ? (
-					<motion.div
+					<LiveRowPresence
 						key="turn-working"
-						exit={{ opacity: 0 }}
-						transition={{ duration: reducedMotion ? 0 : 0.12, ease: [0.22, 1, 0.36, 1] }}
+						reducedMotion={Boolean(reducedMotion)}
 						// Under a reply, sit where that reply's action row will (its 4px
 						// gap, not the turn's 10px).
 						className={cn("overflow-hidden", tailIsReply && "-mt-1.5")}
-						// Kept in the DOM while it fades, but it never outlasts the turn.
-						data-turn-live-row=""
 					>
 						{workingRow}
-					</motion.div>
+					</LiveRowPresence>
 				) : null}
 			</AnimatePresence>
 			{/* Both of these are current state of the turn rather than steps in it, which
