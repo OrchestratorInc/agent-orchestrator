@@ -4,6 +4,13 @@ import { describe, expect, it } from "vitest";
 
 const spawn = readFileSync(fileURLToPath(new URL("../app/spawn.tsx", import.meta.url)), "utf8");
 const tray = readFileSync(fileURLToPath(new URL("./chat/ComposerAttachmentTray.tsx", import.meta.url)), "utf8");
+
+/** Both are in `text`, `first` before `then`. */
+function expectBefore(text: string, first: string, then: string) {
+	expect(text).toContain(first);
+	expect(text).toContain(then);
+	expect(text.indexOf(first)).toBeLessThan(text.indexOf(then));
+}
 const composer = readFileSync(fileURLToPath(new URL("./spawn-composer.tsx", import.meta.url)), "utf8");
 const platformControls = ["ios", "android"].map((platform) => readFileSync(fileURLToPath(new URL(`./spawn-composer-controls.${platform}.tsx`, import.meta.url)), "utf8"));
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
@@ -187,7 +194,51 @@ describe("spawn draft", () => {
 	// saved then would delete it.
 	it("does not save an empty composer over a draft it could not read", () => {
 		expect(spawn).toContain("if (generation === restoreGeneration.current) draftUnread.current = true;");
-		expect(spawn).toContain("if (draftUnread.current && !prompt.trim() && attachments.length === 0) return;");
+		expect(spawn).toContain("if ((draftUnread.current || draftElsewhere.current) && !prompt.trim() && attachments.length === 0) return;");
+	});
+
+	// Opened for machine B while machine A owns the saved draft: restored, A's
+	// words were saved back as B's draft, and an empty page deleted A's.
+	it("keeps another machine's draft off a page routed to this one, and does not save over it", () => {
+		const restore = spawn.slice(spawn.indexOf("const restoreDraft = () => {"), spawn.indexOf("setPrompt(draft.prompt);"));
+		expect(restore).toContain("if (routeHostId && draftHostId !== null && draftHostId !== routeHostId) {\n\t\t\t\tdraftElsewhere.current = true;\n\t\t\t\trestoredHostId.current = null;\n\t\t\t\treturn;");
+		expect(restore.indexOf("draftElsewhere.current = false;")).toBeLessThan(restore.indexOf("if (!draft) return;"));
+		const save = spawn.slice(spawn.indexOf("if (!draftRestored || !accountKnown) return;"), spawn.indexOf("draftSaver.schedule({ prompt, attachments, owner"));
+		expect(save).toContain("if ((draftUnread.current || draftElsewhere.current) && !prompt.trim() && attachments.length === 0) return;\n\t\t// Written here, this page's draft replaces the other machine's.\n\t\tdraftElsewhere.current = false;");
+	});
+
+	// A Cloud draft picked before Cloud loaded landed on a machine (or none) for good.
+	it("waits for Cloud before picking the machine for a Cloud draft", () => {
+		expect(spawn).toContain("const cloudResolved = Boolean(cloud) || (cloudState.status !== \"loading\" && cloudState.status !== \"connecting\");");
+		expect(spawn).toContain("}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);");
+	});
+
+	// A Start sent with a picked account and restored without it sent another
+	// request under a new id, starting the task twice.
+	it("saves and restores a picked agent account for the draft's machine and agent", () => {
+		expect(spawn).toContain("...(accountPick ? { accountId: accountPick, accountHarness: harness } : restoredAccount ? { accountId: restoredAccount.accountId, accountHarness: restoredAccount.harness } : {}),");
+		expect(spawn).toContain("if (picked.accountId && picked.accountHarness) setRestoredAccount({ hostId: restoredHostId.current, harness: picked.accountHarness, accountId: picked.accountId });");
+		const reset = spawn.slice(spawn.indexOf("const accountScope = useRef<string | null>(null);"), spawn.indexOf("}, [restoredAccount, selectedHostId, harness]);"));
+		expectBefore(reset, "if (restoredAccount && selectedHostId === restoredAccount.hostId && harness === restoredAccount.harness) {\n\t\t\tsetAccountPick(restoredAccount.accountId);", "if (moved) setAccountPick(undefined);");
+		const change = spawn.slice(spawn.indexOf("const draftAccountSeen = useRef"), spawn.indexOf("}, [accountKnown, draftAccountId]);"));
+		expect(change).toContain("setRestoredAccount(null);");
+	});
+
+	// Picked under one account and read after another signed in, the file landed in the next account's task.
+	it("drops attachments picked under the account that signed out while they loaded", () => {
+		const add = spawn.slice(spawn.indexOf("const addAttachments = async"), spawn.indexOf("const pickFiles = "));
+		expect(add).toContain("const pickedFor = draftAccountRef.current;");
+		expectBefore(add, "const picked = await pick();\n\t\t\tif (draftAccountRef.current !== pickedFor) return 0;", "const next = await readSpawnAttachments(before, picked);\n\t\t\tif (draftAccountRef.current !== pickedFor) return 0;");
+		expectBefore(add, "if (draftAccountRef.current !== pickedFor) return 0;\n\t\t\tconst merged", "attachmentsRef.current = merged.attachments;");
+	});
+
+	// A save the account change or a forgotten machine dropped is not saved: the
+	// Start stops rather than send a task whose draft has no id on the phone.
+	it("stops a Start whose draft save was dropped, and clears only its own draft once started", () => {
+		const send = spawn.slice(spawn.indexOf("const saved = await saveBeforeStart("), spawn.indexOf("if (projectId === STANDALONE_PROJECT)"));
+		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;", "await spawn({ ...request, clientRequestId: sent.id });");
+		expect(send).toContain("void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});");
+		expect(spawn).not.toContain("then(clearSpawnDraft)");
 	});
 
 	// Saved before the machine is picked, a restored draft keeps its machine.
@@ -216,7 +267,7 @@ describe("spawn draft", () => {
 		const send = spawn.slice(spawn.indexOf("const payload = JSON.stringify(requestFields);"), spawn.indexOf("startedDraft.current = { prompt"));
 		expect(send).toContain("requestMatches(requestRef.current, payload, attachmentsRef.current)");
 		expect(send).toContain("attachments: attachmentsKey(attachmentsRef.current)");
-		expect(send.indexOf("await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });")).toBeGreaterThan(0);
+		expect(send.indexOf("const saved = await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });")).toBeGreaterThan(0);
 		expect(send.indexOf("await saveBeforeStart(")).toBeLessThan(send.indexOf("await spawn({ ...request, clientRequestId: sent.id });"));
 		expect(spawn).toContain("if (draft.request) requestRef.current = draft.request;");
 		// Compared by content: never by the attachments array object.
@@ -244,7 +295,7 @@ describe("spawn draft", () => {
 		expect(spawn).toContain("if (!draftRestored) return;\n\t\tconst draftHostId = restoredHostId.current;");
 		// Unrouted, the restored draft's machine is waited for before another is picked.
 		expect(spawn).toContain("const awaitedHostId = routeHostId ?? draftHostId ?? undefined;");
-		expect(spawn).toContain("if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;");
+		expect(spawn).toContain("if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;");
 		expect(spawn).toContain("const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;");
 	});
 

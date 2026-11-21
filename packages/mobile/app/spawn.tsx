@@ -2,7 +2,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
-import { attachmentsKey, clearSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
+import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
@@ -59,6 +59,9 @@ export default function SpawnScreen() {
 	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
 	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
 	const connectedHosts = useMemo(() => cloud ? [...machineHosts, { id: CLOUD_HOST_ID, label: CLOUD_HOST_NAME, icon: "cloud" as const }] : machineHosts, [cloud, machineHosts]);
+	// Whether Cloud is offered, or known not to be: signed in and loaded, signed
+	// out, or failed. A Cloud draft's page waits for it before picking.
+	const cloudResolved = Boolean(cloud) || (cloudState.status !== "loading" && cloudState.status !== "connecting");
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const hostSelectionInitialized = useRef(false);
 	// State, not a ref: what was typed while the saved New task draft was being
@@ -117,11 +120,11 @@ export default function SpawnScreen() {
 		// Unrouted, a restored draft's machine is the one waited for: picking
 		// another while it is still connecting would move its draft there.
 		const awaitedHostId = routeHostId ?? draftHostId ?? undefined;
-		if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;
+		if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;
 		hostSelectionInitialized.current = true;
 		const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;
 		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: preferredHostId, hosts: connectedHosts }));
-	}, [configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);
+	}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	// Only a session the plan pays for is the plan's to stop: Coder the
@@ -146,6 +149,9 @@ export default function SpawnScreen() {
 	// The last read of the saved draft failed: it may still be on the phone, so
 	// an empty composer is not saved over it (which would delete it).
 	const draftUnread = useRef(false);
+	// The saved draft is another machine's than the one this page was opened
+	// for: an empty composer is not saved over it either.
+	const draftElsewhere = useRef(false);
 	// The draft a Start began a task with: cleared rather than saved again, until
 	// the prompt or attachments change (on a page kept open after it started).
 	const startedDraft = useRef<{ prompt: string; attachments: readonly SpawnAttachment[] } | null>(null);
@@ -155,6 +161,8 @@ export default function SpawnScreen() {
 	// be saved as no account's, which any account then finds) nor cleared.
 	const accountKnown = cloudState.status !== "loading";
 	const draftAccountId = cloudState.account?.id ?? null;
+	const draftAccountRef = useRef(draftAccountId);
+	draftAccountRef.current = draftAccountId;
 	const draftOwner = useMemo(() => ({ hostId: selectedHostId, accountId: draftAccountId }), [draftAccountId, selectedHostId]);
 	const pickingAttachments = useRef(false);
 	// A paste that came in while a pick was loading, said again when it ends.
@@ -174,7 +182,26 @@ export default function SpawnScreen() {
 	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
 	const [accountPick, setAccountPick] = useState<string>();
 	const spawnAccounts = useAgentAccounts(config, cloudSelected ? undefined : harness);
-	useEffect(() => setAccountPick(undefined), [selectedHostId, harness]);
+	// The agent account a restored draft's Start used, put back once the page is
+	// on the draft's machine and agent: each of those, picked as the page sets
+	// up, starts the account over below. Kept with the draft until then.
+	const [restoredAccount, setRestoredAccount] = useState<{ hostId: string | null; harness: string; accountId: string } | null>(null);
+	const accountScope = useRef<string | null>(null);
+	useEffect(() => {
+		const scope = JSON.stringify([selectedHostId, harness]);
+		const moved = accountScope.current !== scope;
+		accountScope.current = scope;
+		if (restoredAccount && selectedHostId === restoredAccount.hostId && harness === restoredAccount.harness) {
+			setAccountPick(restoredAccount.accountId);
+			setRestoredAccount(null);
+			return;
+		}
+		if (moved) setAccountPick(undefined);
+		// Still setting up (no machine, or the draft's machine with no agent yet)
+		// keeps it waiting; anything else is another choice, which drops it.
+		const settingUp = restoredAccount && (selectedHostId === null || (selectedHostId === restoredAccount.hostId && !harness));
+		if (restoredAccount && !settingUp) setRestoredAccount(null);
+	}, [restoredAccount, selectedHostId, harness]);
 	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
 	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
@@ -193,10 +220,14 @@ export default function SpawnScreen() {
 		...(effort ? { effort } : {}),
 		...(approvalChoice ? { approvalMode: approvalChoice } : {}),
 		mode,
-	}), [agentTouched, approvalChoice, effort, harness, mode, model, modelTouched, projectId]);
+		// Only an account picked (or one restored, not yet put back): the default goes unnamed, as in a Start.
+		...(accountPick ? { accountId: accountPick, accountHarness: harness } : restoredAccount ? { accountId: restoredAccount.accountId, accountHarness: restoredAccount.harness } : {}),
+	}), [accountPick, agentTouched, approvalChoice, effort, harness, mode, model, modelTouched, projectId, restoredAccount]);
 	useEffect(() => {
 		if (!draftRestored || !accountKnown) return;
-		if (draftUnread.current && !prompt.trim() && attachments.length === 0) return;
+		if ((draftUnread.current || draftElsewhere.current) && !prompt.trim() && attachments.length === 0) return;
+		// Written here, this page's draft replaces the other machine's.
+		draftElsewhere.current = false;
 		const started = startedDraft.current;
 		if (started && started.prompt === prompt && started.attachments === attachments) return;
 		startedDraft.current = null;
@@ -223,6 +254,7 @@ export default function SpawnScreen() {
 		if (picked.model) { setModel(picked.model); setModelTouched(true); }
 		if (picked.effort) setEffort(picked.effort);
 		if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);
+		if (picked.accountId && picked.accountHarness) setRestoredAccount({ hostId: restoredHostId.current, harness: picked.accountHarness, accountId: picked.accountId });
 	};
 	const restoreDraft = () => {
 		const generation = ++restoreGeneration.current;
@@ -230,7 +262,17 @@ export default function SpawnScreen() {
 		void loadSpawnDraft().then((draft) => {
 			if (generation !== restoreGeneration.current) return;
 			draftUnread.current = false;
+			draftElsewhere.current = false;
 			if (!draft) return;
+			// Routed to another machine than the draft's: the draft stays its
+			// machine's, neither shown here nor saved over by this empty page. An
+			// unrouted page goes to the draft's machine with it.
+			const draftHostId = draft.owner?.hostId ?? null;
+			if (routeHostId && draftHostId !== null && draftHostId !== routeHostId) {
+				draftElsewhere.current = true;
+				restoredHostId.current = null;
+				return;
+			}
 			// Text typed or files added before the draft was read are the page's
 			// now: the old draft neither replaces nor joins them.
 			if (promptRef.current || attachmentsRef.current.length) return;
@@ -273,6 +315,7 @@ export default function SpawnScreen() {
 		setAttachments([]);
 		startedDraft.current = null;
 		requestRef.current = undefined;
+		setRestoredAccount(null);
 		restoreDraft();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [accountKnown, draftAccountId]);
@@ -685,11 +728,16 @@ export default function SpawnScreen() {
 			missedPaste.current = false;
 			return was ? "Paste the images again: they came in while attachments were loading." : undefined;
 		};
+		// The account the pick was made under: another signed in while it loaded
+		// emptied the composer, and the files are not the next account's.
+		const pickedFor = draftAccountRef.current;
 		try {
 			const picked = await pick();
+			if (draftAccountRef.current !== pickedFor) return 0;
 			if (!picked) { setAttachmentError(missed()); return 0; }
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
+			if (draftAccountRef.current !== pickedFor) return 0;
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
 			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
@@ -798,11 +846,19 @@ export default function SpawnScreen() {
 			// restored draft's Start reuses it, and the daemon answers with that
 			// task. A save that fails does not hold the task back; the draft is
 			// deleted instead, so none without this id can be restored and sent again.
-			await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });
+			const saved = await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });
+			// Dropped while it waited: the account changed or this machine was
+			// forgotten, which emptied the draft, and the task it held does not start.
+			if (saved === "dropped") {
+				holding.current = false;
+				setBusy(false);
+				return;
+			}
 			const session = await spawn({ ...request, clientRequestId: sent.id });
-			// Started: the draft goes, so the next New task opens empty.
+			// Started: the draft goes, so the next New task opens empty. Only this
+			// Start's: another open page's draft saved meanwhile stays.
 			startedDraft.current = { prompt, attachments: attachmentsRef.current };
-			void draftSaver.cancel().then(clearSpawnDraft).catch(() => {});
+			void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			else rememberLastProject(selectedHostId, projectId);
 			holding.current = false;

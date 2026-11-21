@@ -100,6 +100,18 @@ describe("host-qualified mobile routes", () => {
 		expect(spawnHostSelectionReady({ routeHostId: "gone", configResolved: true, hosts: loaded, connectedMachineCount: 1 })).toBe(true);
 	});
 
+	// Cloud can load after the machines: picked before it does, a Cloud draft
+	// lands on a machine (or none) and is never moved back.
+	it("waits for Cloud to sign in or fail before picking for a Cloud route or draft", () => {
+		const loaded = [{ hostId: "host-a", loading: false }];
+		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: true, hosts: loaded, connectedMachineCount: 1 })).toBe(false);
+		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: true, hosts: loaded, connectedMachineCount: 1, cloudResolved: false })).toBe(false);
+		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: true, hosts: loaded, connectedMachineCount: 1, cloudResolved: true })).toBe(true);
+		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: false, hosts: [], connectedMachineCount: 0, cloudResolved: true })).toBe(false);
+		// A machine's route does not wait for Cloud.
+		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: true, hosts: loaded, connectedMachineCount: 1, cloudResolved: false })).toBe(true);
+	});
+
 	it("rejects catalog results requested for a previously selected machine", () => {
 		expect(spawnHostRequestIsCurrent(2, 2, "host-a", "host-a")).toBe(true);
 		expect(spawnHostRequestIsCurrent(1, 2, "host-a", "host-a")).toBe(false);

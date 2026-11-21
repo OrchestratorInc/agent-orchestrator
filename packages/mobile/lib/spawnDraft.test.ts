@@ -38,7 +38,7 @@ vi.mock("expo-file-system", () => {
 vi.mock("./account", () => ({ loadAccount: async () => store.account ? { id: store.account, email: "a@example.com" } : null }));
 vi.mock("./hosts", () => ({ loadHosts: async () => store.hosts.map((id) => ({ id })) }));
 
-import { attachmentsKey, clearSpawnDraft, createSpawnDraftSaver, forgetSpawnDraftFor, loadSpawnDraft, requestMatches, saveBeforeStart, saveSpawnDraft, SPAWN_DRAFT_KEEP_MS, SPAWN_DRAFT_KEY } from "./spawnDraft";
+import { attachmentsKey, clearSpawnDraft, clearStartedSpawnDraft, createSpawnDraftSaver, forgetSpawnDraftFor, loadSpawnDraft, requestMatches, saveBeforeStart, saveSpawnDraft, SPAWN_DRAFT_KEEP_MS, SPAWN_DRAFT_KEY } from "./spawnDraft";
 
 const image = { name: "screen shot.png", mimeType: "image/png", data: "aW1hZ2U=", bytes: 5, previewUri: "file:///cache/picked.png" };
 const log = { name: "build.log", mimeType: "text/plain", data: "bG9n", bytes: 3 };
@@ -161,10 +161,19 @@ describe("the New task draft", () => {
 		expect(requestMatches(request, request.payload, [{ ...log }])).toBe(true);
 	});
 
+	// A Start sends each attachment's type and bytes, not its name.
+	it("matches a Start by the attachments' types and bytes, not their names", () => {
+		const request = { id: "req-1", payload: "{}", attachments: attachmentsKey([log]) };
+		expect(requestMatches(request, request.payload, [{ ...log, mimeType: "application/octet-stream" }])).toBe(false);
+		expect(requestMatches(request, request.payload, [{ ...log, name: "renamed.log" }])).toBe(true);
+		expect(requestMatches(request, request.payload, [{ ...log, data: "bG9nIQ==" }])).toBe(false);
+		expect(attachmentsKey([log, image])).not.toBe(attachmentsKey([image, log]));
+	});
+
 	// What was picked goes into the Start: restored without it (a model
 	// override), the next Start would send another request under a new id.
-	it("keeps what was picked: project, agent, model override, level, approval, mode", async () => {
-		const selections = { projectId: "web-app", harness: "codex", model: "gpt-5", effort: "high", approvalMode: "auto", mode: "tui" };
+	it("keeps what was picked: project, agent, model override, level, approval, mode, agent account", async () => {
+		const selections = { projectId: "web-app", harness: "codex", model: "gpt-5", effort: "high", approvalMode: "auto", mode: "tui", accountId: "work", accountHarness: "codex" };
 		await saveSpawnDraft({ prompt: "Ship it", attachments: [], selections });
 		expect((await loadSpawnDraft())?.selections).toEqual(selections);
 		// Anything not shaped as written is left out, not handed to the page.
@@ -201,6 +210,54 @@ describe("the New task draft", () => {
 		const working = createSpawnDraftSaver();
 		expect(await saveBeforeStart(working, { prompt: "Ship it", attachments: [], request })).toBe(true);
 		expect((await loadSpawnDraft())?.request).toEqual(request);
+	});
+
+	// The account changed, or the draft's machine was forgotten, while the save
+	// before a Start waited: that save was dropped, and the Start must not go.
+	it("reports a save before a Start that a cancel or a forget dropped, and leaves the draft alone", async () => {
+		await saveSpawnDraft({ prompt: "Another page's draft", attachments: [] });
+		let release!: () => void;
+		const blocking = createSpawnDraftSaver(async () => { await new Promise<void>((done) => { release = done; }); });
+		blocking.schedule({ prompt: "other", attachments: [] });
+		const writing = blocking.flush();
+		await vi.waitFor(() => expect(release).toBeDefined());
+		const saved: string[] = [];
+		const saver = createSpawnDraftSaver(async (draft) => { saved.push(draft.prompt); });
+		const request = { id: "req-1", payload: "{}", attachments: "" };
+		const starting = saveBeforeStart(saver, { prompt: "Ship it", attachments: [], request });
+		await Promise.resolve();
+		void saver.cancel();
+		release();
+		await writing;
+		expect(await starting).toBe("dropped");
+		expect(saved).toEqual([]);
+		expect((await loadSpawnDraft())?.prompt).toBe("Another page's draft");
+
+		const owner = { hostId: "machine-a", accountId: null };
+		blocking.schedule({ prompt: "other", attachments: [] });
+		release = undefined as unknown as () => void;
+		const writingAgain = blocking.flush();
+		await vi.waitFor(() => expect(release).toBeDefined());
+		saver.schedule({ prompt: "Ship it", attachments: [], owner, request });
+		const flushing = saver.flush();
+		const forgetting = forgetSpawnDraftFor({ hostId: "machine-a" });
+		release();
+		await Promise.all([writingAgain, forgetting]);
+		expect(await flushing).toBe("dropped");
+	});
+
+	// Two pages open: one's Start finishing must not delete the draft the other saved meanwhile.
+	it("clears the started draft only while the phone still holds it", async () => {
+		const request = { id: "req-1", payload: "{}", attachments: "" };
+		await saveSpawnDraft({ prompt: "Ship it", attachments: [], request });
+		await saveSpawnDraft({ prompt: "Next task", attachments: [log] });
+		await clearStartedSpawnDraft("req-1");
+		expect((await loadSpawnDraft())?.prompt).toBe("Next task");
+		expect(draftFiles()).toHaveLength(1);
+		await saveSpawnDraft({ prompt: "Ship it", attachments: [log], request });
+		await clearStartedSpawnDraft("req-1");
+		expect(await loadSpawnDraft()).toBeNull();
+		expect(draftFiles()).toEqual([]);
 	});
 
 	it("reports a failed save from flush, without rejecting", async () => {
@@ -348,6 +405,20 @@ describe("the New task draft", () => {
 		await Promise.all([first, second, forgetting]);
 		expect(writes).toEqual(["first"]);
 		expect(store.items.has(SPAWN_DRAFT_KEY)).toBe(false);
+	});
+
+	// Read, checked and removed in one turn of the queue: another machine's save
+	// that commits between the read and the removal is not deleted.
+	it("does not delete another owner's draft saved while the forgotten one is checked", async () => {
+		await saveSpawnDraft({ prompt: "For a", attachments: [], owner: { hostId: "machine-a", accountId: null } });
+		const saver = createSpawnDraftSaver(undefined, 500);
+		const forgetting = forgetSpawnDraftFor({ hostId: "machine-a" });
+		await Promise.resolve();
+		saver.schedule({ prompt: "For b", attachments: [], owner: { hostId: "machine-b", accountId: null } });
+		const saving = saver.flush();
+		await Promise.all([forgetting, saving]);
+		store.hosts = ["machine-b"];
+		expect((await loadSpawnDraft())?.prompt).toBe("For b");
 	});
 
 	it("still saves another owner's draft when one is forgotten", async () => {
