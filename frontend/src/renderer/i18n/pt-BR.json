@@ -1933,6 +1933,7 @@
 	"settings.project.sandbox.sudo": "Agentes podem usar sudo",
 	"settings.project.sandbox.sudoDescription": "Permite que agentes executem comandos como root. Logins salvos ficam desativados em sandboxes onde agentes podem usar sudo.",
 	"settings.project.sandbox.unsupported": "Ainda não é compatível com este servidor do Cloud.",
+	"settings.project.sandbox.readOnly": "Só o criador do projeto ou um proprietário ou administrador da organização pode alterar isso.",
 	"settings.project.cloudBranchRequired": "A branch padrão é obrigatória.",
 	"settings.project.cloudLoadFailed": "Não foi possível carregar este projeto na nuvem.",
 	"settings.project.retry": "Tentar novamente",

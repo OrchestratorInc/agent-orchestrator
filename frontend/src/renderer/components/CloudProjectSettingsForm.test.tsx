@@ -780,4 +780,35 @@ describe("Cloud project sandbox settings", () => {
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
 		expect(screen.queryByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeInTheDocument();
 	});
+
+	it("shows both switches read-only when the server says this user cannot edit them", async () => {
+		project = { ...project, canEditSandbox: false } as CloudCpProject;
+		mount("sandbox");
+		const docker = await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" });
+		const sudo = screen.getByRole("switch", { name: "Agents can use sudo" });
+		expect(docker).toBeDisabled();
+		expect(sudo).toBeDisabled();
+		expect(screen.getAllByText("Only the project's creator or an org owner or admin can change this.")).toHaveLength(2);
+	});
+
+	it("keeps the switches editable when the server does not say, and shows its 403 inline", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		expect(sudo).toBeEnabled();
+		await userEvent.click(sudo);
+		expect(await screen.findByRole("alert")).toHaveTextContent("only the project's creator or an organization owner or admin can change Docker or sudo");
+		expect(sudo).not.toBeChecked();
+	});
+
+	it("goes read-only when a save answers that this user can no longer edit", async () => {
+		mocks.patch.mockImplementationOnce(async (_org: string, _id: string, patch: CloudCpProjectSettingsRequest) => {
+			project = { ...project, config: { ...project.config, ...patch.config }, canEditSandbox: false } as CloudCpProject;
+			return { project };
+		});
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Agents can use sudo" }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeDisabled());
+		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeChecked();
+	});
 });

@@ -142,6 +142,12 @@ function configKeyUnsupported(error: unknown, key: string): boolean {
 		error.message === `unsupported or null config.${key}`;
 }
 
+/** Whether the signed-in user may change the sandbox settings (project.canEditSandbox); undefined when the server does not say. */
+function canEditSandboxOf(project: CloudCpProject): boolean | undefined {
+	const value = (project as { canEditSandbox?: unknown }).canEditSandbox;
+	return typeof value === "boolean" ? value : undefined;
+}
+
 type SandboxConfigKey = "sandboxDocker" | "agentsCanUseSudo";
 
 /**
@@ -152,11 +158,15 @@ type SandboxConfigKey = "sandboxDocker" | "agentsCanUseSudo";
  */
 export function CloudProjectSandboxSettings({ project, showDocker }: { project: CloudCpProject; showDocker: boolean }) {
 	const { t } = useTranslation();
+	// false means this user may not change them; absent (an older server) means
+	// unknown, so the switches stay editable and the server's 403 answers.
+	const [canEdit, setCanEdit] = useState(() => canEditSandboxOf(project));
+	const rowProps = { project, readOnly: canEdit === false, onSaved: (updated: CloudCpProject) => setCanEdit(canEditSandboxOf(updated)) };
 	return <SettingsGroup title={t("settings.project.sandbox.title")} grouped>
-		{showDocker ? <SandboxSwitchRow project={project} configKey="sandboxDocker" id="project-sandbox-docker"
+		{showDocker ? <SandboxSwitchRow {...rowProps} configKey="sandboxDocker" id="project-sandbox-docker"
 			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}
 			checkedOf={(config) => config?.sandboxDocker !== false} /> : null}
-		<SandboxSwitchRow project={project} configKey="agentsCanUseSudo" id="project-sandbox-sudo"
+		<SandboxSwitchRow {...rowProps} configKey="agentsCanUseSudo" id="project-sandbox-sudo"
 			label={t("settings.project.sandbox.sudo")} description={t("settings.project.sandbox.sudoDescription")}
 			checkedOf={(config) => config?.agentsCanUseSudo === true} />
 	</SettingsGroup>;
@@ -167,8 +177,10 @@ export function CloudProjectSandboxSettings({ project, showDocker }: { project: 
  * from before the setting rejects the key; the switch then says so and stays
  * disabled instead of flipping back on every try.
  */
-function SandboxSwitchRow({ project, configKey, id, label, description, checkedOf }: {
+function SandboxSwitchRow({ project, readOnly, onSaved, configKey, id, label, description, checkedOf }: {
 	project: CloudCpProject;
+	readOnly: boolean;
+	onSaved: (project: CloudCpProject) => void;
 	configKey: SandboxConfigKey;
 	id: string;
 	label: string;
@@ -184,6 +196,7 @@ function SandboxSwitchRow({ project, configKey, id, label, description, checkedO
 		mutationFn: (value: boolean) => client.updateProjectSettings(project.orgId, project.id, { config: { [configKey]: value } }),
 		onSuccess: (response) => {
 			setSaved(checkedOf(response.project.config));
+			onSaved(response.project);
 			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
 			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		},
@@ -191,13 +204,13 @@ function SandboxSwitchRow({ project, configKey, id, label, description, checkedO
 	});
 	// The value being saved shows until the save settles; a failed one goes back.
 	const shown = save.isPending && save.variables !== undefined ? save.variables : saved;
-	const shownDescription = unsupported ? t("settings.project.sandbox.unsupported") : save.isError ? (
+	const shownDescription = unsupported ? t("settings.project.sandbox.unsupported") : readOnly ? t("settings.project.sandbox.readOnly") : save.isError ? (
 		<span className="text-error" role="alert">
 			{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
 		</span>
 	) : description;
 	return <SettingsRow label={label} description={shownDescription}>
-		<Switch id={id} aria-label={label} checked={shown} disabled={unsupported || save.isPending}
+		<Switch id={id} aria-label={label} checked={shown} disabled={unsupported || readOnly || save.isPending}
 			onCheckedChange={(checked) => save.mutate(checked)} />
 	</SettingsRow>;
 }
