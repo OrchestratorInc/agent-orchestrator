@@ -152,9 +152,10 @@ describe("Android chat controls row", () => {
 		expect(gauge()).toBeUndefined();
 	});
 
-	it("offers the approval modes from the shield", () => {
+	// The desktop composer's "Auto ▾": the shield, the mode's name and an arrow.
+	it("offers the approval modes from the shield, named as on the desktop", () => {
 		render();
-		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Ask when unsure");
+		expect(trigger("chat-approval").findAllByType("ComposeText" as never).map((node) => node.props.children)).toContain("Ask when unsure");
 		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Ask when unsure", "on"]);
 	});
 

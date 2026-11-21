@@ -134,6 +134,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 						onChoose={(value) => choose(approvalRow, value)}
 						disabled={off}
 						id="chat-approval"
+						labelled
 					/>
 				) : null}
 			</HStack>

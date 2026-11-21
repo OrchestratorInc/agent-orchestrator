@@ -316,6 +316,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		navigation.setOptions({ gestureEnabled: !cardShowing });
 	}, [cardShowing, navigation]);
 
+	// Desktop's session topbar actions lead "⋯": a worker's Orchestrator, an orchestrator's Board and New task.
+	const topbarActions = useSessionTopbarActions({ orchestrator: session?.kind === "orchestrator", projectId: session?.projectId || undefined, hostId: CLOUD_HOST_ID });
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			headerTitle: () => (
@@ -326,10 +328,11 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					subtitle={[project?.displayName ?? "Cloud", harness ? cloudAgentLabel(harness) : ""].filter(Boolean).join(" · ")}
 					harness={harness || undefined}
 					state={headerState}
+					barButtons={topbarActions.length}
 				/>
 			),
 		});
-	}, [harness, headerState, navigation, project?.displayName, title]);
+	}, [harness, headerState, navigation, project?.displayName, title, topbarActions.length]);
 	// The conversation scrolls up under a clear bar, as a local chat's does.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;
@@ -410,8 +413,6 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		Keyboard.dismiss();
 		router.push(chatSheetRoute({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: (action) => menuActionsRef.current[action]?.() }));
 	}, [router, subscribeMenuGroups, title]);
-	// Desktop's session topbar actions lead "⋯": a worker's Orchestrator, an orchestrator's Board and New task.
-	const topbarActions = useSessionTopbarActions({ orchestrator: session?.kind === "orchestrator", projectId: session?.projectId || undefined, hostId: CLOUD_HOST_ID });
 	const headerItems = useMemo(() => hasSession ? (
 		<Stack.Toolbar placement="right">
 			{sessionTopbarToolbarButtons(topbarActions)}

@@ -80,17 +80,29 @@ export function useTriggerModifiers({ label, id, disabled }: { label: string; id
 export type ApprovalChoice = { value: string; label: string; symbol: IOSSymbol; selected: boolean };
 
 /** The approval mode as its symbol alone; the menu and VoiceOver name it. */
-export function ApprovalMenu({ title = "Approval", choices, onChoose, disabled, id }: { title?: string; choices: readonly ApprovalChoice[]; onChoose: (value: string) => void; disabled: boolean; id: string }) {
+export function ApprovalMenu({ title = "Approval", choices, onChoose, disabled, id, labelled = false }: { title?: string; choices: readonly ApprovalChoice[]; onChoose: (value: string) => void; disabled: boolean; id: string; labelled?: boolean }) {
 	const selected = choices.find((choice) => choice.selected);
 	return (
 		<Menu
-			label={<SymbolFace name={selected?.symbol ?? "checkmark.shield"} />}
+			// Labelled, it reads as the desktop composer's "Auto ▾": the mode's shield, its name and a chevron.
+			label={labelled ? <LabelledFace name={selected?.symbol ?? "checkmark.shield"} title={selected?.label ?? "Auto"} /> : <SymbolFace name={selected?.symbol ?? "checkmark.shield"} />}
 			modifiers={useTriggerModifiers({ label: `${title}, ${selected?.label ?? "Auto"}`, id, disabled })}
 		>
 			<Section title={title}>
 				{choices.map((choice) => <Choice key={choice.value} label={choice.label} systemImage={choice.symbol} selected={choice.selected} onChoose={() => onChoose(choice.value)} />)}
 			</Section>
 		</Menu>
+	);
+}
+
+/** A symbol, a name and a small chevron as a trigger's face, a full touch target tall. */
+function LabelledFace({ name, title }: { name: IOSSymbol; title: string }) {
+	return (
+		<HStack spacing={space.xxs} modifiers={[padding({ horizontal: space.xs }), frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
+			<Image systemName={name} modifiers={[font({ textStyle: "subheadline", weight: "medium" })]} />
+			<Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), lineLimit(1)]}>{title}</Text>
+			<Image systemName="chevron.down" modifiers={[font({ textStyle: "caption2", weight: "semibold" })]} />
+		</HStack>
 	);
 }
 

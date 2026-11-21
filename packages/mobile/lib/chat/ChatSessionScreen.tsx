@@ -434,12 +434,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
 						harness={headerHarness}
 						state={headerState}
+						barButtons={topbarActions.length}
 					/>
 				);
 				return PILL_HEADER ? <HeaderPill onBack={goBack}>{heading}</HeaderPill> : heading;
 			},
 		});
-	}, [goBack, headerHarness, headerState, navigation, projectName, title, t]);
+	}, [goBack, headerHarness, headerState, navigation, projectName, title, t, topbarActions.length]);
 	// The route keeps its options when it swaps this screen for the terminal,
 	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
 	// stayed on this screen's last state: the Chat controller the switch stopped,

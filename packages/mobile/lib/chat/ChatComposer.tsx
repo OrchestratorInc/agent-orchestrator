@@ -43,6 +43,7 @@ import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAct
 import { HardwareReturn } from "./HardwareReturn";
 import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
 import { contextMeterModel, quotaChipModel } from "./contextMeter";
+import { ContextRing } from "./ContextRing";
 import { RequestCard } from "./RequestCard";
 import type { RequestDockModel } from "./requestDockModel";
 import { createRequestGate } from "./requestGate";
@@ -935,6 +936,8 @@ function Composer({
 				{/* Mounted closed too, at no height, so the settings are already
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
+					{/* The desktop's context ring, right after attach. */}
+					<ContextRing usage={snapshot.usage} onPress={onOpenUsage} />
 					<View style={styles.settingsSlot}>
 						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
 					</View>
