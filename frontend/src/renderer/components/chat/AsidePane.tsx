@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ArrowUp, AtSign, CircleCheck, MoreHorizontal } from "@/components/app-icons";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCachedQueryData } from "../../hooks/useCloudScriptRuns";
 import {
 	asideIdOf,
 	asideRemovalOf,
@@ -681,7 +682,7 @@ export function CloudAsidePane({
 		queryFn: ({ signal }) => loadAsideThread(client, orgId, sessionId, asideId, signal),
 	});
 	// The thread as the list knows it, for a pane opened before the thread loads.
-	const listed = useQuery<CloudCpAsideListResponse>({ queryKey: cloudAsidesKey(orgId, sessionId), enabled: false }).data?.items.find((item) => item.asideId === asideId);
+	const listed = useCachedQueryData<CloudCpAsideListResponse>(cloudAsidesKey(orgId, sessionId), true)?.items.find((item) => item.asideId === asideId);
 	const aside: CloudCpAside | undefined = thread.data?.aside ?? listed;
 	const comment = aside?.origin === "comment";
 

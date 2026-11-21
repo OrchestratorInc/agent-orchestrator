@@ -1,13 +1,13 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cloudAsideKey, peekOpenAside, resetOpenAsides, openAside } from "../../lib/cloud-asides";
+import { cloudAsideKey, cloudAsidesKey, peekOpenAside, resetOpenAsides, openAside } from "../../lib/cloud-asides";
 import { cloudChatEventsKey } from "../../lib/cloud-chat-history";
 import type { CloudCpAsideThread, CloudCpClientEvent, CloudCpNotification } from "../../lib/cloud-cp/types";
 import { clearMentionFocus, mentionOpenTarget, peekMentionFocus, requestMentionFocus } from "../../lib/cloud-mention-open";
-import { resetCloudInboxSupport } from "../../lib/cloud-notifications";
+import { cloudInboxQueryKey, resetCloudInboxSupport } from "../../lib/cloud-notifications";
 import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
 import { typeInLexicalEditor } from "../../test/lexical";
@@ -209,6 +209,40 @@ describe("the conversation", () => {
 		};
 		const message = toSnapshot(session, [...events, sent], "u-priya").items.find((item): item is ConversationMessage => item.kind === "message" && item.sequence === 50);
 		expect(message?.fromAside).toEqual({ asideId: "c-1", quote: "real backoff", comments: [{ authorName: "Marco Rossi", text: "Use jitter" }, { authorName: "Priya Shah", text: "Agreed" }] });
+	});
+});
+
+describe("the caches it shares", () => {
+	it("reads the inbox and the thread list without taking over their queries, so a live refresh still reads them", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const inboxKey = cloudInboxQueryKey(BASE, "u-priya");
+		const readInbox = vi.fn().mockResolvedValue({ items: [], unreadCount: 0, latestSequence: 1 });
+		// The shell's bell keeps the inbox live: the one reader of it that fetches.
+		function Bell() {
+			useQuery({ queryKey: inboxKey, queryFn: readInbox });
+			return null;
+		}
+		openAside(session.id, "a-1");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<Bell />
+					<CloudSessionChatSurface session={session} />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(readInbox).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(cloudMocks.listSessionAsides).toHaveBeenCalledTimes(1));
+		// A notification arrives: the bell reads the inbox again, and the thread list is read again.
+		await act(() => queryClient.invalidateQueries({ queryKey: inboxKey }));
+		await act(() => queryClient.invalidateQueries({ queryKey: cloudAsidesKey("org-1", session.id) }));
+		expect(readInbox).toHaveBeenCalledTimes(2);
+		expect(queryClient.getQueryState(inboxKey)?.status).toBe("success");
+		expect(cloudMocks.listSessionAsides).toHaveBeenCalledTimes(2);
+		expect(errors.mock.calls.flat().map(String).join(" ")).not.toMatch(/No queryFn|skipToken/);
+		errors.mockRestore();
 	});
 });
 

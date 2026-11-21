@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
-import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { readCloudSessionMentions, useCloudInboxSupport } from "../hooks/useCloudNotifications";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCachedQueryData } from "../hooks/useCloudScriptRuns";
 import { ASIDE_REPLY, cloudInboxQueryKey, MENTIONED } from "../lib/cloud-notifications";
 import type { CloudCpNotificationListResponse } from "../lib/cloud-cp/types";
 import { useUiStore } from "../stores/ui-store";
@@ -21,7 +22,9 @@ export function CloudSessionNotificationReader({ orgId, sessionId }: { orgId: st
 	const queryClient = useQueryClient();
 	const { client, ready, baseUrl, userId } = useCloudCp();
 	const supported = useCloudInboxSupport(baseUrl) === "supported";
-	const inbox = useQuery<CloudCpNotificationListResponse>({ queryKey: cloudInboxQueryKey(baseUrl, userId), queryFn: skipToken }).data;
+	// Read from the cache, never as an observer: an observer's options become the
+	// query's, and a skipToken one would leave the bell's next refresh nothing to fetch with.
+	const inbox = useCachedQueryData<CloudCpNotificationListResponse>(cloudInboxQueryKey(baseUrl, userId), true);
 	const attentive = useWindowAttention();
 	const unreadKey = useMemo(() => !supported ? "" : (inbox?.items ?? [])
 		.filter((row) => row.orgId === orgId && row.sessionId === sessionId && (row.type === MENTIONED || row.type === ASIDE_REPLY) && row.status === "unread")

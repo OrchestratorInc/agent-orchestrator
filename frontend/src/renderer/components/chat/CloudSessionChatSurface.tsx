@@ -1,9 +1,10 @@
 import { CLOUD_CHAT_MESSAGE_BYTES, EXCERPT_PREAMBLE, isExcerptSnapshot, formatSnapshotExcerpt, formatNumberedAnnotations } from "../../../shared/chat-excerpt";
-import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCachedQueryData } from "../../hooks/useCloudScriptRuns";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
 import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
@@ -2525,7 +2526,8 @@ export function CloudSessionChatSurface({
 		selfUserId: me,
 	} : undefined, [activeOrg?.displayName, activeOrg?.id, cloud?.orgId, me, mentionCandidates.data, mentionsOn]);
 	// A chip naming this person, or a team a mention reached them through, is tinted.
-	const inbox = useQuery<CloudCpNotificationListResponse>({ queryKey: cloudInboxQueryKey(baseUrl, userId), queryFn: skipToken }).data;
+	// Read from the cache: the shell's bell is the inbox's one fetching observer.
+	const inbox = useCachedQueryData<CloudCpNotificationListResponse>(cloudInboxQueryKey(baseUrl, userId), true);
 	const mentionTint = useMemo<MentionTint>(() => {
 		const teamIds = new Set<string>();
 		for (const row of inbox?.items ?? []) {
