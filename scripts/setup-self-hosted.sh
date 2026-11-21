@@ -184,9 +184,9 @@ state="$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sy
 if [[ "$state" == ready ]]; then
 	current_exe="$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("executablePath", ""))')"
 	real_root="$(cd "$host_root" 2>/dev/null && pwd -P || printf '%s' "$host_root")"
+	[[ "$current_exe" == "$real_root"/* ]] && current_exe="$host_root/${current_exe#"$real_root"/}"
 	case "$current_exe" in
 		"$host_root"/releases/*/resources/daemon/ao|"$host_root"/current/resources/daemon/ao) ;;
-		"$real_root"/releases/*/resources/daemon/ao|"$real_root"/current/resources/daemon/ao) ;;
 		*) printf 'Another Orchestrator daemon is already running: %s. Stop it before setting up this host.\n' "$current_exe" >&2; exit 1 ;;
 	esac
 elif [[ "$state" != stopped && "$state" != stale ]]; then

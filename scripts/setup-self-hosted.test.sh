@@ -212,6 +212,12 @@ PY
 		[[ "$first" != "$tmp/home"/* ]]
 		install ready "$first/resources/daemon/ao"
 		[[ "$(cd "$tmp/home/.ao/host/current" && pwd -P)" != "$first" ]]
+		install ready "$first/resources/daemon/ao"
+		[[ -d "$first" ]]
+		install stopped
+		[[ ! -e "$first" ]]
+		releases=("$tmp/home/.ao/host/releases"/*)
+		[[ ${#releases[@]} -eq 2 ]]
 		;;
 	failed-restarts)
 		printf '%s\n' '#!/bin/sh' \
