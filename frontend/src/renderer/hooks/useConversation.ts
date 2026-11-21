@@ -1341,6 +1341,12 @@ export function useConversationCommands(
 		currentTurnIdRef.current = activeTurnId;
 	});
 	const [steerRefusedOn, setSteerRefusedOn] = useState<{ sentOn?: string; arrivedOn?: string }>();
+	// A turn starting ends any refusal from before it. Without this, one that came
+	// back while idle would show again once that turn ends and the chat is idle.
+	useEffect(() => {
+		if (activeTurnId === undefined) return;
+		setSteerRefusedOn((refused) => (refused && refused.arrivedOn !== activeTurnId ? undefined : refused));
+	}, [activeTurnId]);
 	/**
 	 * Guidance delivered INTO the running turn.
 	 *

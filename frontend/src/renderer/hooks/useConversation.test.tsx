@@ -2374,6 +2374,21 @@ describe("Stop", () => {
 		expect(result.current.steerRefusal).toBeUndefined();
 	});
 
+	it("does not bring back a refusal from before a turn once that turn ends", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" } });
+		const { result, rerender } = renderStop({ turnId: undefined });
+		await act(async () => {
+			await result.current.steer("go left").catch(() => {});
+		});
+		await waitFor(() => expect(result.current.steerRefusal).toMatch(/Send it as a message instead/));
+
+		rerender({ turnId: "turn-2" });
+		expect(result.current.steerRefusal).toBeUndefined();
+		rerender({ turnId: undefined });
+		expect(result.current.steerRefusal).toBeUndefined();
+	});
+
 	it("still knows the harness cannot steer after the turn changes", async () => {
 		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
 		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_STEER_UNSUPPORTED" } });
