@@ -78,6 +78,7 @@ vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warnin
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("../InlineBanner", async () => ({ InlineBanner: await host("InlineBanner") }));
 vi.mock("./SessionTopbar", () => ({ SessionTopbar: () => null }));
+vi.mock("../OrchestratorLoader", () => ({ ConversationLoading: () => null }));
 vi.mock("../sessionTopbar", () => ({ useSessionTopbarActions: () => [], sessionTopbarToolbarButtons: () => [], SessionTopbarPills: ({ children }: { children?: unknown }) => children }));
 vi.mock("../store", () => ({
 	useApp: () => ({

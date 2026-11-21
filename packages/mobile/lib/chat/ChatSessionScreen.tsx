@@ -67,6 +67,7 @@ import { usePushSettled } from "../usePushSettled";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { space } from "../tokens";
+import { ConversationLoading } from "../OrchestratorLoader";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
@@ -861,7 +862,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
+	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><ConversationLoading title="Orchestrating…" message={isOrchestrator ? undefined : title} /></View>;
 	if (conversation.unavailable) {
 		return <Failure>
 			<EmptyState
