@@ -57,7 +57,7 @@ The desktop app bundles the `ao` CLI. You don't need it for normal desktop use, 
 | Windows installer or winget | `resources\daemon\ao.exe` inside the app's install folder |
 | Linux `.deb` or `.rpm` | `resources/daemon/ao` inside the app's install folder |
 
-Without the cask, call `ao` by its full path, or add an alias to your shell profile:
+Without the cask, call `ao` by its full path, or add an alias to your shell profile. An alias works only in your interactive shell; scripts don't see it, so they should use the full path or a linked `ao`:
 
 ```bash
 alias ao='"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"'

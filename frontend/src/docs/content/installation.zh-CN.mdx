@@ -1,7 +1,7 @@
 ---
 title: 安装
 description: 下载 Orchestrator 桌面应用，并连接你的编程工具。
-translatedFrom: 726c098e309e
+translatedFrom: e613300aa514
 ---
 
 如需最新的稳定版桌面构建，请从 [Orchestrator 官方下载页面](https://orchestrator.inc/download/)开始。该页面还列出了每夜构建和移动应用。如果你想直接获取桌面安装包，请从下面选择：
@@ -60,7 +60,7 @@ brew install --cask agent-orchestrator
 | Windows 安装程序或 winget | 应用安装目录中的 `resources\daemon\ao.exe` |
 | Linux `.deb` 或 `.rpm` | 应用安装目录中的 `resources/daemon/ao` |
 
-不使用 cask 时，请用完整路径调用 `ao`，或在 shell 配置文件中添加别名：
+不使用 cask 时，请用完整路径调用 `ao`，或在 shell 配置文件中添加别名。别名只在交互式 shell 中有效，脚本看不到它，因此脚本应使用完整路径或已链接的 `ao`：
 
 ```bash
 alias ao='"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"'

@@ -1,7 +1,7 @@
 ---
 title: インストール
 description: Orchestrator のデスクトップアプリをダウンロードし、使っているコーディングツールと接続します。
-translatedFrom: 726c098e309e
+translatedFrom: e613300aa514
 ---
 
 最新の安定版デスクトップビルドは、[Orchestrator の公式ダウンロードページ](https://orchestrator.inc/download/)から入手してください。ナイトリービルドとモバイルアプリもこのページにあります。デスクトップのパッケージを直接入手したい場合は、以下から選んでください。
@@ -60,7 +60,7 @@ brew install --cask agent-orchestrator
 | Windows のインストーラーまたは winget | アプリのインストールフォルダー内の `resources\daemon\ao.exe` |
 | Linux の `.deb` または `.rpm` | アプリのインストールフォルダー内の `resources/daemon/ao` |
 
-cask を使わない場合は、`ao` をフルパスで実行するか、シェルのプロファイルにエイリアスを追加します。
+cask を使わない場合は、`ao` をフルパスで実行するか、シェルのプロファイルにエイリアスを追加します。エイリアスは対話シェルでのみ有効で、スクリプトからは見えません。スクリプトではフルパスか、リンクした `ao` を使ってください。
 
 ```bash
 alias ao='"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"'
