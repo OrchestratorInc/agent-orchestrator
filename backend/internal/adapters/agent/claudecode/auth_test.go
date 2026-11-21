@@ -634,6 +634,170 @@ func TestLaunchAuthReusesCachedSuccessUntilInvalidated(t *testing.T) {
 	}
 }
 
+// stubClaudeAuthCLI replaces `claude auth status` with a canned signed-in
+// report and returns a pointer to the number of times it ran.
+func stubClaudeAuthCLI(t *testing.T) *int {
+	t.Helper()
+	runs := 0
+	previous := claudeAuthCommand
+	claudeAuthCommand = func(context.Context, string, string, map[string]string) (claudeCommandOutput, error) {
+		runs++
+		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":true,"apiProvider":"gateway"}`)}, nil
+	}
+	t.Cleanup(func() { claudeAuthCommand = previous })
+	return &runs
+}
+
+func TestAuthReportCacheKeyIgnoresPerSessionVariables(t *testing.T) {
+	workingDir := t.TempDir()
+	first := map[string]string{
+		"ANTHROPIC_API_KEY":     "same-key",
+		"AO_SESSION_ID":         "session-1",
+		"AO_BROWSER_CAPABILITY": "capability-1",
+	}
+	second := map[string]string{
+		"ANTHROPIC_API_KEY":     "same-key",
+		"AO_SESSION_ID":         "session-2",
+		"AO_BROWSER_CAPABILITY": "capability-2",
+	}
+	if a, b := authReportCacheKey("/fixture/claude", workingDir, first), authReportCacheKey("/fixture/claude", workingDir, second); a != b {
+		t.Fatalf("keys differ across per-session variables: %s vs %s", a, b)
+	}
+}
+
+func TestAuthReportCacheKeyChangesWithWhatCanChangeTheAnswer(t *testing.T) {
+	workingDir := t.TempDir()
+	baseEnv := map[string]string{"ANTHROPIC_API_KEY": "key-a", "CLAUDE_CODE_USE_BEDROCK": "0"}
+	base := authReportCacheKey("/fixture/claude", workingDir, baseEnv)
+
+	withEnv := func(name, value string) map[string]string {
+		env := map[string]string{}
+		for k, v := range baseEnv {
+			env[k] = v
+		}
+		env[name] = value
+		return env
+	}
+	settingsKey := func(name, content string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".claude", name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return authReportCacheKey("/fixture/claude", dir, baseEnv)
+	}
+
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{"ANTHROPIC_ value", authReportCacheKey("/fixture/claude", workingDir, withEnv("ANTHROPIC_API_KEY", "key-b"))},
+		{"CLAUDE_ value", authReportCacheKey("/fixture/claude", workingDir, withEnv("CLAUDE_CODE_USE_BEDROCK", "1"))},
+		{"new credential variable", authReportCacheKey("/fixture/claude", workingDir, withEnv("ANTHROPIC_BASE_URL", "https://gateway.example"))},
+		{"binary", authReportCacheKey("/other/claude", workingDir, baseEnv)},
+		{"settings.json content", settingsKey("settings.json", `{"apiKeyHelper":"helper-a"}`)},
+		{"settings.local.json content", settingsKey("settings.local.json", `{"apiKeyHelper":"helper-a"}`)},
+	}
+	seen := map[string]string{base: "base"}
+	for _, tt := range tests {
+		if previous, dup := seen[tt.key]; dup {
+			t.Errorf("%s: key equals the %s key", tt.name, previous)
+		}
+		seen[tt.key] = tt.name
+	}
+
+	if a, b := settingsKey("settings.json", `{"apiKeyHelper":"helper-a"}`), settingsKey("settings.json", `{"apiKeyHelper":"helper-b"}`); a == b {
+		t.Fatalf("settings.json content change did not change the key: %s", a)
+	}
+}
+
+func TestAuthReportCacheSharesOneCLIRunAcrossSessionsUntilCredentialsChange(t *testing.T) {
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	cliRuns := stubClaudeAuthCLI(t)
+
+	plugin := &Plugin{resolvedBinary: "/fixture/claude"}
+	workingDir := t.TempDir()
+	envFor := func(sessionID string) map[string]string {
+		return map[string]string{
+			"ANTHROPIC_API_KEY":     "same-key",
+			"AO_SESSION_ID":         sessionID,
+			"AO_BROWSER_CAPABILITY": "capability-" + sessionID,
+		}
+	}
+	probe := func(env map[string]string) (cached bool) {
+		t.Helper()
+		report, ok, step := plugin.claudeCLIAuthReportDiagnostic(context.Background(), "/fixture/claude", workingDir, env)
+		if !ok || report.LoggedIn == nil || !*report.LoggedIn {
+			t.Fatalf("probe: ok=%v report=%+v, want a signed-in report", ok, report)
+		}
+		return step.Cached
+	}
+
+	if probe(envFor("one")) || *cliRuns != 1 {
+		t.Fatalf("first launch: cliRuns=%d, want one fresh CLI run", *cliRuns)
+	}
+	if !probe(envFor("two")) || *cliRuns != 1 {
+		t.Fatalf("second launch with different per-session vars: cliRuns=%d, want the cached report", *cliRuns)
+	}
+
+	changedKey := envFor("two")
+	changedKey["ANTHROPIC_API_KEY"] = "rotated-key"
+	if probe(changedKey) || *cliRuns != 2 {
+		t.Fatalf("rotated ANTHROPIC_API_KEY: cliRuns=%d, want a new CLI run", *cliRuns)
+	}
+	changedClaude := envFor("two")
+	changedClaude["CLAUDE_CODE_USE_BEDROCK"] = "1"
+	if probe(changedClaude) || *cliRuns != 3 {
+		t.Fatalf("new CLAUDE_ variable: cliRuns=%d, want a new CLI run", *cliRuns)
+	}
+
+	if err := os.MkdirAll(filepath.Join(workingDir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(workingDir, ".claude", "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"apiKeyHelper":"helper-a"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if probe(envFor("two")) || *cliRuns != 4 {
+		t.Fatalf("new .claude/settings.json: cliRuns=%d, want a new CLI run", *cliRuns)
+	}
+	if !probe(envFor("three")) || *cliRuns != 4 {
+		t.Fatalf("unchanged settings: cliRuns=%d, want the cached report", *cliRuns)
+	}
+	if err := os.WriteFile(settings, []byte(`{"apiKeyHelper":"helper-b"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if probe(envFor("three")) || *cliRuns != 5 {
+		t.Fatalf("edited .claude/settings.json: cliRuns=%d, want a new CLI run", *cliRuns)
+	}
+}
+
+func TestInvalidateAuthCacheClearsTheReportCache(t *testing.T) {
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	cliRuns := stubClaudeAuthCLI(t)
+
+	plugin := &Plugin{resolvedBinary: "/fixture/claude"}
+	env := map[string]string{"ANTHROPIC_API_KEY": "same-key"}
+	for i := 0; i < 2; i++ {
+		if _, ok, _ := plugin.claudeCLIAuthReportDiagnostic(context.Background(), "/fixture/claude", "/project", env); !ok {
+			t.Fatal("probe failed, want a parsed report")
+		}
+	}
+	if *cliRuns != 1 {
+		t.Fatalf("cliRuns=%d before invalidation, want the second call served from the report cache", *cliRuns)
+	}
+
+	InvalidateAuthCache()
+	if _, ok, step := plugin.claudeCLIAuthReportDiagnostic(context.Background(), "/fixture/claude", "/project", env); !ok || step.Cached || *cliRuns != 2 {
+		t.Fatalf("after invalidation: ok=%v cached=%v cliRuns=%d, want a fresh CLI run", ok, step.Cached, *cliRuns)
+	}
+}
+
 // The provider response that proves the credential works also owns the model
 // and effort catalog. Model discovery must reuse that exact response instead
 // of issuing a second validation request that can fail independently.
