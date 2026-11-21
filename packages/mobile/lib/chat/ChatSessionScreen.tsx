@@ -964,7 +964,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				harness={headerHarness}
 				onBack={goBack}
 				onMenu={menuReady ? openActions : undefined}
-				onNewTab={() => void openShell()}
 				actions={topbarActions}
 			/>
 			{CLEAR_HEADER ? null : banners}

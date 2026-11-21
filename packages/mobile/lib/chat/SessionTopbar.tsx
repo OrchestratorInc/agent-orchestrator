@@ -17,12 +17,12 @@ const ICON_BUTTON = 36;
  * The desktop session view's top bar (SessionTabsTopbar + SessionTopbarActions),
  * drawn by the conversation itself:
  *
- *   [‹] [agent · title · ⋮] [+]              [Orchestrator]
- *   [‹] [agent · Orchestrator · ⋮] [+]       [Board] [+ Task]
+ *   [‹] [agent · title · ⋮]              [Orchestrator]
+ *   [‹] [agent · Orchestrator · ⋮]       [Board] [+ Task]
  *
  * The session is a tab, as on the desktop: its agent, its title and its ⋮
- * menu (the conversation's actions). The + beside it opens a worktree shell,
- * the desktop's new terminal tab. The session's own actions sit flat at the
+ * menu (the conversation's actions). The worktree shell is in that menu
+ * rather than a + beside the tab. The session's own actions sit flat at the
  * bar's end. A solid bar with a hairline under it; the conversation starts
  * below. The back chevron is the phone's way home, where the desktop keeps
  * its sidebar open beside the session.
