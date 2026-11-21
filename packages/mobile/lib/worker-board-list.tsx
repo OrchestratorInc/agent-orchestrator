@@ -17,6 +17,7 @@ import {
 } from "./agentsView";
 import type { DashboardSession } from "./api";
 import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolProps } from "./AppSymbol.types";
 import { ArchivedWorkerRow } from "./archived-worker-row";
 import { useArchivedSessions, type ArchiveSource } from "./archive/useArchivedSessions";
 import { haptics } from "./haptics";
@@ -538,7 +539,7 @@ function WorkerBoard({
 		if (item.kind === "archive") return <ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />;
 		if (item.kind === "archive-status") return <ArchiveStatusRow loading={pagedArchive.loading} error={pagedArchive.error}
 			hasMore={pagedArchive.hasMore} onRetry={pagedArchive.retry} onLoadMore={pagedArchive.loadMore} />;
-		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open}
+		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open} bare icon={SECTION_ICONS[item.key.replace("header:", "")]}
 			onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined} />;
 		if (item.kind === "archived") return <ArchivedWorkerRow session={item.session} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
@@ -631,6 +632,14 @@ function WorkerBoard({
 		</View>
 	);
 }
+
+/** Each board section's glyph, before its label. */
+const SECTION_ICONS: Record<string, AppSymbolProps["name"]> = {
+	pinned: "pin",
+	needs_you: "notifications",
+	recent: "history",
+	search: "search",
+};
 
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
