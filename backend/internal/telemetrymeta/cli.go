@@ -208,6 +208,10 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao session switch":       {},
 	"ao spawn":                {},
 	"ao stop":                 {},
+	"ao task":                 {},
+	"ao task start":           {},
+	"ao task status":          {},
+	"ao task wait":            {},
 	"ao version":              {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
