@@ -284,6 +284,9 @@ type Manager struct {
 	// This coordination is intentionally memory-only: a daemon crash leaves the
 	// durable session exited, so the user can safely retry the resume.
 	pendingLaunches map[domain.SessionID]pendingLaunch
+	// kimiChildren counts each Kimi session's open child agents (see
+	// kimiChildSignal). Guarded by mu.
+	kimiChildren map[domain.SessionID]int
 	// steerActive reports whether a harness can safely receive a write during an
 	// active turn (input steers the run) rather than only while idle. Supplied by
 	// the agent adapter via WithActiveSteering; the default answers false, so an
@@ -316,6 +319,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		flights:                     map[domain.SessionID]*toolFlight{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
+		kimiChildren:                map[domain.SessionID]int{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
 		startupSignalGatesInput:     func(domain.AgentHarness) bool { return false },
 		urgentNudgeWaitingInputSafe: func(domain.AgentHarness) bool { return false },
@@ -525,6 +529,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		// m.mu — mutate holds it across this callback.
 		delete(m.flights, id)
 		delete(m.steps, id)
+		delete(m.kimiChildren, id)
 		terminated = true
 		beforeEnd = cur
 		return next, true
@@ -568,7 +573,9 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	// Subagent answers, including prompt suggestions, are not root-conversation
 	// facts. Their usage is collected independently from lifecycle metadata.
 	s.SubagentID = strings.TrimSpace(s.SubagentID)
-	if s.Event == "subagent-stop" && s.SubagentID == "" {
+	// Kimi's subagent-stop names no child; kimiChildSignalLocked consumes it
+	// after the launch fence.
+	if s.Event == "subagent-stop" && s.SubagentID == "" && s.ExpectedHarness != domain.HarnessKimi {
 		return nil
 	}
 	s.AgentSessionID = strings.TrimSpace(s.AgentSessionID)
@@ -659,6 +666,7 @@ retryProjection:
 	if rec.IsTerminated {
 		delete(m.flights, id)
 		delete(m.steps, id)
+		delete(m.kimiChildren, id)
 		m.mu.Unlock()
 		return nil
 	}
@@ -726,6 +734,10 @@ retryProjection:
 	nativeIdentityChanged := s.AgentSessionID != "" && previousNativeID != "" && s.AgentSessionID != previousNativeID
 	if nativeIdentityChanged && !s.Timestamp.IsZero() &&
 		!rec.Metadata.NativeIdentityObservedAt.IsZero() && !s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt) {
+		m.mu.Unlock()
+		return nil
+	}
+	if m.kimiChildSignalLocked(id, s) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -1835,6 +1847,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 				cur.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: now}
 				delete(m.flights, id) // runs under m.mu (mutate holds it)
 				delete(m.steps, id)
+				delete(m.kimiChildren, id)
 				outcome = terminationApplied
 				return cur, true
 			}
