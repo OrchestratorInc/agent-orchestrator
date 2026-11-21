@@ -3142,9 +3142,10 @@ paths:
       tags: [Sessions]
       description: >-
         Allow the action once, always allow its kind of action on this site for
-        the session, or deny it. Allowed for the session's owner and its
-        editors; a viewer gets 403. A decision on an approval already decided
-        otherwise, or expired, gets 409.
+        the session, or deny it. Only the session's creator, or the person it
+        was started for, may decide (BrowserApproval.canDecide); anyone else
+        gets 403. A decision on an approval already decided otherwise, or
+        expired, gets 409.
       requestBody:
         required: true
         content:
@@ -8468,6 +8469,26 @@ components:
           type: string
           format: date-time
           description: When the worker stops waiting and the action is refused.
+        canDecide:
+          type: boolean
+          description: >-
+            Whether the caller may decide it: only the session's creator, or the
+            person it was started for (a session from before creators were
+            recorded: the organization's owners and admins). Absent from an
+            older control plane, where any non-viewer could; treat it as true.
+        decider:
+          $ref: "#/components/schemas/BrowserApprovalDecider"
+    BrowserApprovalDecider:
+      type: object
+      additionalProperties: false
+      description: Who a session's browser approvals wait for.
+      properties:
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: The person's display name, else their email.
     BrowserApprovalList:
       type: object
       additionalProperties: false
