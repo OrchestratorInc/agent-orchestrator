@@ -3756,6 +3756,8 @@ export interface components {
             standalone?: boolean;
             /** @description True for a standalone agent's project: its owner's one worker session, with no orchestrator. Only its owner lists it. */
             standaloneAgent?: boolean;
+            /** @description Whether the caller may change what this project's agents may do in the sandbox (config.sandboxDocker, config.agentsCanUseSudo): the project's creator or an organization owner or admin. Set on the project GET and the settings PATCH responses; absent from older servers and other responses. A settings PATCH that changes either from anyone else is refused whole with 403 and error code sandbox_settings_forbidden. */
+            canEditSandbox?: boolean;
             config: components["schemas"]["ProjectConfig"];
             /** Format: date-time */
             createdAt: string;
