@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,5 +103,37 @@ func TestRuntimeEnvKeepsAccountKeyAwayFromCustomEndpoint(t *testing.T) {
 		if env[keyVar] != "sk-endpoint" {
 			t.Fatalf("%s: %s = %q, want the endpoint key", style, keyVar, env[keyVar])
 		}
+	}
+}
+
+// With case-insensitive keys (Windows), a project's lowercase spelling of an
+// endpoint key keeps its value through the account step.
+func TestRuntimeEnvKeepsCaseVariantProjectEndpointKey(t *testing.T) {
+	previous := envKeysCaseInsensitive
+	envKeysCaseInsensitive = true
+	t.Cleanup(func() { envKeysCaseInsensitive = previous })
+
+	dir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:       dir,
+		executable:    func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentAccounts: savedAPIKeyAccount{},
+	}
+	env, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{"anthropic_base_url": "https://project.example.com"}, "", "claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values []string
+	for key, value := range env {
+		if strings.EqualFold(key, "ANTHROPIC_BASE_URL") {
+			values = append(values, value)
+		}
+	}
+	if len(values) != 1 || values[0] != "https://project.example.com" {
+		t.Fatalf("base URL entries = %q, want only the project value", values)
 	}
 }

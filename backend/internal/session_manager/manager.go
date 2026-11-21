@@ -7473,17 +7473,27 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserURL] = m.agentBrowserURL
 		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
-	beforeAccount := make(map[string]string, len(endpointEnv))
+	// Snapshot project-set endpoint keys under the spelling env holds them in.
+	type envEntry struct{ key, value string }
+	beforeAccount := make(map[string]envEntry, len(endpointEnv))
 	for key := range endpointEnv {
-		beforeAccount[key] = env[key]
+		if !overridden(key) {
+			continue
+		}
+		for existing, value := range env {
+			if existing == key || caseInsensitive && strings.EqualFold(existing, key) {
+				beforeAccount[key] = envEntry{key: existing, value: value}
+				break
+			}
+		}
 	}
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
 	// A bound saved account must never send its credential to a custom
 	// endpoint, so the endpoint's base URL and key go on top again and both
 	// come from one source. A key the project sets gets its project value back.
 	for key, value := range endpointEnv {
-		if overridden(key) {
-			setProtectedEnv(env, key, beforeAccount[key], caseInsensitive)
+		if entry, ok := beforeAccount[key]; ok {
+			setProtectedEnv(env, entry.key, entry.value, caseInsensitive)
 			continue
 		}
 		setProtectedEnv(env, key, value, caseInsensitive)
