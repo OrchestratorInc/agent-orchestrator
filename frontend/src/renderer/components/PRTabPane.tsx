@@ -7,7 +7,7 @@ import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { usePRStack } from "../hooks/usePRStack";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { formatTimeCompact } from "../lib/format-time";
-import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prMergeQueueEntry, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import type { PRTabSection } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
@@ -150,6 +150,8 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 	const lowerBlock = landing ? stackBlocker(landing, pr.number) : undefined;
 	const blockReason = prSummaryBlockReason(pr);
 	const merge: { state?: PRCheckState; className?: string; label: string } | undefined = pr.state !== "open" && pr.state !== "draft" ? undefined
+		// Queued is on its way to merging, not blocked, whatever the provider says of a direct merge.
+		: prMergeQueueEntry(pr) ? { state: "pending", label: t("pr.queue.card") }
 		: pr.mergeability.state === "conflicting" ? { state: "failed", label: t("pr.card.mergeConflict") }
 			: pr.state === "draft" || pr.mergeability.state === "unknown" ? undefined
 				: lowerBlock ? { label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) }) }

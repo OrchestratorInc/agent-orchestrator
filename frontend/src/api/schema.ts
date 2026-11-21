@@ -2354,6 +2354,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prs/{id}/dequeue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove a pull request from its base branch's merge queue */
+        post: operations["dequeuePR"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/prs/{id}/details": {
         parameters: {
             query?: never;
@@ -7137,6 +7154,15 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        DequeuePRRequest: {
+            prUrl: string;
+        };
+        DequeuePRResponse: {
+            /** Format: date-time */
+            changedAt: string;
+            ok: boolean;
+            prNumber: number;
+        };
         DesktopArtifactLocationResponse: {
             artifactDir: string;
             sessionId: string;
@@ -7640,8 +7666,9 @@ export interface components {
             method: string;
             ok: boolean;
             prNumber: number;
+            queue?: components["schemas"]["SessionPRMergeQueueEntry"];
             /** @enum {string} */
-            state: "merged";
+            state: "merged" | "open";
             /** Format: date-time */
             stateChangedAt: string;
         };
@@ -8528,6 +8555,14 @@ export interface components {
             color?: string;
             name: string;
         };
+        SessionPRMergeQueueEntry: {
+            /** Format: date-time */
+            enqueuedAt?: null | string;
+            estimatedSecondsToMerge?: number;
+            position: number;
+            /** @enum {string} */
+            state: "queued" | "awaiting_checks" | "mergeable" | "unmergeable" | "locked";
+        };
         SessionPRMergeabilitySummary: {
             conflictFiles?: components["schemas"]["SessionPRConflictFile"][];
             prUrl: string;
@@ -8597,6 +8632,8 @@ export interface components {
             headSha: string;
             htmlUrl?: string;
             labels: components["schemas"]["SessionPRLabel"][];
+            mergeQueue?: components["schemas"]["SessionPRMergeQueueEntry"];
+            mergeQueueRequired?: boolean;
             mergeability: components["schemas"]["SessionPRMergeabilitySummary"];
             number: number;
             /** Format: date-time */
@@ -17765,6 +17802,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    dequeuePR: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DequeuePRRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DequeuePRResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
