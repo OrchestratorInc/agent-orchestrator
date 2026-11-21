@@ -145,6 +145,10 @@ func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, t
 // be read without one, or that the provider failed to return, is unavailable.
 func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID, taskID string) (ports.ChatBackgroundTaskOutput, error) {
 	controller, err := s.attachedChatController(ctx, id)
+	if err != nil && ctx.Err() != nil {
+		// The panel cancelled its poll; that is not a server failure.
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
 	if err != nil {
 		return ports.ChatBackgroundTaskOutput{}, err
 	}
@@ -158,12 +162,10 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	output, err := reader.BackgroundTaskOutput(readCtx, taskID)
-	if err := ctx.Err(); err != nil {
-		return ports.ChatBackgroundTaskOutput{}, err
-	}
-	if err != nil {
-		// A panel polls this: a controller closing mid-read, a timeout or a
-		// provider error is a moment without output, not a server failure.
+	if err != nil || ctx.Err() != nil {
+		// A panel polls this: a poll it cancelled, a controller closing
+		// mid-read, a timeout or a provider error is a moment without output,
+		// not a server failure.
 		if !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
 			s.log.Debug("background task output unavailable", "session", id, "task", taskID, "error", err)
 		}

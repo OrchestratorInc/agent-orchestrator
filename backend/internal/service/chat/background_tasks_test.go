@@ -282,10 +282,10 @@ func TestBackgroundTaskOutputProviderFailuresAreUnavailable(t *testing.T) {
 			t.Fatalf("%v became %v", err, got)
 		}
 	}
-	// The caller's own cancellation is not the provider's answer.
+	// A poll the caller cancelled is a moment without output, not a 500.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, got := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); !errors.Is(got, context.Canceled) {
+	if _, got := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); !errors.Is(got, ports.ErrBackgroundTaskOutputUnavailable) {
 		t.Fatalf("canceled read=%v", got)
 	}
 }

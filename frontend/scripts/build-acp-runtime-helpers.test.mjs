@@ -295,12 +295,12 @@ describe("patchClaudeBackgroundTasks output", () => {
 	}
 
 	/** What Claude Code sends when a Bash call goes to the background (2.1.323). */
-	function launch(h, { taskId, toolUseId, command, file }) {
+	function launch(h, { taskId, toolUseId, command, file, text }) {
 		h.session.toolUseCache[toolUseId] = { name: "Bash", input: { command, run_in_background: true } };
 		h.emit({
 			type: "user",
 			tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: taskId },
-			message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${file}.` }] },
+			message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: text ?? `Command running in background with ID: ${taskId}. Output is being written to: ${file}.` }] },
 		});
 		delete h.session.toolUseCache[toolUseId];
 	}
@@ -349,6 +349,19 @@ describe("patchClaudeBackgroundTasks output", () => {
 			["unc", "\\\\server\\share\\Jane Doe\\unc.output"],
 		]) {
 			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", file: path });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+		// A network share is never read.
+		await expect(h.output("unc")).rejects.toThrow("is gone");
+	});
+
+	it("takes the path nearest the file name, ending at its first mention", () => {
+		const h = harness();
+		for (const [taskId, text, path] of [
+			["near", "Output (see /docs) at /tmp/t/near.output", "/tmp/t/near.output"],
+			["first", "Output is being written to: /tmp/x/first.output. Use /tmp/y/first.output", "/tmp/x/first.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", text });
 			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
 		}
 	});

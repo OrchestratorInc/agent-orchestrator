@@ -138,10 +138,30 @@ func TestTailOutputKeepsConPTYBlanksAndStripsRawEscapes(t *testing.T) {
 		{"8-bit csi", "\u009b31mred\u009b0m", "red"},
 		{"unterminated osc", "\x1b]0;title\nnext line", "\nnext line"},
 		{"bidi", "abc\u202eevil\u202c zero\u200bwidth \U0001F468\u200d\U0001F469", "abcevil zerowidth \U0001F468\u200d\U0001F469"},
+		{"format chars", "a\u2060b\ufeffc\u00add\U000E0041e", "abcde"},
+		// A partial repaint skips the cells it leaves unchanged.
+		{"partial repaint", "building 10%\r\x1b[9C90%", "building 90%"},
+		{"repaint past the end", "ab\r\x1b[4Cc", "ab  c"},
+		{"whole redraw", "50%\r100%", "100%"},
 	} {
 		if got := TailOutput(tc.raw, false); got.Text != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got.Text, tc.want)
 		}
+	}
+}
+
+func TestTailOutputBoundsCursorForwardPerRead(t *testing.T) {
+	got := TailOutput(strings.Repeat("\x1b[256C", MaxOutputBytes/6), false)
+	if len(got.Text) > MaxOutputBytes || strings.Trim(got.Text, " ") != "" {
+		t.Fatalf("len=%d", len(got.Text))
+	}
+}
+
+func TestOutputBufferReplaceKeepsOnlyTheTail(t *testing.T) {
+	var b OutputBuffer
+	b.Replace("big", strings.Repeat("x\n", 4*MaxOutputBytes))
+	if data := b.entries["big"].data; len(data) != MaxOutputBytes || cap(data) > 2*MaxOutputBytes {
+		t.Fatalf("len=%d cap=%d", len(data), cap(data))
 	}
 }
 

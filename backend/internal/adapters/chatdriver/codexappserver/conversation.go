@@ -84,6 +84,11 @@ type conversation struct {
 	// streams on, oldest first in backgroundRunOrder.
 	backgroundRuns     map[string]string
 	backgroundRunOrder []string
+	// backgroundStarted holds the exec items whose start this controller saw,
+	// oldest first in backgroundStartOrder, so a terminal started before it
+	// attached (a daemon restart) can read as missing its earlier output.
+	backgroundStarted    map[string]bool
+	backgroundStartOrder []string
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.

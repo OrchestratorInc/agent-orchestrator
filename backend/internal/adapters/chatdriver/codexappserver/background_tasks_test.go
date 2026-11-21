@@ -33,7 +33,7 @@ func TestBackgroundTasksReadsNativeCodexInventory(t *testing.T) {
 			} else {
 				srv.reply("thread/backgroundTerminals/list", tc.response)
 			}
-			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +122,7 @@ func TestBackgroundTasksCodexSubagentCanRunAgainAfterCompletion(t *testing.T) {
 func TestBackgroundTasksPreservesObservedAgentsWhenShellInventoryUnsupported(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.replyError("thread/backgroundTerminals/list", -32601, "method not found")
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestStopBackgroundTaskTerminatesOneCodexTerminal(t *testing.T) {
 			} else if tc.reply != "" {
 				srv.reply("thread/backgroundTerminals/terminate", tc.reply)
 			}
-			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -194,7 +194,7 @@ func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"63962","itemId":"cmd-1","command":"npm run dev"},{"processId":"70001","itemId":"cmd-2","command":"npm run build"}],"nextCursor":null}`)
 	srv.reply("thread/backgroundTerminals/terminate", `{"terminated":true}`)
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
 func TestBackgroundTasksCodexUsesCommandStartAndHidesUnknownAge(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"sleep 30"}]}`)
-	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,6 +368,22 @@ func TestBackgroundTaskOutputCodexStaysReadableAfterTheTaskEnds(t *testing.T) {
 	}
 	if got, err := c.BackgroundTaskOutput(context.Background(), "70001"); err != nil || got.Text != "" || !got.Truncated {
 		t.Fatalf("evicted output=%+v err=%v", got, err)
+	}
+}
+
+// Reproduced with real Codex after a daemon restart: a quiet terminal that
+// printed before this controller attached.
+func TestBackgroundTaskOutputCodexMarksAQuietTerminalFromBeforeAttach(t *testing.T) {
+	c := &conversation{}
+	c.backgroundObserved.ReconcileShells([]ports.ChatBackgroundTask{{ID: "4000", RunID: "server", Kind: "shell", State: "running"}}, time.Now())
+	if got, err := c.BackgroundTaskOutput(context.Background(), "4000"); err != nil || got.Text != "" || !got.Truncated {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+	// One whose start this controller saw has simply printed nothing yet.
+	commandStarted(c, "fresh")
+	c.backgroundObserved.ReconcileShells([]ports.ChatBackgroundTask{{ID: "4001", RunID: "fresh", Kind: "shell", State: "running"}}, time.Now())
+	if got, err := c.BackgroundTaskOutput(context.Background(), "4001"); err != nil || got.Text != "" || got.Truncated {
+		t.Fatalf("output=%+v err=%v", got, err)
 	}
 }
 

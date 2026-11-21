@@ -419,18 +419,33 @@ function aoObserveBackgroundLaunch(session, message) {
 
 // The output file a launch result names, which ends with the task's file name.
 // The path may contain spaces (a Windows profile such as "C:\Users\Jane Doe"),
-// so it runs from "written to:" when the sentence has it, else from the first
-// path root on that line, up to the file name.
+// so it runs from "written to:" to the first file name after it when the
+// sentence has that phrase, else from the path root nearest the file name.
 function aoBackgroundOutputPath(text, fileName) {
 	const root = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
+	const endsAt = (line, from) => {
+		for (let end = line.indexOf(fileName, from); end >= 0; end = line.indexOf(fileName, end + 1)) {
+			if (end > 0 && (line[end - 1] === "/" || line[end - 1] === "\\")) return end + fileName.length;
+		}
+		return -1;
+	};
 	for (const line of text.split(/\r?\n/)) {
-		const end = line.lastIndexOf(fileName);
-		if (end < 1 || (line[end - 1] !== "/" && line[end - 1] !== "\\")) continue;
-		const head = line.slice(0, end + fileName.length);
-		const anchored = /written to:\s*(.+)$/i.exec(head)?.[1];
-		const starts = anchored ? [anchored] : [...head.matchAll(/(?:^|[\s'"(])(?=\/|[A-Za-z]:[\\/]|\\\\)/g)].map(m => head.slice(m.index + m[0].length));
-		const path = starts.map(start => start.trim().replace(/^['"(]/, "")).find(start => root.test(start));
-		if (path) return path;
+		const anchor = /written to:\s*/i.exec(line);
+		if (anchor) {
+			const start = anchor.index + anchor[0].length;
+			const end = endsAt(line, start);
+			const path = end < 0 ? "" : line.slice(start, end).replace(/^['"(]/, "");
+			if (root.test(path)) return path;
+			continue;
+		}
+		const end = endsAt(line, 0);
+		if (end < 0) continue;
+		const head = line.slice(0, end);
+		const starts = [...head.matchAll(/(?:^|[\s'"(])(?=\/|[A-Za-z]:[\\/]|\\\\)/g)].map(m => m.index + m[0].length);
+		for (const start of starts.reverse()) {
+			const path = head.slice(start);
+			if (root.test(path)) return path;
+		}
 	}
 	return undefined;
 }
@@ -439,8 +454,11 @@ function aoBackgroundOutputPath(text, fileName) {
 // Null when the file is gone or not a regular file. The agent can write that
 // directory, so a symlink is not followed and a FIFO never blocks the read.
 async function aoReadBackgroundOutput(path, maxBytes) {
-	const { lstat, open } = process.getBuiltinModule("node:fs/promises");
+	const { lstat, open, realpath } = process.getBuiltinModule("node:fs/promises");
 	const { constants } = process.getBuiltinModule("node:fs");
+	const { basename, dirname, join } = process.getBuiltinModule("node:path");
+	// Never a network share: a forged result line could point the read at one.
+	if (/^(?:\\\\|\/\/)/.test(path)) return null;
 	let file;
 	try {
 		if (!(await lstat(path)).isFile()) return null;
@@ -451,6 +469,9 @@ async function aoReadBackgroundOutput(path, maxBytes) {
 	try {
 		const stats = await file.stat();
 		if (!stats.isFile()) return null;
+		// Windows has no O_NOFOLLOW, so a link swapped in after the lstat is
+		// caught here: the opened name must still be the file itself.
+		if (await realpath(path) !== join(await realpath(dirname(path)), basename(path))) return null;
 		const start = Math.max(0, stats.size - maxBytes);
 		const buffer = Buffer.alloc(stats.size - start);
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
