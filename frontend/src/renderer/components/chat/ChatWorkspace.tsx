@@ -2280,8 +2280,9 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{/* An archived chat reads as an ordinary one: sending to it restores it. */}
-					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock || terminated ? null : (
+					{/* An archived chat reads as an ordinary one: sending to it restores it, and the
+					    composer, not a banner, says so until the agent is back. */}
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock || terminated || restoring ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}

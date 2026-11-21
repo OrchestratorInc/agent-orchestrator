@@ -3486,6 +3486,10 @@ describe("ChatWorkspace timeline", () => {
 		// The session turns live before its agent is back: still one restore.
 		rerender(view(true, false));
 		expect(composer).toHaveAttribute("aria-placeholder", "Restoring session");
+		// No agent banner flashes above the chat meanwhile.
+		expect(screen.queryByText("Waking agent…")).not.toBeInTheDocument();
+		expect(screen.queryByText("Resuming…")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		rerender(view(false, false));
 		expect(composer).toHaveAttribute("aria-placeholder", "Message the agent");
 		expect(document.querySelector(".cursor-chat-composer")).not.toHaveAttribute("data-starting");
