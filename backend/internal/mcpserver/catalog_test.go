@@ -71,8 +71,6 @@ func fixed(status int, payload string) func() (int, string) {
 	return func() (int, string) { return status, payload }
 }
 
-// runMCPOpen keeps stdin open until want replies arrive, as a live client does:
-// the server stops in-flight waits when stdin closes.
 func runMCPOpen(t *testing.T, want int, lines ...string) []mcpReply {
 	t.Helper()
 	inR, inW := io.Pipe()
@@ -671,5 +669,50 @@ func TestToolsForAnotherSessionRefuseThisSession(t *testing.T) {
 				t.Fatalf("isError = %v, calls = %+v, text = %s", isError, daemon.seen(), text)
 			}
 		})
+	}
+}
+
+func TestAPaddedOwnIdNeverReachesThisSession(t *testing.T) {
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-1/conversation": fixed(200, bypassConversation),
+		"POST /api/v1/sessions/ao-1/kill":        fixed(200, `{"ok":true}`),
+	})
+	text, isError := callTool(t, "session_stop", map[string]any{"sessionId": "ao-1 "})
+	if !isError {
+		t.Fatalf("a padded own id was accepted: %s", text)
+	}
+	for _, call := range daemon.seen() {
+		if call.path == "/api/v1/sessions/ao-1/kill" {
+			t.Errorf("the calling session was stopped: %+v", call)
+		}
+	}
+}
+
+func TestArgumentsMustBeInRange(t *testing.T) {
+	daemon := startFakeDaemon(t, nil)
+	for tool, args := range map[string]map[string]any{
+		"session_read": {"sessionId": "ao-2", "limit": 1e30},
+		"session_list": {"kind": "reviewer"},
+		"session_wait": {"sessionIds": []string{"ao-2"}, "timeoutSec": 0},
+	} {
+		if text, isError := callTool(t, tool, args); !isError || !strings.Contains(text, "must be") {
+			t.Errorf("%s %v: isError = %v, text = %s", tool, args, isError, text)
+		}
+	}
+	if len(daemon.seen()) != 0 {
+		t.Errorf("an out-of-range call reached the daemon: %+v", daemon.seen())
+	}
+}
+
+func TestMarkupHeavyTurnsStayValidJSON(t *testing.T) {
+	heavy := strings.Repeat(`<a href=\"x\">&</a>\n`, 2000)
+	turn := `{"userRequest":"` + heavy + `","agentResponse":"` + heavy + `"}`
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2/history": fixed(200, `{"total":5,"turns":[`+strings.Repeat(turn+",", 4)+turn+`]}`),
+	})
+	text, isError := callTool(t, "session_read", map[string]any{"sessionId": "ao-2", "limit": 5})
+	var history struct{ Turns []map[string]string }
+	if err := json.Unmarshal([]byte(text), &history); isError || err != nil || len(history.Turns) != 5 {
+		t.Fatalf("isError = %v, err = %v, turns = %d, bytes = %d", isError, err, len(history.Turns), len(text))
 	}
 }

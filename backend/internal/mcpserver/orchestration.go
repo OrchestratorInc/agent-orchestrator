@@ -18,7 +18,7 @@ const (
 	maxWaitSessions            = 20
 	maxWaitSeconds             = 110
 	defaultWaitSeconds         = 50
-	sessionReadBudget          = 36_000
+	sessionReadBudget          = 20_000
 	quietPollsAfterWork        = 2
 	quietPollsNeverSeenWorking = 5
 )

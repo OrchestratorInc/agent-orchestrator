@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -92,11 +94,20 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 			var text string
 			if text, valid = value.(string); valid && strings.TrimSpace(text) == "" {
 				delete(args, name)
+				continue
+			}
+			if allowed, ok := prop["enum"].([]string); ok && valid && !slices.Contains(allowed, text) {
+				return mcpToolError(fmt.Errorf("%s must be one of: %s", name, strings.Join(allowed, ", ")))
 			}
 		case "integer":
 			var number float64
 			number, valid = value.(float64)
 			valid = valid && number == math.Trunc(number)
+			minimum, _ := prop["minimum"].(int)
+			maximum, _ := prop["maximum"].(int)
+			if valid && (number < float64(minimum) || number > float64(maximum)) {
+				return mcpToolError(fmt.Errorf("%s must be %d to %d", name, minimum, maximum))
+			}
 		case "boolean":
 			_, valid = value.(bool)
 		case "array":
@@ -125,10 +136,13 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 	if err != nil {
 		return mcpToolError(err)
 	}
-	encoded, err := json.Marshal(result)
-	if err != nil {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(result); err != nil {
 		return mcpToolError(err)
 	}
+	encoded := bytes.TrimSpace(buffer.Bytes())
 	text := string(encoded)
 	if len(text) > maxToolResultChars {
 		text = strings.ToValidUTF8(text[:maxToolResultChars], "") + fmt.Sprintf("\n[cut: %d of %d bytes shown, so this is not complete JSON; narrow the request]", maxToolResultChars, len(encoded))
@@ -175,7 +189,7 @@ func (r routeTool) call(ctx context.Context, s *server, args map[string]any) (an
 		if _, given := args[name]; !given && name == "sessionId" {
 			value = caller
 		}
-		if value = strings.TrimSpace(value); value == "" {
+		if value == "" {
 			return nil, fmt.Errorf("%s is required", name)
 		}
 		path = strings.ReplaceAll(path, placeholder, url.PathEscape(value))
@@ -330,9 +344,9 @@ var catalog = []catalogTool{
 		"Lists sessions with status, agent, branch and project. Read it before you start new work, so you do not duplicate a session that exists.", false,
 		map[string]any{
 			"projectId": stringProp("Only sessions of this project."),
-			"active":    map[string]any{"type": "boolean", "description": "true: only sessions that are not terminated. Omit it to include terminated sessions."},
+			"active":    map[string]any{"type": "boolean", "description": "true: only sessions that are not terminated. false: only terminated sessions. Omit it for all."},
 			"kind":      enumProp("Only this kind.", "worker", "orchestrator"),
-			"limit":     intProp("Sessions per page. Defaults to 50.", 1, 200),
+			"limit":     intProp("Sessions per page. Defaults to 50.", 1, 100),
 			"cursor":    stringProp("nextCursor from the previous page."),
 		}, nil,
 		routeTool{method: http.MethodGet, path: "sessions", query: []string{"projectId", "active", "kind", "limit", "cursor"},
