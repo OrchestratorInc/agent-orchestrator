@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 	workerTuning: {} as { model?: string; mode?: string; effort?: string },
 	baseTuning: {} as { model?: string; mode?: string; effort?: string },
 	workspaces: [] as Array<Record<string, unknown>>,
+	catalogWarning: "",
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -44,7 +45,7 @@ vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
 		queryKey: ["agent-models", agentId, projectId],
-		queryFn: async () => agentId === "amp" ? ({ models: [{ id: "smart", label: "Smart", isDefault: true }, { id: "rush", label: "Rush" }], allowCustom: false, customModelEntry: "none", selectionMode: "mode" }) : ({
+		queryFn: async () => agentId === "amp" ? ({ models: [{ id: "smart", label: "Smart", isDefault: true }, { id: "rush", label: "Rush" }], allowCustom: false, customModelEntry: "none", selectionMode: "mode" }) : mocks.catalogWarning ? ({ models: [], warning: mocks.catalogWarning, allowCustom: false, customModelEntry: "none", selectionMode: "catalog" }) : ({
 			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }, { id: "capable", label: "Capable", efforts: ["low", "high"], defaultEffort: "high" }, { id: "plain", label: "Plain", efforts: [] }, { id: "project-model", label: "Project model", efforts: ["minimal", "low"], defaultEffort: "low" }],
 			allowCustom: false,
 			customModelEntry: "none",
@@ -104,7 +105,7 @@ async function choose(user: Clicker, dialog: HTMLElement, row: "Agent" | "Model"
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.catalogWarning = ""; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -673,10 +674,29 @@ describe("AutomationsView", () => {
 		await openBlankCreate(userEvent);
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
 		expect(dialog).toHaveClass("border-(--color-border-overlay)", "bg-popover", "rounded-panel");
-		expect(within(dialog).getByRole("heading", { name: "New automation" })).toHaveClass("settings-dialog-title");
+		expect(within(dialog).getByRole("heading", { name: "New automation" })).toHaveClass("text-heading-sm");
 		expect(dialog).toHaveClass("left-1/2", "top-1/2");
 		expect(dialog).not.toHaveClass("right-0", "h-dvh");
 		expect(within(dialog).queryByText(/purpose|more options/i)).not.toBeInTheDocument();
+	});
+
+	it("shows an agent's model error as an icon and holds Create until it clears", async () => {
+		mocks.catalogWarning = "Codex is not signed in; sign in to load its models";
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "New automation" });
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
+		// The message is the icon's, read on hover or focus, not a line of its own.
+		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Codex is not signed in; sign in to load its models");
+		expect(within(dialog).getByText("Codex is not signed in; sign in to load its models")).toHaveClass("sr-only");
+		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeDisabled();
+		await choose(user, dialog, "Agent", /Amp/);
+		await waitFor(() => expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument());
+		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeEnabled();
 	});
 
 	it("offers Weekdays as a schedule with one time field", async () => {
@@ -707,12 +727,12 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveFocus();
 	});
 
-	it("shows the breadcrumb from Automations to the dialog", async () => {
+	it("names the dialog in one quiet title, without a breadcrumb", async () => {
 		renderView();
 		await openBlankCreate(userEvent);
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		expect(within(dialog).getByText("Automations")).toHaveClass("text-muted-foreground");
-		expect(within(dialog).getByRole("heading", { name: "New automation" })).toBeInTheDocument();
+		expect(within(dialog).getByRole("heading", { name: "New automation" })).toHaveClass("text-muted-foreground");
+		expect(within(dialog).queryByText("Automations")).not.toBeInTheDocument();
 	});
 
 	it("keeps Next run current while the dialog stays open", async () => {

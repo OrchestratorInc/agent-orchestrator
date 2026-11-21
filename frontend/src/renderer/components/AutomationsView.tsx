@@ -715,16 +715,11 @@ function AutomationFormDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent showCloseButton={false} className={cn(centeredOnboardingDialogClass, "h-[min(720px,calc(100svh-24px))] max-h-none w-[min(960px,calc(100vw-24px))] rounded-panel")}>
+			<DialogContent showCloseButton={false} className={cn(centeredOnboardingDialogClass, "h-[min(640px,calc(100svh-24px))] max-h-none w-[min(960px,calc(100vw-24px))] rounded-panel")}>
 				<div className="flex shrink-0 items-center gap-2 border-b border-border py-2 ps-4 pe-2">
-					{/* Breadcrumb from the page behind the dialog to the dialog itself. */}
-					<div className="flex min-w-0 flex-1 items-center gap-1.5">
-						<span className="shrink-0 text-heading-sm text-muted-foreground">{t("automations.title")}</span>
-						<span aria-hidden="true" className="text-heading-sm text-passive">/</span>
-						<DialogTitle className="settings-dialog-title min-w-0 truncate">
-							{t(editing ? "automations.edit" : "automations.new")}
-						</DialogTitle>
-					</div>
+					<DialogTitle className="min-w-0 flex-1 truncate text-heading-sm font-normal text-muted-foreground">
+						{t(editing ? "automations.edit" : "automations.new")}
+					</DialogTitle>
 					<DialogDescription className="sr-only">
 						{t(editing ? "automations.edit.description" : "automations.create.description")}
 					</DialogDescription>
@@ -771,7 +766,7 @@ function AutomationFormDialog({
 						<section className="flex flex-col gap-2" aria-labelledby="automation-run-in">
 						<h3 id="automation-run-in" className={FORM_CAPTION_CLASS}>{t("automations.section.runIn")}</h3>
 						{/* The composer's project picker, then its one agent, model and effort picker. */}
-						<div className="-ms-3 flex min-w-0 flex-wrap items-start gap-1">
+						<div className="-ms-3 flex min-w-0 items-center gap-1">
 							<SettingsOptionMenu
 								triggerRef={projectRef}
 								aria-invalid={Boolean(validationErrors.projectId)}
@@ -786,7 +781,7 @@ function AutomationFormDialog({
 								menuClassName="w-48 max-h-72"
 								menuItemClassName="gap-2! [&_svg]:text-current!"
 								triggerVariant="ghost"
-								triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
+								triggerClassName={cn(TRIGGER_CLASS, "w-fit min-w-0")}
 								showCaret={false}
 								renderTrigger={(selected, placeholder) => (
 									<span className="inline-flex min-w-0 items-center gap-1.5">
@@ -802,7 +797,7 @@ function AutomationFormDialog({
 								)}
 							/>
 							{open ? (
-								<div className="flex min-w-0 flex-col gap-1" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+								<div className="flex shrink-0 items-center" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"

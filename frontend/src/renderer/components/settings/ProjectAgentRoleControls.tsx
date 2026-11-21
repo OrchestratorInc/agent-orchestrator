@@ -123,7 +123,7 @@ export function AgentModelField({
 		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
 
 	if (variant === "task") {
-		return <>
+		return (
 			<TaskModelSelection id="automation-model" fetching={query.isFetching} agentId={agentId} agentLabel={agentId} projectId={projectId}
 				catalog={catalog ? { ...catalog, models: offeredModels } : undefined}
 				value={model} mode={mode} effort={effort}
@@ -131,9 +131,9 @@ export function AgentModelField({
 				onModelChange={onModelChange} onModeChange={onModeChange} onEffortChange={onEffortChange}
 				onValidityChange={onValidityChange}
 				agentSwitch={agentSwitch ?? { projectId, hostId, agents: [], onPendingChange: () => {} }}
+				warning={warning}
 			/>
-			{warning ? <FieldWarning className={cn("text-xs", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} /> : null}
-		</>;
+		);
 	}
 
 	if (isMode) {
