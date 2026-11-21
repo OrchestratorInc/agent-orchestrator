@@ -73,15 +73,25 @@ func callSessionRead(ctx context.Context, s *server, args map[string]any) (any, 
 	if err := s.daemon.DoJSON(ctx, http.MethodGet, sessionPath(stringArg(args, "sessionId"), "/history?"+query.Encode()), nil, &history); err != nil {
 		return nil, err
 	}
-	perText := min(maxTurnTextChars, sessionReadBudget/(2*max(len(history.Turns), 1)))
-	for _, turn := range history.Turns {
+	full := make([]map[string]string, len(history.Turns))
+	for i, turn := range history.Turns {
+		full[i] = map[string]string{}
 		for _, key := range []string{"userRequest", "agentResponse"} {
 			if text, ok := turn[key].(string); ok {
-				turn[key] = clip(text, perText)
+				full[i][key] = text
 			}
 		}
 	}
-	return history, nil
+	for perText := min(maxTurnTextChars, sessionReadBudget/(2*max(len(history.Turns), 1))); ; perText /= 2 {
+		for i, turn := range history.Turns {
+			for key, text := range full[i] {
+				turn[key] = clip(text, perText)
+			}
+		}
+		if encoded, err := encodeResult(history); err != nil || len(encoded) <= maxToolResultChars || perText < 64 {
+			return history, nil
+		}
+	}
 }
 
 func sessionSettled(session map[string]any) bool {
@@ -94,7 +104,7 @@ func sessionSettled(session map[string]any) bool {
 	case "provisioning":
 		return false
 	}
-	return session["activity"] != "active"
+	return session["activity"] != "active" && session["statusReadiness"] != "checking"
 }
 
 func (s *server) chatTurnInFlight(ctx context.Context, id string) (bool, error) {
@@ -123,8 +133,11 @@ func waitSessionIDs(args map[string]any) ([]string, error) {
 	raw, _ := args["sessionIds"].([]any)
 	ids := make([]string, 0, len(raw))
 	for _, value := range raw {
-		id, _ := value.(string)
-		if id = strings.TrimSpace(id); id != "" && !slices.Contains(ids, id) {
+		id, ok := value.(string)
+		if id = strings.TrimSpace(id); !ok || id == "" {
+			return nil, errors.New("sessionIds must contain only non-empty session ids")
+		}
+		if !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}

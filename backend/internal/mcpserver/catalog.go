@@ -21,11 +21,11 @@ const (
 )
 
 type catalogTool struct {
-	name, title, desc     string
-	act, ungated, notSelf bool
-	props                 map[string]any
-	required              []string
-	call                  func(ctx context.Context, s *server, args map[string]any) (any, error)
+	name, title, desc                  string
+	act, ungated, notSelf, destructive bool
+	props                              map[string]any
+	required                           []string
+	call                               func(ctx context.Context, s *server, args map[string]any) (any, error)
 }
 
 type routeTool struct {
@@ -50,7 +50,7 @@ func (t catalogTool) definition() map[string]any {
 	}
 	return map[string]any{
 		"name": t.name, "title": t.title, "description": t.desc, "inputSchema": schema,
-		"annotations": map[string]any{"title": t.title, "readOnlyHint": !t.act, "destructiveHint": false, "openWorldHint": false},
+		"annotations": map[string]any{"title": t.title, "readOnlyHint": !t.act, "destructiveHint": t.destructive, "openWorldHint": false},
 	}
 }
 
@@ -136,13 +136,10 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 	if err != nil {
 		return mcpToolError(err)
 	}
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(result); err != nil {
+	encoded, err := encodeResult(result)
+	if err != nil {
 		return mcpToolError(err)
 	}
-	encoded := bytes.TrimSpace(buffer.Bytes())
 	text := string(encoded)
 	if len(text) > maxToolResultChars {
 		text = strings.ToValidUTF8(text[:maxToolResultChars], "") + fmt.Sprintf("\n[cut: %d of %d bytes shown, so this is not complete JSON; narrow the request]", maxToolResultChars, len(encoded))
@@ -239,11 +236,12 @@ func (r routeTool) call(ctx context.Context, s *server, args map[string]any) (an
 	if r.pick == nil {
 		return out, nil
 	}
+	var picked any = out
 	var decoded map[string]any
-	if json.Unmarshal(out, &decoded) != nil {
-		return out, nil
+	if json.Unmarshal(out, &decoded) == nil {
+		picked = r.pick(decoded)
 	}
-	return r.pick(decoded), nil
+	return picked, nil
 }
 
 func keep(source map[string]any, keys ...string) map[string]any {
@@ -270,6 +268,9 @@ func each(value any, pick func(map[string]any) map[string]any) []any {
 func sessionSummary(session map[string]any) map[string]any {
 	out := keep(session, "id", "displayName", "status", "kind", "harness", "mode", "model", "projectId", "branch",
 		"isTerminated", "provisionState", "provisionError", "lastEventAt")
+	if readiness, _ := session["statusReadiness"].(string); readiness != "" && readiness != "ready" {
+		out["statusReadiness"] = readiness
+	}
 	if activity, ok := session["activity"].(map[string]any); ok {
 		if state, _ := activity["state"].(string); state != "" {
 			out["activity"] = state
@@ -315,6 +316,21 @@ func ownSession(t catalogTool) catalogTool {
 func otherSession(t catalogTool) catalogTool {
 	t.notSelf = true
 	return t
+}
+
+func destructive(t catalogTool) catalogTool {
+	t.destructive = true
+	return t
+}
+
+func encodeResult(result any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(result); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(buffer.Bytes()), nil
 }
 
 func reviewTriggerBody(caller string, args map[string]any) map[string]any {
@@ -446,13 +462,13 @@ var catalog = []catalogTool{
 		[]string{"sessionId", "message"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/send",
 			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"senderSessionId": caller} }})),
-	otherSession(routed("session_interrupt", "Interrupt a session's turn", "Stops the turn a Chat session runs now. The session stays, and a later message starts it again.", true,
+	destructive(otherSession(routed("session_interrupt", "Interrupt a session's turn", "Stops the turn a Chat session runs now. The session stays, and a later message starts it again.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
-		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/conversation/interrupt"})),
-	otherSession(routed("session_stop", "Stop a session", "Terminates a session. Its worktree and history stay, and session_restore brings it back.", true,
+		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/conversation/interrupt"}))),
+	destructive(otherSession(routed("session_stop", "Stop a session", "Terminates a session. Its worktree and history stay, and session_restore brings it back.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/kill",
-			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"callerSessionId": caller} }})),
+			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"callerSessionId": caller} }}))),
 	otherSession(routed("session_restore", "Restore a session", "Restores a terminated session, or resumes an agent that exited.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/restore", pick: func(m map[string]any) any {
@@ -505,9 +521,9 @@ var catalog = []catalogTool{
 		map[string]any{"sessionId": sessionProp, "rerun": map[string]any{"type": "boolean", "description": "Review the same commit again."}}, nil,
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/reviews/trigger", body: reviewTriggerBody,
 			pick: func(m map[string]any) any { return keep(m, "created", "reviews", "runs") }}),
-	routed("review_cancel", "Cancel code reviews", "Cancels every running review of a worker session's pull request.", true,
+	destructive(routed("review_cancel", "Cancel code reviews", "Cancels every running review of a worker session's pull request.", true,
 		map[string]any{"sessionId": sessionProp}, nil,
-		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/reviews/cancel", pick: func(m map[string]any) any { return keep(m, "reviews") }}),
+		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/reviews/cancel", pick: func(m map[string]any) any { return keep(m, "reviews") }})),
 	routed("automation_create", "Create an automation", "Creates a recurring automation that starts a session on a schedule.", true,
 		map[string]any{
 			"projectId":   stringProp("Project id."),
@@ -522,7 +538,7 @@ var catalog = []catalogTool{
 			"enabled":     map[string]any{"type": "boolean", "description": "Defaults to true."},
 		}, []string{"projectId", "displayName", "prompt", "kind", "timezone"},
 		routeTool{method: http.MethodPost, path: "automations"}),
-	routed("automation_update", "Update an automation", "Changes an automation. Send only the fields that change; enabled false pauses it.", true,
+	destructive(routed("automation_update", "Update an automation", "Changes an automation. Send only the fields that change; enabled false pauses it.", true,
 		map[string]any{
 			"automationId": stringProp("Automation id from automation_list."),
 			"displayName":  stringProp("Name."),
@@ -534,7 +550,7 @@ var catalog = []catalogTool{
 			"model":        stringProp("Model id."),
 			"enabled":      map[string]any{"type": "boolean", "description": "false pauses the automation."},
 		}, []string{"automationId"},
-		routeTool{method: http.MethodPatch, path: "automations/{automationId}"}),
+		routeTool{method: http.MethodPatch, path: "automations/{automationId}"})),
 	{
 		name: "report", title: "Report progress", act: true, ungated: true,
 		desc: "Records this worker's progress for the project's orchestrator: a checkpoint, a need for input, a blocker, or completion.",

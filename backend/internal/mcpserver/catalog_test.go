@@ -73,6 +73,11 @@ func fixed(status int, payload string) func() (int, string) {
 
 func runMCPOpen(t *testing.T, want int, lines ...string) []mcpReply {
 	t.Helper()
+	return runMCPOpenThen(t, want, nil, lines...)
+}
+
+func runMCPOpenThen(t *testing.T, want int, beforeClose func(), lines ...string) []mcpReply {
+	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	served := make(chan error, 1)
@@ -94,6 +99,9 @@ func runMCPOpen(t *testing.T, want int, lines ...string) []mcpReply {
 			t.Fatalf("reply %q: %v", scanner.Text(), err)
 		}
 		replies = append(replies, reply)
+	}
+	if beforeClose != nil {
+		beforeClose()
 	}
 	_ = inW.Close()
 	go func() { _, _ = io.Copy(io.Discard, outR) }()
@@ -515,23 +523,40 @@ func TestSessionWaitKeepsWaitingThroughADaemonError(t *testing.T) {
 }
 
 func TestSessionWaitDoesNotBlockOtherRequestsAndCanBeCancelled(t *testing.T) {
-	waitPollInterval = 20 * time.Millisecond
+	waitPollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
-	startFakeDaemon(t, map[string]func() (int, string){
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
 		"GET /api/v1/sessions/ao-2": fixed(200, `{"session":{"id":"ao-2","provisionState":"provisioning"}}`),
 	})
-	started := time.Now()
-	replies := runMCPOpen(t, 2,
+	polledWhileOpen := func() bool {
+		before := len(daemon.seen())
+		time.Sleep(200 * time.Millisecond)
+		return len(daemon.seen()) > before
+	}
+	replies := runMCPOpenThen(t, 1, func() {
+		if !polledWhileOpen() {
+			t.Error("the wait is not polling while the ping was answered")
+		}
+	},
+		mcpCall("session_wait", map[string]any{"sessionIds": []string{"ao-2"}, "timeoutSec": 110}),
+		`{"jsonrpc":"2.0","id":8,"method":"ping"}`,
+	)
+	if len(replies) != 1 || string(replies[0].ID) != "8" {
+		t.Fatalf("replies = %+v; a running wait must not hold a ping back", replies)
+	}
+
+	replies = runMCPOpenThen(t, 2, func() {
+		if polledWhileOpen() {
+			t.Error("the wait still polls the daemon after notifications/cancelled, with stdin open")
+		}
+	},
 		mcpCall("session_wait", map[string]any{"sessionIds": []string{"ao-2"}, "timeoutSec": 110}),
 		`{"jsonrpc":"2.0","id":8,"method":"ping"}`,
 		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}`,
 		`{"jsonrpc":"2.0","id":9,"method":"ping"}`,
 	)
 	if len(replies) != 2 || string(replies[0].ID) != "8" || string(replies[1].ID) != "9" {
-		t.Fatalf("replies = %+v; a cancelled wait must get no reply and must not hold the pings back", replies)
-	}
-	if elapsed := time.Since(started); elapsed > 10*time.Second {
-		t.Errorf("a cancelled wait took %s", elapsed)
+		t.Fatalf("replies = %+v; a cancelled wait must get no reply", replies)
 	}
 }
 
@@ -713,6 +738,57 @@ func TestMarkupHeavyTurnsStayValidJSON(t *testing.T) {
 	text, isError := callTool(t, "session_read", map[string]any{"sessionId": "ao-2", "limit": 5})
 	var history struct{ Turns []map[string]string }
 	if err := json.Unmarshal([]byte(text), &history); isError || err != nil || len(history.Turns) != 5 {
+		t.Fatalf("isError = %v, err = %v, turns = %d, bytes = %d", isError, err, len(history.Turns), len(text))
+	}
+}
+
+func TestSessionWaitHoldsWhileTheDaemonStillChecksASession(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	reads := 0
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2": func() (int, string) {
+			reads++
+			if reads <= 4 {
+				return 200, `{"session":{"id":"ao-2","provisionState":"ready","statusReadiness":"checking","activity":{"state":"idle"}}}`
+			}
+			return 200, `{"session":{"id":"ao-2","provisionState":"ready","statusReadiness":"ready","activity":{"state":"idle"}}}`
+		},
+	})
+	if text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2"}}); isError || !strings.Contains(text, `"timedOut":false`) || strings.Contains(text, "checking") {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	if reads != 4+quietPollsNeverSeenWorking {
+		t.Errorf("reads = %d, want %d: reads while the daemon checks must not count as quiet", reads, 4+quietPollsNeverSeenWorking)
+	}
+}
+
+func TestSessionWaitRefusesAnIdThatIsNotAString(t *testing.T) {
+	daemon := startFakeDaemon(t, nil)
+	text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []any{"ao-2", 7}})
+	if !isError || !strings.Contains(text, "sessionIds") || len(daemon.seen()) != 0 {
+		t.Fatalf("isError = %v, calls = %+v, text = %s", isError, daemon.seen(), text)
+	}
+}
+
+func TestOnlyToolsThatStopOrOverwriteAreMarkedDestructive(t *testing.T) {
+	want := map[string]bool{"session_stop": true, "session_interrupt": true, "review_cancel": true, "automation_update": true}
+	for _, tool := range catalog {
+		hint := tool.definition()["annotations"].(map[string]any)["destructiveHint"]
+		if hint != want[tool.name] {
+			t.Errorf("%s destructiveHint = %v, want %v", tool.name, hint, want[tool.name])
+		}
+	}
+}
+
+func TestATurnThatGrowsWhenEncodedStillFitsAsValidJSON(t *testing.T) {
+	control := strings.Repeat(`\u0001`, maxTurnTextChars)
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2/history": fixed(200, `{"total":1,"turns":[{"userRequest":"`+control+`","agentResponse":"`+control+`"}]}`),
+	})
+	text, isError := callTool(t, "session_read", map[string]any{"sessionId": "ao-2", "limit": 1})
+	var history struct{ Turns []map[string]string }
+	if err := json.Unmarshal([]byte(text), &history); isError || err != nil || len(history.Turns) != 1 || len(text) > maxToolResultChars {
 		t.Fatalf("isError = %v, err = %v, turns = %d, bytes = %d", isError, err, len(history.Turns), len(text))
 	}
 }
