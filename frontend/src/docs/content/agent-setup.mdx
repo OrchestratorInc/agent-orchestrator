@@ -51,7 +51,7 @@ Open the desktop app. On macOS you can do it from a terminal by its path:
 open "/Applications/Agent Orchestrator.app"
 ```
 
-If the app was installed for one user only, it is in `~/Applications/Agent Orchestrator.app` instead. Once `ao` works, `ao start` also opens the installed app. Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
+If the app was installed for one user only, it is in `~/Applications/Agent Orchestrator.app` instead. On macOS, once `ao` works, `ao start` also opens the installed app. On Linux and Windows, open the installed app from the desktop's app menu: `ao start` looks only for the app locations it installs itself, and may download a fresh copy instead. Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
 
 Then check that its daemon is ready:
 
