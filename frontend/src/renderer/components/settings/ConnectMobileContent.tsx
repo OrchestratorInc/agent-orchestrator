@@ -588,10 +588,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onError: (_error, _enabled, context) => {
 			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
 		},
-		onSettled: () => {
-			invalidate();
-			void queryClient.invalidateQueries({ queryKey: ["loopback-reach"] });
-		},
+		onSettled: invalidate,
 	});
 
 	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it

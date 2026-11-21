@@ -27,7 +27,7 @@ const MAX_FORWARD_CONNECTIONS = 64;
 const PROBE_TIMEOUT_MS = 3_000;
 const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
 const UNSPECIFIED_URLS = ["*://0.0.0.0/*", "*://[::]/*"];
-const PREVIEW_HOST = /^ao-preview-.*\.localhost\.?$/;
+const PREVIEW_HOST = /^ao-preview-[0-9a-f]{32}\.localhost\.?$/;
 
 class SameHostError extends Error {}
 
@@ -226,27 +226,33 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		return forward;
 	};
 
-	return {
-		route(session: RoutedSession, hostId: string): Promise<void> {
-			let ready = routed.get(session);
-			if (!ready) {
-				ready = (async () => {
-					const port = await socksPort(hostId);
-					await session.setProxy({ mode: "fixed_servers", proxyRules: `socks5://127.0.0.1:${port}`, proxyBypassRules: BYPASS_RULES });
-					session.webRequest.onBeforeRequest({ urls: UNSPECIFIED_URLS }, (details, callback) => {
-						const redirectURL = unspecifiedToLocalhost(details.url);
-						callback(redirectURL ? { redirectURL } : {});
-					});
-					await session.closeAllConnections();
-				})();
-				ready.catch(() => {
-					routed.delete(session);
-					session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => callback({ cancel: Boolean(hostLocalUrl(details.url)) }));
+	const route = (session: RoutedSession, hostId: string): Promise<void> => {
+		let ready = routed.get(session);
+		if (!ready) {
+			ready = (async () => {
+				const port = await socksPort(hostId);
+				await session.setProxy({ mode: "fixed_servers", proxyRules: `socks5://127.0.0.1:${port}`, proxyBypassRules: BYPASS_RULES });
+				session.webRequest.onBeforeRequest({ urls: UNSPECIFIED_URLS }, (details, callback) => {
+					const redirectURL = unspecifiedToLocalhost(details.url);
+					callback(redirectURL ? { redirectURL } : {});
 				});
-				routed.set(session, ready);
-			}
-			return ready;
-		},
+				await session.closeAllConnections();
+			})();
+			ready.catch(() => {
+				routed.delete(session);
+				session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+					const blocked = Boolean(hostLocalUrl(details.url));
+					callback({ cancel: blocked });
+					if (blocked) void route(session, hostId).catch(() => undefined);
+				});
+			});
+			routed.set(session, ready);
+		}
+		return ready;
+	};
+
+	return {
+		route,
 		reach,
 		forward(hostId: string, remotePort: number): Promise<PortForward> {
 			if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65_535) return Promise.reject(new Error("A port is a whole number from 1 to 65535."));

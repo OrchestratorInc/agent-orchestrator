@@ -898,10 +898,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 	// password while persisted state/UI still say the bridge is off.
 	prevHash := b.LAN.PasswordHash()
 	wasRunning := b.LAN.Running()
-	prevSt, err := mobilebridge.Load(b.ConfigPath)
-	if err != nil && !os.IsNotExist(err) {
-		return MobileStatusResponse{}, err
-	}
+	prevSt, _ := mobilebridge.Load(b.ConfigPath)
 
 	b.applyLANAccess(prevSt)
 

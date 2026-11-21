@@ -890,7 +890,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		if (!session.hostId) return url;
 		// A disconnected host has no other address for it: keep the one shown.
 		return aoBridge.remotes.externalUrl(session.hostId, url).catch((error: unknown) => {
-			if (isHostLocalWebLink(url) && !/^https?:\/\/ao-preview-/i.test(url)) throw error;
+			if (isHostLocalWebLink(url) && !/^https?:\/\/ao-preview-[0-9a-f]{32}\.localhost[:/]/i.test(url)) throw error;
 			return url;
 		});
 	};
@@ -910,8 +910,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			setUrlCopied(true);
 			clearTimeout(copyFeedbackTimeoutRef.current);
 			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
-		} catch {
-			showGlobalToast(t("browser.urlCopyFailed"), undefined, "top-center");
+		} catch (error) {
+			showGlobalToast(t("browser.urlCopyFailed"), error instanceof Error ? error.message : undefined, "top-center");
 		}
 	};
 

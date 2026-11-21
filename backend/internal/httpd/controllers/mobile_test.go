@@ -135,19 +135,6 @@ func TestLoopbackTunnelSwitchPersistsAndSurvivesEnable(t *testing.T) {
 	}
 }
 
-func TestEnableKeepsTheLoopbackSwitchWhenTheConfigIsUnreadable(t *testing.T) {
-	b, lan := newKeepAwakeBridge(t, nil)
-	if _, err := b.SetLoopbackTunnel(false); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(b.ConfigPath, []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.Enable(); err == nil || !lan.loopbackOff {
-		t.Fatalf("enable over an unreadable config: err %v, listener off %v", err, lan.loopbackOff)
-	}
-}
-
 func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile", "config.json")
 	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {

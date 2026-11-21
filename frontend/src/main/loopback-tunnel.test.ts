@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as net from "node:net";
 import { connectionOwner, createLoopbackTunnels, isLoopbackName, type RoutedSession } from "./loopback-tunnel";
 import { LoopbackTunnelError } from "./remote-proxy";
@@ -103,17 +103,18 @@ describe("loopback tunnels", () => {
 		expect(state.respond?.("http://localhost:5173/").redirectURL).toBeUndefined();
 	});
 
-	it("keeps a partition it could not route away from this computer's localhost until routing works", async () => {
+	it("keeps a partition it could not route away from this computer's localhost and retries on the next request", async () => {
 		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} } }));
 		const { session, state } = fakeSession();
 		state.failProxy = true;
 		await expect(tunnels.route(session, "h_box")).rejects.toThrow("proxy refused");
 		for (const url of ["http://localhost:5173/", "ws://127.0.0.1:5173/hmr", "http://0.0.0.0:3000/", "http://[::1]:8080/"]) expect(state.respond?.(url).cancel).toBe(true);
-		for (const url of ["https://example.com/", "http://ao-preview-abc.localhost:3011/"]) expect(state.respond?.(url).cancel).toBe(false);
+		expect(state.respond?.("http://ao-preview-abc.localhost:5173/").cancel).toBe(true);
+		for (const url of ["https://example.com/", `http://ao-preview-${"0a".repeat(16)}.localhost:3011/`]) expect(state.respond?.(url).cancel).toBe(false);
 
 		state.failProxy = false;
-		await tunnels.route(session, "h_box");
-		expect(state.respond?.("http://localhost:5173/")).toEqual({});
+		expect(state.respond?.("http://localhost:5173/").cancel).toBe(true);
+		await vi.waitFor(() => expect(state.respond?.("http://localhost:5173/")).toEqual({}));
 	});
 
 	it("tells a host on this computer, a remote host and one that does not share apart", async () => {
