@@ -311,8 +311,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Loaded again when the provider comes up: a chat opened while hibernated or
 	// connecting has no catalog to give, and the composer would otherwise keep the
-	// empty one until the screen was reopened.
-	const providerLive = conversation.snapshot ? providerCatalogLive(conversation.snapshot) : undefined;
+	// empty one until the screen was reopened. A page saved on the phone says
+	// nothing of the provider now (savedPageView shows a busy one as ready), so the
+	// load waits for the live read: one made from it was never asked again.
+	const providerLive = conversation.snapshot && !conversation.saved ? providerCatalogLive(conversation.snapshot) : undefined;
 	useEffect(() => {
 		const load = turnOptionsLoadFor(turnOptionsRequestedFor.current, session.id, providerLive);
 		if (!load) return;
@@ -970,10 +972,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					inputPending={conversation.pendingActions.includes("input")}
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
-					onRollback={conversation.rollback}
-					onFork={forkOptions?.allowed ? forkTurn : undefined}
+					// A page saved on the phone is a record until the live read lands: its
+					// turns may have moved on, so none can be rolled back, forked or edited.
+					onRollback={conversation.saved ? undefined : conversation.rollback}
+					onFork={forkOptions?.allowed && !conversation.saved ? forkTurn : undefined}
 					forkAnyTurn={forkOptions?.anyTurn === true}
-					onEditMessage={conversation.editMessage}
+					onEditMessage={conversation.saved ? undefined : conversation.editMessage}
 					onEditingChange={setEditingMessage}
 					jumpToSequence={jumpToSequence}
 					onJumpHandled={clearJumpToSequence}
