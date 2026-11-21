@@ -287,6 +287,7 @@ var shippedMigrations = map[int64]string{
 	20261117090000000: "20261117090000000_allow_tau_harness.sql",
 	20261118180603285: "20261118180603285_report_unacknowledged_attempts.sql",
 	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
+	20261120094922017: "20261120094922017_allow_codebuddy_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -310,7 +311,10 @@ func burnedVersion(v int64) bool {
 		v == 216 || v == 20261114174124485 ||
 		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
 		// numbers before its migration moved above main's latest version.
-		v == 207 || v == 20261023182047274 || v == 20261114174310512
+		v == 207 || v == 20261023182047274 || v == 20261114174310512 ||
+		// 20261023181512240 and 20261114173149181 were CodeBuddy Code preview
+		// numbers before its migration moved above main's latest version.
+		v == 20261023181512240 || v == 20261114173149181
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

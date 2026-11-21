@@ -52,6 +52,7 @@ func TestShippedChatDrivers(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
 		domain.HarnessMiniMaxCode,
+		domain.HarnessCodeBuddy,
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {

@@ -2327,10 +2327,12 @@ describe("TaskComposer", () => {
 		expect(await screen.findByTitle("Provider temporarily unavailable")).toBeInTheDocument();
 	});
 
-	it("submits a directly entered Mastra Code model", async () => {
-		const agent = "mastra-code";
+	it.each([
+		["mastra-code", "Mastra Code"],
+		["codebuddy", "CodeBuddy Code"],
+	] as const)("submits a directly entered %s model", async (agent, label) => {
 		clearCachedAgentModels(agent);
-		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) return { data: {
 				agentId: agent,
@@ -2360,10 +2362,12 @@ describe("TaskComposer", () => {
 		));
 	});
 
-	it("returns a directly entered Mastra Code model to the native default", async () => {
-		const agent = "mastra-code";
+	it.each([
+		["mastra-code", "Mastra Code"],
+		["codebuddy", "CodeBuddy Code"],
+	] as const)("returns a directly entered %s model to the native default", async (agent, label) => {
 		clearCachedAgentModels(agent);
-		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
 			: { data: { status: "ok", project: { config: {} } } });

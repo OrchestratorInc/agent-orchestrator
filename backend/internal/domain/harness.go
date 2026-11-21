@@ -45,6 +45,7 @@ const (
 	HarnessCommandCode     AgentHarness = "command-code"
 	HarnessMastraCode      AgentHarness = "mastra-code"
 	HarnessDockerAgent     AgentHarness = "docker-agent"
+	HarnessCodeBuddy       AgentHarness = "codebuddy"
 	HarnessHermes          AgentHarness = "hermes"
 	HarnessStakpak         AgentHarness = "stakpak"
 	HarnessOpenInterpreter AgentHarness = "open-interpreter"
@@ -63,7 +64,7 @@ var AllHarnesses = []AgentHarness{
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
 	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessMiniMaxCode, HarnessDeepSeek, HarnessOpenHands,
-	HarnessCommandCode, HarnessMastraCode, HarnessDockerAgent, HarnessMemcode, HarnessHermes, HarnessStakpak, HarnessOpenInterpreter, HarnessTau,
+	HarnessCommandCode, HarnessMastraCode, HarnessDockerAgent, HarnessMemcode, HarnessCodeBuddy, HarnessHermes, HarnessStakpak, HarnessOpenInterpreter, HarnessTau,
 }
 
 // ChatOnly reports whether h has no terminal interface, so every session on it

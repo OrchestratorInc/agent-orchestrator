@@ -56,6 +56,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetCommandCode:     "https://commandcode.ai/docs/quickstart",
 	TargetMastraCode:      "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode",
 	TargetDockerAgent:     "https://docs.docker.com/ai/docker-agent/getting-started/installation/",
+	TargetCodeBuddy:       "https://www.codebuddy.cn/docs/cli/quickstart",
 	TargetHermes:          "https://github.com/NousResearch/hermes-agent",
 	TargetStakpak:         "https://github.com/stakpak/agent#installation",
 	TargetOpenInterpreter: "https://www.openinterpreter.com/docs/terminal/install",
@@ -65,6 +66,12 @@ var agentDocumentationURLs = map[Target]string{
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
 	var plans []Plan
 	switch target {
+	case TargetCodeBuddy:
+		plan := s.planNPM(target, "@tencent-ai/codebuddy-code")
+		if len(plan.Command) > 0 {
+			plan.Command[len(plan.Command)-1] = "@tencent-ai/codebuddy-code@2.164.0"
+		}
+		plans = []Plan{plan}
 	case TargetClaudeCode:
 		official := s.officialByOS(target, "https://claude.ai/install.sh", "bash", "https://claude.ai/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
@@ -412,6 +419,12 @@ func (s requestPlanner) planKiroInstall() Plan {
 }
 
 func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Plan {
+	if operation == AgentOperationUpdate && plan.Target == TargetCodeBuddy {
+		plan.Unsupported = true
+		plan.Command = nil
+		plan.Reason = "AO has qualified CodeBuddy Code 2.164.0 only; update manually until a newer release is verified."
+		return plan
+	}
 	if operation == AgentOperationUpdate && plan.Method == "npm" && (plan.daemonRuntimeRejected || plan.daemonPrefixRejected) {
 		// The installed copy may live under another prefix (nvm, fnm, ~/.local)
 		// with its own Node. The update validates that installation once the

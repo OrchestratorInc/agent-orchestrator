@@ -152,6 +152,7 @@ var commandSpecs = map[string]commandSpec{
 	"command-code":     {args: []string{"--list-models"}, parser: parseCommandCodeModels},
 	"minimax-code":     {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels, interruptOnCancel: true},
 	"open-interpreter": {args: []string{"debug", "models"}, parser: parseOpenInterpreterModels},
+	"codebuddy":        {args: []string{"--help"}, parser: parseCodeBuddyModels},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
@@ -255,7 +256,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 // availability remain agent-owned and are never listed here.
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
-	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
+	case "claude-code", "codex", "codebuddy", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak", "open-interpreter", "mastra-code":
 		return ports.CustomModelEntryDirect
 	case "docker-agent", "minimax-code", "continue", "cline", "kilocode", "vibe", "pi", "tau", "kimchi", "prime-agent":

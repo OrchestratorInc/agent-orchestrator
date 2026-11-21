@@ -13,6 +13,7 @@ export const HARNESS_LOGO_MANIFEST: Readonly<Record<string, { light: HarnessLogo
 	claude: { light: { asset: "claude", source: "claude.svg", hash: "7517fe2def939ef3" } },
 	"claude-code": { light: { asset: "claude-code", source: "claude-code.svg", hash: "75ff4f9ea6e624e8" } },
 	cline: { light: { asset: "cline-light", source: "cline-light.svg", hash: "83ca7d7a0a255ea0" }, dark: { asset: "cline-dark", source: "cline-dark.svg", hash: "3c32732c7401161d" } },
+	codebuddy: { light: { asset: "codebuddy", source: "codebuddy.svg", hash: "149baa45b9f9370c" } },
 	codewhale: { light: { asset: "codewhale-light", source: "codewhale-light.svg", hash: "00cc1c053a5c8176" }, dark: { asset: "codewhale-dark", source: "codewhale-dark.svg", hash: "e661ba4adac62aa1" } },
 	codex: { light: { asset: "codex", source: "codex.svg", hash: "8e67f1ebc350b1f2" } },
 	"command-code": { light: { asset: "command-code-light", source: "command-code-light.svg", hash: "11f0bb77ece263ff" }, dark: { asset: "command-code-dark", source: "command-code-dark.svg", hash: "02c00c2771020179" } },

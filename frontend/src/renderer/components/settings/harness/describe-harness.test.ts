@@ -39,6 +39,15 @@ describe("configured harness authentication summary", () => {
 		}
 		expect(summary("mastra-code", "model_selection", "model_selection_unresolved")).toBe("settings.harness.health.authUnverified");
 	});
+
+	// CodeBuddy Code's native inference check reports the same provider codes.
+	it("keeps unconfirmed CodeBuddy Code provider checks unverified", () => {
+		for (const code of ["provider_inconclusive", "provider_unreachable", "provider_rate_limited", "provider_quota_exhausted", "probe_timeout"]) {
+			expect(summary("codebuddy", "provider_validation", code)).toBe("settings.harness.health.authUnverified");
+		}
+		// A reply from a models.json custom model is proven, but it is not an account sign-in.
+		expect(summary("codebuddy", "provider_validation", "custom_model_only")).toBe("settings.harness.installed");
+	});
 });
 
 // The Account and Health tabs both read this tone, so they never disagree.

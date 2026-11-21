@@ -1,0 +1,270 @@
+package codebuddy
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+)
+
+const authProbeTimeout = 30 * time.Second
+const authProbeOutputLimit = 64 << 10
+
+var _ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
+
+// AuthStatus verifies the provider selected by the native CLI. AO does not
+// inspect its credential stores or infer login from another harness's keys.
+func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
+	return status, err
+}
+
+// AuthStatusWithDiagnostics performs a tiny inference using the same native
+// user profile and inherited environment as CodeBuddy startup. Harness settings
+// has no project scope: project/local settings and project instructions are
+// excluded. A successful check may consume a small amount of provider quota.
+func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
+	}
+	fallback := ports.AgentAuthStatusUnknown
+	for _, key := range []string{"CODEBUDDY_API_KEY", "CODEBUDDY_AUTH_TOKEN"} {
+		value, overridden := ports.AuthEnvironmentOverride(ctx, key)
+		if !overridden {
+			value = os.Getenv(key)
+		}
+		if strings.TrimSpace(value) != "" {
+			fallback = ports.AgentAuthStatusConfigured
+			break
+		}
+	}
+	identity := domain.CommandSource("codebuddy", "--print")
+	finish := func(status ports.AgentAuthStatus, code string, started time.Time) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+		step := domain.NewAgentAuthDiagnostic("provider_validation", code)
+		step.DurationMs = time.Since(started).Milliseconds()
+		switch code {
+		case "provider_rate_limited":
+			step.Reason = "CodeBuddy's selected provider rate-limited the verification request; this is not a rejected login."
+			step.NextStep = "Wait for the provider limit to reset, then check again."
+		case "provider_quota_exhausted":
+			step.Reason = "CodeBuddy's selected provider reported a quota or billing limit; credentials remain configured."
+			step.NextStep = "Review the provider's quota or billing, then check again."
+		case "custom_model_only":
+			step.Reason = "CodeBuddy answered with a custom model from its models.json, not a CodeBuddy account. Its terminal opens the native login screen at every start."
+			step.NextStep = "Press Esc on that screen to continue with your custom model, or sign in to CodeBuddy with Set up."
+		}
+		if status.HasCredential() {
+			ports.RecordAuthEvidence(ctx, identity)
+		}
+		return status, identity, []domain.AgentAuthDiagnostic{step}, nil
+	}
+	started := time.Now()
+	binary, err := p.ResolveBinary(ctx)
+	if err != nil {
+		return finish(fallback, "command_failed", started)
+	}
+	// AO-owned transient files stay under AO_DATA_DIR (or ~/.ao), never the
+	// invoking checkout or a provider profile. Each check has an empty directory.
+	base := ports.AgentAuthDataDir(ctx)
+	if base == "" {
+		base = strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
+	}
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return finish(fallback, "check_failed", started)
+		}
+		base = filepath.Join(home, ".ao")
+	}
+	base = filepath.Join(base, "auth-probes")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return finish(fallback, "check_failed", started)
+	}
+	dir, err := os.MkdirTemp(base, "codebuddy-")
+	if err != nil {
+		return finish(fallback, "check_failed", started)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	probeCtx, cancel := context.WithTimeout(ctx, authProbeTimeout)
+	defer cancel()
+	args := []string{
+		"--print", "--output-format", "json", "--tools", "", "--max-turns", "1",
+		"--no-session-persistence", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`,
+		"--setting-sources", "user", "--settings", `{"disableAllHooks":true}`,
+		"--agent", "cli", "--system-prompt", "Reply briefly without using tools.",
+		"--", "Reply with OK.",
+	}
+	cmd := aoprocess.CommandContext(probeCtx, binary, args...)
+	aoprocess.ConfigureTreeCancellation(cmd)
+	cmd.WaitDelay = time.Second
+	cmd.Dir = dir
+	cmd.Env = authProbeEnv(ctx)
+	output := &boundedAuthOutput{cancel: cancel}
+	cmd.Stdout = output
+	// Native errors can echo credentials and URLs. They never enter diagnostics,
+	// returned errors, or AO logs, and stderr cannot inflate the in-memory buffer.
+	cmd.Stderr = io.Discard
+	runErr := cmd.Run()
+	if err := ctx.Err(); err != nil {
+		_, id, steps, _ := finish(fallback, "probe_cancelled", started)
+		return fallback, id, steps, err
+	}
+	if output.exceeded {
+		return finish(fallback, "provider_inconclusive", started)
+	}
+	if probeCtx.Err() != nil {
+		return finish(fallback, "probe_timeout", started)
+	}
+	status, code := classifyAuthResult(output.Bytes(), runErr == nil, fallback)
+	return finish(status, code, started)
+}
+
+func authProbeEnv(ctx context.Context) []string {
+	// The probe sees what this harness's sessions receive, including keys saved in AO.
+	env := authprobe.Environ(ctx, os.Environ())
+	// Function-hook mods have a separate native startup gate from disableAllHooks.
+	// Override only the probe child; normal sessions retain their plugin setup.
+	for _, binding := range []string{"CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS=1", "CODEBUDDY_DISABLE_CRON=1", "DISABLE_AUTOUPDATER=1", "CBC_ENABLE_FUNCTION_HOOKS=0", "CODEBUDDY_PLUGIN_DIRS="} {
+		key, _, _ := strings.Cut(binding, "=")
+		filtered := env[:0]
+		for _, existing := range env {
+			name, _, _ := strings.Cut(existing, "=")
+			if !strings.EqualFold(name, key) {
+				filtered = append(filtered, existing)
+			}
+		}
+		filtered = append(filtered, binding)
+		env = filtered
+	}
+	return env
+}
+
+// boundedAuthOutput is only an io.Writer. The buffer is a named field so its
+// ReadFrom is not promoted: io.Copy would otherwise use it and bypass the limit.
+type boundedAuthOutput struct {
+	buf      bytes.Buffer
+	exceeded bool
+	cancel   context.CancelFunc
+}
+
+func (b *boundedAuthOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := authProbeOutputLimit - b.buf.Len()
+	if len(p) > remaining {
+		_, _ = b.buf.Write(p[:remaining])
+		b.exceeded = true
+		b.cancel()
+		return n, nil
+	}
+	return b.buf.Write(p)
+}
+
+// Bytes returns the retained output, at most authProbeOutputLimit bytes.
+func (b *boundedAuthOutput) Bytes() []byte { return b.buf.Bytes() }
+
+// Native 2.164 ResultMessage is declared in stream-json-protocol.d.ts and built
+// by result-message-utils. JSON mode emits a history array ending with result.
+// Cancellation also uses subtype success, so the terminal marker and actual
+// inference output must be checked. Never feed these bytes to a prose classifier.
+func classifyAuthResult(raw []byte, exitedOK bool, fallback ports.AgentAuthStatus) (ports.AgentAuthStatus, string) {
+	type result struct {
+		Type           string `json:"type"`
+		Subtype        string `json:"subtype"`
+		IsError        *bool  `json:"is_error"`
+		Result         string `json:"result"`
+		TerminalReason string `json:"terminal_reason"`
+		Usage          struct {
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+		Errors     []json.RawMessage `json:"errors"`
+		ErrorsInfo []struct {
+			Status   int    `json:"status"`
+			Category string `json:"category"`
+		} `json:"errors_info"`
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return fallback, "provider_inconclusive"
+	}
+	customOnly := false
+	if raw[0] == '[' {
+		var history []json.RawMessage
+		if json.Unmarshal(raw, &history) != nil || len(history) == 0 {
+			return fallback, "provider_inconclusive"
+		}
+		customOnly = answeredOnlyByCustomModels(history[:len(history)-1])
+		raw = history[len(history)-1]
+	}
+	var r result
+	if json.Unmarshal(raw, &r) != nil || r.Type != "result" || r.IsError == nil {
+		return fallback, "provider_inconclusive"
+	}
+	if !*r.IsError && exitedOK && r.Subtype == "success" && r.TerminalReason == "" && len(r.Errors) == 0 && len(r.ErrorsInfo) == 0 && strings.TrimSpace(r.Result) != "" && r.Usage.OutputTokens > 0 {
+		if customOnly {
+			// The reply came from a model in the user's own models.json, which
+			// works without a CodeBuddy account. The interactive TUI still opens
+			// its native login screen on every start, so this is not a sign-in.
+			return ports.AgentAuthStatusConfigured, "custom_model_only"
+		}
+		return ports.AgentAuthStatusAuthorized, "provider_accepted"
+	}
+	if *r.IsError && r.Subtype == "error_during_execution" {
+		// Quota/transport do not prove sign-out. Only structured credential rejection
+		// establishes unauthorized; raw messages and unknown categories stay private.
+		for _, info := range r.ErrorsInfo {
+			if info.Category == "quota" {
+				return fallback, "provider_quota_exhausted"
+			}
+			if info.Status == 429 {
+				return fallback, "provider_rate_limited"
+			}
+			if info.Category == "network" || info.Status == 408 || info.Status >= 500 {
+				return fallback, "provider_unreachable"
+			}
+		}
+		for _, info := range r.ErrorsInfo {
+			if info.Status == 401 || info.Status == 403 {
+				return ports.AgentAuthStatusUnauthorized, "provider_rejected"
+			}
+		}
+	}
+	return fallback, "provider_inconclusive"
+}
+
+// customModelPrefix marks a native request routed to a model the user defined
+// in CodeBuddy's models.json rather than one served through a CodeBuddy account.
+const customModelPrefix = "custom-local:"
+
+// answeredOnlyByCustomModels reports whether every assistant reply in a JSON
+// history names a user-defined custom model. Unknown shapes return false, so
+// the account-backed reading stays the default.
+func answeredOnlyByCustomModels(history []json.RawMessage) bool {
+	type message struct {
+		Type         string `json:"type"`
+		Role         string `json:"role"`
+		ProviderData struct {
+			RequestModelID string `json:"requestModelId"`
+		} `json:"providerData"`
+	}
+	seen := false
+	for _, raw := range history {
+		var m message
+		if json.Unmarshal(raw, &m) != nil || m.Type != "message" || m.Role != "assistant" {
+			continue
+		}
+		if !strings.HasPrefix(m.ProviderData.RequestModelID, customModelPrefix) {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}

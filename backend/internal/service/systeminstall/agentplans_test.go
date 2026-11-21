@@ -126,8 +126,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 44 {
-		t.Fatalf("got %d plans, want 44", len(plans))
+	if len(plans) != 45 {
+		t.Fatalf("got %d plans, want 45", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -142,8 +142,10 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
 		}
 	}
-	if !seen["mastra-code"] {
-		t.Fatal("missing install plan for mastra-code")
+	for _, id := range []string{"mastra-code", "codebuddy"} {
+		if !seen[id] {
+			t.Fatalf("missing install plan for %s", id)
+		}
 	}
 }
 
@@ -360,6 +362,33 @@ func TestGeminiMacInstallUsesSupportedNPMRelease(t *testing.T) {
 	}
 	if _, err := planner.resolveAgentMethod(TargetGemini, "homebrew", AgentOperationInstall); err == nil {
 		t.Fatal("Homebrew method should not be offered while its Gemini CLI formula is below the required version")
+	}
+}
+
+func TestCodeBuddyInstallPinsCommandButUsesPackageNameForReleaseFeed(t *testing.T) {
+	s := newTestService("windows", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "C:/npm", writable: true}
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetCodeBuddy, AgentOperationInstall)
+	if len(plans) != 1 || plans[0].Unsupported {
+		t.Fatalf("CodeBuddy install plans = %+v, want one available plan", plans)
+	}
+	if got := plans[0].Package; got != "@tencent-ai/codebuddy-code" {
+		t.Fatalf("release-feed package = %q, want unversioned package name", got)
+	}
+	if got := strings.Join(plans[0].Command, " "); got != "npm install -g @tencent-ai/codebuddy-code@2.164.0" {
+		t.Fatalf("install command = %q, want pinned qualified release", got)
+	}
+	update := planner.agentMethodPlans(TargetCodeBuddy, AgentOperationUpdate)
+	if len(update) != 1 || !update[0].Unsupported || len(update[0].Command) != 0 ||
+		!strings.Contains(update[0].Reason, "2.164.0 only") {
+		t.Fatalf("CodeBuddy update plans = %+v, want no automatic unqualified update", update)
+	}
+	if _, err := planner.resolveAgentMethod(TargetCodeBuddy, "npm", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
+		t.Fatalf("CodeBuddy update method error = %v, want unavailable method", err)
 	}
 }
 
@@ -668,6 +697,8 @@ func TestNPMPlanUsesTargetSpecificNodeFloors(t *testing.T) {
 		{name: "auggie accepts node 20", target: TargetAuggie, nodeVersion: "v20.0.0", wantAllowed: true},
 		{name: "auggie rejects node 18", target: TargetAuggie, nodeVersion: "v18.20.0", wantReason: "Node.js 20+"},
 		{name: "claude rejects node 20", target: TargetClaudeCode, nodeVersion: "v20.19.0", wantReason: "Node.js 22+"},
+		{name: "codebuddy rejects node 18.20.7", target: TargetCodeBuddy, nodeVersion: "v18.20.7", wantReason: "Node.js 18.20.8+"},
+		{name: "codebuddy accepts node 18.20.8", target: TargetCodeBuddy, nodeVersion: "v18.20.8", wantAllowed: true},
 		{name: "pi rejects node 22.18", target: TargetPi, nodeVersion: "v22.18.0", wantReason: "Node.js 22.19+"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

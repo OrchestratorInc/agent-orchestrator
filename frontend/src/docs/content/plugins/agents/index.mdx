@@ -58,6 +58,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `openhands` | Yes | — | — |
 | `command-code` | Yes | Yes | — |
 | `mastra-code` | Yes | — | — |
+| `codebuddy` | Yes | — | — |
 | `open-interpreter` | Yes | — | — |
 | `stakpak` | Yes | — | — |
 
@@ -144,3 +145,5 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 </Cards>
 
 Docker Agent supports native ACP Chat on Unix. Without a config of your own, Orchestrator generates a private default config per session from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GOOGLE_API_KEY`/`GEMINI_API_KEY`. To use your own instead, set `AO_DOCKER_AGENT_CONFIG` to an absolute existing YAML config path before launching Orchestrator; its native provider credentials and hooks are preserved. Terminal mode, accept-edits, and reasoning-effort overrides are unavailable. Use the configured model choices. Local authentication is reported as configured or unknown; provider authorization is checked when a task runs.
+
+CodeBuddy Code supports foreground TUI sessions with native Default permissions and exact native resume. Configure CodeBuddy first; Chat and other permission modes are unavailable.

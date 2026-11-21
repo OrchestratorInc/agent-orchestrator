@@ -39,6 +39,7 @@ const AGENT_HUES: Record<AgentId, number | null> = {
 	openhands: 85,
 	"command-code": null,
 	"mastra-code": null,
+	codebuddy: null,
 	"docker-agent": null,
 	memcode: 140,
 	hermes: 75,

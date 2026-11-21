@@ -2763,9 +2763,10 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
 		merged.Model = ""
 	}
-	// Mastra Code uses native interactive permissions unless a project, role, or
-	// request explicitly chooses another policy. Do not synthesize Auto.
-	if harness == domain.HarnessMastraCode && merged.Permissions == "" {
+	// Mastra Code and CodeBuddy Code use native interactive permissions unless a
+	// project, role, or request explicitly chooses another policy. Do not
+	// synthesize Auto.
+	if (harness == domain.HarnessMastraCode || harness == domain.HarnessCodeBuddy) && merged.Permissions == "" {
 		merged.Permissions = ports.PermissionModeDefault
 	}
 	return merged

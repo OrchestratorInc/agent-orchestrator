@@ -43,6 +43,7 @@ export const AGENT_OPTIONS = [
 	"docker-agent",
 	"tau",
 	"memcode",
+	"codebuddy",
 	"hermes",
 	"stakpak",
 ] as const;
@@ -98,6 +99,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"docker-agent": "Docker Agent",
 	tau: "Tau",
 	memcode: "memcode",
+	"codebuddy": "CodeBuddy Code",
 	"hermes": "Hermes Agent",
 	stakpak: "Stakpak",
 };
