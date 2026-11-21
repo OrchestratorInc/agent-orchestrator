@@ -817,8 +817,11 @@ func TestSetupBothRoleFlagsNeedNoDefault(t *testing.T) {
 		t.Fatalf("err = %v\n%s", err, out)
 	}
 	res := decodeSetup(t, out)
-	if res.Agent.Worker != "codex" || res.Agent.Orchestrator != "claude-code" {
+	if res.Agent.Worker != "codex" || res.Agent.Orchestrator != "claude-code" || res.Agent.Source != "roles" {
 		t.Fatalf("agent = %+v", res.Agent)
+	}
+	if detail := stepNamed(t, res, "agent").Detail; !strings.Contains(detail, "from --worker-agent and --orchestrator-agent") {
+		t.Fatalf("agent detail = %q", detail)
 	}
 }
 

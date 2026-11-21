@@ -81,7 +81,7 @@ type setupStep struct {
 
 type setupAgent struct {
 	ID string `json:"id"`
-	// Source says how the agent was chosen: flag, project, caller or ready.
+	// Source says how the agent was chosen: flag, roles, project, caller or ready.
 	Source string `json:"source"`
 	// DetectedFrom names the environment variable for source "caller".
 	DetectedFrom string `json:"detectedFrom,omitempty"`
@@ -400,7 +400,7 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	case opts.workerAgent != "" && opts.orchestratorAgent != "":
 		// Both roles are named, so no default (not even --agent) is used or
 		// checked.
-		agent.ID, agent.Source = opts.workerAgent, "flag"
+		agent.ID, agent.Source = opts.workerAgent, "roles"
 	case opts.agent != "":
 		agent.ID, agent.Source = opts.agent, "flag"
 	case saved != nil:
@@ -472,6 +472,8 @@ func setupAgentSource(a *setupAgent) string {
 	switch a.Source {
 	case "flag":
 		return "from --agent"
+	case "roles":
+		return "from --worker-agent and --orchestrator-agent"
 	case "caller":
 		return "the calling agent, detected from " + a.DetectedFrom
 	case "ready":
