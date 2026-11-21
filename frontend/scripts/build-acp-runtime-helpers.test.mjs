@@ -20,6 +20,7 @@ import {
 	patchClaudeContextWindowProbe,
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
+	patchClaudeLoginResultError,
 	patchClaudeRetryDetails,
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
@@ -613,6 +614,62 @@ describe("patchClaudeStaleIdleDebt", () => {
 		writeFileSync(adapterPath, 'case "session_state_changed": {\n');
 
 		expect(() => patchClaudeStaleIdleDebt(adapterPath)).toThrow(/idle-debt patch/);
+	});
+});
+
+describe("patchClaudeLoginResultError", () => {
+	// claude-agent-acp 0.70's two result checks, cut down to what they decide.
+	const adapter = `
+function goalFailed(message) {
+                                    const goalCommandFailed = message.is_error ||
+                                        message.stop_reason === "refusal" ||
+                                        ("result" in message && message.result.includes("Please run /login"));
+                                    return goalCommandFailed;
+}
+function resultEnd(message) {
+                            switch (message.subtype) {
+                                case "success": {
+                                    if (message.result.includes("Please run /login")) {
+                                        return "auth_required";
+                                    }
+                                    if (message.is_error) {
+                                        return "error";
+                                    }
+                                    return "end_turn";
+                                }
+                            }
+}
+return { goalFailed, resultEnd };
+`;
+
+	it("reads only an error result as a refused login", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, adapter);
+
+		expect(patchClaudeLoginResultError(adapterPath)).toBe(true);
+		expect(patchClaudeLoginResultError(adapterPath)).toBe(false);
+		const { goalFailed, resultEnd } = new Function(readFileSync(adapterPath, "utf8"))();
+
+		const quoted = {
+			subtype: "success",
+			is_error: false,
+			result: "Those were not logouts: the answer quoted \"Not logged in · Please run /login\".",
+		};
+		const refused = { subtype: "success", is_error: true, result: "Not logged in · Please run /login" };
+		expect(resultEnd(quoted)).toBe("end_turn");
+		expect(goalFailed(quoted)).toBe(false);
+		expect(resultEnd(refused)).toBe("auth_required");
+		expect(goalFailed(refused)).toBe(true);
+		expect(resultEnd({ subtype: "success", is_error: true, result: "API Error: 500" })).toBe("error");
+	});
+
+	it("fails packaging when the adapter's login checks change", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		const changed = adapter.replace('if (message.result.includes("Please run /login")) {', "if (isLoginRequiredText(message.result)) {");
+		writeFileSync(adapterPath, changed);
+
+		expect(() => patchClaudeLoginResultError(adapterPath)).toThrow(/login result patch/);
+		expect(readFileSync(adapterPath, "utf8")).toBe(changed);
 	});
 });
 

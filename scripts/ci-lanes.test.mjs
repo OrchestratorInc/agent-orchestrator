@@ -47,6 +47,8 @@ test('files backend tests and Go CI read from outside backend/ run the Go lane',
   assert.deepEqual(pickLanes(pr(['go.work'])).lanes, ['go']);
   assert.deepEqual(pickLanes(pr(['.github/scripts/go-test-parallel.sh'])).lanes, ['go', 'config']);
   assert.ok(pickLanes(pr(['frontend/scripts/prepare-cloudflared.mjs'])).lanes.includes('go'));
+  assert.ok(pickLanes(pr(['frontend/acp-runtime/package.json'])).lanes.includes('go'));
+  assert.ok(pickLanes(pr(['frontend/scripts/build-acp-runtime-helpers.mjs'])).lanes.includes('go'));
 });
 
 test('packages/shared reaches the frontend and mobile, with all vitest files', () => {

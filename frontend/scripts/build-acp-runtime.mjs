@@ -19,6 +19,7 @@ import {
 	patchClaudeContextWindowProbe,
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
+	patchClaudeLoginResultError,
 	patchClaudeRetryDetails,
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
@@ -95,6 +96,7 @@ patchClaudeHibernationCheck(claudeAdapter);
 patchClaudeFoldedPromptSettlement(claudeAdapter);
 patchClaudeStaleIdleDebt(claudeAdapter);
 patchClaudeSteerSettlement(claudeAdapter);
+patchClaudeLoginResultError(claudeAdapter);
 
 // The Claude Agent SDK declares platform-native Claude executables as optional
 // dependencies. --omit=optional excludes them; this removal is defense-in-depth.

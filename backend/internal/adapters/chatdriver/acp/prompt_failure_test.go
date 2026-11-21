@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,6 +204,100 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 			}
 			if authRecovered != 1 {
 				t.Fatalf("auth recovery signals = %d, want 1", authRecovered)
+			}
+		})
+	}
+}
+
+// claude-agent-acp reports a successful answer that quotes "Please run /login" as
+// a refused login whose title is that answer's last text block. Only a refusal
+// that does not end the agent's final message is a real one.
+func TestPromptResponseLoginRefusalThatRepeatsTheAnswer(t *testing.T) {
+	const (
+		answer  = "All four `auth_required` turns are false.\n\nEach answer quotes \"Please run /login\"; there were no real logouts."
+		refusal = "Not logged in · Please run /login"
+	)
+	// A streamed item: a message chunk, or a tool call when message is "".
+	type item struct{ message, text string }
+	tool := item{}
+	for _, tc := range []struct {
+		name     string
+		streamed []item
+		title    string
+		details  string
+		actions  []any
+		want     domain.TurnState
+		reauth   bool
+	}{
+		{"answer quoting the advice", []item{{"msg-1", "Checking the turns."}, tool, {"msg-2", answer}},
+			strings.ReplaceAll(answer, "\n\n", "\n"), "", []any{"login"}, domain.TurnStateCompleted, false},
+		{"last text block of the answer", []item{{"msg-1", "Checking the turns.\n\n"}, {"msg-1", answer}},
+			answer, "", []any{"login"}, domain.TurnStateCompleted, false},
+		{"answer quoting the advice with details", []item{{"msg-1", answer}},
+			answer, "Run /login in a terminal.", []any{"login"}, domain.TurnStateCompleted, false},
+		{"refusal the answer quoted earlier", []item{{"msg-1", "Each failed turn says \"" + refusal + "\". Let me check the next one."}},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
+		{"refusal after an earlier message ended on it", []item{{"msg-1", "The CLI printed:\n\n" + refusal}, {"msg-2", "Let me check again."}},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
+		{"refusal after a tool call that followed the quote", []item{{"msg-1", "The CLI printed:\n\n" + refusal}, tool},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
+		{"refusal after some answer", []item{{"msg-1", "Let me run the tests."}},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
+		{"refusal before any answer", nil,
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
+		{"other failure repeating the answer", []item{{"msg-1", answer}},
+			answer, "", nil, domain.TurnStateFailed, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authRejected := 0
+			conv := &conversation{
+				sessionID: "session-1", activeTurn: "turn-1", events: make(chan ports.ChatEvent, 64), log: slog.New(slog.DiscardHandler),
+				messages: map[string]string{}, thoughts: map[string]string{}, nestedMessages: map[string]nestedMessageState{}, tools: map[string]*toolState{},
+				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
+				onAuthRejected:        func() { authRejected++ },
+			}
+			for i, streamed := range tc.streamed {
+				update := acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{ToolCallId: acpsdk.ToolCallId(fmt.Sprintf("tool-%d", i)), Title: "Read"}}
+				if streamed.message != "" {
+					update = acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{
+						MessageId: &streamed.message, Content: acpsdk.TextBlock(streamed.text),
+					}}
+				}
+				if err := conv.processUpdate(acpsdk.SessionNotification{SessionId: "session-1", Update: update}); err != nil {
+					t.Fatalf("stream %d: %v", i, err)
+				}
+			}
+			// The adapter's sessionFailureMeta shape: details only when present.
+			failure := map[string]any{
+				"id": "turn-1:error", "revision": float64(1), "category": "access", "severity": "error",
+				"title": tc.title, "actions": tc.actions,
+			}
+			if tc.details != "" {
+				failure["details"] = tc.details
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: testPromptFailureMeta(failure)}, nil)
+			close(conv.events)
+			var completed *ports.ChatEvent
+			for event := range conv.events {
+				if event.Kind == ports.ChatEventTurnCompleted {
+					completed = &event
+				}
+			}
+			if completed == nil {
+				t.Fatal("turn never completed")
+			}
+			if completed.TurnState != tc.want || (completed.Err != nil) != (tc.want == domain.TurnStateFailed) {
+				t.Fatalf("completion = state %q err %v, want state %q", completed.TurnState, completed.Err, tc.want)
+			}
+			if errors.Is(completed.Err, ports.ErrChatAuthRequired) != tc.reauth {
+				t.Fatalf("completion error = %v, want reauth=%v", completed.Err, tc.reauth)
+			}
+			wantRejected := 0
+			if tc.reauth {
+				wantRejected = 1
+			}
+			if authRejected != wantRejected {
+				t.Fatalf("auth rejections = %d, want %d", authRejected, wantRejected)
 			}
 		})
 	}
