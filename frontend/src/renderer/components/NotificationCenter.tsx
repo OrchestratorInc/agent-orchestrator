@@ -46,6 +46,14 @@ import {
 	unreadNotificationsQueryKey,
 } from "../lib/notifications";
 import { useUiStore } from "../stores/ui-store";
+import { useNotificationPreferencesStore } from "../stores/notification-preferences-store";
+import {
+	allowsEveryNotification,
+	isNotificationAllowed,
+	remoteNotificationSource,
+	type NotificationPreferences,
+	type NotificationSource,
+} from "../lib/notification-preferences";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
@@ -71,6 +79,39 @@ const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
 const CLOUD_NOTIFICATION_PREFIX = "cloud-notification:";
 const EMPTY_CLOUD_NOTIFICATIONS: CloudCpNotification[] = [];
 const notificationKey = (hostId: HostId, id: string) => refKey({ host: hostId, id });
+
+function useNotificationPreferences(): NotificationPreferences {
+	const enabled = useNotificationPreferencesStore((state) => state.enabled);
+	const filters = useNotificationPreferencesStore((state) => state.filters);
+	return useMemo(() => ({ enabled, filters }), [enabled, filters]);
+}
+
+/**
+ * The bell's count: what the servers report unread, less the unread rows the
+ * person's preferences ignore. Only loaded rows can be subtracted, so with more
+ * than a page of unread ignored rows the count can run high until they load.
+ */
+function bellUnreadCount(
+	preferences: NotificationPreferences,
+	local: NotificationsCache | undefined,
+	remoteHosts: readonly { hostId: HostId; data?: NotificationsPage }[],
+	cloud: { unreadCount: number; items: readonly CloudCpNotification[] } | undefined,
+): number {
+	if (!preferences.enabled) return 0;
+	const everything = allowsEveryNotification(preferences);
+	const count = (unread: number, items: readonly { status: string; type: string }[], source: NotificationSource) => {
+		if (everything) return unread;
+		if (preferences.filters.mutedSources.includes(source)) return 0;
+		const ignored = items.filter((item) => item.status === "unread" && !isNotificationAllowed(preferences, item.type, source)).length;
+		return Math.max(0, unread - ignored);
+	};
+	let total = count(getCachedUnreadCount(local), getCachedNotifications(local), "local");
+	for (const host of remoteHosts) {
+		if (host.data) total += count(host.data.unreadCount, host.data.notifications, remoteNotificationSource(host.hostId));
+	}
+	if (cloud) total += count(cloud.unreadCount, cloud.items, "cloud");
+	return total;
+}
 
 function useNotificationTargetNavigation() {
 	const navigateToSession = useNavigateToSession();
@@ -204,8 +245,17 @@ export function NotificationRuntime() {
 	const { org: cloudOrg } = useCloudOrg();
 	// Whose Cloud inbox is loaded; a new account or organization is a new inbox.
 	const cloudScope = cloudAll.data ? `${cloudUserId}:${cloudOrg?.id ?? ""}` : undefined;
+	const preferences = useNotificationPreferences();
+	// Read by the long-lived streams and effects below, which need the current value.
+	const preferencesRef = useRef(preferences);
+	preferencesRef.current = preferences;
 	// The same count as the bell's.
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
+	const unreadCount = bellUnreadCount(
+		preferences,
+		unreadQuery.data,
+		remoteUnread.hosts,
+		cloudAll.data ? { unreadCount: cloudAll.data.unreadCount, items: cloudItems } : undefined,
+	);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
@@ -225,9 +275,13 @@ export function NotificationRuntime() {
 		return useUiStore.getState().visibleTerminalKindBySession[sessionId] === "worker" ? sessionId : undefined;
 	}, []);
 
+	const shouldAlertLocal = useCallback(
+		(notification: NotificationDTO) => isNotificationAllowed(preferencesRef.current, notification.type, "local"),
+		[],
+	);
 	useEffect(
-		() => createNotificationsTransport(queryClient, getVisibleAgentSessionId).connect(),
-		[getVisibleAgentSessionId, queryClient],
+		() => createNotificationsTransport(queryClient, getVisibleAgentSessionId, shouldAlertLocal).connect(),
+		[getVisibleAgentSessionId, queryClient, shouldAlertLocal],
 	);
 	useEffect(() => connectRemoteNotificationStreams(queryClient), [queryClient]);
 
@@ -248,6 +302,7 @@ export function NotificationRuntime() {
 			}
 			for (const notification of host.data.notifications) {
 				if (previousIds.has(notification.id)) continue;
+				if (!isNotificationAllowed(preferencesRef.current, notification.type, remoteNotificationSource(host.hostId))) continue;
 				const id = `${REMOTE_NOTIFICATION_PREFIX}${notificationKey(host.hostId, notification.id)}`;
 				shownRemoteNotifications.current.set(id, notification);
 				if (shownRemoteNotifications.current.size > 256) {
@@ -288,6 +343,7 @@ export function NotificationRuntime() {
 			previous.add(notification.id);
 			if (previous.size > 512) previous.delete(previous.values().next().value!);
 			if (notification.status !== "unread" || notification.resolvedAt) continue;
+			if (!isNotificationAllowed(preferencesRef.current, notification.type, "cloud")) continue;
 			const id = `${CLOUD_NOTIFICATION_PREFIX}${notification.id}`;
 			shownCloudNotifications.current.set(id, notification);
 			if (shownCloudNotifications.current.size > 256) {
@@ -369,24 +425,40 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// CloudNotificationRuntime keeps this list live; the panel only reads it.
 	// Its response also carries the server's total unread count for the badge.
 	const cloudAll = useCloudNotifications("all", { live: false });
-	const cloudItems = cloudAll.items ?? [];
+	const preferences = useNotificationPreferences();
+	const allowed = useCallback(
+		(type: string, source: NotificationSource) => isNotificationAllowed(preferences, type, source),
+		[preferences],
+	);
+	const allCloudItems = cloudAll.items ?? EMPTY_CLOUD_NOTIFICATIONS;
+	// Rows the person's preferences ignore never reach the panel, so they are
+	// neither shown nor acknowledged.
+	const cloudItems = useMemo(
+		() => allCloudItems.filter((item) => allowed(item.type, "cloud")),
+		[allCloudItems, allowed],
+	);
 	const markAllRead = useMarkAllNotificationsReadMutation();
 	const clearAll = useClearAllNotificationsMutation();
 	const clearOne = useClearNotificationMutation();
 	const restoreSession = useRestoreSession();
-	const notifications = useMemo(() => getCachedNotifications(allQuery.data), [allQuery.data]);
+	const loadedNotifications = useMemo(() => getCachedNotifications(allQuery.data), [allQuery.data]);
+	const notifications = useMemo(
+		() => loadedNotifications.filter((item) => allowed(item.type, "local")),
+		[allowed, loadedNotifications],
+	);
 	const remoteItems = useMemo(() => remoteAll.hosts.map((host) => {
 		const seen = new Set<string>();
 		const unread = remoteUnread.hosts.find((item) => item.hostId === host.hostId)?.data;
+		const source = remoteNotificationSource(host.hostId);
 		const items = [unread, host.data, ...(remoteOlderPages[host.hostId] ?? [])].filter((page): page is NotificationsPage => Boolean(page)).flatMap((page) =>
 			page.notifications.filter((notification) => {
-				if (seen.has(notification.id)) return false;
+				if (seen.has(notification.id) || !allowed(notification.type, source)) return false;
 				seen.add(notification.id);
 				return true;
 			}),
 		);
 		return { ...host, notifications: items };
-	}), [remoteAll.hosts, remoteOlderPages, remoteUnread.hosts]);
+	}), [allowed, remoteAll.hosts, remoteOlderPages, remoteUnread.hosts]);
 	useEffect(() => {
 		for (const host of remoteAll.hosts) {
 			if (!host.data) continue;
@@ -405,19 +477,24 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const localHasMore = Boolean(allQuery.hasNextPage);
 	const visibleCloudItems = useMemo(() => {
 		if (!localHasMore) return cloudItems;
-		const oldestLocal = notifications.reduce(
+		const oldestLocal = loadedNotifications.reduce(
 			(min, item) => Math.min(min, Date.parse(item.createdAt)),
 			Number.POSITIVE_INFINITY,
 		);
 		return cloudItems.filter((item) => Date.parse(item.createdAt) >= oldestLocal);
-	}, [cloudItems, localHasMore, notifications]);
+	}, [cloudItems, loadedNotifications, localHasMore]);
 	const entries = useMemo(() => [
 		...notifications.map((notification) => ({ hostId: LOCAL_HOST, label: "", notification })),
 		...remoteItems.flatMap((host) => host.notifications.map((notification) => ({
 			hostId: host.hostId, label: host.label, notification,
 		}))),
 	].sort((a, b) => b.notification.createdAt.localeCompare(a.notification.createdAt)), [notifications, remoteItems]);
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
+	const unreadCount = bellUnreadCount(
+		preferences,
+		unreadQuery.data,
+		remoteUnread.hosts,
+		cloudAll.data ? { unreadCount: cloudAll.data.unreadCount, items: allCloudItems } : undefined,
+	);
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
 	const { openSession } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();
@@ -436,13 +513,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const visibleUnreadIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const item of getCachedNotifications(unreadQuery.data)) {
-			if (item.status === "unread") ids.add(item.id);
+			if (item.status === "unread" && allowed(item.type, "local")) ids.add(item.id);
 		}
 		for (const item of notifications) {
 			if (item.status === "unread") ids.add(item.id);
 		}
 		return [...ids];
-	}, [notifications, unreadQuery.data]);
+	}, [allowed, notifications, unreadQuery.data]);
 	const visibleUnreadKey = visibleUnreadIds.join("|");
 
 	// Opening the panel acknowledges what has actually been loaded. Later unread
@@ -632,7 +709,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const clearCloudOne = cloudAll.clearOne;
 	// Clear local history unless it is confirmed empty. A failed local load still
 	// clears server-side: the daemon's clear-all does not need rows loaded.
-	const clearLocal = notifications.length > 0 || !allQuery.isSuccess;
+	const clearLocal = loadedNotifications.length > 0 || !allQuery.isSuccess;
 	const handleClearAll = useCallback(() => {
 		if (clearingAll) return;
 		setActionError(null);
@@ -731,7 +808,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// Local history only loads once the panel opens, while cloud rows are cached
 	// in the background. Hold the list until local arrives so rows don't pop in,
 	// and keep a local load failure visible even when cloud rows exist.
-	const localEmpty = notifications.length === 0;
+	const localEmpty = loadedNotifications.length === 0;
 	const localLoadFailed = allQuery.isError && localEmpty && !confirmedClearSnapshot;
 	const localLoading = allQuery.isLoading && localEmpty;
 	const remoteLoadFailed = remoteAll.hosts.some((host) => host.isError);
@@ -865,6 +942,8 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					<NotificationEmpty icon={CircleAlert} message={t("notify.loadFailed")} />
 				) : localLoading || (remoteLoading && isEmpty) ? (
 					<NotificationEmpty icon={LoaderCircle} message={t("notify.loading")} />
+				) : !preferences.enabled ? (
+					<NotificationEmpty icon={Bell} message={t("notify.off")} />
 				) : isEmpty ? (
 					<NotificationEmpty icon={CheckCheck} message={t("notify.emptyAll")} />
 					) : (

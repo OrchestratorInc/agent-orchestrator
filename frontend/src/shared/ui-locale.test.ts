@@ -38,7 +38,9 @@ describe("shared UI locale schema", () => {
 	it("defaults soundNotificationsEnabled to true and accepts a persisted boolean", () => {
 		expect(DEFAULT_UI_SETTINGS).toEqual({
 			locale: "en",
+			notificationsEnabled: true,
 			soundNotificationsEnabled: true,
+			notificationFilters: { mutedKinds: [], mutedSources: [] },
 			terminalShell: { kind: "auto" },
 		});
 		expect(coerceUiSettings({ locale: "en", soundNotificationsEnabled: false })).toEqual({
@@ -49,6 +51,21 @@ describe("shared UI locale schema", () => {
 			...DEFAULT_UI_SETTINGS,
 			soundNotificationsEnabled: true,
 		});
+	});
+
+	it("keeps notifications on and nothing muted unless the person changed them", () => {
+		expect(coerceUiSettings({ notificationsEnabled: false })).toEqual({ ...DEFAULT_UI_SETTINGS, notificationsEnabled: false });
+		expect(coerceUiSettings({ notificationsEnabled: "false" })).toEqual(DEFAULT_UI_SETTINGS);
+		expect(
+			coerceUiSettings({
+				notificationFilters: { mutedKinds: ["pr_merged", "pr_merged", 3, ""], mutedSources: ["cloud", "remote:a"] },
+			}),
+		).toEqual({
+			...DEFAULT_UI_SETTINGS,
+			notificationFilters: { mutedKinds: ["pr_merged"], mutedSources: ["cloud", "remote:a"] },
+		});
+		expect(coerceUiSettings({ notificationFilters: { mutedKinds: "pr_merged" } })).toEqual(DEFAULT_UI_SETTINGS);
+		expect(coerceUiSettings({ notificationFilters: null })).toEqual(DEFAULT_UI_SETTINGS);
 	});
 
 	it("coerces a non-boolean or missing soundNotificationsEnabled to the default (true)", () => {
