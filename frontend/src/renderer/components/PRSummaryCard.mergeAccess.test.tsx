@@ -77,11 +77,21 @@ describe.each([
 		expect(screen.getAllByText(/check/i).length).toBeGreaterThan(0);
 	});
 
-	it("keeps today's Merge when the permission is unknown or the control plane doesn't say", () => {
-		const { unmount } = renderCard({ ...ready, mergeAccess: { permission: "unknown", via: "github" } });
+	it("keeps today's Merge when the permission is unknown but AO can merge, or the control plane doesn't say", () => {
+		const { unmount } = renderCard({ ...ready, mergeAccess: { permission: "unknown", via: "ao" } });
 		expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeTruthy();
 		unmount();
 		renderCard(ready);
 		expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeTruthy();
+	});
+
+	// The control plane could not read the person's permission (no token of
+	// theirs) on a repository AO can't write to: a Merge from AO would only be
+	// refused, so the card sends them to GitHub, where their own rights decide.
+	it("sends an unknown permission to GitHub when AO can't merge there", () => {
+		renderCard({ ...ready, mergeAccess: { permission: "unknown", via: "github" } });
+		expect(screen.queryByRole("button", { name: "Merge PR #7" })).toBeNull();
+		expect(screen.getByRole("link", { name: /merge.*on github/i }).getAttribute("href")).toBe(prUrl);
+		expect(client.mergePullRequest).not.toHaveBeenCalled();
 	});
 });

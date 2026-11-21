@@ -596,8 +596,13 @@ export type PRMergeRoute = "ao" | "github" | "maintainer";
 
 export function prMergeRoute(pr: Pick<SessionPRSummary, "mergeAccess">): PRMergeRoute {
 	const access = pr.mergeAccess;
-	if (access?.permission === "read") return "maintainer";
-	if (access?.permission === "write" && access.via === "github") return "github";
+	if (!access) return "ao";
+	if (access.permission === "read" || access.via === "none") return "maintainer";
+	// via is the control plane's answer to whether a merge from AO can work:
+	// "github" means AO can't write to the repository as the person (its
+	// GitHub App isn't installed there and they connected no token), so a
+	// merge from AO is refused whatever their permission, unknown included.
+	if (access.via === "github") return "github";
 	return "ao";
 }
 

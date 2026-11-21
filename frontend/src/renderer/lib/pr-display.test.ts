@@ -1257,9 +1257,12 @@ describe("prMergeRoute", () => {
 		[{ permission: "write", via: "ao" }, "ao"],
 		[{ permission: "write", via: "github" }, "github"],
 		[{ permission: "read", via: "none" }, "maintainer"],
-		// Unknown keeps today's Merge, wherever AO says it would merge.
-		[{ permission: "unknown", via: "github" }, "ao"],
+		// An unknown permission follows where AO says a merge can happen: AO
+		// can't merge as the person on a repository it can't write to (no App,
+		// no token of theirs), so that one merges on GitHub.
+		[{ permission: "unknown", via: "github" }, "github"],
 		[{ permission: "unknown", via: "ao" }, "ao"],
+		[{ permission: "unknown", via: "none" }, "maintainer"],
 	] as const)("maps %j to %s", (mergeAccess, route) => {
 		expect(prMergeRoute({ mergeAccess })).toBe(route);
 	});
