@@ -104,7 +104,7 @@ describe("loopback tunnels", () => {
 		const { session, state } = fakeSession();
 		state.failProxy = true;
 		await expect(tunnels.route(session, "h_box")).rejects.toThrow("proxy refused");
-		for (const url of ["http://localhost:5173/", "ws://127.0.0.1:5173/hmr", "http://0.0.0.0:3000/", "http://[::1]:8080/"]) expect(await state.respond?.(url)).toEqual({ cancel: true });
+		for (const url of ["http://localhost:5173/", "http://app.localhost:5173/", "ws://127.0.0.1:5173/hmr", "http://0.0.0.0:3000/", "http://[::1]:8080/"]) expect(await state.respond?.(url)).toEqual({ cancel: true });
 		for (const url of ["https://example.com/", "http://ao-preview-artifact.abc.localhost:3011/"]) expect(await state.respond?.(url)).toEqual({});
 
 		state.failProxy = false;

@@ -50,7 +50,8 @@ import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { appI18n } from "../../i18n";
-import { ipcErrorReason, isHostLocalWebLink } from "../../lib/loopback";
+import { editorHandoffErrorMessage } from "../../hooks/useEditorHandoff";
+import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
 import { CODE_ISLAND, COPY_ISLAND, EMOJI_GRAPHEME, GRAPHEME_SEGMENTER, IMAGE_ISLAND, LINK_ISLAND, codeBlockIsland, codeIsland, headingIslands, imageIsland, islandHref, linkIsland, proseIslands, unescapeHtml } from "../../lib/stream-islands";
@@ -536,7 +537,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 
 const hostExternalUrl = (hostId: string, url: string): Promise<string | undefined> =>
 	aoBridge.remotes.externalUrl(hostId, url).catch((error: unknown) => {
-		useUiStore.getState().showGlobalToast(appI18n.t("sessionServers.forwardFailed"), ipcErrorReason(error), "error");
+		useUiStore.getState().showGlobalToast(appI18n.t("sessionServers.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
 		return undefined;
 	});
 

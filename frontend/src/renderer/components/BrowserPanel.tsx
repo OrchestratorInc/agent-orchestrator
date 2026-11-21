@@ -98,7 +98,8 @@ import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
-import { ipcErrorReason, isHostLocalWebLink } from "../lib/loopback";
+import { isHostLocalWebLink } from "../lib/loopback";
+import { editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -887,14 +888,14 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// A remote preview's address works only in this panel, which trusts its
 	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
-		if (!session.hostId) return url;
+		if (!session.hostId || !isHostLocalWebLink(url)) return url;
 		return aoBridge.remotes.externalUrl(session.hostId, url);
 	};
 
 	const openCurrentPageExternally = async () => {
 		if (!isWebLink(navState.url) || agentPageOnHost) return;
 		const url = await externalURL(navState.url).catch((error: unknown) => {
-			showGlobalToast(t("sessionServers.forwardFailed"), ipcErrorReason(error), "error");
+			showGlobalToast(t("sessionServers.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
 		});
 		if (url) await openLinkInSystemBrowser(url);
 	};
@@ -907,7 +908,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			clearTimeout(copyFeedbackTimeoutRef.current);
 			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
 		} catch (error) {
-			showGlobalToast(t("browser.urlCopyFailed"), ipcErrorReason(error), "top-center");
+			showGlobalToast(t("browser.urlCopyFailed"), editorHandoffErrorMessage(error) ?? undefined, "top-center");
 		}
 	};
 

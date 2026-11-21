@@ -27,7 +27,7 @@ const MAX_FORWARD_CONNECTIONS = 64;
 const PROBE_TIMEOUT_MS = 3_000;
 const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
 const UNSPECIFIED_URLS = ["*://0.0.0.0/*", "*://[::]/*"];
-const PREVIEW_HOST = /^ao-preview-.*\.localhost\.?$/;
+const PREVIEW_HOST = /^ao-preview-.*\.localhost$/;
 
 class SameHostError extends Error {}
 

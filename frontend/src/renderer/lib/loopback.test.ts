@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hostLoopbackUrl, ipcErrorReason } from "./loopback";
+import { hostLoopbackUrl } from "./loopback";
 
 describe("hostLoopbackUrl", () => {
 	it.each([
@@ -13,13 +13,5 @@ describe("hostLoopbackUrl", () => {
 
 	it.each(["https://example.com/", "http://ao-preview-abc.localhost:4000/", "file:///tmp/index.html", "localhost.example.com:3000"])("leaves %s to the preview proxy", (target) => {
 		expect(hostLoopbackUrl(target)).toBeUndefined();
-	});
-});
-
-describe("ipcErrorReason", () => {
-	it("drops the IPC wrapper from a main-process error", () => {
-		expect(ipcErrorReason(new Error("Error invoking remote method 'remotes:externalUrl': Error: Can't reach this host's localhost."))).toBe("Can't reach this host's localhost.");
-		expect(ipcErrorReason(new Error("plain"))).toBe("plain");
-		expect(ipcErrorReason("nope")).toBeUndefined();
 	});
 });
