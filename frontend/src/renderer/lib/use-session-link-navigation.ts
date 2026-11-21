@@ -61,6 +61,7 @@ export function useSessionLinkSource(sourceHostId?: string, sourceKind?: "cloud"
 }
 
 const restoringLinks = new Map<string, string>();
+let latestRestoreLink: string | undefined;
 
 export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cloud"): (url: string) => boolean {
 	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
@@ -105,6 +106,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			const dedupeKey = `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`;
 			const pendingRestore = restoringLinks.has(dedupeKey);
 			restoringLinks.set(dedupeKey, window.location.hash);
+			latestRestoreLink = dedupeKey;
 			if (pendingRestore) return true;
 			showGlobalToast(`Resuming session ${resolved.sessionId}…`, undefined, { placement: "top-center", durationMs: 0, dedupeKey });
 			const pending = useUiStore.getState().globalToastSequence;
@@ -115,7 +117,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 					restoringLinks.delete(dedupeKey);
 					if (result.status === "success") {
 						useUiStore.getState().dismissGlobalToast(pending);
-						if (window.location.hash !== from) return;
+						if (window.location.hash !== from || latestRestoreLink !== dedupeKey) return;
 						if (remoteHostId) navigateToSession(resolved.projectId, resolved.sessionId, remoteHostId);
 						else navigateToSession(resolved.projectId, resolved.sessionId);
 						return;

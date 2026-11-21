@@ -37,7 +37,7 @@ describe("useSessionLinkNavigation", () => {
 			isSuccess: true,
 			data: [
 				{ id: "other-project", sessions: [{ id: "other-session", isTerminated: false }] },
-				{ id: "project", sessions: [{ id: "session", title: "renamed", isTerminated: false }, { id: "terminated", isTerminated: true }] },
+				{ id: "project", sessions: [{ id: "session", title: "renamed", isTerminated: false }, { id: "terminated", isTerminated: true }, { id: "terminated-2", isTerminated: true }] },
 			],
 		});
 	});
@@ -102,6 +102,20 @@ describe("useSessionLinkNavigation", () => {
 		await act(async () => finish({ status: "success" }));
 		expect(mocks.restore).toHaveBeenCalledTimes(1);
 		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+	});
+
+	it("opens only the most recently clicked terminated session", async () => {
+		const finishes: Array<(result: { status: "success" }) => void> = [];
+		mocks.restore.mockImplementation(() => new Promise((resolve) => { finishes.push(resolve); }));
+		window.location.hash = "#/projects/project/sessions/session";
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		act(() => { result.current("ao://sessions/project/terminated"); });
+		act(() => { result.current("ao://sessions/project/terminated-2"); });
+		await act(async () => finishes[0]!({ status: "success" }));
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		await act(async () => finishes[1]!({ status: "success" }));
+		expect(mocks.navigate).toHaveBeenCalledTimes(1);
+		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated-2");
 	});
 
 	it("does not pull the user away when they moved on before the resume finished", async () => {
