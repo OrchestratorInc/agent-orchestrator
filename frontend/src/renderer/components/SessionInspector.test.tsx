@@ -1320,6 +1320,40 @@ describe("SessionInspector PR section", () => {
       }));
     });
 
+    it("marks a layer behind the one below it, holds Merge, and asks that layer's agent to rebase", async () => {
+      postMock.mockImplementation(async () => ({ data: {} }));
+      serveStack(stackOf(layer(1, "open"), layer(2, "open", { behindParent: 3, sessionId: "sess-2" }), layer(3, "open")));
+      const list = within(await screen.findByRole("list", { name: "Stack #40" }));
+      expect(list.getAllByText("needs rebase")).toHaveLength(1);
+      const button = await screen.findByRole("button", { name: "Merge through #2 · 2 PRs" });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("title", "#2: needs rebase");
+      const row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(row.getByText("#2 is behind #1, the layer below it.")).toBeInTheDocument();
+      expect(row.getByRole("link", { name: "Rebase on GitHub" })).toHaveAttribute("href", "https://github.com/acme/app/pull/2");
+      await userEvent.click(row.getByRole("button", { name: "Ask agent to rebase #2" }));
+      await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/send", {
+        params: { path: { sessionId: "sess-2" } },
+        body: { message: expect.stringContaining("git rebase origin/layer-1") },
+      }));
+      expect(await row.findByText("Asked the agent on #2 to rebase.")).toBeInTheDocument();
+      expect(row.queryByRole("button", { name: "Ask agent to rebase #2" })).not.toBeInTheDocument();
+    });
+
+    it("offers only GitHub's rebase for a layer AO doesn't track, and nothing once every layer is current", async () => {
+      serveStack(stackOf(layer(1, "open"), layer(2, "open", { behindParent: 1 })));
+      const row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(row.getByRole("link", { name: "Rebase on GitHub" })).toBeInTheDocument();
+      expect(row.queryByRole("button", { name: /Ask agent to rebase/ })).not.toBeInTheDocument();
+    });
+
+    it("shows no rebase notice for a current stack", async () => {
+      serveStack(stackOf(layer(1, "open"), layer(2, "open")));
+      await screen.findByRole("list", { name: "Stack #40" });
+      expect(screen.queryByTestId("pr-stack-rebase")).not.toBeInTheDocument();
+      expect(screen.queryByText("needs rebase")).not.toBeInTheDocument();
+    });
+
     it("only offers a new task on the top of a stack", async () => {
       serveStack(stackOf(layer(2, "open"), layer(3, "open")));
       await screen.findByRole("list", { name: "Stack #40" });

@@ -310,6 +310,15 @@ func (m *Provider) MergeStack(ctx context.Context, request ports.SCMStackMergeRe
 	return stacker.MergeStack(ctx, request)
 }
 
+// CommitsBehind delegates to the sub-provider matching repo.Provider.
+func (m *Provider) CommitsBehind(ctx context.Context, repo ports.SCMRepo, base, head string) (int, error) {
+	stacker, err := m.stacker(repo.Provider)
+	if err != nil {
+		return 0, err
+	}
+	return stacker.CommitsBehind(ctx, repo, base, head)
+}
+
 // HeadChecks delegates to the sub-provider matching repo.Provider when that
 // provider can read a commit's checks.
 func (m *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha string) (ports.SCMHeadChecks, error) {
