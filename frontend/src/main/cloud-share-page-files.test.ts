@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ ipcMain: {} }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1") }));
 
-import { collectPageFiles, isSharePage, isShareVideo, MAX_PAGE_FILES, pageFileReferences, servedPath } from "./cloud-share-page-files";
+import { collectPageFiles, isSharePage, MAX_PAGE_FILES, pageFileReferences, servedPath } from "./cloud-share-page-files";
 
 describe("pageFileReferences", () => {
 	it("finds what the page's markup and styles load", () => {
@@ -61,10 +61,9 @@ describe("servedPath", () => {
 	});
 });
 
-describe("page and video names", () => {
-	it("tells a page and a video by extension", () => {
+describe("page names", () => {
+	it("tells a page by extension", () => {
 		expect([isSharePage("a.html"), isSharePage("A.HTM"), isSharePage("a.svg")]).toEqual([true, true, false]);
-		expect([isShareVideo("a.MP4"), isShareVideo("x/a.webm"), isShareVideo("a.png")]).toEqual([true, true, false]);
 	});
 });
 
@@ -90,15 +89,16 @@ describe("collectPageFiles", () => {
 
 	it("includes the files beside the page once each and says what it leaves out", async () => {
 		const html = `<img src="images/a.png"><img src="./images/a.png"><img src="b.jpg"><img src="report.html">
-<video src="clip.mp4" poster="b.jpg"></video><img src="../top.png"><img src="missing.png"><img src="link.png">
+<video src="clip.mp4" poster="b.jpg"></video><video src="take.mkv"></video><img src="../top.png"><img src="missing.png"><img src="link.png">
 <img src="https://cdn.test/x.png"><img src="_ao/x.png">`;
 		const { files, skipped } = await collectPageFiles(dataDir, "sess-1", "docs/report.html", html);
 		expect(files.map((file) => [file.path, file.file.relativePath, file.file.size])).toEqual([
 			["images/a.png", "docs/images/a.png", 1],
 			["b.jpg", "docs/b.jpg", 2],
+			["clip.mp4", "docs/clip.mp4", 5],
 		]);
 		expect(skipped).toEqual([
-			{ reference: "clip.mp4", reason: "video" },
+			{ reference: "take.mkv", reason: "video_format" },
 			{ reference: "../top.png", reason: "outside" },
 			{ reference: "missing.png", reason: "missing", relativePath: "docs/missing.png" },
 			{ reference: "link.png", reason: "outside" },

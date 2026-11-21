@@ -28,8 +28,8 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
-import { ShareArtifactMenuPopover, VIDEO_FILE, useHostShareLinks, useShareAccess, useShareAvailable } from "./ShareArtifactPopover";
-import type { CloudShareFile } from "../../shared/cloud-share";
+import { ShareArtifactMenuPopover, useHostShareLinks, useShareAccess, useShareAvailable } from "./ShareArtifactPopover";
+import { isUnplayableShareVideo, type CloudShareFile } from "../../shared/cloud-share";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -140,7 +140,7 @@ export function ArtifactActionsMenu({
 	const published = Boolean(artifact.shareUrl);
 	const sharing = useRef(false);
 	const shareAvailable = useShareAvailable();
-	const canShare = Boolean(share) && iconOnly && shareAvailable && !VIDEO_FILE.test(artifact.path);
+	const canShare = Boolean(share) && iconOnly && shareAvailable && !isUnplayableShareVideo(artifact.path);
 	const actionClassName = cn(className, (menuOpen || shareOpen) && "opacity-100 [@media(hover:hover)]:opacity-100");
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
