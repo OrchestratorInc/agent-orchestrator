@@ -92,7 +92,7 @@ commit_args() {
 # per line as "name<TAB>value": long options by any prefix, short option
 # clusters up to a letter that takes a value, and a required value (attached
 # or the next word) consumed with its option, so a value is never read as an
-# option itself.
+# option itself. -S and -u end a cluster: their optional value is attached.
 parse_args() {
 	printf '%s\n' "$args" | awk '
 		BEGIN {
@@ -118,6 +118,9 @@ parse_args() {
 		/^-./ {
 			for (i = 2; i <= length($0); i++) {
 				c = substr($0, i, 1)
+				# -S and -u take an optional value, attached if given: the
+				# rest of the word is that value, not more options.
+				if (c == "S" || c == "u") break
 				if (c == "e") print "edit\t"
 				if (c in short) {
 					if (i < length($0)) print short[c] "\t" substr($0, i + 1)

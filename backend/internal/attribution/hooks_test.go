@@ -371,6 +371,9 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 		// git takes long options abbreviated.
 		{"--edi on a -m holding only a # line", "", "", "true", []string{"--edi", "-m", "# placeholder"}, "", false, false, ""},
 		{"--clean=strip over commit.cleanup=verbatim", "", "verbatim", "true", []string{"--clean=strip", "-m", "# placeholder"}, "", false, false, ""},
+		// -S and -u take an attached optional value, not more options.
+		{"-S key ending in F before --cleanup=strip", "", "", "true", []string{"-S0xDEADBEEF", "--cleanup=strip", "--no-gpg-sign", "-m", "# placeholder"}, "", false, false, ""},
+		{"-unormal before --cleanup=strip", "", "", "true", []string{"-unormal", "--cleanup=strip", "-m", "# placeholder"}, "", false, false, ""},
 		{"an e inside a -m value is not -e", "", "", "true", []string{"-m", "-e is just text"}, "-e is just text", false, false, ""},
 		// Like git, the last --cleanup wins.
 		{"--cleanup given twice, the last is strip", "", "", "true", []string{"--cleanup=verbatim", "--cleanup=strip", "-m", "# Placeholder"}, "", false, false, ""},
