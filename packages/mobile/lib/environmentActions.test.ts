@@ -1,0 +1,161 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentMachineDraft } from "./environmentEditor";
+import type { Host } from "./hosts";
+
+// What persistManualHostEdit saves: the typed route, as plain as it was unless a test says otherwise.
+const savedAsTyped = vi.hoisted(() => async (host: Host, config: { host: string; httpPort: string }, _name: string, index: number): Promise<Host> => ({
+	...host,
+	endpoints: host.endpoints.map((endpoint, i) => i === index ? { ...endpoint, host: config.host.trim(), port: Number(config.httpPort) } : endpoint),
+}));
+
+const fixtures = vi.hoisted(() => ({
+	activeHostMetadata: vi.fn<() => Promise<{ id: string } | null>>(async () => null),
+	loadHosts: vi.fn<() => Promise<Host[]>>(async () => []),
+	forgetServer: vi.fn(async () => {}),
+	forgetPairedHost: vi.fn(async () => {}),
+	persist: vi.fn(savedAsTyped),
+
+	updateHostAppearance: vi.fn(async () => {}),
+}));
+
+vi.mock("./api", () => ({
+	ApiError: class ApiError extends Error {
+		constructor(readonly status: number) { super(`HTTP ${status}`); }
+	},
+	pingServer: vi.fn(),
+}));
+vi.mock("./connectRuntime", () => ({ probeEndpoint: vi.fn() }));
+vi.mock("./disconnect", () => ({ forgetServer: fixtures.forgetServer, forgetPairedHost: fixtures.forgetPairedHost }));
+vi.mock("./hosts", () => ({
+	activeHostMetadata: fixtures.activeHostMetadata,
+	loadHosts: fixtures.loadHosts,
+	renameHost: vi.fn(),
+	saveHost: vi.fn(),
+	updateHostAppearance: fixtures.updateHostAppearance,
+}));
+vi.mock("./manualConnect", async () => {
+	class AccountManagedHostError extends Error {}
+	class DifferentMachineError extends Error {}
+	return { AccountManagedHostError, DifferentMachineError, persistManualHostEdit: fixtures.persist };
+});
+
+import { ApiError } from "./api";
+import { forgetEnvironmentMachine, ForgetMachineError, saveEnvironmentMachine } from "./environmentActions";
+import { MachineSaveError } from "./environmentEditor";
+import { DifferentMachineError } from "./manualConnect";
+
+const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [{ kind: "lan", host: "10.0.0.2", port: 3011, secure: false }], token: "a-token", lastConnected: 2, appearance: { symbol: "server" } };
+const b: Host = { ...a, id: "b", name: "B", token: "b-token", lastConnected: 1 };
+
+beforeEach(() => {
+	for (const mock of Object.values(fixtures)) mock.mockReset();
+	fixtures.persist.mockImplementation(savedAsTyped);
+});
+
+describe("forgetting a machine", () => {
+	it.each([false, true])("forgets the default and names the next one (last machine: %s)", async (lastMachine) => {
+		fixtures.activeHostMetadata.mockResolvedValue({ id: "a" });
+		fixtures.loadHosts.mockResolvedValue(lastMachine ? [] : [b]);
+		const result = await forgetEnvironmentMachine(a, "a");
+		expect(fixtures.forgetServer).toHaveBeenCalledWith(a);
+		expect(fixtures.forgetPairedHost).not.toHaveBeenCalled();
+		expect(result.wasDefault).toBe(true);
+		expect(result.notice).toBe(lastMachine ? "A forgotten." : "A forgotten. B is now the default.");
+		expect(result.nextDefault?.id).toBe(lastMachine ? undefined : "b");
+	});
+
+	it("forgets a non-default without touching the default", async () => {
+		fixtures.activeHostMetadata.mockResolvedValue({ id: "a" });
+		fixtures.loadHosts.mockResolvedValue([a]);
+		const result = await forgetEnvironmentMachine(b, "a");
+		expect(fixtures.forgetPairedHost).toHaveBeenCalledWith(b);
+		expect(fixtures.forgetServer).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ wasDefault: false, notice: "B forgotten." });
+		expect(result.nextDefault?.id).toBe("a");
+	});
+
+	// Account sync may move the default while the page is open: the stored
+	// selection decides, and the machine asked for is the one forgotten.
+	it("forgets the machine asked for even when the selection moved while the page was open", async () => {
+		fixtures.activeHostMetadata.mockResolvedValue({ id: "b" });
+		fixtures.loadHosts.mockResolvedValue([b]);
+		const result = await forgetEnvironmentMachine(a, "a");
+		expect(fixtures.forgetPairedHost).toHaveBeenCalledWith(a);
+		expect(fixtures.forgetServer).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ wasDefault: false, notice: "A forgotten." });
+	});
+
+	it("reports a connection it couldn't remove, or saved machines it couldn't read", async () => {
+		fixtures.activeHostMetadata.mockResolvedValue({ id: "a" });
+		fixtures.forgetServer.mockRejectedValue(new Error("storage failed"));
+		fixtures.loadHosts.mockResolvedValue([a]);
+		await expect(forgetEnvironmentMachine(a, "a")).rejects.toEqual(new ForgetMachineError("This machine's saved connection couldn't be removed. Try again."));
+		fixtures.loadHosts.mockRejectedValue(new Error("keychain"));
+		await expect(forgetEnvironmentMachine(a, null)).rejects.toEqual(new ForgetMachineError("The saved machines couldn't be read. Try again."));
+	});
+});
+
+describe("saving a machine", () => {
+	const draft = (patch: Partial<EnvironmentMachineDraft["config"]> = {}, symbol: "server" | "cloud" = "server"): EnvironmentMachineDraft => ({
+		machineName: "A",
+		appearance: { symbol },
+		endpointIndex: 0,
+		config: { host: "10.0.0.2", httpPort: "3011", muxPort: "14801", secure: false, password: "a-token", hostId: "a", ...patch },
+	});
+
+	it("stores a new icon and says whether the route changed", async () => {
+		expect(await saveEnvironmentMachine(a, draft({}, "cloud"), "ios")).toEqual({ routeChanged: false });
+		expect(fixtures.updateHostAppearance).toHaveBeenCalledWith("a", { symbol: "cloud" });
+		expect(await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }), "ios")).toEqual({ routeChanged: true });
+		expect(fixtures.updateHostAppearance).toHaveBeenCalledOnce();
+	});
+
+	// The address decides TLS when the route is saved, so the change is read
+	// from what was saved rather than from the draft.
+	it("counts a route that answered over TLS this time as changed", async () => {
+		fixtures.persist.mockImplementationOnce(async (host: Host) => ({ ...host, endpoints: [{ ...host.endpoints[0], secure: true }] }));
+		expect(await saveEnvironmentMachine(a, draft(), "ios")).toEqual({ routeChanged: true });
+	});
+
+	it("puts a rejected password against the password field", async () => {
+		fixtures.persist.mockRejectedValue(new (ApiError as unknown as new (status: number) => Error)(401));
+		await expect(saveEnvironmentMachine(a, draft({ password: "wrong" }), "ios")).rejects.toEqual(new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password"));
+	});
+
+	it("puts another machine answering, or nothing answering, against the address", async () => {
+		fixtures.persist.mockRejectedValueOnce(Object.assign(new DifferentMachineError(), { message: "That address belongs to another machine." }));
+		const different = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }), "ios").catch((error: MachineSaveError) => error);
+		expect(different).toMatchObject({ field: "host", message: "That address belongs to another machine." });
+		fixtures.persist.mockRejectedValueOnce(new Error("timeout"));
+		const unreachable = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }), "ios").catch((error: MachineSaveError) => error);
+		expect(unreachable).toBeInstanceOf(MachineSaveError);
+		expect(unreachable).toMatchObject({ field: "host" });
+	});
+
+	it("says to type http:// when a Tailscale name on another port does not answer over HTTPS", async () => {
+		fixtures.persist.mockRejectedValueOnce(new TypeError("Network request failed"));
+		const failed = await saveEnvironmentMachine(a, draft({ host: "my-pc.tail1234.ts.net", httpPort: "3011" }), "android").catch((error: MachineSaveError) => error);
+		expect(failed).toMatchObject({ field: "host", message: expect.stringContaining("enter http://my-pc.tail1234.ts.net:3011.") });
+	});
+
+	// A storage failure on the icon has no HTTP status, which used to read as
+	// "unreachable": the machine was blamed for a local write, and a route that
+	// had already been saved was never reported.
+	it("reports an icon that failed to save as such, with the route it did save", async () => {
+		fixtures.updateHostAppearance.mockRejectedValueOnce(new Error("storage full"));
+		const moved = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }, "cloud"), "ios");
+		expect(moved.routeChanged).toBe(true);
+		expect(moved.appearanceError).toBeInstanceOf(MachineSaveError);
+		expect(moved.appearanceError).toMatchObject({ field: "host", message: "The connection was saved, but the icon couldn't be. Try Save again." });
+
+		fixtures.updateHostAppearance.mockRejectedValueOnce(new Error("storage full"));
+		const iconOnly = await saveEnvironmentMachine(a, draft({}, "cloud"), "ios");
+		expect(iconOnly).toMatchObject({ routeChanged: false, appearanceError: { field: "host", message: "The icon couldn't be saved. Try again." } });
+	});
+
+	it("names the port it tried when Port was left empty", async () => {
+		fixtures.persist.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(500));
+		const failed = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9", httpPort: "" }), "ios").catch((error: MachineSaveError) => error);
+		expect(failed).toMatchObject({ field: "host", message: expect.stringContaining("10.0.0.9:3011 answered") });
+	});
+});

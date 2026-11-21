@@ -71,6 +71,25 @@ describe("pending Chat send", () => {
 		expect((await reservePendingSend(key, { id: "second", draftText: "Fix B", text: "Fix B", hasAttachments: false })).id).toBe("second");
 	});
 
+	// Same text, new pick: the earlier record must not carry its old switch.
+	it("refuses to reuse an uncertain send for a different agent or model", async () => {
+		const key = pendingSendKey("host", "switch");
+		const toCodex = { id: "first", draftText: "carry on", text: "carry on", hasAttachments: false, kind: "send" as const, providerSwitch: { targetHarness: "codex", model: "gpt-6-sol" } };
+		await reservePendingSend(key, toCodex);
+		await expect(reservePendingSend(key, { ...toCodex, id: "pi", providerSwitch: { targetHarness: "pi" } })).rejects.toThrow("different agent or model");
+		await expect(reservePendingSend(key, { ...toCodex, id: "model", providerSwitch: { targetHarness: "codex" } })).rejects.toThrow("different agent or model");
+		const { providerSwitch: _dropped, ...plain } = toCodex;
+		await expect(reservePendingSend(key, { ...plain, id: "running-agent" })).rejects.toThrow("different agent or model");
+		expect(await reservePendingSend(key, { ...toCodex, id: "same-pick" })).toEqual(toCodex);
+		expect(await readPendingSend(key)).toEqual(toCodex);
+	});
+
+	it("treats a damaged switch on a saved send as a damaged record", async () => {
+		const key = pendingSendKey("host", "damaged-switch");
+		saved.set(key, JSON.stringify({ id: "x", draftText: "a", text: "a", hasAttachments: false, providerSwitch: { model: 3 } }));
+		await expect(readPendingSend(key)).rejects.toThrow("damaged");
+	});
+
 	it("never reuses an uncertain ID with newly selected attachments", async () => {
 		const key = "ao.chat.pending.host-A.session-1";
 		await reservePendingSend(key, { id: "first", draftText: "Fix it", text: "Fix it", hasAttachments: false });

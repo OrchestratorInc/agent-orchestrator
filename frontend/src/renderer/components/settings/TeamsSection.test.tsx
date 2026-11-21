@@ -208,7 +208,7 @@ describe("TeamsSection", () => {
 		mocks.ready = false;
 		mocks.org = undefined;
 		renderSection();
-		expect(screen.getByText("Sign in to AO Cloud to use teams.")).toBeInTheDocument();
+		expect(screen.getByText("Sign in to Orchestrator Cloud to use teams.")).toBeInTheDocument();
 		expect(document.querySelector("[aria-busy]")).toBeNull();
 	});
 
@@ -224,7 +224,7 @@ describe("TeamsSection", () => {
 	it("is quiet against a control plane from before teams", async () => {
 		mocks.teamsError = new CloudCpError("404 page not found", { status: 404 });
 		renderSection();
-		expect(await screen.findByText("Teams aren't available on this AO Cloud yet. Share links still work.")).toBeInTheDocument();
+		expect(await screen.findByText("Teams aren't available on this Orchestrator Cloud yet. Share links still work.")).toBeInTheDocument();
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(mocks.calls.filter((call) => call[0] === "listTeams")).toHaveLength(1);
 	});
@@ -459,10 +459,10 @@ describe("TeamsSection", () => {
 		await userEvent.click(await screen.findByText("Platform"));
 		const row = await shareRow("Fix checkout");
 		await userEvent.click(within(row).getByRole("button", { name: /Change access/ }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't change access.");
 		// Back to what it was.
-		expect(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ })).toHaveTextContent("Write to the agent");
+		expect(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can write");
 
 		await userEvent.click(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Stop sharing with Platform" }));

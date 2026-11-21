@@ -29,7 +29,7 @@ export type RendererTelemetryCapture = {
 	message: string;
 	level?: "fatal" | "error" | "warning" | "info";
 	tags?: Record<string, string>;
-	exception?: { type: string; frames: Array<{ function: string; filename?: string; lineno?: number; colno?: number }> };
+	exception?: { type: string; frames: Array<{ function: string; filename?: string; lineno?: number; colno?: number; debug_id?: string }> };
 };
 
 export type RendererTelemetryCaptureInput = Omit<RendererTelemetryCapture, "consentGeneration">;

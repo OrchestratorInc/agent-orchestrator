@@ -77,6 +77,7 @@ func TestIsCoordinationMessage(t *testing.T) {
 		{message: "  " + WrapSessionDelivery("send-1", "hello"), want: true},
 		{message: `<ao-handoff-request id="1">`, want: true},
 		{message: "AO transferred the previous agent's context in hidden system instructions. Continue.", want: true},
+		{message: WrapReportDelivery("report-2", "worker finished") + "\nalso fix the login bug"},
 		{message: "fix the login bug"},
 		{message: "please mention <ao-handoff-request in the docs"},
 		{message: ""},

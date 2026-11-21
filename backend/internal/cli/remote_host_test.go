@@ -44,13 +44,14 @@ func TestRemoteHostCLIUsesLocalControlAPI(t *testing.T) {
 		want       []string
 		absent     string
 	}{
-		{"enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
-		{"status", "status", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
+		{"enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only", "POST /api/v1/mobile/pairing-code"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
+		{"status", "status", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "http://192.168.1.10:3011", "--show-password"}, "pairing-secret"},
+		{"status --show-password", "status --show-password", []string{"GET /api/v1/mobile/status"}, []string{"Password: pairing-secret"}, ""},
 		{"disable", "disable", []string{"POST /api/v1/mobile/disable"}, []string{"disabled"}, "pairing-secret"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests = nil
-			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", tc.verb)
+			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, append([]string{"remote-host"}, strings.Fields(tc.verb)...)...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,7 +106,7 @@ func TestRemoteHostCLITunnelFromDisabledAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-lan-only,POST /api/v1/mobile/remote-access" {
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-lan-only,POST /api/v1/mobile/remote-access,POST /api/v1/mobile/pairing-code" {
 		t.Fatalf("requests = %s", got)
 	}
 	for _, want := range []string{"pairing-secret", "Tunnel: starting", "Cloudflare terminates TLS"} {
@@ -136,6 +137,11 @@ func TestRemoteHostCLITunnelOnlyUsesLoopbackRoute(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 			requests = append(requests, r.Method+" "+r.URL.Path)
 		}
+		// A daemon without pairing codes.
+		if r.URL.Path == "/api/v1/mobile/pairing-code" {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"enabled":true,"loopbackOnly":true,"hostId":"host-a","password":"pairing-secret","tunnel":{"supported":true,"running":true}}`)
 	}))
@@ -145,7 +151,7 @@ func TestRemoteHostCLITunnelOnlyUsesLoopbackRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(requests, ","); got != "POST /api/v1/mobile/enable-tunnel-only" {
+	if got := strings.Join(requests, ","); got != "POST /api/v1/mobile/enable-tunnel-only,POST /api/v1/mobile/pairing-code" {
 		t.Fatalf("tunnel-only requests = %s", got)
 	}
 	if !strings.Contains(out, "Tunnel: starting") || !strings.Contains(out, "pairing-secret") || strings.Contains(out, "http://") {
@@ -189,6 +195,11 @@ func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
 				if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 					requests = append(requests, r.Method+" "+r.URL.Path)
 				}
+				// A daemon without pairing codes.
+				if r.URL.Path == "/api/v1/mobile/pairing-code" {
+					http.NotFound(w, r)
+					return
+				}
 				_, _ = fmt.Fprintf(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false,"installing":%v}}`, installing)
 			}))
 			t.Cleanup(srv.Close)
@@ -198,7 +209,7 @@ func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
+			if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access,POST /api/v1/mobile/pairing-code" {
 				t.Fatalf("requests = %s, want no listener restart", got)
 			}
 			if !strings.Contains(out, "existing-secret") || !strings.Contains(out, want) {
@@ -287,7 +298,24 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
 	if err != nil || !strings.Contains(out, "https://h-0d483066194a12a5dc17.useao.dev:443") ||
 		!strings.Contains(out, "Fixed address: it stays the same after restarts.") || strings.Contains(out, "Quick tunnel") ||
-		!strings.Contains(out, "Linked to an AO account") {
+		!strings.Contains(out, "Linked to an Orchestrator account") {
 		t.Fatalf("fixed address status = %q, %v", out, err)
+	}
+}
+
+// A machine whose account link AO Cloud refuses must not claim the
+// account's devices list it (#7976).
+func TestRemoteHostCLISaysARefusedLinkMayNotBeListed(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"enabled":true,"accountLinked":true,"accountLinkRefused":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"quick.trycloudflare.com","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
+	if err != nil || strings.Contains(out, "devices list this machine") ||
+		!strings.Contains(out, "Orchestrator Cloud refuses this machine's account link") || !strings.Contains(out, "ao remote-host link") {
+		t.Fatalf("refused link status = %q, %v", out, err)
 	}
 }

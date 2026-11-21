@@ -32,6 +32,25 @@ export function shareCodeLinkUrl(controlPlaneUrl: string, code: string): string 
 	return `${controlPlaneUrl.replace(/\/+$/, "")}/s/${encodeURIComponent(code)}`;
 }
 
+/**
+ * The link to copy for a link just created. With a well-formed code: the
+ * short link the control plane names on its public site (orchestrator.inc)
+ * when it names one, else its own /s/<code> page. Without one (codes off),
+ * the token link; undefined when the response carries neither.
+ */
+export function createdShareLinkUrl(
+	baseUrl: string,
+	orgId: string,
+	link: { code?: string; token?: string; shortUrl?: string },
+): string | undefined {
+	if (isShareCode(link.code)) {
+		const named = link.shortUrl ? parseShareUrl(link.shortUrl) : undefined;
+		if (named && "code" in named && named.code === link.code && link.shortUrl!.startsWith("https://")) return link.shortUrl;
+		return shareCodeLinkUrl(baseUrl, link.code);
+	}
+	return link.token ? shareLinkUrl(baseUrl, orgId, link.token) : undefined;
+}
+
 /** The share a pasted or opened link names, or undefined when it names none. */
 export function parseShareLink(text: string): ShareLinkTarget | undefined {
 	const trimmed = text.trim();

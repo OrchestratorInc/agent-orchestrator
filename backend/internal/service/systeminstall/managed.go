@@ -247,7 +247,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		}
 	}
 	if cli == "" {
-		return errors.New("AO could not tell which executable sessions run, so it cannot install a managed copy")
+		return errors.New("cannot install a managed copy: Orchestrator could not tell which executable sessions run")
 	}
 	targetDir := s.managedTargetDir(plan.Target)
 	versionsDir := filepath.Join(targetDir, "versions")
@@ -363,7 +363,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	if err := writeFileAtomic(filepath.Join(targetDir, "managed.json"), mustJSON(record)); err != nil {
 		return installFailed(setupFailed, fmt.Errorf("record managed install: %w", err))
 	}
-	_, _ = fmt.Fprintf(out, "AO now runs %s %s from %s\n", cli, version, dir)
+	_, _ = fmt.Fprintf(out, "Orchestrator now runs %s %s from %s\n", cli, version, dir)
 	s.mu.Lock()
 	invalidate := s.invalidateBinary
 	s.mu.Unlock()
