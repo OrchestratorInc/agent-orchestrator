@@ -97,7 +97,7 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 	}
 	text := string(encoded)
 	if len(text) > maxToolResultChars {
-		text = text[:maxToolResultChars] + fmt.Sprintf("\n[truncated: %d of %d characters shown; narrow the request]", maxToolResultChars, len(encoded))
+		text = strings.ToValidUTF8(text[:maxToolResultChars], "") + fmt.Sprintf("\n[truncated: %d of %d characters shown; narrow the request]", maxToolResultChars, len(encoded))
 	}
 	return map[string]any{"content": []any{mcpText(text)}}
 }
@@ -225,7 +225,7 @@ func clip(text string) string {
 	if len(text) <= maxTurnTextChars {
 		return text
 	}
-	return text[:maxTurnTextChars] + fmt.Sprintf(" [truncated: %d more characters]", len(text)-maxTurnTextChars)
+	return strings.ToValidUTF8(text[:maxTurnTextChars], "") + fmt.Sprintf(" [truncated: %d more characters]", len(text)-maxTurnTextChars)
 }
 
 func stringProp(desc string) map[string]any {
@@ -262,7 +262,7 @@ func requesterBody(caller string) map[string]any {
 var catalog = []catalogTool{
 	{
 		name: "capabilities", title: "List agents and accounts",
-		desc: "Lists the coding agents this computer can run, whether each is installed and signed in, and the subscription accounts. " +
+		desc: "Lists the coding agents installed on this computer, whether each is signed in, and the subscription accounts. " +
 			"Call it before session_spawn when you choose an agent or model.",
 		call: callCapabilities,
 	},
@@ -406,12 +406,12 @@ var catalog = []catalogTool{
 		required: []string{"sessionId"},
 		call:     callSessionFork,
 	},
-	routed("session_switch", "Switch a session's agent or model", "Moves a session to another agent, model or effort. The conversation continues there.", true,
+	routed("session_switch", "Switch a session's agent", "Moves a session to another coding agent. The conversation continues there.", true,
 		map[string]any{
 			"sessionId": otherSessionProp,
-			"harness":   stringProp("Agent id to switch to. Use the session's current agent to change only the model or effort."),
-			"model":     stringProp("Model id."),
-			"effort":    stringProp("Reasoning effort."),
+			"harness":   stringProp("Agent id to switch to. It must differ from the session's current agent."),
+			"model":     stringProp("Model id for the new agent."),
+			"effort":    stringProp("Reasoning effort for the new agent."),
 		}, []string{"sessionId", "harness"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/provider-switch", rename: map[string]string{"harness": "targetHarness"},
 			pick: func(m map[string]any) any { return keep(m, "status", "warnings", "settingsUpdated", "stoppedTurn") }}),

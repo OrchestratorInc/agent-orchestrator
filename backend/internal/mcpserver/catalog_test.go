@@ -300,3 +300,31 @@ func TestDaemonErrorsReachTheAgentAsToolErrors(t *testing.T) {
 		t.Fatalf("isError = %v, text = %s", isError, text)
 	}
 }
+
+func TestCapabilitiesLeavesOutAccountDetails(t *testing.T) {
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/agents": fixed(200, `{"supported":[{"id":"devin"}],"installed":[{"id":"codex","label":"Codex","authStatus":"authorized","usageCount":3}]}`),
+		"GET /api/v1/agents/accounts": fixed(200, `{"accounts":[{"id":"device-claude","provider":"claude","plan":"max","default":true,"signedIn":true,
+			"email":"person@example.com","orgName":"Example","limits":{"windows":[1]}}]}`),
+	})
+	text, isError := callTool(t, "capabilities", nil)
+	if isError || !strings.Contains(text, `"id":"codex"`) || !strings.Contains(text, `"plan":"max"`) {
+		t.Fatalf("capabilities = %s", text)
+	}
+	for _, private := range []string{"person@example.com", "Example", "limits", "usageCount", "devin"} {
+		if strings.Contains(text, private) {
+			t.Errorf("capabilities shows %q: %s", private, text)
+		}
+	}
+}
+
+func TestLongTurnsAreCutOnACharacterBoundary(t *testing.T) {
+	long := strings.Repeat("é", maxTurnTextChars)
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2/history": fixed(200, `{"total":1,"turns":[{"agentResponse":"`+long+`"}]}`),
+	})
+	text, isError := callTool(t, "session_read", map[string]any{"sessionId": "ao-2"})
+	if isError || !strings.Contains(text, "truncated") || strings.Contains(text, "\ufffd") || strings.ContainsRune(text, '\uFFFD') {
+		t.Fatalf("isError = %v, text tail = %q", isError, text[len(text)-80:])
+	}
+}

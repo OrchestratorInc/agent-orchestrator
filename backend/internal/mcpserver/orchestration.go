@@ -40,14 +40,21 @@ func newRequestID() string {
 }
 
 func callCapabilities(ctx context.Context, s *server, _ map[string]any) (any, error) {
-	var agents, accounts json.RawMessage
+	var agents, accounts map[string]any
 	if err := s.daemon.DoJSON(ctx, http.MethodGet, "agents", nil, &agents); err != nil {
 		return nil, err
 	}
 	if err := s.daemon.DoJSON(ctx, http.MethodGet, "agents/accounts", nil, &accounts); err != nil {
 		return nil, err
 	}
-	return map[string]any{"agents": agents, "accounts": accounts}, nil
+	return map[string]any{
+		"agents": each(agents["installed"], func(agent map[string]any) map[string]any {
+			return keep(agent, "id", "label", "authStatus")
+		}),
+		"accounts": each(accounts["accounts"], func(account map[string]any) map[string]any {
+			return keep(account, "id", "provider", "plan", "default", "signedIn")
+		}),
+	}, nil
 }
 
 func callSessionRead(ctx context.Context, s *server, args map[string]any) (any, error) {
