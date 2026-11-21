@@ -11,7 +11,7 @@
 // for GitHub), and that save can still fail, so the desktop app reports it,
 // not this page.
 //
-// Used by Claude and GitHub sign-in in every build, and by Orchestrator Cloud
+// Used by Claude Code and GitHub sign-in in every build, and by Orchestrator Cloud
 // sign-in only when it uses a loopback redirect (development builds, or an
 // AO_CLOUD_AUTH_REDIRECT override). Packaged Cloud sign-in returns through a
 // hosted HTTPS page instead (resolveCloudAuthRedirect).
@@ -51,15 +51,15 @@ export interface AuthCallbackPage {
 }
 
 // An <img> rather than inline markup, so the logo's own ids and gradients
-// can't clash with the page's. Shown in greyscale, so it stays a quiet mark.
+// can't clash with the page's.
 const LOGO_SRC = `data:image/svg+xml;base64,${Buffer.from(logoSvg).toString("base64")}`;
 
 /** How long the success page shows before it returns to the app. */
 const RETURN_DELAY_MS = 1500;
 
 const PROVIDER_NAME: Record<AuthCallbackProvider, string> = {
-	cloud: "Orchestrator Cloud",
-	"claude-code": "Claude",
+	cloud: "Orchestrator",
+	"claude-code": "Claude Code",
 	github: "GitHub",
 };
 
@@ -109,7 +109,7 @@ main {
 	padding: 32px 16px 10vh;
 	text-align: center;
 }
-.mark { display: block; width: 32px; height: 32px; margin: 0 0 20px; filter: grayscale(1); opacity: 0.85; }
+.mark { display: block; width: 32px; height: 32px; margin: 0 0 20px; }
 h1 { margin: 0; font-size: 22px; line-height: 1.3; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
 p { margin: 8px 0 0; max-width: 28rem; color: var(--muted); text-wrap: balance; }
 p strong { color: var(--fg); font-weight: 500; }

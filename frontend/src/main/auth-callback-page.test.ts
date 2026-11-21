@@ -3,8 +3,8 @@ import { APP_RETURN_URL, authCallbackReturnUrl, renderAuthCallbackPage } from ".
 
 describe("renderAuthCallbackPage", () => {
 	it("names the service on success and failure", () => {
-		expect(renderAuthCallbackPage({ provider: "cloud", ok: true })).toContain("<title>Signed in to Orchestrator Cloud</title>");
-		expect(renderAuthCallbackPage({ provider: "claude-code", ok: true })).toContain("<h1>Signed in to Claude</h1>");
+		expect(renderAuthCallbackPage({ provider: "cloud", ok: true })).toContain("<title>Signed in to Orchestrator</title>");
+		expect(renderAuthCallbackPage({ provider: "claude-code", ok: true })).toContain("<h1>Signed in to Claude Code</h1>");
 		expect(renderAuthCallbackPage({ provider: "github", ok: false })).toContain("<h1>Couldn’t sign in to GitHub</h1>");
 	});
 
