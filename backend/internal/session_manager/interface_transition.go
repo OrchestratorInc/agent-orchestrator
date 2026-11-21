@@ -605,6 +605,7 @@ func (m *Manager) runInterfaceTransition(
 			}
 			env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 			m.augmentAgentRuntimeEnv(bridge, env)
+			m.applyImportedConfigEnv(ctx, rec, env)
 			if bridgeErr := storageBridge.PrepareInterfaceHandoffStorage(ctx, ports.SessionRef{
 				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: transition.NativeConversationID},
