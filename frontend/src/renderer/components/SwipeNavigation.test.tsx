@@ -412,22 +412,21 @@ describe("SwipeNavigation", () => {
 			expect(history.back).not.toHaveBeenCalled();
 		});
 
-		it("ignores an edge swipe that starts over a streamed code block, table or display formula", () => {
+		it.each([
+			["a finished code block", "```ts\nconst a = 1;\n```\n\nmore", "pre code"],
+			["a code block still being written", "Here:\n\n```ts\nconst a = 1;", "pre code"],
+			["a table", "| a | b |\n|---|---|\n| 1 | 2 |\n\nmore", "td"],
+			["a display formula", "$$\nx^2\n$$\n\nmore", '[data-math="display"]'],
+		] as const)("ignores an edge swipe that starts over %s while streaming", (_name, text, selector) => {
 			useUiStore.setState({ renderMath: true });
 			try {
-				const { container, getByTestId } = render(
-					<Harness>
-						<ChatMarkdown streaming text={"```ts\nconst a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n$$\nx^2\n$$\n\nmore"} />
-					</Harness>,
-				);
-				const targets = ["pre code", "td", '[data-math="display"]'].map((selector) => container.querySelector(selector));
-				for (const target of targets) {
-					expect(target).not.toBeNull();
-					fingers("down");
-					swipe(target!, drag(-20, 4), 0);
-					swipe(getByTestId("pane"), drag(-20, 10), 0);
-					fingers("up");
-				}
+				const { container, getByTestId } = render(<Harness><ChatMarkdown streaming text={text} /></Harness>);
+				const target = container.querySelector(selector);
+				expect(target).not.toBeNull();
+				fingers("down");
+				swipe(target!, drag(-20, 4), 0);
+				swipe(getByTestId("pane"), drag(-20, 10), 0);
+				fingers("up");
 				expect(history.back).not.toHaveBeenCalled();
 			} finally {
 				useUiStore.setState({ renderMath: false });
