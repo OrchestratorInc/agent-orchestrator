@@ -541,7 +541,7 @@ func (c *commandContext) taskStatus(ctx context.Context, id taskID) taskResult {
 	case "auth_required":
 		res.Fix = c.signInFix(ctx, sess.Harness)
 	case "provider_key_missing":
-		res.Fix = fmt.Sprintf("add the API key that %s needs (Orchestrator Settings → Agents, or the agent's own config), then retry", sess.Harness)
+		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
 	}
 	return res
 }
