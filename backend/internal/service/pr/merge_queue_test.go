@@ -203,6 +203,15 @@ func TestActionServiceDequeue_Refusals(t *testing.T) {
 			t.Fatalf("local queue writes = %#v", queue.writes)
 		}
 	})
+	t.Run("branch without a queue", func(t *testing.T) {
+		pr, scm, queue := queueFixture()
+		scm.observation.PR.MergeQueueRequired = false
+		_, err := queueService(pr, scm, queue, nil).Dequeue(context.Background(), "42", pr.URL)
+		// Nothing to clear, and the branch must not be marked as merging through a queue.
+		if !errors.Is(err, ErrPRNotQueued) || len(queue.writes) != 0 {
+			t.Fatalf("error = %v, writes = %#v", err, queue.writes)
+		}
+	})
 	t.Run("provider refuses", func(t *testing.T) {
 		pr, scm, queue := queueFixture()
 		scm.observation.PR.MergeQueue = &domain.MergeQueueEntry{State: domain.MergeQueueLocked, Position: 1}

@@ -363,7 +363,11 @@ func (s *ActionService) Dequeue(ctx context.Context, prID, prURL string) (Dequeu
 	}
 	fresh := observations[0]
 	if fresh.PR.MergeQueue == nil {
-		s.recordQueue(ctx, tracked.URL, nil, s.clock().UTC())
+		// Clear a stale entry, but only on a branch that has a queue: the
+		// write also marks the branch as merging through one.
+		if fresh.PR.MergeQueueRequired {
+			s.recordQueue(ctx, tracked.URL, nil, s.clock().UTC())
+		}
 		return DequeueResult{}, ErrPRNotQueued
 	}
 	if err := s.queuer.DequeuePullRequest(ctx, ports.SCMDequeueRequest{
