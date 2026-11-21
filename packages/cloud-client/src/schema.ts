@@ -8378,7 +8378,7 @@ export interface operations {
                             /** @enum {string} */
                             status: "added" | "modified" | "deleted";
                         }[];
-                        /** @description The Claude Code conversation the move would carry. Absent when there is none. */
+                        /** @description The agent's conversation the move would carry: a Claude Code, Codex, OpenCode or Cursor conversation. Absent for another agent or when there is none. */
                         transcript?: {
                             /**
                              * Format: int64
@@ -8428,10 +8428,10 @@ export interface operations {
                             displayName?: string;
                         };
                         handoffNote: string;
-                        /** @description The Claude Code conversation, checkpointed after the push, for the daemon to resume. Absent for another agent or when none was captured. */
+                        /** @description The agent's conversation, checkpointed after the push, for the daemon to resume: a Claude Code, Codex, OpenCode or Cursor conversation, as that agent stores it (for OpenCode, its session export document). Absent for another agent or when none was captured. */
                         transcript?: {
                             agentSessionId: string;
-                            /** @description The sandbox's Claude project folder the conversation was in. */
+                            /** @description The folder the conversation was in: for Claude Code the sandbox's Claude project folder. */
                             projectDir: string;
                             /** Format: byte */
                             transcriptGzip: string;
