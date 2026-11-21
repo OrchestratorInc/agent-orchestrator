@@ -44,8 +44,13 @@ export function ApprovalModeMenuRow({ sessionId, hostId, onOpen }: { sessionId: 
 			}}
 		>
 			<ShieldCheck aria-hidden="true" className="size-icon-base shrink-0" />
-			<span className="flex-1">{t("browser.approvals.label")}</span>
-			{mode ? <span className="max-w-28 truncate text-caption text-passive">{t(`approvals.mode.${mode}`)}</span> : null}
+			{/* The label stays on one line; the mode gives way, as the Profile row's value does. */}
+			<span className="flex-1 whitespace-nowrap">{t("browser.approvals.label")}</span>
+			{mode ? (
+				<span className="min-w-0 max-w-20 truncate text-caption text-passive" title={t(`approvals.mode.${mode}`)}>
+					{t(`approvals.mode.${mode}`)}
+				</span>
+			) : null}
 			<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 		</DropdownMenuItem>
 	);

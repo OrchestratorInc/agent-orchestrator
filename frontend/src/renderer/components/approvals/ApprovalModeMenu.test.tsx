@@ -61,4 +61,22 @@ describe("ApprovalModeMenu", () => {
 	it("scopes the policy cache by host", () => {
 		expect(approvalPolicyQueryKey("ao-9", "box")).not.toEqual(approvalPolicyQueryKey("ao-9"));
 	});
+
+	it("keeps the root row's label on one line and truncates the mode instead", async () => {
+		vi.spyOn(apiClient, "GET").mockResolvedValue(policy("every-submit") as never);
+		render(
+			<DropdownMenu open>
+				<DropdownMenuTrigger>menu</DropdownMenuTrigger>
+				<DropdownMenuContent>
+					<ApprovalModeMenuRow sessionId="ao-7" onOpen={vi.fn()} />
+				</DropdownMenuContent>
+			</DropdownMenu>,
+		);
+		const value = await screen.findByText("Every form submission");
+		const label = screen.getByText("Ask before acting");
+		expect(label).toHaveClass("whitespace-nowrap");
+		expect(value).toHaveClass("min-w-0", "truncate", "max-w-20");
+		// The full mode stays readable when truncated.
+		expect(value).toHaveAttribute("title", "Every form submission");
+	});
 });
