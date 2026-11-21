@@ -309,34 +309,55 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 		name, template, cleanup, editor string
 		args                            []string
 		want                            string // "" means abort
+		dashT                           bool   // pass the template with -t, not commit.template
 	}{
 		{"template sign-off replaced by another", "Subject\n\nSigned-off-by: Alice <a@example.com>\n", "",
-			`sed 's/^Signed-off-by: Alice.*/Signed-off-by: Bob <b@example.com>/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Signed-off-by: Bob"},
-		{"template ends with the committer's sign-off, untouched", "Subject\n\n" + dev + "\n", "", "true", nil, ""},
-		{"template ends with the committer's sign-off, untouched with -s", "Subject\n\n" + dev + "\n", "", "true", []string{"-s"}, ""},
+			`sed 's/^Signed-off-by: Alice.*/Signed-off-by: Bob <b@example.com>/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Signed-off-by: Bob", false},
+		{"template ends with the committer's sign-off, untouched", "Subject\n\n" + dev + "\n", "", "true", nil, "", false},
+		{"template ends with the committer's sign-off, untouched with -s", "Subject\n\n" + dev + "\n", "", "true", []string{"-s"}, "", false},
 		{"template ends with the committer's sign-off, removed", "Subject\n\n" + dev + "\n", "",
-			`grep -v '^Signed-off-by: ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Subject"},
+			`grep -v '^Signed-off-by: ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Subject", false},
 		// whitespace keeps git's own status comments, so even an untouched
 		// template differs from it and git commits.
-		{"cleanup=whitespace, untouched", "# Heading\nBody text\n", "whitespace", "true", nil, "# Heading"},
+		{"cleanup=whitespace, untouched", "# Heading\nBody text\n", "whitespace", "true", nil, "# Heading", false},
 		{"cleanup=whitespace, only the # heading edited", "# Heading\nBody text\n", "whitespace",
-			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading"},
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading", false},
 		// scissors puts git's status below the cut line, so an untouched
 		// template still aborts and a heading edit still counts.
-		{"cleanup=scissors, untouched", "# Heading\nBody text\n", "scissors", "true", nil, ""},
+		{"cleanup=scissors, untouched", "# Heading\nBody text\n", "scissors", "true", nil, "", false},
 		{"cleanup=scissors, only the # heading edited", "# Heading\nBody text\n", "scissors",
-			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading"},
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading", false},
 		{"default cleanup, only the # heading edited", "# Heading\nBody text\n", "",
-			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, ""},
-		{"cleanup=verbatim, untouched", "Subject\n", "verbatim", "true", nil, "Subject"},
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "", false},
+		{"cleanup=verbatim, untouched", "Subject\n", "verbatim", "true", nil, "Subject", false},
+		// Reported: whitespace keeps the template's own "#" line, and with
+		// --no-status git adds no help, so the message is still the template.
+		{"cleanup=whitespace --no-status, # line in the template", "Subject\n# Write a description\n", "whitespace", "true", []string{"--no-status"}, "", false},
+		{"cleanup=whitespace --no-status, # line in a -t template", "Subject\n# Write a description\n", "whitespace", "true", []string{"--no-status"}, "", true},
+		{"--cleanup=whitespace --no-status on the command line", "Subject\n# Write a description\n", "", "true", []string{"--cleanup=whitespace", "--no-status"}, "", false},
+		{"cleanup=whitespace, # line template edited", "Subject\n# Write a description\n", "whitespace",
+			`printf 'more\n' >> "$1"`, []string{"--no-status"}, "more", false},
+		// Reported: strip drops "#" lines from -m too, leaving nothing.
+		{"cleanup=strip, -m holding only a # line", "", "strip", "true", []string{"-m", "# Placeholder"}, "", false},
+		{"cleanup=strip, -m text and a # line", "", "strip", "true", []string{"-m", "feat: x\n# note"}, "feat: x", false},
+		{"default cleanup keeps a -m # line", "", "", "true", []string{"-m", "# Placeholder"}, "# Placeholder", false},
+		{"cleanup=verbatim, -m holding only a sign-off", "", "verbatim", "true", []string{"-m", dev}, dev, false},
+		{"-t template untouched", "Subject\n", "", "true", nil, "", true},
+		{"-t template untouched with -s", "Subject\n", "", "true", []string{"-s"}, "", true},
+		{"-t template edited", "Subject\n", "", `printf 'more\n' >> "$1"`, nil, "more", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var tpl string
 			r := newRepo(t, testCoAuthor, func(r repo) {
-				tpl := filepath.Join(r.main, ".gitmessage")
-				if err := os.WriteFile(tpl, []byte(tc.template), 0o644); err != nil {
-					t.Fatal(err)
+				if tc.template != "" {
+					tpl = filepath.Join(r.main, ".gitmessage")
+					if err := os.WriteFile(tpl, []byte(tc.template), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					if !tc.dashT {
+						r.git(r.main, "config", "commit.template", tpl)
+					}
 				}
-				r.git(r.main, "config", "commit.template", tpl)
 				if tc.cleanup != "" {
 					r.git(r.main, "config", "commit.cleanup", tc.cleanup)
 				}
@@ -349,12 +370,16 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 				}
 			}
 			before := r.git(r.worktree, "rev-parse", "HEAD")
-			cmd := exec.Command("git", append([]string{"-C", r.worktree, "commit", "--allow-empty"}, tc.args...)...)
+			args := []string{"-C", r.worktree, "commit", "--allow-empty"}
+			if tc.dashT {
+				args = append(args, "-t", tpl)
+			}
+			cmd := exec.Command("git", append(args, tc.args...)...)
 			cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_EDITOR="+ed,
 				"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
 			out, err := cmd.CombinedOutput()
 			if tc.want == "" {
-				if err == nil || !strings.Contains(string(out), "did not edit the message") {
+				if err == nil || (!strings.Contains(string(out), "did not edit the message") && !strings.Contains(string(out), "empty commit message")) {
 					t.Fatalf("want git's abort, got %v:\n%s\n%s", err, out, r.message("HEAD"))
 				}
 				if after := r.git(r.worktree, "rev-parse", "HEAD"); after != before {

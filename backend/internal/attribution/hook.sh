@@ -74,12 +74,45 @@ comment_awk() {
 	'"$1" "$2"
 }
 
+# commit_args prints the arguments of the `git commit` that runs this hook,
+# one per line, or nothing when they cannot be read. On Linux they come from
+# /proc exactly; elsewhere from ps, split at spaces, so an argument holding a
+# space reads wrong and is then not found, which falls back to the cautious
+# path below.
+commit_args() {
+	if [ -r "/proc/$PPID/cmdline" ]; then
+		tr '\0' '\n' <"/proc/$PPID/cmdline"
+	else
+		ps -o args= -p "$PPID" 2>/dev/null | tr ' ' '\n'
+	fi | awk 'seen { print } $0 == "commit" { seen = 1 }'
+}
+
+# commit_option prints the value of `git commit` option $1 (--cleanup or
+# --template, which also matches -t) and reports whether it was given.
+commit_option() {
+	printf '%s\n' "$args" | awk -v opt="$1" '
+		$0 == "--" { exit }
+		want { print; found = 1; exit }
+		$0 == opt { want = 1; next }
+		index($0, opt "=") == 1 { print substr($0, length(opt) + 2); found = 1; exit }
+		opt == "--template" && $0 == "-t" { want = 1; next }
+		opt == "--template" && $0 ~ /^-t./ { print substr($0, 3); found = 1; exit }
+		END { exit !found }
+	'
+}
+
+# cleanup_mode prints the commit's cleanup mode: --cleanup, else
+# commit.cleanup, else empty (git's default).
+cleanup_mode() {
+	commit_option --cleanup || git config --get commit.cleanup 2>/dev/null
+}
+
 # strips_comments reports whether git drops comment lines from an edited
 # message: commit.cleanup unset, default or strip. whitespace, scissors and
 # verbatim keep them. A --cleanup option on the command line is not visible
 # to the hook.
 strips_comments() {
-	case $(git config --get commit.cleanup 2>/dev/null) in
+	case $(cleanup_mode) in
 	whitespace | scissors | verbatim) return 1 ;;
 	esac
 	return 0
@@ -98,6 +131,11 @@ normalize() {
 # whitespace and, when git strips them, comment lines. `git commit -v`
 # appends a diff below a scissors line; it is not message.
 has_message() {
+	# verbatim keeps a message exactly as written; git commits any non-empty one.
+	if [ "$(cleanup_mode)" = verbatim ]; then
+		comment_awk 'scissors($0) { exit } /./ { found = 1; exit } END { exit !found }' "$1"
+		return
+	fi
 	strip=1
 	strips_comments || strip=0
 	comment_awk '
@@ -119,43 +157,80 @@ template_snapshot() {
 
 # snapshot_template records message file $1 when $2, the commit source, is a
 # template, and clears any snapshot an earlier, aborted commit left.
+#
+# Git compares the edited message with the template file it read. The hook
+# sees only the prepared message, which can also hold the sign-off -s added
+# and, with commit.cleanup=whitespace, the help git appends as comments. So it
+# keeps every baseline the template could be, one per line block:
+#   - the configured commit.template, when the message starts with it: that is
+#     git's own baseline, and the only one kept;
+#   - otherwise (a -t file, which the hook cannot see) the prepared message,
+#     with and without a trailing committer sign-off, and with and without a
+#     trailing block of comment lines after a blank line.
+# The message counts as untouched if it is untouched against any of them, so
+# an unclear case leaves the trailer off rather than let a commit through.
 snapshot_template() {
 	snap=$(template_snapshot) || return 0
 	[ -n "$snap" ] || return 0
-	rm -f "$snap"
-	if [ "$2" = template ] && [ -n "$1" ] && [ -f "$1" ]; then
-		# With -s git has already added the committer's sign-off; git compares
-		# against the template without it, so the snapshot leaves that one
-		# line out. Sign-offs written in the template itself stay: when the
-		# configured commit.template ends with the committer's own sign-off,
-		# the line is the template's. (A -t file is not visible to the hook.)
-		ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed 's/ [0-9]* [-+][0-9]*$//')
-		signoff="Signed-off-by: $ident"
-		full=$(message_text "$1")
-		# commit.cleanup=whitespace keeps the help git appends below the
-		# template as comment lines; git compares against the template alone.
-		if [ "$(git config --get commit.cleanup 2>/dev/null)" = whitespace ] &&
-			[ "$(git config --type=bool --get commit.status 2>/dev/null)" != false ]; then
-			full=$(printf '%s\n' "$full" | comment_awk '
-				{ line[NR] = $0 }
-				!comment($0) && $0 ~ /[^ \t\r]/ { last = NR }
-				END { for (i = 1; i <= last; i++) print line[i] }
-			' -)
-		fi
-		tpl=$(git config --path --get commit.template 2>/dev/null) &&
-			[ -f "$tpl" ] && [ "$(normalize <"$tpl")" = "$full" ] && signoff=
-		printf '%s\n' "$full" | ORCHESTRATOR_SIGNOFF=$signoff awk '
-			{ line[NR] = $0 }
-			!/^[[:space:]]*$/ { last = NR }
-			END {
-				if (last && ENVIRON["ORCHESTRATOR_SIGNOFF"] != "" && line[last] == ENVIRON["ORCHESTRATOR_SIGNOFF"]) {
-					last--
-					while (last && line[last] ~ /^[[:space:]]*$/) last--
-				}
-				for (i = 1; i <= last; i++) print line[i]
-			}
-		' >"$snap" || rm -f "$snap"
+	rm -f "$snap" "$snap".*
+	[ "$2" = template ] && [ -n "$1" ] && [ -f "$1" ] || return 0
+	full=$(message_text "$1")
+	# git's own baseline: the -t file, else commit.template. Used alone only
+	# when the command line was read, so a -t cannot hide behind it.
+	if tpl=$(commit_option --template); then
+		case "$tpl" in /*) ;; *) tpl=$PWD/${GIT_PREFIX-}$tpl ;; esac
+	else
+		tpl=$(git config --path --get commit.template 2>/dev/null)
 	fi
+	i=0
+	if [ -n "$tpl" ] && [ -f "$tpl" ]; then
+		exact=$(normalize <"$tpl")
+		case "$full" in
+		"$exact"*)
+			printf '%s\n' "$exact" >"$snap.$i"
+			i=$((i + 1))
+			if [ -n "$args" ]; then
+				: >"$snap"
+				return 0
+			fi
+			;;
+		esac
+	fi
+	ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed 's/ [0-9]* [-+][0-9]*$//')
+	nohelp=$(printf '%s\n' "$full" | drop_help)
+	for base in "$full" "$nohelp"; do
+		printf '%s\n' "$base" >"$snap.$i"
+		printf '%s\n' "$base" | drop_signoff "Signed-off-by: $ident" >"$snap.$((i + 1))"
+		i=$((i + 2))
+	done
+	: >"$snap"
+}
+
+# drop_help prints stdin without a trailing block of comment lines that
+# follows a blank line: the help git appends below a template.
+drop_help() {
+	comment_awk '
+		{ line[NR] = $0 }
+		$0 !~ /[^ \t\r]/ { blank = NR }
+		!comment($0) && $0 ~ /[^ \t\r]/ { last = NR }
+		END {
+			end = NR
+			if (blank > last) end = blank
+			for (i = 1; i <= end; i++) print line[i]
+		}
+	' -
+}
+
+# drop_signoff prints stdin without its last line when that line is $1.
+drop_signoff() {
+	ORCHESTRATOR_SIGNOFF=$1 awk '
+		{ line[NR] = $0 }
+		$0 ~ /[^ \t\r]/ { last = NR }
+		END {
+			if (last && line[last] == ENVIRON["ORCHESTRATOR_SIGNOFF"]) last--
+			for (i = 1; i <= last; i++) print line[i]
+		}
+	'
 }
 
 # message_text prints the message in file $1 the way git reads it: without
@@ -173,24 +248,41 @@ only_signoffs() {
 }
 
 # template_untouched reports whether message file $1 is still the template
-# this commit started from, and consumes the snapshot.
+# this commit started from, against any recorded baseline, and consumes the
+# snapshot.
 template_untouched() {
 	snap=$(template_snapshot) || return 1
 	[ -n "$snap" ] && [ -f "$snap" ] || return 1
+	untouched=1
 	# With commit.cleanup=verbatim git never treats a message as the template.
-	if [ "$(git config --get commit.cleanup 2>/dev/null)" = verbatim ]; then
-		rm -f "$snap"
-		return 1
+	if [ "$(cleanup_mode)" != verbatim ]; then
+		text=$(message_text "$1")
+		for base in "$snap".*; do
+			[ -f "$base" ] || continue
+			snapshot=$(cat "$base")
+			# Git's own rule: the template, then nothing but whitespace and sign-offs.
+			case "$text" in
+			"$snapshot"*) rest=${text#"$snapshot"} ;;
+			*) rest=$text ;;
+			esac
+			if only_signoffs "$rest"; then
+				untouched=0
+				break
+			fi
+		done
 	fi
-	text=$(message_text "$1")
-	snapshot=$(cat "$snap")
-	rm -f "$snap"
-	# Git's own rule: the template, then nothing but whitespace and sign-offs.
-	case "$text" in
-	"$snapshot"*) rest=${text#"$snapshot"} ;;
-	*) rest=$text ;;
-	esac
-	only_signoffs "$rest"
+	rm -f "$snap" "$snap".*
+	return $untouched
+}
+
+# literal_text prints a -m or -F message in file $1 the way git cleans it:
+# as written, except that commit.cleanup=strip drops comment lines there too.
+literal_text() {
+	if [ "$(cleanup_mode)" = strip ]; then
+		comment_awk '!comment($0) { print }' "$1"
+	else
+		cat "$1"
+	fi
 }
 
 # insert_trailer adds trailer $2 to message file $1 with none of the person's
@@ -229,6 +321,23 @@ insert_trailer() {
 	) 2>/dev/null || true
 }
 
+# insert_trailer_above_scissors adds trailer $2 to message file $1 as the
+# last line of the message: comment lines count as message text, and only a
+# `commit -v` scissors line and the diff below it are left as they are.
+insert_trailer_above_scissors() {
+	cut=$(comment_awk 'scissors($0) { print NR; exit }' "$1")
+	if [ -z "$cut" ]; then
+		insert_trailer "$1" "$2" literal
+		return
+	fi
+	top=$1.orchestrator-top
+	head -n "$((cut - 1))" "$1" >"$top" &&
+		insert_trailer "$top" "$2" literal &&
+		tail -n "+$cut" "$1" >>"$top" &&
+		mv "$top" "$1"
+	rm -f "$top"
+}
+
 # add_trailer adds the trailer to the message file in $1. $2 is the commit
 # source git passes to prepare-commit-msg (empty for commit-msg).
 add_trailer() {
@@ -253,11 +362,22 @@ add_trailer() {
 	elif [ "$2" != message ]; then
 		has_message "$msg" || return 0
 		template_untouched "$msg" && return 0
-		# Nothing but sign-offs: git aborts it as an empty message.
-		only_signoffs "$(message_text "$msg")" && return 0
-		insert_trailer "$msg" "Co-authored-by: $coauthor"
-	elif ! only_signoffs "$(cat "$msg")"; then
-		# git commit -s -m "" holds only a sign-off, which git aborts as empty.
+		mode=$(cleanup_mode)
+		# Nothing but sign-offs: git aborts it as an empty message, except
+		# with verbatim, which commits any message.
+		[ "$mode" != verbatim ] && only_signoffs "$(message_text "$msg")" && return 0
+		if strips_comments; then
+			insert_trailer "$msg" "Co-authored-by: $coauthor"
+		else
+			# git keeps comment lines here, so the trailer goes after them,
+			# above any `commit -v` scissors line.
+			insert_trailer_above_scissors "$msg" "Co-authored-by: $coauthor"
+		fi
+	elif [ "$(cleanup_mode)" = verbatim ] && [ -s "$msg" ] ||
+		! only_signoffs "$(literal_text "$msg")"; then
+		# git commit -s -m "" holds only a sign-off, and with
+		# commit.cleanup=strip a "# ..." message holds nothing: git aborts both
+		# as empty.
 		insert_trailer "$msg" "Co-authored-by: $coauthor" literal
 	fi
 }
@@ -265,6 +385,7 @@ add_trailer() {
 original=$(original_hook)
 case "$hook" in
 prepare-commit-msg | commit-msg)
+	args=$(commit_args)
 	if [ "$hook" = prepare-commit-msg ]; then
 		snapshot_template "$1" "$2"
 	fi
