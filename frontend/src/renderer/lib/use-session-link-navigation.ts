@@ -60,7 +60,7 @@ export function useSessionLinkSource(sourceHostId?: string, sourceKind?: "cloud"
 	return useSource(remoteHostId ?? "");
 }
 
-const restoringLinks = new Set<string>();
+const restoringLinks = new Map<string, string>();
 
 export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cloud"): (url: string) => boolean {
 	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
@@ -103,14 +103,15 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		// A terminated session's artifacts are still served, so its artifact links still open.
 		if (resolved.isTerminated && !artifact) {
 			const dedupeKey = `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`;
-			if (restoringLinks.has(dedupeKey)) return true;
-			restoringLinks.add(dedupeKey);
-			const from = window.location.hash;
+			const pendingRestore = restoringLinks.has(dedupeKey);
+			restoringLinks.set(dedupeKey, window.location.hash);
+			if (pendingRestore) return true;
 			showGlobalToast(`Resuming session ${resolved.sessionId}…`, undefined, { placement: "top-center", durationMs: 0, dedupeKey });
 			const pending = useUiStore.getState().globalToastSequence;
 			void restoreSession(resolved.sessionId, remoteHostId)
 				.catch((error: unknown) => ({ status: "error" as const, message: error instanceof Error ? error.message : "Unable to restore session" }))
 				.then((result) => {
+					const from = restoringLinks.get(dedupeKey);
 					restoringLinks.delete(dedupeKey);
 					if (result.status === "success") {
 						useUiStore.getState().dismissGlobalToast(pending);

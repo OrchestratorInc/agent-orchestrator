@@ -91,6 +91,19 @@ describe("useSessionLinkNavigation", () => {
 		expect(useUiStore.getState().globalToasts).toEqual([]);
 	});
 
+	it("opens from the latest page when the pending link is clicked again", async () => {
+		let finish!: (result: { status: "success" }) => void;
+		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		window.location.hash = "#/projects/project/sessions/session";
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		act(() => { result.current("ao://sessions/project/terminated"); });
+		window.location.hash = "#/projects/other-project/sessions/other-session";
+		act(() => { result.current("ao://sessions/project/terminated"); });
+		await act(async () => finish({ status: "success" }));
+		expect(mocks.restore).toHaveBeenCalledTimes(1);
+		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+	});
+
 	it("does not pull the user away when they moved on before the resume finished", async () => {
 		let finish!: (result: { status: "success" }) => void;
 		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
