@@ -7,9 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
@@ -92,6 +96,11 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 			return fmt.Errorf("%s is required", label)
 		}
 		defer zeroBytes(secret)
+		if flag == "--with-api-key" {
+			if err := c.checkOpenAIKey(ctx, secret, out, style); err != nil {
+				return err
+			}
+		}
 		args = append(args, flag)
 		payload := append(append([]byte(nil), secret...), '\n')
 		defer zeroBytes(payload)
@@ -107,6 +116,91 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 		return err
 	}
 	return nil
+}
+
+const (
+	defaultOpenAIRESTBase = "https://api.openai.com/v1"
+	openAIKeyCheckTimeout = 15 * time.Second
+)
+
+// checkOpenAIKey asks OpenAI whether it accepts key before Codex saves it.
+// `codex login --with-api-key` stores any string and reports success, so a
+// mistyped key failed only at a session's first model call (#5029). A refused
+// key (401) is not saved. A key Codex sends somewhere else (another
+// model_provider, an openai_base_url or OPENAI_BASE_URL, or a profile that may
+// pick either) is not OpenAI's to judge and is never sent to it. A 403 can mean
+// a restricted key without Models: Read, another org or region, and an
+// unreachable OpenAI is no verdict: those keys are saved unchecked, and the
+// output says so. The key never appears in output or errors.
+func (c *commandContext) checkOpenAIKey(ctx context.Context, key []byte, out io.Writer, style codexLoginStyle) error {
+	if codexKeyGoesElsewhere() || strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) != "" {
+		_, err := fmt.Fprintln(out, style.dim("Saved without checking: Codex uses another provider than OpenAI for this key."))
+		return err
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, openAIKeyCheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(c.deps.OpenAIRESTBase, "/")+"/models", http.NoBody)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+string(key))
+	client := &http.Client{Timeout: openAIKeyCheckTimeout}
+	if c.deps.HTTPClient != nil {
+		client.Transport = c.deps.HTTPClient.Transport
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		_, writeErr := fmt.Fprintln(out, style.dim("Couldn't reach OpenAI to check the key, so Codex saves it unchecked."))
+		return writeErr
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	_ = resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("OpenAI refused this API key (HTTP %d), so it was not saved. Check the key and try again", resp.StatusCode)
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		_, err := fmt.Fprintln(out, style.success("OpenAI accepted the key."))
+		return err
+	default:
+		_, err := fmt.Fprintln(out, style.dim(fmt.Sprintf("OpenAI answered HTTP %d, so Codex saves the key unchecked.", resp.StatusCode)))
+		return err
+	}
+}
+
+// codexTopLevelKey is a top-level `key = "…"` in Codex's config.toml that can
+// send an API key somewhere other than api.openai.com.
+var codexTopLevelKey = regexp.MustCompile(`^\s*(model_provider|openai_base_url|profile)\s*=\s*["']([^"']+)["']`)
+
+// codexKeyGoesElsewhere reports whether Codex's config.toml, at its top level
+// (before any [table]), selects another model_provider than openai, points the
+// built-in openai provider at another openai_base_url, or picks a profile,
+// which can do either.
+func codexKeyGoesElsewhere() bool {
+	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		home = filepath.Join(userHome, ".codex")
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			break
+		}
+		match := codexTopLevelKey.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		if value := strings.TrimSpace(match[2]); value != "" && (match[1] != "model_provider" || value != "openai") {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveLoginExecutable(explicit, name string, lookPath func(string) (string, error)) (string, error) {
@@ -165,7 +259,7 @@ func writeCodexLoginMenu(out io.Writer, style codexLoginStyle) error {
 		fmt.Sprintf("  %s  %s %s", style.accent("2"), style.bold("Device code"), style.dim("· Sign in on another device")),
 		"",
 		style.dim("DEVELOPER CREDENTIALS"),
-		fmt.Sprintf("  %s  %s %s", style.accent("3"), style.bold("OpenAI API key"), style.dim("· Validated and saved by Codex")),
+		fmt.Sprintf("  %s  %s %s", style.accent("3"), style.bold("OpenAI API key"), style.dim("· Checked with OpenAI, then saved by Codex")),
 		fmt.Sprintf("  %s  %s %s", style.accent("4"), style.bold("Access token"), style.dim("· For advanced or managed environments")),
 		"",
 		style.bold("Enter 1-4 and press Return"),
