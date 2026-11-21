@@ -165,6 +165,9 @@ describe("host update flow", () => {
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", unconfirmed: true });
 		await refreshHostUpdate(URL);
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", unconfirmed: true });
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue({ ...view("0.14.10", "failed"), error: "No space left on device" });
+		await refreshHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", error: "No space left on device" });
 		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
 		await startHostUpdate(URL);
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });

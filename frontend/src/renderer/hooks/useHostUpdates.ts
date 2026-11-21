@@ -70,7 +70,8 @@ function settle(url: string, view: HostUpdateView | null) {
 	const updating = byUrl[url]?.updating;
 	if (!updating) {
 		if (!view) return;
-		patch(url, { view, ...(byUrl[url]?.error === "" ? { error: undefined } : {}), ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
+		const previous = byUrl[url];
+		patch(url, { view, unconfirmed: previous?.unconfirmed && view.state === "idle" && view.version === previous.view?.version ? true : undefined, ...(byUrl[url]?.error === "" ? { error: undefined } : {}), ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
 		return;
 	}
 	if (view?.state === "updating") {
