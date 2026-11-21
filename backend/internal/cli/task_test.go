@@ -112,7 +112,14 @@ func TestEvaluateTask(t *testing.T) {
 			conv:       `{"turns":[{"id":"t1","state":"running"}],"activities":[{"turnId":"t1","activityKind":"approval","status":"pending"}]}`,
 			wantStatus: taskStatusNeedsInput,
 		},
-		{name: "session blocked", sess: blocked, conv: `{"turns":[{"id":"t1","state":"running"}]}`, wantStatus: taskStatusNeedsInput},
+		// The session state is read before the conversation and may describe an
+		// earlier turn, so a chat task relies on its own turn's pending activity.
+		{name: "session blocked without a pending activity on the turn", sess: blocked, conv: `{"turns":[{"id":"t1","state":"running"}]}`, wantStatus: taskStatusRunning},
+		{
+			name: "a failed attempt's stale approval does not block its retry", sess: chat, turn: "t1",
+			conv:       `{"turns":[{"id":"t1","state":"failed"},{"id":"t2","state":"running","retryOfTurnId":"t1"}],"activities":[{"turnId":"t1","activityKind":"approval","status":"pending"}]}`,
+			wantStatus: taskStatusRunning,
+		},
 		{
 			name: "a later turn's approval does not reopen a finished task", sess: blocked, turn: "t1",
 			conv:       `{"turns":[{"id":"t1","state":"completed"},{"id":"t2","state":"running"}],"activities":[{"turnId":"t2","activityKind":"approval","status":"pending"}]}`,
@@ -664,5 +671,38 @@ func TestExitCodeKeepsOtherExitErrorsAtOne(t *testing.T) {
 	}
 	if got := ExitCode(fmt.Errorf("codex login failed: %w", err)); got != 1 {
 		t.Fatalf("ExitCode(wrapped exec.ExitError) = %d, want 1", got)
+	}
+}
+
+func TestTaskStatusPagesBackWhileThePageSplitsTheTurn(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
+		d.mu.Lock()
+		query := d.lastQuery
+		d.mu.Unlock()
+		switch query {
+		case "beforeSequence=300":
+			// Older rows of the same turn, including the worker it spawned.
+			return 200, `{"hasMoreBefore":true,"oldestSequence":100,"turns":[{"id":"t2","state":"running"}],"activities":[
+				{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-7"}}]}`
+		case "beforeSequence=100":
+			return 200, `{"hasMoreBefore":true,"oldestSequence":40,"turns":[{"id":"t1","state":"completed"}]}`
+		case "":
+			return 200, `{"hasMoreBefore":true,"oldestSequence":300,"turns":[{"id":"t2","state":"running"}]}`
+		}
+		t.Errorf("unexpected page %q", query)
+		return 500, `{}`
+	})
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d: %v", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); !reflect.DeepEqual(res["sessionIds"], []any{"repo-orchestrator", "repo-7"}) {
+		t.Fatalf("result = %v", res)
+	}
+	if d.saw("GET /api/v1/sessions/repo-orchestrator/conversation") && d.lastQuery != "beforeSequence=100" {
+		t.Fatalf("stopped paging at %q; want it to stop once the earlier turn t1 is loaded", d.lastQuery)
 	}
 }

@@ -551,9 +551,10 @@ func (c *commandContext) fetchTaskSession(ctx context.Context, id string) (taskS
 	return res.Session, nil
 }
 
-// fetchTaskConversation reads the conversation and, when the task's turn is
-// older than the latest page, pages back until it is loaded. A worker task is
-// its session's first turn, so it reads back to the start.
+// fetchTaskConversation reads the conversation and pages back until the
+// task's turn and all of its activity are loaded: until an earlier turn
+// appears too, or history ends. A worker task is its session's first turn, so
+// it reads back to the start.
 func (c *commandContext) fetchTaskConversation(ctx context.Context, id taskID) (*taskConversation, error) {
 	path := "sessions/" + url.PathEscape(id.session) + "/conversation"
 	var conv taskConversation
@@ -561,7 +562,10 @@ func (c *commandContext) fetchTaskConversation(ctx context.Context, id taskID) (
 		return nil, err
 	}
 	for page := 0; page < taskHistoryPageLimit && conv.HasMoreBefore && conv.OldestSequence > 0; page++ {
-		if id.turn != "" && conv.findTurn(id.turn) >= 0 {
+		// Once an earlier turn is loaded too, the page boundary no longer
+		// splits the task's turn, so its earliest activity (such as a worker
+		// it spawned) is loaded as well.
+		if id.turn != "" && conv.findTurn(id.turn) > 0 {
 			break
 		}
 		var older taskConversation
@@ -752,15 +756,15 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 		return taskEvaluation{status: status, reason: reason, spawned: spawned, turnID: turn.ID}
 	}
 
-	if turn.State == "running" || turn.State == "queued" {
+	// Only the live attempt can still be answered: an approval left pending on
+	// an earlier, failed attempt is stale. The session-wide activity state is
+	// not used here, since it is read before the conversation and can describe
+	// another turn.
+	if turn.State == "running" {
 		for _, act := range conv.Activities {
-			if (act.ActivityKind == "approval" || act.ActivityKind == "user_input") && act.Status == "pending" && chain[act.TurnID] {
+			if (act.ActivityKind == "approval" || act.ActivityKind == "user_input") && act.Status == "pending" && act.TurnID == turn.ID {
 				return eval(taskStatusNeedsInput, "the agent is waiting for your answer or approval")
 			}
-		}
-		// The session-wide state describes the turn that is running now.
-		if turn.State == "running" && sess.Activity.State == "blocked" {
-			return eval(taskStatusNeedsInput, "the agent is waiting for your approval")
 		}
 	}
 
