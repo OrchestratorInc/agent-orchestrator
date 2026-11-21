@@ -430,6 +430,7 @@ func TestTaskStartOrchestratorTerminalFallsBackToSend(t *testing.T) {
 	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"active"}}}`)
 	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", 409, `{"error":"conflict","code":"SESSION_MODE_MISMATCH","message":"no chat conversation"}`)
 	d.set("POST /api/v1/sessions/repo-orchestrator/send", 200, `{"ok":true,"sessionId":"repo-orchestrator","message":"fix calc"}`)
+	t.Setenv("AO_SESSION_ID", "") // outside any Orchestrator session
 
 	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo")
 	if err != nil {
@@ -442,6 +443,19 @@ func TestTaskStartOrchestratorTerminalFallsBackToSend(t *testing.T) {
 	_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/sessions/repo-orchestrator/send"]), &sent)
 	if !reflect.DeepEqual(sent, map[string]any{"message": "fix calc", "userAuthored": true}) {
 		t.Fatalf("send body = %v; want what `ao send` sends outside a session", sent)
+	}
+
+	// Inside a session, the calling agent names itself instead.
+	t.Setenv("AO_SESSION_ID", "other-7")
+	if _, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo"); err != nil {
+		t.Fatalf("inside a session: exit = %d: %v", ExitCode(err), err)
+	}
+	sent = nil
+	d.mu.Lock()
+	_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/sessions/repo-orchestrator/send"]), &sent)
+	d.mu.Unlock()
+	if !reflect.DeepEqual(sent, map[string]any{"message": "fix calc", "senderSessionId": "other-7"}) {
+		t.Fatalf("send body inside a session = %v", sent)
 	}
 	if d.saw("GET /api/v1/sessions/repo-orchestrator/conversation") {
 		t.Fatal("a terminal session has no conversation to read")
