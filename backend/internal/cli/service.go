@@ -98,6 +98,9 @@ func newServiceInstallCommand(ctx *commandContext) *cobra.Command {
 			if opts.port < 0 || opts.port > 65535 {
 				return usageError{fmt.Errorf("invalid --port %d: out of range 1-65535", opts.port)}
 			}
+			if opts.timeout <= 0 {
+				return usageError{fmt.Errorf("invalid --timeout %s: must be positive", opts.timeout)}
+			}
 			st, err := ctx.serviceInstall(cmd.Context(), opts)
 			if err != nil {
 				return err
@@ -371,8 +374,12 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	}
 	// Leave nothing behind when the service manager refuses the file, unless
 	// it replaced an earlier install of ours.
+	enabled := false
 	rollback := func(cause error) (serviceStatus, error) {
 		if !exists {
+			if enabled {
+				_ = c.serviceCmd(ctx, "systemctl", "--user", "disable", spec.Name+".service")
+			}
 			_ = os.Remove(spec.File)
 		}
 		return serviceStatus{}, cause
@@ -393,6 +400,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		if err := c.serviceCmd(ctx, "systemctl", "--user", "enable", spec.Name+".service"); err != nil {
 			return rollback(err)
 		}
+		enabled = true
 		if err := c.serviceCmd(ctx, "systemctl", "--user", "restart", spec.Name+".service"); err != nil {
 			return rollback(err)
 		}
@@ -461,9 +469,11 @@ func (c *commandContext) serviceUninstall(ctx context.Context) (serviceStatus, e
 			}
 		}
 	case serviceManagerSystemd:
-		// disable --now also stops it. Ignore a missing user bus so the file
-		// can still be removed.
-		_ = c.serviceCmd(ctx, "systemctl", "--user", "disable", "--now", spec.Name+".service")
+		// disable --now also stops it. Keep the unit when that fails, so a
+		// retry can still stop the service.
+		if err := c.serviceCmd(ctx, "systemctl", "--user", "disable", "--now", spec.Name+".service"); err != nil {
+			return serviceStatus{}, fmt.Errorf("stop the service before removing %s: %w", spec.File, err)
+		}
 	}
 	if err := os.Remove(spec.File); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return serviceStatus{}, err

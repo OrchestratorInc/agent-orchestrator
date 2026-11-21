@@ -84,12 +84,12 @@ Use `ao session ls` for sessions.
 
 ### `ao serve`
 
-Runs the Orchestrator daemon without the desktop app, for servers, scripts, and coding agents. It first checks the run file and `/readyz`: if a daemon already serves this data directory, `ao serve` reports it and exits 0 without starting another. Otherwise it starts the daemon in the background, waits until it is ready, and prints its URL.
+Runs the Orchestrator daemon without the desktop app, for servers, scripts, and coding agents. It first checks the run file and `/readyz`: if a daemon already serves this data directory, `ao serve` reports it and exits 0 without starting another. If the run file points at a daemon for a different data directory (for example, you changed only `AO_DATA_DIR`), it exits 1 and asks you to set `AO_RUN_FILE` and `AO_PORT` too. Otherwise it starts the daemon in the background, waits until it is ready, and prints its URL.
 
 | Flag | Purpose |
 | --- | --- |
 | `--port <n>` | Loopback port for a new daemon. Defaults to `AO_PORT`, else `3001`. Ignored, with a warning, when a daemon is already running. |
-| `--foreground` | Run the daemon in this process instead of in the background (for launchd, systemd, or a terminal). |
+| `--foreground` | Run the daemon in this process, or watch the one already running, until no daemon is left (for launchd, systemd, or a terminal). |
 | `--timeout <duration>` | How long to wait for a new daemon to become ready. Default `2m`. |
 | `--json` | Print the result as JSON. |
 
@@ -109,7 +109,9 @@ With `--json`, `ao serve` prints one object. Scripts can rely on these fields; n
 
 `reused` is `true` when an existing daemon was found. A failure exits 1 with the reason on stderr; a bad flag exits 2.
 
-The daemon is marked persistent: when you open the desktop app later, it attaches to this daemon and leaves it running when the app quits. Stop it with `ao stop`.
+The daemon is marked persistent. When you open the desktop app, it swaps in its own daemon on the same data directory, which keeps running after the app quits. Stop it with `ao stop`.
+
+With `--foreground`, `ao serve` stays running for as long as a daemon serves the data directory, following the app's swap. It exits 0 after a clean stop such as `ao stop`, and 1 when the daemon crashed or was the desktop app's own and quit with the app, so a service manager starts a new one.
 
 Usage analytics follow the desktop app: on by default, never code, prompts, or conversations. They stay off when you turned off **Share usage analytics** in the app, when `DO_NOT_TRACK=1` or `AO_TELEMETRY_REMOTE=off` is set, and in development builds.
 
@@ -129,7 +131,7 @@ Keeps `ao serve` running across logins and reboots, as a user service that never
 | Linux | systemd user unit `~/.config/systemd/user/agent-orchestrator-serve.service` |
 | Windows | Not supported yet. Run `ao serve` from a logon task instead. |
 
-The service runs `ao serve --foreground` with the `PATH`, `AO_DATA_DIR`, `AO_RUN_FILE`, `AO_PORT`, `DO_NOT_TRACK`, and `AO_TELEMETRY_*` values of the shell you install from, so the daemon finds the same agents and tools. Run `ao service install` again after changing them. A custom `AO_DATA_DIR` or `AO_RUN_FILE` gets its own service name, so it never replaces your main one. The service restarts the daemon if it crashes; `ao stop` stops it until the next login. When a daemon is already running for the same data directory (for example, the desktop app's), the service leaves it in charge and exits; it starts its own at the next login. `install` and `uninstall` only touch a file that `ao service install` wrote.
+The service runs `ao serve --foreground` with the `PATH`, `AO_DATA_DIR`, `AO_RUN_FILE`, `AO_PORT`, `DO_NOT_TRACK`, and `AO_TELEMETRY_*` values of the shell you install from, so the daemon finds the same agents and tools. Run `ao service install` again after changing them. A custom `AO_DATA_DIR` or `AO_RUN_FILE` gets its own service name, so it never replaces your main one. The service restarts the daemon if it crashes; `ao stop` stops it until the next login. When a daemon is already running for the same data directory (for example, the desktop app's), the service watches it instead of starting a second one, and starts its own if that daemon crashes or quits with the app. `install` and `uninstall` only touch a file that `ao service install` wrote.
 
 `install` accepts `--port`, `--no-wait`, `--timeout`, and `--json`; `status` and `uninstall` accept `--json`. On Linux, a user service starts at login; to start it at boot before you log in, run `loginctl enable-linger`.
 

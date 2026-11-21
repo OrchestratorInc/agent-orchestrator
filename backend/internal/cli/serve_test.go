@@ -186,6 +186,7 @@ func TestServeEnvTelemetry(t *testing.T) {
 		{name: "app opt-out", version: "1.2.3", optedOut: true, wantRemote: "off"},
 		{name: "app opt-out beats inherited env", base: []string{"AO_TELEMETRY_REMOTE=posthog"}, version: "1.2.3", optedOut: true, wantRemote: "off"},
 		{name: "DO_NOT_TRACK", base: []string{"DO_NOT_TRACK=1"}, version: "1.2.3", wantRemote: "off"},
+		{name: "DO_NOT_TRACK beats inherited env", base: []string{"DO_NOT_TRACK=1", "AO_TELEMETRY_REMOTE=posthog"}, version: "1.2.3", wantRemote: "off"},
 		{name: "DO_NOT_TRACK=0 is not an opt-out", base: []string{"DO_NOT_TRACK=0"}, version: "1.2.3", wantRemote: "posthog"},
 		{name: "explicit env wins", base: []string{"AO_TELEMETRY_REMOTE=off"}, version: "1.2.3", wantRemote: "off"},
 	}
@@ -244,4 +245,186 @@ func TestServeDoesNotEmitCLIInvocation(t *testing.T) {
 		}
 	}
 	t.Fatal("serve not registered")
+}
+
+// fakeServeDaemonIn is fakeServeDaemon reporting the data dir it serves, as
+// the real daemon does through its working directory.
+func fakeServeDaemonIn(t *testing.T, pid int, dataDir string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status := map[string]string{"/healthz": "ok", "/readyz": "ready"}[r.URL.Path]
+		if status == "" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"status":%q,"service":%q,"pid":%d,"workingDirectory":%q}`, status, daemonmeta.ServiceName, pid, dataDir)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestServeRefusesDaemonOfAnotherDataDir(t *testing.T) {
+	cfg := setConfigEnv(t)
+	other := t.TempDir()
+	srv := fakeServeDaemonIn(t, 4242, other)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(pid int) bool { return pid == 4242 }}, "serve", "--json")
+	if err == nil || !strings.Contains(err.Error(), "serves data dir") || !strings.Contains(err.Error(), "AO_RUN_FILE") {
+		t.Fatalf("err = %v, want a data-dir conflict", err)
+	}
+}
+
+func TestServeReusesDaemonOfSameDataDir(t *testing.T) {
+	cfg := setConfigEnv(t)
+	if err := os.MkdirAll(cfg.dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	srv := fakeServeDaemonIn(t, 4242, cfg.dataDir)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(pid int) bool { return pid == 4242 }}, "serve", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := decodeServeResult(t, out); !res.Reused {
+		t.Fatalf("result = %#v, want reused", res)
+	}
+}
+
+// foregroundHarness drives `ao serve --foreground` against a fake daemon whose
+// fate is decided after a few watch ticks.
+type foregroundHarness struct {
+	t       *testing.T
+	cfg     testConfig
+	alive   map[int]bool
+	now     time.Time
+	ticks   int
+	atTick  int
+	onTick  func()
+	started int
+}
+
+func newForegroundHarness(t *testing.T) *foregroundHarness {
+	return &foregroundHarness{t: t, cfg: setConfigEnv(t), alive: map[int]bool{}, now: time.Unix(1000, 0), atTick: 3}
+}
+
+func (h *foregroundHarness) daemon(pid int, owner string) {
+	h.t.Helper()
+	srv := fakeServeDaemon(h.t, pid)
+	if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: pid, Port: serverPort(h.t, srv.URL), StartedAt: time.Unix(100, 0).UTC(), Owner: owner}); err != nil {
+		h.t.Fatal(err)
+	}
+	h.alive[pid] = true
+}
+
+func (h *foregroundHarness) run(args ...string) (string, error) {
+	h.t.Helper()
+	old := serveForegroundDaemon
+	h.t.Cleanup(func() { serveForegroundDaemon = old })
+	serveForegroundDaemon = func([]string) error {
+		h.started++
+		return nil
+	}
+	out, _, err := executeCLI(h.t, Deps{
+		ProcessAlive:   func(pid int) bool { return h.alive[pid] },
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return h.now },
+		Sleep: func(d time.Duration) {
+			h.now = h.now.Add(d)
+			h.ticks++
+			if h.ticks == h.atTick && h.onTick != nil {
+				h.onTick()
+			}
+		},
+	}, append([]string{"serve", "--foreground"}, args...)...)
+	return out, err
+}
+
+func TestServeForegroundWatchesReusedDaemonUntilCleanStop(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "persistent")
+	h.onTick = func() {
+		h.alive[4242] = false
+		_ = runfile.Remove(h.cfg.runFile)
+	}
+	out, err := h.run("--json")
+	if err != nil {
+		t.Fatalf("clean stop should exit 0: %v", err)
+	}
+	if h.started != 0 {
+		t.Fatal("a second daemon was started beside the running one")
+	}
+	if res := decodeServeResult(t, out); !res.Reused || res.PID != 4242 {
+		t.Fatalf("result = %#v", res)
+	}
+}
+
+func TestServeForegroundExitsNonZeroWhenWatchedDaemonCrashes(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "persistent")
+	h.onTick = func() { h.alive[4242] = false } // run file left behind
+	_, err := h.run()
+	if err == nil || !strings.Contains(err.Error(), "exited without shutting down") {
+		t.Fatalf("err = %v, want a crash error so the service restarts", err)
+	}
+}
+
+func TestServeForegroundExitsNonZeroWhenAppDaemonQuits(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "app")
+	h.onTick = func() {
+		h.alive[4242] = false
+		_ = runfile.Remove(h.cfg.runFile)
+	}
+	_, err := h.run()
+	if err == nil || !strings.Contains(err.Error(), "stopped with the app") {
+		t.Fatalf("err = %v, want a restart error when the app's daemon goes away", err)
+	}
+}
+
+func TestServeForegroundFollowsAppReplacement(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.atTick = 2
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	// The desktop app shuts the in-process daemon down and starts its own
+	// persistent daemon on the same data dir, which is later stopped cleanly.
+	h.onTick = func() {
+		h.alive[6161] = false
+		_ = runfile.Remove(h.cfg.runFile)
+	}
+	out, err := h.runWithDaemon(func() { h.daemon(6161, "persistent") })
+	if err != nil {
+		t.Fatalf("clean stop of the replacement should exit 0: %v", err)
+	}
+	if !strings.Contains(out, "pid 6161") {
+		t.Fatalf("serve did not follow the replacement daemon:\n%s", out)
+	}
+}
+
+// runWithDaemon is run with an in-process daemon that, when it returns,
+// leaves replace() running in its place.
+func (h *foregroundHarness) runWithDaemon(replace func()) (string, error) {
+	h.t.Helper()
+	serveForegroundDaemon = func([]string) error {
+		h.started++
+		replace()
+		return nil
+	}
+	out, _, err := executeCLI(h.t, Deps{
+		ProcessAlive:   func(pid int) bool { return h.alive[pid] },
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return h.now },
+		Sleep: func(d time.Duration) {
+			h.now = h.now.Add(d)
+			h.ticks++
+			if h.ticks == h.atTick && h.onTick != nil {
+				h.onTick()
+			}
+		},
+	}, "serve", "--foreground")
+	return out, err
 }

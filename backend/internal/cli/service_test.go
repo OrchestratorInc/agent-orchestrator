@@ -234,3 +234,69 @@ func setServiceHome(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 }
+
+func TestServiceInstallRejectsBadTimeout(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	_, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--timeout", "0s")
+	if ExitCode(err) != 2 {
+		t.Fatalf("exit = %d (err %v), want 2", ExitCode(err), err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("service manager called for a bad flag: %#v", calls)
+	}
+	spec, err := (&commandContext{deps: serviceTestDeps(&calls, nil).withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(spec.File); !os.IsNotExist(err) {
+		t.Fatalf("bad flag wrote %s", spec.File)
+	}
+}
+
+func TestServiceSystemdRollbackDisablesFreshUnit(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	_, _, err := executeCLI(t, serviceTestDeps(&calls, map[string]bool{"systemctl --user restart": true}), "service", "install", "--no-wait")
+	if err == nil {
+		t.Fatal("install succeeded although restart failed")
+	}
+	last := calls[len(calls)-1]
+	if last.args[1] != "disable" {
+		t.Fatalf("last call = %#v, want the fresh unit disabled on rollback", last)
+	}
+}
+
+func TestServiceSystemdUninstallKeepsUnitWhenStopFails(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	out, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--no-wait", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st serviceStatus
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = executeCLI(t, serviceTestDeps(&calls, map[string]bool{"systemctl --user disable": true}), "service", "uninstall")
+	if err == nil || !strings.Contains(err.Error(), "stop the service") {
+		t.Fatalf("err = %v, want a stop failure", err)
+	}
+	if _, err := os.Stat(st.File); err != nil {
+		t.Fatalf("unit removed although the service could not be stopped: %v", err)
+	}
+}
