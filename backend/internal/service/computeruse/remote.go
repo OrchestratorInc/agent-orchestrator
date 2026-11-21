@@ -1,15 +1,19 @@
 package computeruse
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -57,15 +61,24 @@ const (
 	// the MCP server bounds one sent to an agent.
 	maxRemoteImageBytes = 10 << 20
 	maxRemoteLabelRunes = 120
+	// maxRemoteCallers bounds how many other computers' activity is kept.
+	maxRemoteCallers = 64
+	// remoteResponseOverhead is room in maxRemoteResponseBytes for the JSON
+	// around the result and screenshots.
+	remoteResponseOverhead = 64 << 10
+	// identityTimeout bounds the identity check on a new connection.
+	identityTimeout = 10 * time.Second
 	// remoteActiveWindow is how long after its last call another computer
 	// still counts as using this one; a pause longer than this starts a new run.
 	remoteActiveWindow = 2 * time.Minute
 )
 
 var (
-	remoteHostIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	unsafeScopeChars    = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
-	errRemoteOff        = apierr.Forbidden("COMPUTER_USE_REMOTE_OFF", "This computer does not let agents on other computers use it. Turn on \"Let agents on your other computers use this computer\" in Settings > Computer use agents on it.")
+	remoteHostIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	unsafeScopeChars         = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+	errRemoteSettingsCorrupt = errors.New("computeruse: remote settings file is damaged")
+	errRemoteHostMismatch    = errors.New("computeruse: another host answered at the remote host's address")
+	errRemoteOff             = apierr.Forbidden("COMPUTER_USE_REMOTE_OFF", "This computer does not let agents on other computers use it. Turn on \"Let agents on your other computers use this computer\" in Settings > Computer use agents on it.")
 )
 
 // RemoteTarget is the other computer an agent's computer-use calls run on.
@@ -171,7 +184,7 @@ func (r *remoteStore) load() (remoteState, error) {
 	default:
 		var state remoteState
 		if err := json.Unmarshal(data, &state); err != nil {
-			return remoteState{}, fmt.Errorf("computeruse: parse remote settings: %w", err)
+			return remoteState{}, fmt.Errorf("%w: %w", errRemoteSettingsCorrupt, err)
 		}
 		r.state = state
 	}
@@ -220,11 +233,17 @@ func (s remoteState) view() RemoteSettings {
 	return settings
 }
 
-// updateRemote applies change to the saved state under the lock.
-func (s *Service) updateRemote(change func(*remoteState) error) (RemoteSettings, error) {
+// updateRemote applies change to the saved state under the lock. With
+// recoverDamaged, a settings file that cannot be parsed is replaced by the
+// change applied to empty settings: turning things off must work even then,
+// while every other read keeps reporting the damage.
+func (s *Service) updateRemote(recoverDamaged bool, change func(*remoteState) error) (RemoteSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, err := s.remote.load()
+	if err != nil && recoverDamaged && errors.Is(err, errRemoteSettingsCorrupt) {
+		state, err = remoteState{}, nil
+	}
 	if err != nil {
 		return RemoteSettings{}, err
 	}
@@ -272,6 +291,16 @@ func (s *Service) noteRemoteCall(caller, name string, at time.Time) {
 	if s.activity == nil {
 		s.activity = map[string]RemoteActivity{}
 	}
+	s.recentActivityLocked(at)
+	if _, known := s.activity[key]; !known && len(s.activity) >= maxRemoteCallers {
+		oldest := ""
+		for caller, activity := range s.activity {
+			if oldest == "" || activity.LastAt.Before(s.activity[oldest].LastAt) || (activity.LastAt.Equal(s.activity[oldest].LastAt) && caller < oldest) {
+				oldest = caller
+			}
+		}
+		delete(s.activity, oldest)
+	}
 	current, ok := s.activity[key]
 	if !ok || at.Sub(current.LastAt) > remoteActiveWindow {
 		current = RemoteActivity{Caller: key, Started: at.UTC()}
@@ -310,7 +339,7 @@ func (s *Service) SetAllowRemote(ctx context.Context, allow bool) (RemoteSetting
 			return RemoteSettings{}, errNotInstalled
 		}
 	}
-	return s.updateRemote(func(state *remoteState) error {
+	return s.updateRemote(!allow, func(state *remoteState) error {
 		state.AllowRemote = allow
 		return nil
 	})
@@ -324,7 +353,7 @@ func (s *Service) SetRemoteTarget(_ context.Context, request SetRemoteTargetRequ
 		return RemoteSettings{}, err
 	}
 	credential := strings.TrimSpace(request.Credential)
-	return s.updateRemote(func(state *remoteState) error {
+	return s.updateRemote(false, func(state *remoteState) error {
 		state.Target = &target
 		state.Credential = credential
 		if name := strings.TrimSpace(request.CallerName); name != "" {
@@ -337,23 +366,24 @@ func (s *Service) SetRemoteTarget(_ context.Context, request SetRemoteTargetRequ
 	})
 }
 
-// ClearRemoteTarget runs this computer's agents' computer use here again.
+// ClearRemoteTarget runs this computer's agents' computer use here again. It
+// also replaces a damaged settings file.
 func (s *Service) ClearRemoteTarget(context.Context) (RemoteSettings, error) {
-	return s.updateRemote(func(state *remoteState) error {
+	return s.updateRemote(true, func(state *remoteState) error {
 		state.Target = nil
 		state.Credential = ""
 		return nil
 	})
 }
 
-// RemoteTargetLabel names the other computer this computer's agents run
-// computer use on, or "" when they run it here.
-func (s *Service) RemoteTargetLabel(context.Context) string {
+// CurrentTarget names the other computer this computer's agents run computer
+// use on, by host ID and name, or "" for both when they run it here.
+func (s *Service) CurrentTarget(context.Context) (hostID, label string) {
 	state, err := s.remoteState()
 	if err != nil || state.Target == nil {
-		return ""
+		return "", ""
 	}
-	return state.Target.Label
+	return state.Target.HostID, state.Target.Label
 }
 
 // RemoteOffer reports whether agents on other computers can use this one now.
@@ -402,33 +432,62 @@ func (s *Service) ServeRemoteCall(ctx context.Context, request RemoteCallRequest
 	if err := s.requireRemoteAllowed(); err != nil {
 		return RemoteCallResult{}, err
 	}
-	s.noteRemoteCall(request.Caller, request.CallerName, time.Now())
-	result, err := s.callHere(ctx, CallRequest{
+	// Another computer's call runs in its own driver session, never one it
+	// names: a session argument could otherwise reach this computer's sessions.
+	arguments := make(map[string]any, len(request.Arguments))
+	for key, value := range request.Arguments {
+		if key != "session" {
+			arguments[key] = value
+		}
+	}
+	result, err := s.callHereAdmitted(ctx, CallRequest{
 		Tool:      request.Tool,
-		Arguments: request.Arguments,
+		Arguments: arguments,
 		SessionID: remoteScope(request.Caller, request.SessionID),
-	})
+	}, func() { s.noteRemoteCall(request.Caller, request.CallerName, time.Now()) })
 	if err != nil {
 		return RemoteCallResult{}, err
 	}
+	return remoteResult(result), nil
+}
+
+// remoteResult inlines a call's screenshots, newest last, within
+// maxRemoteResponseBytes. The action already ran, so its result always goes
+// back: a screenshot that does not fit, or cannot be read, is left out and its
+// path in the result says why.
+func remoteResult(result CallResult) RemoteCallResult {
+	encodedResult, _ := json.Marshal(result.Result)
+	budget := maxRemoteResponseBytes - remoteResponseOverhead - len(encodedResult)
 	images := make([]RemoteImage, 0, len(result.Images))
+	omitted := map[string]string{}
 	for _, image := range result.Images {
 		info, err := os.Stat(image.Path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() > maxRemoteImageBytes {
+			omitted[image.Path] = "screenshot not sent: it could not be read or is over 10 MB"
+			continue
+		}
+		size := base64.StdEncoding.EncodedLen(int(info.Size())) + len(image.Path) + len(image.MimeType) + 64
+		if size > budget {
+			omitted[image.Path] = "screenshot not sent: the response would be over the size limit"
 			continue
 		}
 		data, err := os.ReadFile(image.Path)
 		if err != nil {
+			omitted[image.Path] = "screenshot not sent: it could not be read"
 			continue
 		}
+		budget -= size
 		images = append(images, RemoteImage{Path: image.Path, MimeType: image.MimeType, Data: base64.StdEncoding.EncodeToString(data)})
 	}
-	return RemoteCallResult{Tool: result.Tool, Result: result.Result, Images: images}, nil
+	return RemoteCallResult{Tool: result.Tool, Result: replacePaths(result.Result, omitted), Images: images}
 }
 
 // remoteScope names the screenshot folder and driver session for another
-// computer's AO session: "remote-<caller>-<session>", within the scope rules.
+// computer's AO session: "remote-<caller>-<session>-<hash>", within the scope
+// rules. The names are cleaned and shortened for reading; the hash of the
+// exact pair keeps two pairs that clean alike apart.
 func remoteScope(caller, sessionID string) string {
+	sum := sha256.Sum256([]byte(caller + "\x00" + sessionID))
 	clean := func(value string, limit int) string {
 		value = strings.Trim(unsafeScopeChars.ReplaceAllString(strings.TrimSpace(value), "-"), "-._")
 		if len(value) > limit {
@@ -440,10 +499,10 @@ func remoteScope(caller, sessionID string) string {
 	if caller = clean(caller, 16); caller != "" {
 		parts = append(parts, caller)
 	}
-	if sessionID = clean(sessionID, 100); sessionID != "" {
+	if sessionID = clean(sessionID, 90); sessionID != "" {
 		parts = append(parts, sessionID)
 	}
-	return strings.Join(parts, "-")
+	return strings.Join(append(parts, hex.EncodeToString(sum[:5])), "-")
 }
 
 func validRemoteTarget(request SetRemoteTargetRequest) (RemoteTarget, error) {
@@ -529,7 +588,9 @@ func (s *Service) callRemote(ctx context.Context, target RemoteTarget, credentia
 	for _, image := range response.Images {
 		path, err := saved.write(image.Data)
 		if err != nil {
-			continue
+			// The action ran; the result says the screenshot is missing rather
+			// than naming a file only the other computer has.
+			path = "screenshot not saved on this computer: " + err.Error()
 		}
 		if image.Path != "" {
 			local[image.Path] = path
@@ -592,8 +653,11 @@ func (s *Service) remoteRequest(ctx context.Context, target RemoteTarget, creden
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := s.remoteClient.Do(request)
+	response, err := s.remoteClientFor(target).Do(request)
 	if err != nil {
+		if errors.Is(err, errRemoteHostMismatch) {
+			return apierr.Conflict("COMPUTER_USE_REMOTE_HOST_CHANGED", fmt.Sprintf("Another computer now answers at %s's address, so this computer did not send it anything. Choose it again under \"Run computer use on\" in Settings > Computer use agents.", target.Label), nil)
+		}
 		if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return apierr.Unavailable("COMPUTER_USE_REMOTE_TIMEOUT", fmt.Sprintf("%s did not answer the computer-use call in time.", target.Label))
 		}
@@ -665,4 +729,114 @@ func remoteKind(status int) apierr.Kind {
 	default:
 		return apierr.KindInternal
 	}
+}
+
+// remoteClientFor returns the client for target. Every connection it opens
+// first asks the address which Orchestrator host answers there, over that same
+// connection and with no credential (GET /api/v1/identity, see ADR 0003), and
+// is used only when the answer is target's host ID: the credential and the
+// call never reach another machine that took over the address. Redirects are
+// not followed for the same reason.
+func (s *Service) remoteClientFor(target RemoteTarget) *http.Client {
+	key := target.HostID + "\x00" + target.URL
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if client := s.remoteClients[key]; client != nil {
+		return client
+	}
+	for other, client := range s.remoteClients {
+		client.CloseIdleConnections()
+		delete(s.remoteClients, other)
+	}
+	if s.remoteClients == nil {
+		s.remoteClients = map[string]*http.Client{}
+	}
+	hostHeader := target.URL
+	if address, err := url.Parse(target.URL); err == nil {
+		hostHeader = address.Host
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if s.remoteTLS != nil {
+		tlsConfig = s.remoteTLS.Clone()
+	}
+	dialer := &net.Dialer{Timeout: identityTimeout, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		// Straight to the host: a proxy in between would get the connection
+		// the identity check vouches for.
+		Proxy:               nil,
+		ForceAttemptHTTP2:   false,
+		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{},
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     60 * time.Second,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			return verifyRemoteHost(ctx, conn, hostHeader, target.HostID)
+		},
+		DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			raw, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			config := tlsConfig.Clone()
+			if config.ServerName == "" {
+				config.ServerName, _, _ = net.SplitHostPort(address)
+			}
+			config.NextProtos = []string{"http/1.1"}
+			conn := tls.Client(raw, config)
+			if err := conn.HandshakeContext(ctx); err != nil {
+				_ = raw.Close()
+				return nil, err
+			}
+			return verifyRemoteHost(ctx, conn, hostHeader, target.HostID)
+		},
+	}
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	s.remoteClients[key] = client
+	return client
+}
+
+// verifyRemoteHost reads which Orchestrator host answers on conn and returns
+// conn only when it is hostID; otherwise it closes conn.
+func verifyRemoteHost(ctx context.Context, conn net.Conn, host, hostID string) (net.Conn, error) {
+	fail := func(err error) (net.Conn, error) {
+		_ = conn.Close()
+		return nil, err
+	}
+	deadline := time.Now().Add(identityTimeout)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	_ = conn.SetDeadline(deadline)
+	request, err := http.NewRequest(http.MethodGet, "http://"+host+"/api/v1/identity", http.NoBody)
+	if err != nil {
+		return fail(err)
+	}
+	request.Header.Set("Accept", "application/json")
+	if err := request.Write(conn); err != nil {
+		return fail(err)
+	}
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, request)
+	if err != nil {
+		return fail(err)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	_ = response.Body.Close()
+	if err != nil {
+		return fail(err)
+	}
+	var identity struct {
+		HostID string `json:"hostId"`
+	}
+	if response.StatusCode != http.StatusOK || json.Unmarshal(body, &identity) != nil || identity.HostID != hostID {
+		return fail(errRemoteHostMismatch)
+	}
+	if response.Close || reader.Buffered() > 0 {
+		return fail(errors.New("computeruse: the remote host closed the connection after the identity check"))
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }

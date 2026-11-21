@@ -185,10 +185,13 @@ account rather than posting, sending, or buying as the wrong person.
   permissions in Settings > Computer use agents and approve CuaDriver in System
   Settings.
 - `COMPUTER_USE_REMOTE_OFF`, `COMPUTER_USE_REMOTE_UNREACHABLE`,
-  `COMPUTER_USE_REMOTE_UNAUTHORIZED`, `COMPUTER_USE_REMOTE_UNSUPPORTED`: computer
-  use runs on another computer that refused or did not answer. Tell the user
-  what the message says; they fix it on that computer or under **Run computer
-  use on**.
+  `COMPUTER_USE_REMOTE_UNAUTHORIZED`, `COMPUTER_USE_REMOTE_UNSUPPORTED`,
+  `COMPUTER_USE_REMOTE_HOST_CHANGED`: computer use runs on another computer that
+  refused or did not answer. Tell the user what the message says; they fix it
+  on that computer or under **Run computer use on**.
+- `COMPUTER_USE_TARGET_CHANGED`: the user moved computer use to another
+  computer after this chat started. Stop using these tools and tell the user to
+  start a new chat to use computer use there.
 - `COMPUTER_USE_WINDOW_REQUIRED`: pixel coordinates without a window. Add the
   `pid` and `window_id` of the window whose screenshot you measured on.
 - `COMPUTER_USE_TEXT_TARGET_REQUIRED`: `type_text` without a field. Read the

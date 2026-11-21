@@ -6399,6 +6399,8 @@ export interface components {
             };
             /** @description AO session the call is made for. Screenshots are saved under it, and calls for the same AO session share one Cua Driver session unless arguments.session names another. */
             sessionId?: string;
+            /** @description Where the calling session was told computer use runs: "local" or the remote host ID chosen under Run computer use on. When it no longer matches, the call is refused. Empty skips the check. */
+            target?: string;
             /** @description Driver tool name, e.g. list_windows or get_window_state. */
             tool: string;
         };

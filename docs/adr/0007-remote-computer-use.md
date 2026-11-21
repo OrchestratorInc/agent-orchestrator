@@ -53,12 +53,22 @@ On the computer the agent runs on:
   (mode 0600). No API response returns the credential.
 - `ao mcp`'s calls to `/api/v1/computer-use/call` and `…/agent-tools` are
   forwarded to the target with `Authorization` and `X-AO-Expected-Host-ID`.
-  Redirects are not followed. Screenshots are saved under the local session's
+  Every connection to the target first reads the unauthenticated
+  `GET /api/v1/identity` over that same connection (ADR 0003) and is used only
+  when it answers with the target's host ID, so the credential and the call
+  never reach another machine that took over the address. Redirects are not
+  followed, and no proxy sits between the check and the call. Screenshots are saved under the local session's
   folder and the result's paths rewritten to them, so the agent's tools work
   unchanged.
 - New chat sessions get the computer-use tools while a target is set, even with
   "Let agents use this computer" off or no Cua Driver here, and their standing
-  prompt names the other computer.
+  prompt names the other computer. Each session's tool server is bound to the
+  target it started with (`AO_COMPUTER_USE_TARGET`); after the user picks
+  another, its calls are refused with `COMPUTER_USE_TARGET_CHANGED` rather than
+  acting on a computer its instructions do not name.
+- Calls from other computers cannot name a Cua Driver session; they always run
+  in their own. One answer, screenshots included, stays within 64 MB: a
+  screenshot that does not fit is left out and the result says so.
 
 ## Consequences
 

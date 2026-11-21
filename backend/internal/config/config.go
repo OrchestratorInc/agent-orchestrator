@@ -23,6 +23,12 @@ import (
 // the CLI reads it.
 const EnvComputerUse = "AO_COMPUTER_USE"
 
+// EnvComputerUseTarget is set beside EnvComputerUse to where the session was
+// told computer use runs: "local" or the remote host ID chosen under "Run
+// computer use on". `ao mcp` sends it with each call, so a session whose
+// target changed is refused instead of acting on another computer.
+const EnvComputerUseTarget = "AO_COMPUTER_USE_TARGET"
+
 const (
 	// LoopbackHost is the only host the daemon ever binds. There is deliberately
 	// no AO_HOST env var: the daemon has no auth/CORS/TLS and a stray

@@ -13,6 +13,7 @@ package computeruse
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,12 @@ type CallRequest struct {
 	// SessionID groups saved screenshots by AO session and names the driver
 	// session the call runs in; empty uses a shared folder and session.
 	SessionID string `json:"sessionId,omitempty" description:"AO session the call is made for. Screenshots are saved under it, and calls for the same AO session share one Cua Driver session unless arguments.session names another."`
+	// Target is where the calling session was told computer use runs.
+	Target string `json:"target,omitempty" description:"Where the calling session was told computer use runs: \"local\" or the remote host ID chosen under Run computer use on. When it no longer matches, the call is refused. Empty skips the check."`
 }
+
+// LocalTarget is CallRequest.Target for computer use on this computer.
+const LocalTarget = "local"
 
 // Image is a screenshot a call saved to disk.
 type Image struct {
@@ -167,8 +173,11 @@ type Service struct {
 	// enabled reports "Let agents use this computer"; nil is off.
 	enabled func(context.Context) bool
 	// remote holds the remote computer-use settings (remote.go), guarded by mu.
-	remote       remoteStore
-	remoteClient *http.Client
+	remote remoteStore
+	// remoteClients holds the client for the current target (remote.go),
+	// guarded by mu; remoteTLS overrides its TLS settings in tests.
+	remoteClients map[string]*http.Client
+	remoteTLS     *tls.Config
 	// activity is which other computers' agents used this one recently, by
 	// caller ID; guarded by mu.
 	activity map[string]RemoteActivity
@@ -201,9 +210,6 @@ func New(driver Driver, dataDir string) *Service {
 		sessionless: map[string]bool{},
 		snapshots:   snapshotWindows{windows: map[string]window{}},
 		remote:      newRemoteStore(dataDir),
-		// A remote host's address is fixed by the user's own pairing; a
-		// redirect would send the credential somewhere else.
-		remoteClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
@@ -345,14 +351,42 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if err != nil {
 		return CallResult{}, err
 	}
+	if err := checkTarget(request.Target, to.target); err != nil {
+		return CallResult{}, err
+	}
 	if to.target != nil {
 		return s.callRemote(ctx, *to.target, to.credential, to.caller, to.callerName, request)
 	}
 	return s.callHere(ctx, request)
 }
 
+// checkTarget refuses a call from a session that started with computer use on
+// another computer than the one chosen now: its instructions name that
+// computer, so its actions must not silently land elsewhere. An empty
+// expected target (a terminal, curl) is not checked.
+func checkTarget(expected string, target *RemoteTarget) error {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return nil
+	}
+	current, label := LocalTarget, "this computer"
+	if target != nil {
+		current, label = target.HostID, target.Label
+	}
+	if expected == current {
+		return nil
+	}
+	return apierr.Conflict("COMPUTER_USE_TARGET_CHANGED", fmt.Sprintf("Computer use for this chat was set up on another computer; it now runs on %s. Start a new chat to use computer use there.", label), nil)
+}
+
 // callHere runs one driver tool on this computer.
 func (s *Service) callHere(ctx context.Context, request CallRequest) (CallResult, error) {
+	return s.callHereAdmitted(ctx, request, nil)
+}
+
+// callHereAdmitted is callHere with admitted run once the call has passed
+// every check, just before the driver runs it.
+func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, admitted func()) (CallResult, error) {
 	tool := strings.TrimSpace(request.Tool)
 	if !toolNamePattern.MatchString(tool) {
 		return CallResult{}, invalidTool(tool)
@@ -377,6 +411,9 @@ func (s *Service) callHere(ctx context.Context, request CallRequest) (CallResult
 	binary, err := s.locate(ctx)
 	if err != nil {
 		return CallResult{}, err
+	}
+	if admitted != nil {
+		admitted()
 	}
 	started := time.Now()
 	result, stepErr, err := s.run(ctx, binary, scope, tool, request.SessionID, arguments)

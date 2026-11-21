@@ -37,7 +37,7 @@ export function useRemoteComputerUseAlerts(): void {
 			void aoBridge.notifications.show({
 				id,
 				title: t("settings.computerUse.remoteActive", { name }),
-				body: t("settings.computerUse.remoteActiveBody"),
+				body: t("settings.computerUse.remoteActiveBody", { name }),
 				type: "computer_use_remote",
 			});
 		}

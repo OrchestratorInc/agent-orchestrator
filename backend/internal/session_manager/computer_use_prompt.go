@@ -15,6 +15,10 @@ import (
 // computer-use tools. The name is defined once, in config, for the CLI too.
 const envComputerUse = config.EnvComputerUse
 
+// envComputerUseTarget binds the server to where computer use ran as the
+// session started.
+const envComputerUseTarget = config.EnvComputerUseTarget
+
 // SetComputerUseEnabled supplies the "Let agents use this computer" setting.
 // While it reports true, new chat sessions get the computer-use tools and
 // standing instruction; sessions already running keep what they started with.
@@ -31,23 +35,30 @@ func (m *Manager) computerUseEnabled(ctx context.Context) bool {
 	return enabled != nil && enabled(ctx)
 }
 
-// SetComputerUseRemote supplies the name of the other computer the user chose
-// under "Run computer use on", or "" while computer use runs on this one. New
-// chat sessions are told which computer their computer-use tools operate.
-func (m *Manager) SetComputerUseRemote(label func(context.Context) string) {
+// SetComputerUseRemote supplies the other computer the user chose under "Run
+// computer use on", by host ID and name, or "" for both while computer use
+// runs on this one. New chat sessions are told which computer their
+// computer-use tools operate, and their tool server is bound to it.
+func (m *Manager) SetComputerUseRemote(target func(context.Context) (hostID, label string)) {
 	m.computerUseMu.Lock()
 	defer m.computerUseMu.Unlock()
-	m.computerUseRemote = label
+	m.computerUseRemote = target
+}
+
+func (m *Manager) computerUseTarget(ctx context.Context) (hostID, label string) {
+	m.computerUseMu.Lock()
+	target := m.computerUseRemote
+	m.computerUseMu.Unlock()
+	if target == nil {
+		return "", ""
+	}
+	hostID, label = target(ctx)
+	return strings.TrimSpace(hostID), strings.TrimSpace(label)
 }
 
 func (m *Manager) computerUseRemoteLabel(ctx context.Context) string {
-	m.computerUseMu.Lock()
-	label := m.computerUseRemote
-	m.computerUseMu.Unlock()
-	if label == nil {
-		return ""
-	}
-	return strings.TrimSpace(label(ctx))
+	_, label := m.computerUseTarget(ctx)
+	return label
 }
 
 // computerUsePrompt tells a chat agent it can drive desktop apps with the

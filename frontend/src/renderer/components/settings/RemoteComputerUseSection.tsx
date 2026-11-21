@@ -19,6 +19,8 @@ type RemoteSettings = ComputerUseRemoteSettings;
 const remoteOfferQueryKey = (hostId: string) => ["computer-use", "remote-offer", hostId] as const;
 const THIS_COMPUTER = "local";
 const OFFER_STALE_MS = 15_000;
+// A computer can start or stop offering computer use while this page is open.
+const OFFER_POLL_MS = 15_000;
 
 /**
  * Computer use across the user's machines, over the remote-host connections
@@ -56,6 +58,7 @@ export function RemoteComputerUseSection({ installed, titleHidden }: { installed
 				return data.offered;
 			},
 			staleTime: OFFER_STALE_MS,
+			refetchInterval: OFFER_POLL_MS,
 			retry: false,
 		})),
 	});

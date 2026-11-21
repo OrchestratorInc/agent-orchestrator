@@ -97,6 +97,11 @@ func (s *Service) localAgentTools(ctx context.Context) ([]AgentTool, error) {
 		}
 		tools = append(tools, tool)
 	}
+	// A cancelled read leaves out the tools it did not reach; it must not
+	// stand in for the driver's list until the next version.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(tools) == 0 {
 		return tools, nil
 	}

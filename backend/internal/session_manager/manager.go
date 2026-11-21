@@ -604,7 +604,7 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu     sync.Mutex
 	computerUse       func(context.Context) bool
-	computerUseRemote func(context.Context) string
+	computerUseRemote func(context.Context) (hostID, label string)
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink

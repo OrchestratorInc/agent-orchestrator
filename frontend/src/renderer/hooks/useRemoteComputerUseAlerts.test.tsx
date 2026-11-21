@@ -41,6 +41,7 @@ describe("useRemoteComputerUseAlerts", () => {
 		expect(bridgeMocks.show).toHaveBeenCalledWith(expect.objectContaining({
 			id: "computer-use-remote:abc:2026-11-21T09:00:00Z",
 			title: "Build box's agent is using this computer",
+			body: "Orchestrator on Build box is operating apps here. Open Settings to stop it.",
 			type: "computer_use_remote",
 		}));
 

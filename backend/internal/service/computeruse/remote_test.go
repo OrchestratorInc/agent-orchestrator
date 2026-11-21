@@ -17,6 +17,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
+// asHost answers the unauthenticated identity check as hostID, then hands
+// every other request to next, as a remote host does.
+func asHost(hostID string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/identity" {
+			if r.Header.Get("Authorization") != "" {
+				http.Error(w, "the identity check must not carry the credential", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"hostId":"` + hostID + `","apiVersion":1}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // serveRemote stands in for the other computer's /api/v1/remote-computer-use
 // routes, backed by a real Service, and records the headers each request
 // brought.
@@ -46,7 +63,7 @@ func serveRemote(t *testing.T, remote *Service) (*httptest.Server, *[]http.Heade
 		}
 		_ = json.NewEncoder(w).Encode(value)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(asHost("host-mac", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headers = append(headers, r.Header.Clone())
 		switch r.URL.Path {
 		case "/api/v1/remote-computer-use/agent-tools":
@@ -63,7 +80,7 @@ func serveRemote(t *testing.T, remote *Service) (*httptest.Server, *[]http.Heade
 		default:
 			http.NotFound(w, r)
 		}
-	}))
+	})))
 	t.Cleanup(server.Close)
 	return server, &headers
 }
@@ -140,7 +157,7 @@ func TestCallRunsOnTheChosenComputerAndSavesScreenshotsHere(t *testing.T) {
 	// The other computer kept the screenshot in a folder of its own for this
 	// computer's session, and named a driver session for it.
 	remotePath, _ := sent["screenshot_out_file"].(string)
-	if !strings.Contains(filepath.Base(filepath.Dir(remotePath)), "remote-") || !strings.HasSuffix(filepath.Dir(remotePath), "-ao-12") {
+	if folder := filepath.Base(filepath.Dir(remotePath)); !strings.HasPrefix(folder, "remote-") || !strings.Contains(folder, "-ao-12-") {
 		t.Fatalf("remote screenshot folder = %q", filepath.Dir(remotePath))
 	}
 	if session, _ := sent["session"].(string); !strings.HasPrefix(session, "ao-remote-") {
@@ -242,7 +259,7 @@ func TestRemoteSettingsPersistWithoutExposingTheCredential(t *testing.T) {
 	}
 
 	reopened := New(&fakeDriver{daemonUp: true}, dataDir)
-	if label := reopened.RemoteTargetLabel(ctx); label != "Studio Mac" {
+	if _, label := reopened.CurrentTarget(ctx); label != "Studio Mac" {
 		t.Fatalf("RemoteTargetLabel() after restart = %q", label)
 	}
 	cleared, err := reopened.ClearRemoteTarget(ctx)
@@ -253,7 +270,7 @@ func TestRemoteSettingsPersistWithoutExposingTheCredential(t *testing.T) {
 	if strings.Contains(string(data), "aod_secret") {
 		t.Fatalf("cleared settings still hold the credential: %s", data)
 	}
-	if label := reopened.RemoteTargetLabel(ctx); label != "" {
+	if _, label := reopened.CurrentTarget(ctx); label != "" {
 		t.Fatalf("RemoteTargetLabel() after clearing = %q", label)
 	}
 }
@@ -287,10 +304,10 @@ func TestRemoteFailuresSayWhatToDo(t *testing.T) {
 		"driver failure":     {http.StatusConflict, `{"code":"COMPUTER_USE_DAEMON_STOPPED","message":"start it"}`, "COMPUTER_USE_DAEMON_STOPPED"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewServer(asHost("host-mac", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
-			}))
+			})))
 			defer server.Close()
 			s := newTestService(t, &fakeDriver{}, "linux")
 			setTarget(t, s, server.URL)
@@ -316,9 +333,9 @@ func TestRemoteCallsDoNotFollowRedirects(t *testing.T) {
 	var reached bool
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 	defer elsewhere.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(asHost("host-mac", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
-	}))
+	})))
 	defer server.Close()
 	s := newTestService(t, &fakeDriver{}, "linux")
 	setTarget(t, s, server.URL)
@@ -331,16 +348,20 @@ func TestRemoteCallsDoNotFollowRedirects(t *testing.T) {
 }
 
 func TestRemoteScopeStaysWithinScopeRules(t *testing.T) {
-	for _, tc := range []struct{ caller, session, want string }{
-		{"abc123", "ao-12", "remote-abc123-ao-12"},
-		{"", "", "remote"},
-		{"../../x", "a/b c", "remote-x-a-b-c"},
-		{strings.Repeat("c", 40), strings.Repeat("s", 200), "remote-" + strings.Repeat("c", 16) + "-" + strings.Repeat("s", 100)},
+	for _, tc := range []struct{ caller, session, prefix string }{
+		{"abc123", "ao-12", "remote-abc123-ao-12-"},
+		{"", "", "remote-"},
+		{"../../x", "a/b c", "remote-x-a-b-c-"},
+		{strings.Repeat("c", 40), strings.Repeat("s", 200), "remote-" + strings.Repeat("c", 16) + "-" + strings.Repeat("s", 90) + "-"},
 	} {
 		got := remoteScope(tc.caller, tc.session)
-		if got != tc.want || !scopePattern.MatchString(got) {
-			t.Errorf("remoteScope(%q, %q) = %q, want %q", tc.caller, tc.session, got, tc.want)
+		if !strings.HasPrefix(got, tc.prefix) || !scopePattern.MatchString(got) || got != remoteScope(tc.caller, tc.session) {
+			t.Errorf("remoteScope(%q, %q) = %q, want a stable scope starting %q", tc.caller, tc.session, got, tc.prefix)
 		}
+	}
+	// Pairs that clean to the same text still get their own scope.
+	if remoteScope("work.a", "s") == remoteScope("work.a-", "s") || remoteScope("c", "a/b") == remoteScope("c", "a b") {
+		t.Fatal("distinct caller and session pairs share a scope")
 	}
 }
 
@@ -423,4 +444,162 @@ func TestUsedComputerSeesWhoIsUsingIt(t *testing.T) {
 		t.Fatalf("quiet computer still listed: %+v", recent)
 	}
 	remote.mu.Unlock()
+}
+
+// The credential goes only to a connection that proved it is the chosen
+// host: another Orchestrator, or anything else, at the saved address gets
+// neither the credential nor the call.
+func TestRemoteCallsOnlyGoToTheChosenHost(t *testing.T) {
+	var sawCredential bool
+	impostor := httptest.NewServer(asHost("someone-else", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawCredential = true
+		}
+		w.WriteHeader(http.StatusOK)
+	})))
+	defer impostor.Close()
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawCredential = true
+		}
+		http.NotFound(w, r)
+	}))
+	defer plain.Close()
+	for _, server := range []*httptest.Server{impostor, plain} {
+		s := newTestService(t, &fakeDriver{}, "linux")
+		setTarget(t, s, server.URL)
+		_, err := s.Call(context.Background(), CallRequest{Tool: "list_windows"})
+		wantCode(t, err, "COMPUTER_USE_REMOTE_HOST_CHANGED")
+	}
+	if sawCredential {
+		t.Fatal("the credential reached a server that is not the chosen host")
+	}
+}
+
+// Another computer cannot name a driver session: its calls stay in their
+// own, whatever arguments.session says.
+func TestRemoteCallerCannotPickADriverSession(t *testing.T) {
+	var sent map[string]any
+	remote := newTestService(t, recordingScreenshotDriver(&sent), "darwin")
+	if _, err := remote.SetAllowRemote(context.Background(), true); err != nil {
+		t.Fatalf("SetAllowRemote() error = %v", err)
+	}
+	_, err := remote.ServeRemoteCall(context.Background(), RemoteCallRequest{
+		Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9, "session": "ao-local-1"}, SessionID: "ao-1", Caller: "abc",
+	})
+	if err != nil {
+		t.Fatalf("ServeRemoteCall() error = %v", err)
+	}
+	if session, _ := sent["session"].(string); session != driverSession(remoteScope("abc", "ao-1")) {
+		t.Fatalf("driver session = %q, want the caller's own", session)
+	}
+}
+
+// A refused call is not activity: only a call that passed every check marks
+// the other computer as using this one.
+func TestOnlyAdmittedCallsCountAsActivity(t *testing.T) {
+	ctx := context.Background()
+	remote := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	if _, err := remote.SetAllowRemote(ctx, true); err != nil {
+		t.Fatalf("SetAllowRemote() error = %v", err)
+	}
+	_, err := remote.ServeRemoteCall(ctx, RemoteCallRequest{Tool: "zoom", Caller: "abc", CallerName: "Build box"})
+	wantCode(t, err, "COMPUTER_USE_TOOL_NOT_OFFERED")
+	if settings, _ := remote.RemoteSettings(ctx); len(settings.Activity) != 0 {
+		t.Fatalf("activity after a refused call = %+v", settings.Activity)
+	}
+	for index := range maxRemoteCallers + 5 {
+		remote.noteRemoteCall(fmt.Sprintf("caller-%d", index), "", time.Now())
+	}
+	remote.mu.Lock()
+	kept := len(remote.activity)
+	remote.mu.Unlock()
+	if kept != maxRemoteCallers {
+		t.Fatalf("kept %d callers, want at most %d", kept, maxRemoteCallers)
+	}
+}
+
+// A session started with computer use on one computer is refused, not
+// redirected, once the user picks another.
+func TestCallsAreBoundToTheSessionsTarget(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	if _, err := s.Call(ctx, CallRequest{Tool: "list_windows", Target: LocalTarget}); err != nil {
+		t.Fatalf("local call error = %v", err)
+	}
+	if _, err := s.Call(ctx, CallRequest{Tool: "list_windows"}); err != nil {
+		t.Fatalf("unbound call error = %v", err)
+	}
+	_, err := s.Call(ctx, CallRequest{Tool: "list_windows", Target: "host-mac"})
+	wantCode(t, err, "COMPUTER_USE_TARGET_CHANGED")
+	if !strings.Contains(err.Error(), "this computer") {
+		t.Fatalf("error = %q, want it to name where computer use runs now", err)
+	}
+	setTarget(t, s, "http://127.0.0.1:1")
+	_, err = s.Call(ctx, CallRequest{Tool: "list_windows", Target: LocalTarget})
+	wantCode(t, err, "COMPUTER_USE_TARGET_CHANGED")
+}
+
+// Screenshots that would push one answer over the limit stay behind; the
+// result still goes back, and says which screenshot is missing.
+func TestRemoteResultStaysWithinTheResponseLimit(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.png")
+	data := make([]byte, maxRemoteImageBytes)
+	copy(data, pngHeader)
+	if err := os.WriteFile(big, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	images := []Image{}
+	for range 8 {
+		images = append(images, Image{Path: big, MimeType: "image/png"})
+	}
+	result := remoteResult(CallResult{Tool: "run_steps", Result: map[string]any{"screenshot_file_path": big}, Images: images})
+	encoded, _ := json.Marshal(result)
+	if len(encoded) > maxRemoteResponseBytes {
+		t.Fatalf("answer is %d bytes, over %d", len(encoded), maxRemoteResponseBytes)
+	}
+	if len(result.Images) == 0 || len(result.Images) == len(images) {
+		t.Fatalf("sent %d of %d screenshots, want some but not all", len(result.Images), len(images))
+	}
+}
+
+// A damaged settings file still lets the user turn things off.
+func TestDamagedRemoteSettingsCanBeReset(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, remoteFileName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(&fakeDriver{daemonUp: true}, dataDir)
+	s.SetEnabled(func(context.Context) bool { return true })
+	if _, err := s.Call(ctx, CallRequest{Tool: "list_windows"}); err == nil {
+		t.Fatal("Call() with damaged settings ran somewhere instead of reporting the damage")
+	}
+	if _, err := s.SetAllowRemote(ctx, true); err == nil {
+		t.Fatal("SetAllowRemote(true) overwrote damaged settings")
+	}
+	settings, err := s.ClearRemoteTarget(ctx)
+	if err != nil || settings.Target != nil || settings.AllowRemote {
+		t.Fatalf("ClearRemoteTarget() = %+v, %v", settings, err)
+	}
+	if _, err := s.Call(ctx, CallRequest{Tool: "list_windows"}); err != nil {
+		t.Fatalf("Call() after reset error = %v", err)
+	}
+}
+
+// A tool list read with a cancelled context is not cached.
+func TestCancelledToolReadIsNotCached(t *testing.T) {
+	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.AgentTools(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AgentTools(cancelled) error = %v, want context.Canceled", err)
+	}
+	s.mu.Lock()
+	cached := s.agentTools.tools
+	s.mu.Unlock()
+	if cached != nil {
+		t.Fatalf("cached %d tools from a cancelled read", len(cached))
+	}
 }

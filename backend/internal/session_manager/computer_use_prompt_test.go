@@ -95,6 +95,14 @@ func TestAOMCPServerFollowsComputerUseSetting(t *testing.T) {
 		if got := servers[0].Env[config.EnvComputerUse] == "1"; got != on {
 			t.Fatalf("setting %v: server env = %v", on, servers[0].Env)
 		}
+		if want := map[bool]string{true: "local", false: ""}[on]; servers[0].Env[config.EnvComputerUseTarget] != want {
+			t.Fatalf("setting %v: target env = %q, want %q", on, servers[0].Env[config.EnvComputerUseTarget], want)
+		}
+	}
+	// A session started with computer use on another computer is bound to it.
+	m.SetComputerUseRemote(func(context.Context) (string, string) { return "host-mac", "Studio Mac" })
+	if servers := m.aoMCPServers(context.Background(), domain.HarnessClaudeCode, env); servers[0].Env[config.EnvComputerUseTarget] != "host-mac" {
+		t.Fatalf("remote target env = %v", servers[0].Env)
 	}
 }
 
@@ -157,7 +165,12 @@ func TestBuildSystemPromptNamesTheRemoteComputer(t *testing.T) {
 	})
 	m.SetComputerUseEnabled(func(context.Context) bool { return true })
 	label := ""
-	m.SetComputerUseRemote(func(context.Context) string { return label })
+	m.SetComputerUseRemote(func(context.Context) (string, string) {
+		if label == "" {
+			return "", ""
+		}
+		return "host-mac", label
+	})
 
 	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", true)
 	if err != nil {

@@ -27,6 +27,7 @@ type cuaCallRequest struct {
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments,omitempty"`
 	SessionID string         `json:"sessionId,omitempty"`
+	Target    string         `json:"target,omitempty"`
 }
 
 type cuaImage struct {
@@ -92,7 +93,12 @@ func (s *server) callCua(ctx context.Context, tool string, raw json.RawMessage) 
 			return mcpToolError(fmt.Errorf("invalid arguments: %w", err))
 		}
 	}
-	request := cuaCallRequest{Tool: tool, Arguments: arguments, SessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID"))}
+	request := cuaCallRequest{
+		Tool: tool, Arguments: arguments, SessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+		// Where this session was told computer use runs; the daemon refuses the
+		// call if that changed since.
+		Target: strings.TrimSpace(os.Getenv(config.EnvComputerUseTarget)),
+	}
 	var response cuaCallResponse
 	if err := s.daemon.PostJSON(ctx, "computer-use/call", request, &response); err != nil {
 		return mcpToolError(err)

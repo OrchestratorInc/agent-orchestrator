@@ -927,9 +927,10 @@ func Run(buildVersion string) (retErr error) {
 	// "Let agents use this computer" gives new chat sessions the computer-use
 	// tools, and so does choosing another computer to run computer use on.
 	sessMgr.SetComputerUseEnabled(func(ctx context.Context) bool {
-		return settingsSvc.ComputerUseEnabled(ctx) || computerUse.RemoteTargetLabel(ctx) != ""
+		hostID, _ := computerUse.CurrentTarget(ctx)
+		return settingsSvc.ComputerUseEnabled(ctx) || hostID != ""
 	})
-	sessMgr.SetComputerUseRemote(computerUse.RemoteTargetLabel)
+	sessMgr.SetComputerUseRemote(computerUse.CurrentTarget)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})
