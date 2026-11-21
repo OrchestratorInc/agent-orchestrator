@@ -447,11 +447,48 @@ describe("app preview controls", () => {
 			expect(titles()).not.toContain("Machine offline");
 		});
 
-		it("waits for the connection instead of saying offline when no preview loaded yet", async () => {
+		// A browser-only session has no app preview to hold, so the screen's own
+		// "Connecting" view replaced the pane and its last frame was lost.
+		it("keeps the live browser on screen when the session has no app preview", async () => {
+			fixtures.getPreview.mockResolvedValue(null);
+			await openPreview();
+			expect(mobileView().disabled).toBe(true);
+			const before = { ...fixtures.paneLife };
+			expect(before.mounts).toBeGreaterThan(0);
+			await appSwitch();
+			expect(nodes("BrowserLivePane")).toHaveLength(1);
+			expect(fixtures.paneLife).toEqual(before);
+			expect(titles()).toEqual([]);
+		});
+
+		it("keeps the live browser on screen through an app switch before its preview loaded", async () => {
 			fixtures.getPreview.mockReturnValue(new Promise(() => {}));
 			await openPreview();
+			const before = { ...fixtures.paneLife };
+			await appSwitch();
+			expect(fixtures.paneLife).toEqual(before);
+			expect(titles()).not.toContain("Machine offline");
+		});
+
+		it("waits for the connection instead of mounting the live browser when it opens during a reconnect", async () => {
+			fixtures.getPreview.mockResolvedValue(null);
+			fixtures.away = true;
+			await openPreview();
+			expect(titles()).toEqual(["Connecting to this machine…"]);
+			expect(nodes("BrowserLivePane")).toHaveLength(0);
+			expect(fixtures.getPreview).not.toHaveBeenCalled();
+			fixtures.away = false;
+			await act(async () => { screen.update(<SessionPreviewScreen />); });
+			expect(nodes("BrowserLivePane")).toHaveLength(1);
+		});
+
+		it("does not hold a live browser from another session", async () => {
+			fixtures.getPreview.mockResolvedValue(null);
+			await openPreview();
+			fixtures.params.id = "session-2";
 			await appSwitch();
 			expect(titles()).toEqual(["Connecting to this machine…"]);
+			expect(nodes("BrowserLivePane")).toHaveLength(0);
 		});
 
 		it("says the machine is offline once it really is", async () => {

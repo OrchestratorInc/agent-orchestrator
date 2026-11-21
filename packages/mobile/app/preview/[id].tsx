@@ -99,6 +99,18 @@ function SessionPreviewContent() {
 
 	// The live browser names its page as it changes.
 	const showingBrowser = !refreshingResponsive && !showingApp;
+	// A live browser already on screen stays through an app switch even with no
+	// app preview held, so its last frame and an open address prompt survive the
+	// reconnect: it starts no stream without a verified connection and says it is
+	// waiting (see BrowserLivePane). One that never mounted waits for the
+	// connection below instead, and a machine really gone or refusing this phone
+	// still says so.
+	const paneRoute = `${routeHostId ?? ""}|${sessionID}`;
+	const browserMountedFor = useRef<string | null>(null);
+	const browserHeld = !config && browserMountedFor.current === paneRoute;
+	const machine = !config ? machineState(app) : "ok";
+	const screenWaits = !hostMatches || (!preview && (machine !== "ok" || (!config && !browserHeld)));
+	useEffect(() => { browserMountedFor.current = !screenWaits && showingBrowser ? paneRoute : null; });
 	const [browserTitle, setBrowserTitle] = useState<string>();
 	const headerTitle = (showingApp && (webTitle || preview.entry)) || (showingBrowser && browserTitle) || title || "Preview";
 	useLayoutEffect(() => {
@@ -181,10 +193,9 @@ function SessionPreviewContent() {
 	// reconnects. An app switch closes the connection on purpose, so only a
 	// machine that is really gone says so, and one that refused this phone says
 	// that rather than spinning (see machineState).
-	const machine = !config ? machineState(app) : "ok";
 	if (!preview && machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
 	if (!preview && machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
-	if (!config && !preview) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
+	if (!config && !preview && !browserHeld) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
 
 	return <View style={[styles.screen, { paddingTop: glassInset }]}>
 		{headerItems}

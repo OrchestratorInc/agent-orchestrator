@@ -644,11 +644,28 @@ function ImageCompare({ backend, detail, name, sources }: { backend: FilesBacken
 	// one the connection stays away from (or can't resolve) says so, and a tap
 	// tries again.
 	const opener = useOpenWhenVerified<ImageSide>(backend);
-	if (!verified) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
+	// The sides drawn are read again through the connection verified for this
+	// mount, never the page's stored ones: those may be an earlier connection's
+	// (read before an app switch), whose address may now be another device's,
+	// and they carry the credential. Cloud's sides are data, read once, and are
+	// drawn as they are. Read once: the page mounts this again for another file.
+	const rereads = Boolean(backend?.whenVerified);
+	const [drawn, setDrawn] = useState<{ before?: ImageSide; after?: ImageSide }>();
+	useEffect(() => {
+		if (!verified || !rereads) return;
+		const controller = new AbortController();
+		const side = (which: "before" | "after", had: ImageSide | undefined) => had ? sources.resolveSide(which, controller.signal).catch(() => undefined) : Promise.resolve(undefined);
+		void Promise.all([side("before", sources.before), side("after", sources.after)]).then(([before, after]) => { if (!controller.signal.aborted) setDrawn({ before, after }); });
+		return () => controller.abort();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [verified]);
+	const shown = rereads ? drawn : sources;
+	if (!verified || !shown) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	const panes = [
-		sources.before ? { label: detail.deleted ? "Deleted" : "Before", side: "before" as const, source: sources.before } : null,
-		sources.after ? { label: detail.status === "added" ? "Added" : sources.before ? "After" : statusLabel[detail.status], side: "after" as const, source: sources.after } : null,
+		shown.before ? { label: detail.deleted ? "Deleted" : "Before", side: "before" as const, source: shown.before } : null,
+		shown.after ? { label: detail.status === "added" ? "Added" : shown.before ? "After" : statusLabel[detail.status], side: "after" as const, source: shown.after } : null,
 	].filter((pane): pane is NonNullable<typeof pane> => Boolean(pane));
+	if (!panes.length) return <View style={styles.center}><EmptyState icon="alert-triangle" title={`Couldn't open ${name}`} /></View>;
 	// The viewer is a new request with the credential. The pane's source may be
 	// the last connection's (an address the machine answered on before the app
 	// switch), so it is resolved again through the verified connection; the
