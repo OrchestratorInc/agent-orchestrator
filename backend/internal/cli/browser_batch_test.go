@@ -603,6 +603,10 @@ func TestBrowserBatchRedactsTypedValues(t *testing.T) {
 		{[]string{"find", "label", "Password", "fill", "hunter2"}, []string{"find", "label", "Password", "fill", browserBatchRedacted}},
 		{[]string{"find", "role", "textbox", "type", "hunter2", "--exact"}, []string{"find", "role", "textbox", "type", browserBatchRedacted, browserBatchRedacted}},
 		{[]string{"find", "text", "Sign in", "click"}, []string{"find", "text", "Sign in", "click"}},
+		{[]string{"find", "nth", "0", "input[type=password]", "fill", "hunter2"}, []string{"find", "nth", "0", "input[type=password]", "fill", browserBatchRedacted}},
+		{[]string{"find", "role", "textbox", "--name", "Password", "fill", "hunter2"}, []string{"find", "role", "textbox", "--name", "Password", "fill", browserBatchRedacted}},
+		{[]string{"find", "role", "textbox", "--name=Password", "--exact", "type", "hunter2"}, []string{"find", "role", "textbox", "--name=Password", "--exact", "type", browserBatchRedacted}},
+		{[]string{"find", "label", "fill", "click"}, []string{"find", "label", "fill", "click"}},
 		{[]string{"set", "credentials", "ada", "hunter2"}, []string{"set", "credentials", browserBatchRedacted, browserBatchRedacted}},
 	} {
 		if got := browserBatchReportArgs(tc.step); !reflect.DeepEqual(got, tc.want) {

@@ -597,11 +597,12 @@ func browserBatchReportArgs(step []string) []string {
 			out[i] = browserBatchRedacted
 		}
 	}
-	// Remote `find <locator> <value> fill|type <text>`: the action is the
-	// fourth word, so a locator value that reads "fill" is not mistaken for it.
-	if out[0] == "find" && len(out) > 4 && (out[3] == "fill" || out[3] == "type") {
-		for i := 4; i < len(out); i++ {
-			out[i] = browserBatchRedacted
+	// Remote `find <locator> <value> [--name <n>] [--exact] fill|type <text>`.
+	if out[0] == "find" {
+		if action := browserBatchFindActionIndex(out); action > 0 && (out[action] == "fill" || out[action] == "type") {
+			for i := action + 1; i < len(out); i++ {
+				out[i] = browserBatchRedacted
+			}
 		}
 	}
 	for i := 0; i < len(out); i++ {
@@ -614,6 +615,31 @@ func browserBatchReportArgs(step []string) []string {
 		}
 	}
 	return out
+}
+
+// browserBatchFindActionIndex returns the index of the action word in a remote
+// `find` step, or -1. The locator takes one value (`nth` takes an index and a
+// selector), and `--name <value>`, `--name=<value>` and `--exact` may come
+// before the action, so a locator value that reads "fill" is never taken for it.
+func browserBatchFindActionIndex(step []string) int {
+	if len(step) < 2 {
+		return -1
+	}
+	i := 3
+	if step[1] == "nth" {
+		i = 4
+	}
+	for i < len(step) {
+		switch {
+		case step[i] == "--name":
+			i += 2
+		case strings.HasPrefix(step[i], "--name=") || step[i] == "--exact":
+			i++
+		default:
+			return i
+		}
+	}
+	return -1
 }
 
 // browserBatchEcho prints a step back compactly: long values are elided so a
