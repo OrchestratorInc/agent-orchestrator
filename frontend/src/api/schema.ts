@@ -7831,6 +7831,7 @@ export interface components {
             number: number;
         };
         PRStackLayerResponse: {
+            behindParent?: number;
             ci?: string;
             headBranch: string;
             headSha: string;

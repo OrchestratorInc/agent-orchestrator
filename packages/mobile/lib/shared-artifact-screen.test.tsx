@@ -5,7 +5,7 @@ const state = vi.hoisted(() => ({
 	params: { url: "https://orchestrator.inc/artifact/shared-report" } as { url: string | string[] },
 	router: { canGoBack: () => false, back: vi.fn(), replace: vi.fn() },
 }));
-vi.mock("react-native", () => ({ View: "View", StyleSheet: { create: (value: unknown) => value } }));
+vi.mock("react-native", () => ({ Platform: { OS: "ios" }, View: "View", StyleSheet: { create: (value: unknown) => value } }));
 vi.mock("expo-router", () => ({
 	Stack: { Screen: "StackScreen" },
 	useLocalSearchParams: () => state.params,

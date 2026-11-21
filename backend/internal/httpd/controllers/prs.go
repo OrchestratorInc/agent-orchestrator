@@ -53,6 +53,7 @@ func writeStackResult(w http.ResponseWriter, res prsvc.StackResult) {
 				Mergeability:   layer.Mergeability,
 				NoChecks:       layer.NoChecks,
 				SessionID:      layer.SessionID,
+				BehindParent:   layer.BehindParent,
 			})
 		}
 		out.Stack = &stack

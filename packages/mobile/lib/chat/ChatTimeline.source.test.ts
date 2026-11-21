@@ -63,15 +63,10 @@ describe("chat under the clear header", () => {
 });
 
 describe("streaming response layout", () => {
-	it("keeps the live cursor inside the response instead of adding a new block", () => {
-		expect(source).toContain('showCursor ? `${item.text || ""} ▍`');
+	it("draws a streaming reply as its text alone, with no cursor or extra block", () => {
+		expect(source).not.toContain("▍");
+		expect(source).not.toContain("showCursor");
 		expect(source).not.toContain("styles.streamingDot");
-	});
-
-	it("draws the cursor on the turn's newest reply only", () => {
-		expect(source).toContain("streamingCursorMessageId(items)");
-		expect(source).toContain("showCursor={row.items[0].id === cursorMessageId}");
-		expect(source).not.toContain('item.streaming ? `${item.text || ""} ▍`');
 	});
 });
 
@@ -138,6 +133,13 @@ describe("a turn's action row", () => {
 		expect(actions).toContain("<View style={styles.turnActions}>");
 		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
 	});
+	// The row's height is fixed, so the time cannot grow past it: uncapped, the
+	// largest text sizes drew its line taller than the row and cut it off. At
+	// the chrome cap (1.3) the footnote's 17pt line is 22pt, inside the 28pt
+	// control the row is built around.
+	it("caps the time's text size where its line still fits the row", () => {
+		expect(actions).toContain("maxFontSizeMultiplier={fontScaleCap.chrome}");
+	});
 	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
 		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
 		expect(source).not.toContain("styles.responseActions");
@@ -155,6 +157,37 @@ describe("jump to latest", () => {
 	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
 	it("lets only a drag stop following the newest message", () => {
 		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);");
+	});
+	// A follow is queued a frame ahead. Output that arrived just before a drag
+	// queued one that then ran mid-fling, carried the list back to its end, and
+	// that end restarted the follow: the reader could never scroll away.
+	it("never follows new output while the person scrolls", () => {
+		expect(source).toContain("if (!followsTail.current || dragging.current) return;");
+		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
+	});
+	it("follows again only once the person comes to rest right at the end", () => {
+		expect(source).toContain("const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
+	});
+	// Android reports momentum after every touch-up, even a still one, so output
+	// that lands between letting go at the end and the momentum's end is not
+	// followed. It must not count against coming to rest at the end, and a
+	// follow that resumes catches up on it.
+	it("keeps the release's verdict through Android's still momentum and catches up when the follow resumes", () => {
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
+		expect(source).toContain("followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);");
+		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
+		expect(source).not.toContain("grewWhileDragging");
+	});
+	// The jump shows whenever the list is not following, on every path: a drag
+	// resting between RESUME_SLOP and TAIL_SLOP neither followed nor offered it,
+	// and with different slops per path it showed on settle and hid on the next
+	// scroll event.
+	it("offers the jump to the newest message whenever the list is not following", () => {
+		expect(source).toContain("const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
+		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");
+		expect(source).toContain("setShowJump(!followsTail.current && !resting);");
+		expect(source).toContain("releasedAt.current = released ? { offset, atEnd: resting } : undefined;\n\t\tsetShowJump(!followsTail.current);");
 	});
 	// Under a floating composer the list keeps its size and moves its content with the keyboard.
 	it("moves its own content with the keyboard under a floating composer", () => {
@@ -379,14 +412,14 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}");
-		expect(source).toContain("onScrollEndDrag={settle}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
-		expect(source).toContain("if (tail && !dragging.current) followsTail.current = true;");
+		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");
 		// A scroll event alone never turns the follow off: rows drawn above change
 		// the content's size mid-drag without the person having left the end.
 		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
-		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);");
+		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
 	});
 	// A follow from JS mid-keyboard jumped the list to the keyboard's end and back.
 	// A tap on a reply gives its selectable text focus; the list scrolled that

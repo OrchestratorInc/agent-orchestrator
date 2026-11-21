@@ -141,6 +141,7 @@ type ActionService struct {
 	refresher     ReviewRefresher
 	attachments   ports.SCMAttachmentStore
 	stacker       ports.SCMStacker
+	stackBehind   stackBehindCache
 	details       detailsStore
 	headChecks    ports.SCMHeadChecksReader
 	queuer        ports.SCMMergeQueuer

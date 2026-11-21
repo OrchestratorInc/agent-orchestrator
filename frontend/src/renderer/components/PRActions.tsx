@@ -9,7 +9,7 @@ import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { clientForSessionHost } from "../lib/host-clients";
 import { prMergeQueueDetail, prMergeQueueEntry, prSummaryBlockReason, type PRBlockReason, type PRMergeQueueEntry } from "../lib/pr-display";
-import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
+import { stackBlocker, stackLayersToLand, type StackBlockReason } from "../lib/pr-stack";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { cn } from "../lib/utils";
 import type { SessionGitActionKind } from "../stores/session-git-action-store";
@@ -231,7 +231,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	const open = pr.state === "open" || pr.state === "draft";
 	const lowerBlock = landing ? stackBlocker(landing, pr.number) : undefined;
 	const blocker = lowerBlock
-		? t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) })
+		? t("pr.stack.blocked", { number: lowerBlock.number, reason: t(stackBlockReasonLabel[lowerBlock.reason]) })
 		: canMerge || queued ? undefined : t(blockedSentence[prSummaryBlockReason(pr) ?? "provider"]);
 	// Until the stack is known, a merge can't say what it would land. A failed read
 	// doesn't hold it up: the daemon re-checks before merging.
@@ -515,4 +515,10 @@ export const blockReasonLabel: Record<PRBlockReason, "pr.blocker.draft" | "pr.bl
 	changes: "pr.blocker.changes",
 	review: "pr.blocker.review",
 	threads: "pr.blocker.threads",
+};
+
+/** A stack's reasons as a label: a layer's own, or one still to be rebased. */
+export const stackBlockReasonLabel: Record<StackBlockReason, (typeof blockReasonLabel)[PRBlockReason] | "pr.stack.needsRebase"> = {
+	...blockReasonLabel,
+	rebase: "pr.stack.needsRebase",
 };

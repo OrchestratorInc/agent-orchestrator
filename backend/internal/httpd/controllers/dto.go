@@ -3111,6 +3111,9 @@ type PRStackLayerResponse struct {
 	NoChecks bool `json:"noChecks,omitempty"`
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
+	// BehindParent counts the commits of the open layer below that this layer
+	// lacks: above zero, it needs rebasing onto that layer.
+	BehindParent int `json:"behindParent,omitempty"`
 }
 
 // LoadPRDetailsRequest names the tracked PR whose details to read.
