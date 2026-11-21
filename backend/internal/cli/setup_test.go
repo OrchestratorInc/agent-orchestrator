@@ -663,3 +663,25 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupChecksAgentsAReusedProjectKeeps(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("CLAUDECODE", "1")
+	d.set("GET /api/v1/projects", 200, `{"projects":[{"id":"calc"}]}`)
+	d.set("GET /api/v1/projects/calc", 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}}`, repo))
+	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	res := decodeSetup(t, out)
+	project := stepNamed(t, res, "project")
+	if project.Status != setupNeedsHuman || !strings.Contains(project.Detail, "runs codex") || !strings.HasPrefix(project.Fix, "run `codex login`") {
+		t.Fatalf("project step = %+v", project)
+	}
+	if res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
+		t.Fatalf("agent = %+v", res.Agent)
+	}
+}

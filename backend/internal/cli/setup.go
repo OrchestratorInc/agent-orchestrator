@@ -107,6 +107,11 @@ type setupResult struct {
 	Task        *taskResult   `json:"task"`
 	// pending is set when a --check or --dry-run found work setup would do.
 	pending bool
+	// readiness and checked are the agent step's readiness reading and the
+	// agents it probed, so the project step can check the agents a reused
+	// project keeps.
+	readiness []agentReadinessSnapshot
+	checked   map[string]bool
 }
 
 func newSetupCommand(ctx *commandContext) *cobra.Command {
@@ -265,13 +270,14 @@ func (c *commandContext) finishSetup(res *setupResult, opts setupOptions) {
 	switch {
 	case blocked:
 		verify.Status = setupNeedsHuman
+		verify.Detail = "not ready: finish next_actions, then run `ao setup` again"
 		for _, s := range res.Steps {
 			if s.Status == setupFailed {
 				verify.Status = setupFailed
+				verify.Detail = fmt.Sprintf("not ready: the %s step failed; fix what its detail names, then run `ao setup` again", s.Step)
 				break
 			}
 		}
-		verify.Detail = "not ready: finish next_actions, then run `ao setup` again"
 	case res.pending && opts.check:
 		verify.Status = setupSkipped
 		verify.Detail = "not ready: run `ao setup` to finish"
@@ -280,7 +286,7 @@ func (c *commandContext) finishSetup(res *setupResult, opts setupOptions) {
 		verify.Status = setupSkipped
 		verify.Detail = "dry run: nothing changed; run `ao setup` to apply"
 	}
-	if opts.start != "" && res.Ready {
+	if opts.start != "" && res.Ready && res.Task != nil {
 		verify.Detail += "; task " + res.Task.Status
 	}
 	res.Steps = append(res.Steps, verify)
@@ -404,38 +410,25 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	res.Agent = agent
 
 	// Check every distinct agent the project will run.
+	res.readiness = readiness.Agents
 	var problems, fixes, notes []string
 	status := setupOK
 	for _, id := range uniqueStrings(agent.ID, agent.Worker, agent.Orchestrator) {
-		var probe setupProbe
-		if err := c.postJSON(ctx, "agents/"+url.PathEscape(id)+"/probe", struct{}{}, &probe); err != nil {
-			step.Status, step.Detail = setupFailed, fmt.Sprintf("could not check agent %s: %s", id, err.Error())
+		check, err := c.setupCheckAgent(ctx, id, res)
+		if err != nil {
+			step.Status, step.Detail = setupFailed, err.Error()
 			return step
 		}
-		auth := probe.Agent.AuthStatus
 		if id == agent.ID {
-			agent.AuthStatus = auth
+			agent.AuthStatus = check.auth
 		}
-		switch {
-		case !probe.Supported:
-			status = setupFailed
-			problems = append(problems, fmt.Sprintf("agent %q is not supported by this Orchestrator", id))
-			fixes = append(fixes, "pick a supported agent from `ao agent ls` and pass --agent <id>")
-		case !probe.Installed:
-			status = worseSetupStatus(status, setupNeedsHuman)
-			problems = append(problems, fmt.Sprintf("agent %s is not installed", id))
-			fixes = append(fixes, c.setupInstallFix(ctx, id, readiness.Agents))
-		case auth == "unauthorized":
-			status = worseSetupStatus(status, setupNeedsHuman)
-			problems = append(problems, fmt.Sprintf("agent %s is not signed in", id))
-			fixes = append(fixes, setupSignInFix(c.signInFix(ctx, id), id, readiness.Agents))
-		case auth == "authorized" || auth == "not_applicable":
-			notes = append(notes, fmt.Sprintf("%s is signed in", id))
-		case auth == "configured":
-			notes = append(notes, fmt.Sprintf("%s has a saved sign-in that the first task will confirm", id))
-		default:
-			notes = append(notes, fmt.Sprintf("%s is installed; its sign-in could not be checked, so the first task will confirm it", id))
+		status = worseSetupStatus(status, check.status)
+		if check.problem != "" {
+			problems = append(problems, check.problem)
+			fixes = append(fixes, check.fix)
+			continue
 		}
+		notes = append(notes, check.note)
 	}
 	step.Status = status
 	chosen := fmt.Sprintf("using %s (%s)", agent.ID, setupAgentSource(agent))
@@ -461,6 +454,45 @@ func setupAgentSource(a *setupAgent) string {
 		return "the first ready agent"
 	}
 	return a.Source
+}
+
+type setupAgentCheck struct {
+	status, auth, problem, fix, note string
+}
+
+// setupCheckAgent probes one agent now and says whether it can run: not
+// supported fails, not installed or signed out needs a person.
+func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *setupResult) (setupAgentCheck, error) {
+	if res.checked == nil {
+		res.checked = map[string]bool{}
+	}
+	res.checked[id] = true
+	var probe setupProbe
+	if err := c.postJSON(ctx, "agents/"+url.PathEscape(id)+"/probe", struct{}{}, &probe); err != nil {
+		return setupAgentCheck{}, fmt.Errorf("could not check agent %s: %w", id, err)
+	}
+	check := setupAgentCheck{status: setupOK, auth: probe.Agent.AuthStatus}
+	switch {
+	case !probe.Supported:
+		check.status = setupFailed
+		check.problem = fmt.Sprintf("agent %q is not supported by this Orchestrator", id)
+		check.fix = "pick a supported agent from `ao agent ls` and pass --agent <id>"
+	case !probe.Installed:
+		check.status = setupNeedsHuman
+		check.problem = fmt.Sprintf("agent %s is not installed", id)
+		check.fix = c.setupInstallFix(ctx, id, res.readiness)
+	case check.auth == "unauthorized":
+		check.status = setupNeedsHuman
+		check.problem = fmt.Sprintf("agent %s is not signed in", id)
+		check.fix = setupSignInFix(c.signInFix(ctx, id), id, res.readiness)
+	case check.auth == "authorized" || check.auth == "not_applicable":
+		check.note = fmt.Sprintf("%s is signed in", id)
+	case check.auth == "configured":
+		check.note = fmt.Sprintf("%s has a saved sign-in that the first task will confirm", id)
+	default:
+		check.note = fmt.Sprintf("%s is installed; its sign-in could not be checked, so the first task will confirm it", id)
+	}
+	return check, nil
 }
 
 // firstReadyAgent returns the first agent the daemon calls ready, else the
@@ -733,6 +765,30 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 	res.Agent.Worker = firstNonEmpty(want.Worker.Agent, res.Agent.Worker)
 	res.Agent.Orchestrator = firstNonEmpty(want.Orchestrator.Agent, res.Agent.Orchestrator)
 
+	if len(conflicts) == 0 {
+		// The project keeps agents the agent step did not check: check them
+		// too, so ready means the project's own agents can run.
+		for _, id := range uniqueStrings(res.Agent.Worker, res.Agent.Orchestrator) {
+			if res.checked[id] {
+				continue
+			}
+			check, err := c.setupCheckAgent(ctx, id, res)
+			if err != nil {
+				step := setupStep{Step: setupStepProject, Status: setupFailed, Detail: err.Error()}
+				return &step, ""
+			}
+			if check.problem != "" {
+				step := setupStep{
+					Step:   setupStepProject,
+					Status: check.status,
+					Detail: fmt.Sprintf("project %s is already registered and runs %s: %s", project.ID, id, check.problem),
+					Fix:    check.fix,
+				}
+				res.Project = setupProjectFrom(*project, true)
+				return &step, ""
+			}
+		}
+	}
 	if len(conflicts) > 0 {
 		step := setupStep{
 			Step:   setupStepProject,
@@ -933,8 +989,10 @@ func writeSetupResult(w io.Writer, res setupResult, opts setupOptions) error {
 		for i, a := range res.NextActions {
 			fmt.Fprintf(&b, "  %d. %s\n", i+1, a)
 		}
+	case opts.readOnly():
+		b.WriteString("\nNothing was changed. Run `ao setup` to apply.\n")
 	default:
-		b.WriteString("\nDry run: nothing was changed.\n")
+		b.WriteString("\nNot ready yet: see the failed step above.\n")
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
