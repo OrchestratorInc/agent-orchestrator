@@ -301,6 +301,25 @@ describe("ElicitationDock", () => {
 		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "decline", undefined);
 	});
 
+	it("sends no schema default for a skipped Claude question", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		const { properties } = optionalClaudeQuestions;
+		const withDefaults = {
+			...optionalClaudeQuestions,
+			properties: {
+				...properties,
+				question_0: { ...properties.question_0, default: "Native" },
+				question_1: { ...properties.question_1, default: "Go" },
+			},
+		};
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: withDefaults })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "decline", undefined);
+	});
+
 	it("offers no Skip on a required Claude question", () => {
 		render(<ElicitationDock activity={activity({ inputMode: "form", schema: claudeQuestions })} onResolve={vi.fn()} />);
 		expect(screen.queryByRole("button", { name: "Skip" })).not.toBeInTheDocument();

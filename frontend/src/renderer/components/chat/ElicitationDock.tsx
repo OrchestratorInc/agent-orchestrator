@@ -418,8 +418,11 @@ function FormRequest({
 			return;
 		}
 		const next = { ...values };
-		for (const [name] of visibleProperties) delete next[name];
-		Object.assign(next, initialValues(visibleProperties));
+		// Cleared, not reset: a schema default would send the question as answered.
+		for (const [name, property] of visibleProperties) {
+			if (property.type === "array") next[name] = [];
+			else delete next[name];
+		}
 		setValues(next);
 		setMissing(new Set());
 		if (hasNextQuestion) {
