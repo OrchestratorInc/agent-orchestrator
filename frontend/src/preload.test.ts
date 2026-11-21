@@ -467,29 +467,9 @@ describe("preload browser profile bridge", () => {
 		await bridge.browser.showProfileMenu({
 			viewId: "1:worker-1",
 			bounds: { x: 1, y: 2, width: 3, height: 4 },
-			labels: {
-				temporary: "Temporary",
-				manage: "Manage",
-				switchTitle: "Switch",
-				switchMessage: "Reload",
-				switchDetail: "Unsaved",
-				cancel: "No",
-				confirm: "Yes",
-			},
+			labels: { temporary: "Temporary", manage: "Manage" },
 		});
-		await bridge.browser.selectProfile({
-			viewId: "1:worker-1",
-			profileId: null,
-			labels: {
-				temporary: "Temporary",
-				manage: "Manage",
-				switchTitle: "Switch",
-				switchMessage: "Reload",
-				switchDetail: "Unsaved",
-				cancel: "No",
-				confirm: "Yes",
-			},
-		});
+		await bridge.browser.selectProfile({ viewId: "1:worker-1", profileId: null, confirmed: true });
 		await bridge.browser.historySuggestions({ viewId: "1:worker-1", query: "git" });
 		await bridge.browser.historyFavicon({ viewId: "1:worker-1", url: "https://github.com/openai" });
 		await bridge.browser.captureScreenshot("1:worker-1");
@@ -510,7 +490,7 @@ describe("preload browser profile bridge", () => {
 
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(1, "browser:profile:get", "1:worker-1");
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(2, "browser:profile:menu", expect.objectContaining({ viewId: "1:worker-1" }));
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(3, "browser:profile:select", expect.objectContaining({ viewId: "1:worker-1", profileId: null }));
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(3, "browser:profile:select", { viewId: "1:worker-1", profileId: null, confirmed: true });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(4, "browser:history:suggest", { viewId: "1:worker-1", query: "git" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(5, "browser:history:favicon", { viewId: "1:worker-1", url: "https://github.com/openai" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(6, "browser:captureScreenshot", "1:worker-1");
@@ -547,6 +527,30 @@ describe("preload browser profile bridge", () => {
 		expect(manageListener).toHaveBeenCalledWith("1:worker-1");
 		manageDispose();
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:profileManage", manageWrapped);
+
+		const confirmListener = vi.fn();
+		const confirmDispose = bridge.browser.onProfileSwitchConfirm(confirmListener);
+		const confirmWrapped = electronMocks.listeners.get("browser:profileSwitchConfirm");
+		confirmWrapped?.({}, { viewId: "1:worker-1", profileId: null });
+		confirmWrapped?.({}, { viewId: "1:worker-1", profileId: "work" });
+		confirmWrapped?.({}, { viewId: "1:worker-1" });
+		confirmWrapped?.({}, { viewId: 42, profileId: null });
+		expect(confirmListener.mock.calls).toEqual([
+			[{ viewId: "1:worker-1", profileId: null }],
+			[{ viewId: "1:worker-1", profileId: "work" }],
+		]);
+		confirmDispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("browser:profileSwitchConfirm", confirmWrapped);
+
+		const failedListener = vi.fn();
+		const failedDispose = bridge.browser.onProfileSwitchFailed(failedListener);
+		const failedWrapped = electronMocks.listeners.get("browser:profileSwitchFailed");
+		failedWrapped?.({}, { viewId: "1:worker-1", message: "Profile storage is unavailable." });
+		failedWrapped?.({}, { viewId: "1:worker-1" });
+		expect(failedListener).toHaveBeenCalledTimes(1);
+		expect(failedListener).toHaveBeenCalledWith({ viewId: "1:worker-1", message: "Profile storage is unavailable." });
+		failedDispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("browser:profileSwitchFailed", failedWrapped);
 
 		const progressListener = vi.fn();
 		const progressDispose = bridge.browserProfiles.onImportProgress(progressListener);

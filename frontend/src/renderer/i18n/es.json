@@ -648,6 +648,8 @@
 	"browser.profile.switchTitle": "¿Cambiar el perfil?",
 	"browser.profile.switchMessage": "Cambiar de perfil volverá a cargar las páginas del navegador.",
 	"browser.profile.switchDetail": "Se puede perder el estado no guardado de la página.",
+	"browser.profile.switchConfirm": "Cambiar perfil",
+	"browser.profile.switchFailed": "No se pudo cambiar el perfil",
 	"browser.queued": "En cola",
 	"browser.queuedCount": "En cola ({{count}})",
 	"browser.recentlyClosed": "Cerradas recientemente",

@@ -644,6 +644,8 @@
 	"browser.profile.switchTitle": "Profil wechseln?",
 	"browser.profile.switchMessage": "Beim Wechseln des Profils werden die Browserseiten neu geladen.",
 	"browser.profile.switchDetail": "Nicht gespeicherte Seitenzustände können verloren gehen.",
+	"browser.profile.switchConfirm": "Profil wechseln",
+	"browser.profile.switchFailed": "Profil konnte nicht gewechselt werden",
 	"browser.queued": "In Warteschlange",
 	"browser.queuedCount": "In Warteschlange ({{count}})",
 	"browser.recentlyClosed": "Kürzlich geschlossen",

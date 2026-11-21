@@ -644,6 +644,8 @@
 	"browser.profile.switchTitle": "切换配置文件？",
 	"browser.profile.switchMessage": "切换配置文件将重新加载浏览器页面。",
 	"browser.profile.switchDetail": "未保存的页面状态可能会丢失。",
+	"browser.profile.switchConfirm": "切换配置文件",
+	"browser.profile.switchFailed": "无法切换配置文件",
 	"browser.queued": "已排队",
 	"browser.queuedCount": "已排队（{{count}}）",
 	"browser.recentlyClosed": "最近关闭",
