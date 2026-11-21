@@ -115,7 +115,8 @@ func (s *server) chatTurnInFlight(ctx context.Context, id string) (bool, error) 
 }
 
 func notFound(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not_found")
+	var status daemonStatusError
+	return errors.As(err, &status) && status.status == http.StatusNotFound
 }
 
 func waitSessionIDs(args map[string]any) ([]string, error) {
@@ -173,7 +174,7 @@ func callSessionWait(ctx context.Context, s *server, args map[string]any) (any, 
 			}
 			switch {
 			case busy:
-			case activity == "waiting_input" || activity == "blocked":
+			case activity == "waiting_input" || activity == "blocked" || activity == "exited" || summary["provisionState"] == "failed":
 				exact = true
 			case summary["mode"] == "chat" && summary["isTerminated"] != true:
 				inFlight, err := s.chatTurnInFlight(ctx, id)

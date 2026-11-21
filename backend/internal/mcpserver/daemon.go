@@ -25,6 +25,13 @@ func NewDaemonClient() Daemon {
 
 type daemonClient struct{ http *http.Client }
 
+type daemonStatusError struct {
+	status int
+	text   string
+}
+
+func (e daemonStatusError) Error() string { return e.text }
+
 func (d daemonClient) GetJSON(ctx context.Context, path string, out any) error {
 	return d.do(ctx, http.MethodGet, path, nil, out)
 }
@@ -80,7 +87,7 @@ func (d daemonClient) do(ctx context.Context, method, path string, body, out any
 		var e struct{ Message, Code, RequestID string }
 		_ = json.NewDecoder(resp.Body).Decode(&e)
 		if e.Message == "" {
-			return fmt.Errorf("daemon returned HTTP %d", resp.StatusCode)
+			return daemonStatusError{resp.StatusCode, fmt.Sprintf("daemon returned HTTP %d", resp.StatusCode)}
 		}
 		msg := e.Message
 		if e.Code != "" {
@@ -89,7 +96,7 @@ func (d daemonClient) do(ctx context.Context, method, path string, body, out any
 		if e.RequestID != "" {
 			msg += " [request " + e.RequestID + "]"
 		}
-		return errors.New(msg)
+		return daemonStatusError{resp.StatusCode, msg}
 	}
 	if out == nil || resp.StatusCode == http.StatusNoContent {
 		return nil

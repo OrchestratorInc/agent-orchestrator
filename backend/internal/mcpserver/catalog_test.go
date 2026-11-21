@@ -527,15 +527,13 @@ func TestSessionWaitDoesNotBlockOtherRequestsAndCanBeCancelled(t *testing.T) {
 		mcpCall("session_wait", map[string]any{"sessionIds": []string{"ao-2"}, "timeoutSec": 110}),
 		`{"jsonrpc":"2.0","id":8,"method":"ping"}`,
 		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}`,
+		`{"jsonrpc":"2.0","id":9,"method":"ping"}`,
 	)
-	if len(replies) != 2 || string(replies[0].ID) != "8" || string(replies[1].ID) != "7" {
-		t.Fatalf("replies = %+v", replies)
+	if len(replies) != 2 || string(replies[0].ID) != "8" || string(replies[1].ID) != "9" {
+		t.Fatalf("replies = %+v; a cancelled wait must get no reply and must not hold the pings back", replies)
 	}
 	if elapsed := time.Since(started); elapsed > 10*time.Second {
 		t.Errorf("a cancelled wait took %s", elapsed)
-	}
-	if !strings.Contains(replies[1].Result.Content[0].Text, `"timedOut":true`) {
-		t.Errorf("wait reply = %+v", replies[1].Result)
 	}
 }
 
@@ -633,5 +631,45 @@ func TestActToolIsRefusedWhenTheCallerHasNoConversation(t *testing.T) {
 		if call.method == "POST" {
 			t.Errorf("a side chat stopped a session: %+v", call)
 		}
+	}
+}
+
+func TestSessionWaitReturnsForAChatSessionThatCannotWork(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	for name, session := range map[string]string{
+		"failed to start": `{"id":"ao-2","mode":"chat","provisionState":"failed","activity":{"state":"idle"}}`,
+		"agent exited":    `{"id":"ao-2","mode":"chat","provisionState":"ready","activity":{"state":"exited"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			startFakeDaemon(t, map[string]func() (int, string){
+				"GET /api/v1/sessions/ao-2":              fixed(200, `{"session":`+session+`}`),
+				"GET /api/v1/sessions/ao-2/conversation": fixed(200, `{"turns":[{"state":"queued"}]}`),
+			})
+			if text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2"}, "timeoutSec": 5}); isError || !strings.Contains(text, `"timedOut":false`) {
+				t.Fatalf("isError = %v, text = %s", isError, text)
+			}
+		})
+	}
+}
+
+func TestSessionWaitTreatsABare404AsAMissingSession(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	startFakeDaemon(t, map[string]func() (int, string){"GET /api/v1/sessions/gone": fixed(404, ``)})
+	if text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"gone"}, "timeoutSec": 5}); isError || !strings.Contains(text, `"timedOut":false`) || !strings.Contains(text, "HTTP 404") {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+}
+
+func TestToolsForAnotherSessionRefuseThisSession(t *testing.T) {
+	for _, tool := range []string{"session_stop", "session_send", "session_interrupt", "session_restore", "session_switch", "pending_respond"} {
+		t.Run(tool, func(t *testing.T) {
+			daemon := startFakeDaemon(t, nil)
+			text, isError := callTool(t, tool, map[string]any{"sessionId": "ao-1", "message": "m", "harness": "codex", "requestId": "r", "decisionId": "d"})
+			if !isError || !strings.Contains(text, "this session") || len(daemon.seen()) != 0 {
+				t.Fatalf("isError = %v, calls = %+v, text = %s", isError, daemon.seen(), text)
+			}
+		})
 	}
 }

@@ -19,11 +19,11 @@ const (
 )
 
 type catalogTool struct {
-	name, title, desc string
-	act, ungated      bool
-	props             map[string]any
-	required          []string
-	call              func(ctx context.Context, s *server, args map[string]any) (any, error)
+	name, title, desc     string
+	act, ungated, notSelf bool
+	props                 map[string]any
+	required              []string
+	call                  func(ctx context.Context, s *server, args map[string]any) (any, error)
 }
 
 type routeTool struct {
@@ -113,6 +113,9 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 			return mcpToolError(fmt.Errorf("%s is required", name))
 		}
 	}
+	if t.notSelf && args["sessionId"] == callerSession() {
+		return mcpToolError(errors.New("sessionId is this session; this tool acts on another session"))
+	}
 	if t.act && !t.ungated {
 		if err := s.requireFullAccess(ctx); err != nil {
 			return mcpToolError(err)
@@ -149,10 +152,10 @@ func (s *server) requireFullAccess(ctx context.Context) error {
 	}
 	if mode := conversation.Settings.ApprovalMode; mode != fullAccessMode {
 		if mode == "" {
-			mode = "default"
+			mode = "not set"
 		}
 		return fmt.Errorf("this session's permission mode is %q. Tools that start or change sessions need full access (%s). "+
-			"Ask the user to switch this session to full access, or to do this step in Orchestrator", mode, fullAccessMode)
+			"Ask the user to set this session to full access in its mode picker, or to do this step in Orchestrator", mode, fullAccessMode)
 	}
 	if conversation.Settings.PlanMode {
 		return errors.New("this session is in plan mode. Tools that start or change sessions do not run while it plans")
@@ -295,6 +298,11 @@ func ownSession(t catalogTool) catalogTool {
 	return t
 }
 
+func otherSession(t catalogTool) catalogTool {
+	t.notSelf = true
+	return t
+}
+
 func reviewTriggerBody(caller string, args map[string]any) map[string]any {
 	rerun, _ := args["rerun"].(bool)
 	return map[string]any{"requesterSessionId": caller, "source": "agent", "rejectReviewedHead": !rerun, "enableAutoInject": true}
@@ -362,6 +370,7 @@ var catalog = []catalogTool{
 		name: "session_wait", title: "Wait for sessions",
 		desc: "Waits until every listed session stops working: it is idle, needs input, has exited, or failed to start. " +
 			"Use it instead of polling session_list. A timeout does not stop the sessions: timedOut is true and you can call it again. " +
+			"It follows a Chat session's turns exactly; for a Terminal session it reads activity, so check the result with session_read. " +
 			"A session that needs input is in the answer with status needs_input: read pending_list for it.",
 		props: map[string]any{
 			"sessionIds": map[string]any{"type": "array", "minItems": 1, "maxItems": maxWaitSessions, "items": map[string]any{"type": "string"},
@@ -418,19 +427,19 @@ var catalog = []catalogTool{
 		required: []string{"prompt"},
 		call:     callSessionSpawn,
 	},
-	routed("session_send", "Send a message to a session", "Sends a message to another session's agent. The agent reads it as its next instruction.", true,
+	otherSession(routed("session_send", "Send a message to a session", "Sends a message to another session's agent. The agent reads it as its next instruction.", true,
 		map[string]any{"sessionId": otherSessionProp, "message": stringProp("The message, at most 4096 bytes.")},
 		[]string{"sessionId", "message"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/send",
-			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"senderSessionId": caller} }}),
-	routed("session_interrupt", "Interrupt a session's turn", "Stops the turn a Chat session runs now. The session stays, and a later message starts it again.", true,
+			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"senderSessionId": caller} }})),
+	otherSession(routed("session_interrupt", "Interrupt a session's turn", "Stops the turn a Chat session runs now. The session stays, and a later message starts it again.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
-		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/conversation/interrupt"}),
-	routed("session_stop", "Stop a session", "Terminates a session. Its worktree and history stay, and session_restore brings it back.", true,
+		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/conversation/interrupt"})),
+	otherSession(routed("session_stop", "Stop a session", "Terminates a session. Its worktree and history stay, and session_restore brings it back.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/kill",
-			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"callerSessionId": caller} }}),
-	routed("session_restore", "Restore a session", "Restores a terminated session, or resumes an agent that exited.", true,
+			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"callerSessionId": caller} }})),
+	otherSession(routed("session_restore", "Restore a session", "Restores a terminated session, or resumes an agent that exited.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/restore", pick: func(m map[string]any) any {
 			out := keep(m, "ok", "restoreMode", "sessionId")
@@ -438,7 +447,7 @@ var catalog = []catalogTool{
 				out["session"] = sessionSummary(session)
 			}
 			return out
-		}}),
+		}})),
 	ownSession(routed("session_rename", "Rename this session", "Sets the name this session shows in the sidebar.", true,
 		map[string]any{"displayName": stringProp("The new name.")}, []string{"displayName"},
 		routeTool{method: http.MethodPatch, path: "sessions/{sessionId}"})),
@@ -449,7 +458,7 @@ var catalog = []catalogTool{
 		required: []string{"sessionId"},
 		call:     callSessionFork,
 	},
-	routed("session_switch", "Switch a session's agent", "Moves a session to another coding agent. The conversation continues there.", true,
+	otherSession(routed("session_switch", "Switch a session's agent", "Moves a session to another coding agent. The conversation continues there.", true,
 		map[string]any{
 			"sessionId": otherSessionProp,
 			"harness":   stringProp("Agent id to switch to. It must differ from the session's current agent."),
@@ -457,9 +466,9 @@ var catalog = []catalogTool{
 			"effort":    stringProp("Reasoning effort for the new agent."),
 		}, []string{"sessionId", "harness"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/provider-switch", rename: map[string]string{"harness": "targetHarness"},
-			pick: func(m map[string]any) any { return keep(m, "status", "warnings", "settingsUpdated", "stoppedTurn") }}),
+			pick: func(m map[string]any) any { return keep(m, "status", "warnings", "settingsUpdated", "stoppedTurn") }})),
 	{
-		name: "pending_respond", title: "Answer a pending request", act: true,
+		name: "pending_respond", title: "Answer a pending request", act: true, notSelf: true,
 		desc: "Answers an approval or a question from pending_list. For an approval, give one of its decision ids. " +
 			"For a question, give action accept with content, or decline.",
 		props: map[string]any{

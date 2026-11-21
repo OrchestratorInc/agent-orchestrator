@@ -106,10 +106,13 @@ func (s *server) serveMCP(ctx context.Context, in io.Reader, out io.Writer) erro
 				waitsMu.Unlock()
 				waits.Go(func() {
 					defer cancel()
-					_ = reply(s.handleMCP(waitCtx, state, line))
+					resp := s.handleMCP(waitCtx, state, line)
 					waitsMu.Lock()
 					delete(cancelWait, id)
 					waitsMu.Unlock()
+					if waitCtx.Err() == nil {
+						_ = reply(resp)
+					}
 				})
 			default:
 				if err := reply(s.handleMCP(ctx, state, line)); err != nil {
