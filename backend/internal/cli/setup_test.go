@@ -841,3 +841,22 @@ func TestSetupCheckReportsNonGitAndUnbornPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupBothRoleFlagsIgnoreAnUnusedAgentFlag(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/gemini/probe", 200, `{"agent":{"id":"gemini","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "gemini", "--worker-agent", "codex", "--orchestrator-agent", "claude-code", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if d.saw("POST /api/v1/agents/gemini/probe") {
+		t.Fatal("setup checked --agent although both roles override it")
+	}
+	var body addProjectRequest
+	if err := json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body); err != nil || body.Config == nil ||
+		body.Config.Worker.Agent != "codex" || body.Config.Orchestrator.Agent != "claude-code" {
+		t.Fatalf("POST /projects body = %s", d.bodies["POST /api/v1/projects"])
+	}
+}

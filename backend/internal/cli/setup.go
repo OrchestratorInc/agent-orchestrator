@@ -397,11 +397,12 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	var callerNote string
 	saved := c.setupSavedAgents(ctx, opts)
 	switch {
+	case opts.workerAgent != "" && opts.orchestratorAgent != "":
+		// Both roles are named, so no default (not even --agent) is used or
+		// checked.
+		agent.ID, agent.Source = opts.workerAgent, "flag"
 	case opts.agent != "":
 		agent.ID, agent.Source = opts.agent, "flag"
-	case opts.workerAgent != "" && opts.orchestratorAgent != "":
-		// Both roles are named, so no default is needed.
-		agent.ID, agent.Source = opts.workerAgent, "flag"
 	case saved != nil:
 		// A registered project keeps the agents it was set up with unless
 		// the caller asks for others.
