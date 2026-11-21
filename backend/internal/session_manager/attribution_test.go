@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/attribution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
 func attributionWorktree(t *testing.T, root, name string) string {
@@ -510,6 +511,62 @@ func TestSpawnDecisionHoldsWhenRecordingTheTrailerFails(t *testing.T) {
 	}
 }
 
+// The spawn reads the beta once: a toggle between the trailer and the footer
+// decisions cannot split them.
+func TestSpawnAttributionReadsTheBetaOnce(t *testing.T) {
+	ctx := context.Background()
+	m, st, _, _ := newManager()
+	project := st.projects["mer"]
+	project.RepoOriginURL = "https://github.com/o/r"
+	st.projects["mer"] = project
+	reads := 0
+	// On for the first read only, as if turned off right after it.
+	m.SetCommitAttributionEnabled(func(context.Context) bool { reads++; return reads == 1 })
+	if got := m.recordSpawnAttributionFor(ctx, project, "mer-1"); got != attribution.Bot.CoAuthor() {
+		t.Fatalf("trailer = %q, want the bot", got)
+	}
+	if footer, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); !recorded || !footer {
+		t.Fatalf("footer = %v (recorded %v), want true like the trailer", footer, recorded)
+	}
+	if reads != 1 {
+		t.Fatalf("beta read %d times, want once", reads)
+	}
+}
+
+// A spawn that fails before its workspace setup leaves no pending decision
+// behind, whether it runs synchronously or in the background.
+func TestFailedSpawnForgetsItsAttributionDecision(t *testing.T) {
+	ctx := context.Background()
+	t.Run("synchronous", func(t *testing.T) {
+		m, _, _, ws := newManager()
+		m.SetCommitAttributionEnabled(func(context.Context) bool { return true })
+		ws.createErr = errors.New("worktree add failed")
+		if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err == nil {
+			t.Fatal("spawn succeeded, want the worktree failure")
+		}
+		if n := len(m.spawnAttribution); n != 0 {
+			t.Fatalf("%d pending decisions after the failed spawn, want none", n)
+		}
+	})
+	t.Run("asynchronous chat", func(t *testing.T) {
+		m, _, _ := newChatManager(&recordingLauncher{})
+		m.browserCapabilities = browsersvc.NewAuthority()
+		m.SetCommitAttributionEnabled(func(context.Context) bool { return true })
+		deferred := deferredBackground(m)
+		m.workspace.(*fakeWorkspace).createErr = errors.New("worktree add failed")
+		if _, _, _, err := m.Spawn(ctx, asyncChatSpawnConfig("do the thing")); err != nil {
+			t.Fatalf("spawn: %v", err)
+		}
+		if n := len(m.spawnAttribution); n != 0 {
+			t.Fatalf("%d pending decisions once the spawn answered, want none (carried by the spawn)", n)
+		}
+		(*deferred)[0]()
+		if n := len(m.spawnAttribution); n != 0 {
+			t.Fatalf("%d pending decisions after the failed start, want none", n)
+		}
+	})
+}
+
 // A session with no recorded choice, from before choices were kept, follows
 // the current settings, as it did before.
 func TestPRFooterPromptFollowsSettingsWithoutARecordedChoice(t *testing.T) {
@@ -571,7 +628,7 @@ func TestPRFooterChoiceIsNotRecordedWhenReposCannotBeListed(t *testing.T) {
 	m.SetCommitAttributionEnabled(func(context.Context) bool { return true })
 
 	st.workspaceRepoErr = errors.New("database is locked")
-	m.recordPRFooterChoice(ctx, project, "mer-1")
+	m.recordPRFooterChoice(ctx, project, "mer-1", true)
 	if _, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); recorded {
 		t.Fatal("recorded a footer choice from a failed repository lookup")
 	}
@@ -583,9 +640,41 @@ func TestPRFooterChoiceIsNotRecordedWhenReposCannotBeListed(t *testing.T) {
 	if !strings.Contains(prompt, attribution.PRFooter) {
 		t.Fatal("footer missing once the repository lookup works")
 	}
-	m.recordPRFooterChoice(ctx, project, "mer-1")
+	m.recordPRFooterChoice(ctx, project, "mer-1", true)
 	if footer, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); !recorded || !footer {
 		t.Fatalf("after a working lookup: footer %v recorded %v; want true recorded", footer, recorded)
+	}
+}
+
+// Project setup that points the worktree's core.hooksPath at the repository's
+// own hooks (as a hook manager does) keeps the session's trailer, and the
+// dispatcher still runs those hooks.
+func TestSetupThatReplacesHooksPathKeepsAttribution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix git hook scripts")
+	}
+	ctx := context.Background()
+	root := t.TempDir()
+	wt := filepath.Join(root, "session", "s-1")
+	attributionRepo(t, filepath.Join(root, "repo"), wt, "orchestrator/s-1/root")
+	beta := true
+	m, _ := attributionManager(t, root, &beta)
+	setup := `mkdir -p .githooks && ` +
+		`printf '#!/bin/sh\necho ran >> "$(git rev-parse --git-common-dir)/repo-hook.log"\n' > .githooks/commit-msg && ` +
+		`chmod +x .githooks/commit-msg && git config --worktree core.hooksPath .githooks`
+	project := domain.ProjectRecord{ID: "p", Path: filepath.Join(root, "repo"), Config: domain.ProjectConfig{PostCreate: []string{setup}}}
+	if err := m.provisionWorkspace(ctx, project, "s-1", wt); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitMessage(t, wt); !strings.Contains(msg, "Co-authored-by: "+attribution.Bot.CoAuthor()) {
+		t.Fatalf("commit after setup lost the trailer:\n%s", msg)
+	}
+	common, err := exec.Command("git", "-C", wt, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(common)), "repo-hook.log")); err != nil || !strings.Contains(string(log), "ran") {
+		t.Fatalf("the repository's own commit-msg hook did not run: %v %q", err, log)
 	}
 }
 

@@ -1407,6 +1407,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnArtifactDir, err)
 		}
 	}
+	// buildSpawnTexts decides attribution for this spawn. Whatever happens
+	// next, the decision is gone when Spawn returns: the synchronous path's
+	// setup has applied it, and the async path carries it in its own state.
+	defer m.takeSpawnAttribution(id)
 	prompt, systemPrompt, err := m.buildSpawnTexts(ctx, cfg, id)
 	if err != nil {
 		m.cleanupArtifactDir(id)
@@ -1512,7 +1516,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// The attachments are named now (spawnAttachmentRefs is derived, not read
 	// from disk) so the opening prompt is complete before the files land.
 	if asyncChat {
+		attribution, decided := m.takeSpawnAttribution(id)
 		started, promptBytes, systemPromptBytes, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
+			attribution:       attribution,
+			attributionKnown:  decided,
 			cfg:               cfg,
 			project:           project,
 			projectKind:       projectKind,
@@ -7452,7 +7459,7 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 // that session started with.
 func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) error {
 	// Before post-create commands, so commits they make are credited too.
-	m.applyCommitAttribution(ctx, project, sessionID, workspacePath, choice)
+	coAuthor := m.applyCommitAttribution(ctx, project, sessionID, workspacePath, choice)
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
@@ -7471,7 +7478,7 @@ func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.Pro
 		return err
 	}
 	// Setup may have installed a repository hook that needs a dispatcher.
-	m.refreshAttributionHooks(ctx, project, workspacePath)
+	m.refreshAttributionHooks(ctx, project, workspacePath, coAuthor)
 	return nil
 }
 

@@ -27,12 +27,6 @@ func (m *Manager) commitAttributionEnabled(ctx context.Context) bool {
 	return enabled != nil && enabled(ctx)
 }
 
-// commitTrailerWanted reports whether new commits in this project's sessions
-// get the Co-authored-by: orchestrator-inc[bot] trailer.
-func (m *Manager) commitTrailerWanted(ctx context.Context, project domain.ProjectRecord) bool {
-	return !project.Config.Attribution.DisableCommitTrailer && m.commitAttributionEnabled(ctx)
-}
-
 // prFooterWanted reports whether agents in this project end PR bodies with the
 // Orchestrator footer. Projects without a remote have no PRs to sign; in a
 // workspace project the remotes may live only on its child repositories.
@@ -45,7 +39,12 @@ func (m *Manager) prFooterWanted(ctx context.Context, project domain.ProjectReco
 // when a workspace's repositories could not be listed, so the footer is left
 // out for now but no choice is recorded for the session.
 func (m *Manager) prFooterChoice(ctx context.Context, project domain.ProjectRecord) (want, known bool) {
-	if project.Config.Attribution.DisablePRFooter || !m.commitAttributionEnabled(ctx) {
+	return m.prFooterChoiceWith(ctx, project, m.commitAttributionEnabled(ctx))
+}
+
+// prFooterChoiceWith is prFooterChoice with the beta already read.
+func (m *Manager) prFooterChoiceWith(ctx context.Context, project domain.ProjectRecord, enabled bool) (want, known bool) {
+	if project.Config.Attribution.DisablePRFooter || !enabled {
 		return false, true
 	}
 	if strings.TrimSpace(project.RepoOriginURL) != "" {
@@ -104,19 +103,17 @@ func (m *Manager) recordSpawnAttribution(ctx context.Context, projectID domain.P
 // decision whether or not recording it succeeded, so neither a failed write
 // nor a row left by an earlier attempt can change it. Returns the trailer.
 func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID) string {
+	// The beta is read once, so one toggle cannot give the trailer and the
+	// footer different answers.
+	enabled := m.commitAttributionEnabled(ctx)
 	coAuthor := ""
-	if m.commitTrailerWanted(ctx, project) {
+	if enabled && !project.Config.Attribution.DisableCommitTrailer {
 		coAuthor = attribution.Bot.CoAuthor()
 	}
 	if sessionID == "" {
 		return coAuthor
 	}
-	m.spawnAttributionMu.Lock()
-	if m.spawnAttribution == nil {
-		m.spawnAttribution = map[domain.SessionID]string{}
-	}
-	m.spawnAttribution[sessionID] = coAuthor
-	m.spawnAttributionMu.Unlock()
+	m.keepSpawnAttribution(sessionID, coAuthor)
 	if m.store != nil {
 		// Recorded even without a trailer, which also clears one an earlier
 		// attempt recorded, so a recreated worktree gets this decision.
@@ -124,8 +121,19 @@ func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.
 			m.logger.Warn("attribution: record session choice", "sessionID", sessionID, "error", err)
 		}
 	}
-	m.recordPRFooterChoice(ctx, project, sessionID)
+	m.recordPRFooterChoice(ctx, project, sessionID, enabled)
 	return coAuthor
+}
+
+// keepSpawnAttribution holds a trailer decision for the session's workspace
+// setup, which takes it.
+func (m *Manager) keepSpawnAttribution(sessionID domain.SessionID, coAuthor string) {
+	m.spawnAttributionMu.Lock()
+	defer m.spawnAttributionMu.Unlock()
+	if m.spawnAttribution == nil {
+		m.spawnAttribution = map[domain.SessionID]string{}
+	}
+	m.spawnAttribution[sessionID] = coAuthor
 }
 
 // takeSpawnAttribution returns and forgets the trailer decision a spawn kept
@@ -141,11 +149,11 @@ func (m *Manager) takeSpawnAttribution(sessionID domain.SessionID) (string, bool
 // recordPRFooterChoice keeps whether a starting session's agents sign PRs, so
 // its prompt says the same when it is rebuilt for a relaunch, a restore or a
 // switch between Chat and the terminal, whatever the settings say by then.
-func (m *Manager) recordPRFooterChoice(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID) {
+func (m *Manager) recordPRFooterChoice(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, enabled bool) {
 	if m.store == nil || sessionID == "" {
 		return
 	}
-	footer, known := m.prFooterChoice(ctx, project)
+	footer, known := m.prFooterChoiceWith(ctx, project, enabled)
 	if !known {
 		// Not settled: later prompts follow the settings until a lookup works.
 		return
@@ -179,9 +187,9 @@ func (m *Manager) sessionPRFooter(ctx context.Context, project domain.ProjectRec
 // child repository has its own worktree below it; every one is configured.
 // Failures are logged, never fatal: a missing trailer must not stop a session
 // from starting.
-func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) {
+func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) string {
 	if workspacePath == "" {
-		return
+		return ""
 	}
 	coAuthor := ""
 	switch choice {
@@ -205,7 +213,7 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 	base := attribution.HooksDir(m.dataDir)
 	if coAuthor == "" {
 		if _, err := os.Stat(base); err != nil {
-			return
+			return ""
 		}
 	}
 	for _, worktree := range m.sessionGitWorktrees(ctx, project, workspacePath) {
@@ -221,13 +229,18 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 			m.logger.Warn("attribution: configure worktree", "path", worktree, "error", err)
 		}
 	}
+	return coAuthor
 }
 
-// refreshAttributionHooks rescans the configured worktrees of a session for
-// on-demand repository hooks (reference-transaction and the like) after project
-// setup ran, so a hook setup installed still runs. Without the dispatcher for
-// its name git would skip it, since core.hooksPath points at Orchestrator's dir.
-func (m *Manager) refreshAttributionHooks(ctx context.Context, project domain.ProjectRecord, workspacePath string) {
+// refreshAttributionHooks runs after project setup. It rescans the configured
+// worktrees of a session for on-demand repository hooks (reference-transaction
+// and the like) that setup installed, so they still run: without the
+// dispatcher for its name git would skip one, since core.hooksPath points at
+// Orchestrator's dir. Setup can also point a worktree's core.hooksPath at the
+// repository's own hooks (a hook manager does); a session with the trailer
+// (coAuthor) is then configured again, which saves that path so the
+// dispatcher still runs those hooks.
+func (m *Manager) refreshAttributionHooks(ctx context.Context, project domain.ProjectRecord, workspacePath, coAuthor string) {
 	hooksDir := attribution.HooksDir(m.dataDir)
 	if workspacePath == "" || len(project.Config.PostCreate) == 0 {
 		return
@@ -237,6 +250,12 @@ func (m *Manager) refreshAttributionHooks(ctx context.Context, project domain.Pr
 	}
 	for _, worktree := range m.sessionGitWorktrees(ctx, project, workspacePath) {
 		if !attribution.ConfiguredFor(ctx, worktree, hooksDir) {
+			if coAuthor == "" {
+				continue
+			}
+			if err := attribution.ConfigureWorktree(ctx, worktree, hooksDir, coAuthor); err != nil {
+				m.logger.Warn("attribution: configure worktree after setup", "path", worktree, "error", err)
+			}
 			continue
 		}
 		if err := attribution.RefreshRepositoryHooks(ctx, worktree, hooksDir); err != nil {
