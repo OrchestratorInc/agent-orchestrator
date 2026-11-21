@@ -114,6 +114,7 @@ vi.mock("../mux", () => ({
 	},
 }));
 vi.mock("../native-header-items", () => ({ glassHeaderControl: () => ({}) }));
+vi.mock("../sessionTopbar", () => ({ useSessionTopbarActions: () => [], sessionTopbarToolbarButtons: () => [], SessionTopbarPills: ({ children }: { children?: unknown }) => children }));
 vi.mock("../store", () => ({
 	useApp: () => ({
 		sessions: fixtures.sessions,

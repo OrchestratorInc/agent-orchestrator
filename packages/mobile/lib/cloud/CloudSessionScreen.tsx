@@ -46,6 +46,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { space } from "../tokens";
 import { toolbarIcon } from "../toolbarIcon";
+import { sessionTopbarToolbarButtons, useSessionTopbarActions } from "../sessionTopbar";
 import { Button, EmptyState } from "../ui";
 import { cloudAgentLabel } from "./agents";
 import { cloudAttachmentUri, cloudUploadDeps } from "./attachmentFiles";
@@ -409,11 +410,14 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		Keyboard.dismiss();
 		router.push(chatSheetRoute({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: (action) => menuActionsRef.current[action]?.() }));
 	}, [router, subscribeMenuGroups, title]);
+	// Desktop's session topbar actions lead "⋯": a worker's Orchestrator, an orchestrator's Board and New task.
+	const topbarActions = useSessionTopbarActions({ orchestrator: session?.kind === "orchestrator", projectId: session?.projectId || undefined, hostId: CLOUD_HOST_ID });
 	const headerItems = useMemo(() => hasSession ? (
 		<Stack.Toolbar placement="right">
+			{sessionTopbarToolbarButtons(topbarActions)}
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Session actions" onPress={openActions} />
 		</Stack.Toolbar>
-	) : null, [hasSession, openActions]);
+	) : null, [hasSession, openActions, topbarActions]);
 
 	// An `ao://sessions/…` link (an orchestrator naming the worker it spawned)
 	// opens that session's chat here, as the local chat does; any other link

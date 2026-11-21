@@ -61,7 +61,7 @@ describe("active turn controls", () => {
 	// PATCH. With the precedence inverted, renaming on the board changed the row
 	// and left this header showing the agent's auto-generated title.
 	it("prefers the session's name over the conversation title", () => {
-		expect(screenSource).toContain("const title = sessionName || conversation.snapshot?.title");
+		expect(screenSource).toContain('const title = isOrchestrator ? "Orchestrator" : sessionName || conversation.snapshot?.title');
 	});
 
 	// The actions sheet holds only Shell, Preview, Artifacts, Pin, PR Review, Compact and Archive.

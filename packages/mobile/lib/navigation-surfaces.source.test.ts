@@ -56,7 +56,7 @@ describe("navigation surfaces", () => {
 		expect(session).toContain("headerTitle: () => {");
 		expect(session).toContain('<Stack.Toolbar placement="right">');
 		// Android floats the "⋯" on a pill of its own, set as the bar's item.
-		expect(session).toContain('headerRight: menuReady ? () => <HeaderPillButton icon="more"');
+		expect(session).toContain('{menuReady ? <HeaderPillButton icon="more" label="Conversation actions"');
 		expect(session).not.toContain("resetHeaderRightForSwap");
 	});
 });

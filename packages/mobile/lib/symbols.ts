@@ -32,6 +32,10 @@ export const symbols = {
 	settings: { ios: "gearshape", android: "settings" },
 	notifications: { ios: "bell", android: "notifications" },
 	add: { ios: "plus", android: "add" },
+	// A session's way to its project's orchestrator, and an orchestrator's to
+	// its board: the desktop session topbar's Orchestrator and Board buttons.
+	orchestrator: { ios: "point.3.connected.trianglepath.dotted", android: "account_tree" },
+	board: { ios: "square.grid.2x2", android: "grid_view" },
 	// A header overflow. M3 stacks it vertically in a top app bar.
 	more: { ios: "ellipsis.circle", android: "more_vert" },
 	// An overflow inside a row or card, where a vertical glyph reads as a grip.

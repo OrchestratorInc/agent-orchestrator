@@ -10,6 +10,7 @@ export type { MaterialDrawableName, ToolbarIcon, ToolbarSymbol, ToolbarSymbolNam
 // drawable is required; every other module asks `materialDrawable`.
 const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	account_circle: require("../assets/icons/account_circle.xml"),
+	account_tree: require("../assets/icons/account_tree.xml"),
 	add: require("../assets/icons/add.xml"),
 	add_comment: require("../assets/icons/add_comment.xml"),
 	archive: require("../assets/icons/archive.xml"),
@@ -49,6 +50,7 @@ const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	filter_list: require("../assets/icons/filter_list.xml"),
 	find_in_page: require("../assets/icons/find_in_page.xml"),
 	folder: require("../assets/icons/folder.xml"),
+	grid_view: require("../assets/icons/grid_view.xml"),
 	group: require("../assets/icons/group.xml"),
 	history: require("../assets/icons/history.xml"),
 	host: require("../assets/icons/host.xml"),

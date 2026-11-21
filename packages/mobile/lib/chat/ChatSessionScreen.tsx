@@ -59,6 +59,7 @@ import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
+import { SessionTopbarPills, sessionTopbarToolbarButtons, useSessionTopbarActions } from "../sessionTopbar";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePushSettled } from "../usePushSettled";
@@ -361,7 +362,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This
 	// had that precedence inverted, so renaming from the board changed the row but
 	// left this header on the agent's auto-generated conversation title.
-	const title = sessionName || conversation.snapshot?.title || session.id;
+	// An orchestrator's header reads "Orchestrator", as its desktop tab does;
+	// the project is the subtitle.
+	const isOrchestrator = "projectName" in session || session.kind === "orchestrator";
+	const title = isOrchestrator ? "Orchestrator" : sessionName || conversation.snapshot?.title || session.id;
+	const topbarActions = useSessionTopbarActions({ orchestrator: isOrchestrator, projectId: session.projectId || undefined, hostId: currentHostId });
 	const projectName = "projectName" in session
 		? session.projectName
 		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
@@ -626,7 +631,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// What the menu shows, as plain values: the conversation streams, and the menu
 	// is rebuilt only when one of these changes, not on every event.
 	const menuSnapshot = conversation.snapshot;
-	const isOrchestrator = "projectName" in session;
 	const menuReady = Boolean(menuSnapshot);
 	// The daemon refuses to rename the project orchestrator.
 	const menuCanCompact = Boolean(menuSnapshot && can(menuSnapshot, "compaction")) && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
@@ -774,15 +778,21 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useLayoutEffect(() => {
 		if (!PILL_HEADER) return;
 		navigation.setOptions({
-			headerRight: menuReady ? () => <HeaderPillButton icon="more" label="Conversation actions" onPress={openActions} testID="header-more" /> : undefined,
+			headerRight: menuReady || topbarActions.length ? () => (
+				<SessionTopbarPills actions={topbarActions}>
+					{menuReady ? <HeaderPillButton icon="more" label="Conversation actions" onPress={openActions} testID="header-more" /> : null}
+				</SessionTopbarPills>
+			) : undefined,
 		});
 		return () => navigation.setOptions({ headerRight: undefined });
-	}, [menuReady, navigation, openActions]);
-	const headerItems = useMemo(() => menuReady && !PILL_HEADER ? (
+	}, [menuReady, navigation, openActions, topbarActions]);
+	// Desktop's session topbar actions (Orchestrator, or Board and New task) lead "⋯".
+	const headerItems = useMemo(() => (menuReady || topbarActions.length) && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
+			{sessionTopbarToolbarButtons(topbarActions)}
+			{menuReady ? <Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} /> : null}
 		</Stack.Toolbar>
-	) : null, [menuReady, openActions]);
+	) : null, [menuReady, openActions, topbarActions]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
