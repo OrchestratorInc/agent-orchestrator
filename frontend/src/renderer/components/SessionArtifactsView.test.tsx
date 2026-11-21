@@ -78,8 +78,8 @@ vi.mock("./ArtifactSnapshotThumbnail", async () => {
 	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
 });
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
-		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
+	ArtifactFileView: ({ active = true, cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { active?: boolean; cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
+		<div data-active={active ? "true" : "false"} data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
 			{`viewer:${path}`}
 			<button type="button" onClick={() => onEditingChange?.(true)}>start editing</button>
 			<button type="button" onClick={() => onEditingChange?.(false)}>stop editing</button>
@@ -1046,6 +1046,16 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
 
 		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
+	});
+
+	it("tells the open file whether the view is showing, so a video pauses when the inspector closes", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		const view = renderView(<SessionArtifactsView active request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+		expect(await screen.findByTestId("artifact-view")).toHaveAttribute("data-active", "true");
+
+		view.rerender(<SessionArtifactsView active={false} request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+
+		expect(screen.getByTestId("artifact-view")).toHaveAttribute("data-active", "false");
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {
