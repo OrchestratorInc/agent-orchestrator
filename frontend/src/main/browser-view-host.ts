@@ -49,6 +49,7 @@ import type {
   ShortcutChord,
 } from "../shared/shortcuts";
 import type { AgentBrowserRuntime } from "./agent-browser-runtime";
+import type { CredentialFiller } from "./browser-vault-fill";
 import type {
   AgentBrowserTarget,
   AgentBrowserTargetProvider,
@@ -543,6 +544,9 @@ export type BrowserViewHostOptions = {
   getKeybindingOverrides?: () => KeybindingOverrides;
   isKeybindingRecording?: () => boolean;
   agentBrowserRuntime?: AgentBrowserRuntime;
+  // Fills vault credentials at the edge and scrubs filled secrets from every
+  // result returned to the agent.
+  credentialFiller?: CredentialFiller;
   isCloseShellTerminalShortcutEnabled?: () => boolean;
   browserProfileStore?: BrowserProfileStore;
   browserHistoryStore?: BrowserHistoryStore;
@@ -4468,6 +4472,7 @@ export function createBrowserViewHost(
       if (action === "__destroy-session") {
         const viewId = viewIdsBySessionId.get(sessionId);
         await options.agentBrowserRuntime?.closeSession(sessionId);
+        options.credentialFiller?.forget(sessionId);
         if (viewId) destroy(viewId);
         return { destroyed: Boolean(viewId) };
       }
@@ -5068,7 +5073,23 @@ export function createBrowserViewHost(
             ) as BrowserDevToolsInput["operation"];
             return devtoolsAction(session, operation);
           }
-          case "screenshot":
+          case "screenshot": {
+            // A typed 2FA code may be visible in this tab's document. Checked
+            // now as a fast failure, and again for the tab the queued capture
+            // actually reads, since a tab switch can happen while it waits.
+            const refuseIfCodeOnScreen = async (shown: BrowserEntry) => {
+              const filler = options.credentialFiller;
+              if (!filler) return;
+              const documentKey = `${shown.tabId}:${shown.documentGeneration}`;
+              const blocked = await filler.screenshotBlocked(sessionId, documentKey, {
+                sendCommand: async (method, params) => {
+                  await ensureDebugger(shown);
+                  return shown.view.webContents.debugger.sendCommand(method, params);
+                },
+              });
+              if (blocked) throw browserError("BROWSER_SECRET_ON_SCREEN", blocked);
+            };
+            await refuseIfCodeOnScreen(activeEntry(session));
             if (!options.agentBrowserRuntime) {
               throw browserError(
                 "BROWSER_AUTOMATION_UNAVAILABLE",
@@ -5081,6 +5102,7 @@ export function createBrowserViewHost(
                 await ensureNativeActiveTab(session, signal);
                 const targetEntry = activeEntry(session);
                 await targetEntry.ready;
+                await refuseIfCodeOnScreen(targetEntry);
                 try {
                   const result = await options.agentBrowserRuntime!.screenshot(
                     sessionId,
@@ -5111,6 +5133,7 @@ export function createBrowserViewHost(
               },
               signal,
             );
+          }
           case "network-start":
             return startNetworkCapture(
               session,
@@ -5126,6 +5149,60 @@ export function createBrowserViewHost(
             return stopNetworkCapture(networkEntryFor(session), "stopped");
           case "network-clear":
             return clearNetworkCapture(networkEntryFor(session));
+          case "vault-describe":
+          case "fill-secret":
+          case "login": {
+            const filler = options.credentialFiller;
+            if (!filler) {
+              throw browserError("BROWSER_VAULT_UNAVAILABLE", "The credential vault is unavailable");
+            }
+            // The daemon always stamps the session's project; "" is a
+            // standalone session, which may use only all-projects items.
+            if (typeof args.projectId !== "string") {
+              throw browserError("BROWSER_VAULT_UNAVAILABLE", "Credential fills need the daemon's project scope");
+            }
+            const projectId = args.projectId;
+            const optional = (key: string) =>
+              typeof args[key] === "string" && args[key] ? (args[key] as string) : undefined;
+            const describedAction = action === "vault-describe" ? optional("action") : action;
+            const field = args.field;
+            if (describedAction === "fill-secret" && field !== "username" && field !== "password" && field !== "totp") {
+              throw browserError("INVALID_ARGUMENT", "field must be username, password, or totp");
+            }
+            if (describedAction === "fill-secret" && !optional("itemId")) {
+              throw browserError("INVALID_ARGUMENT", "item is required");
+            }
+            // fill-secret types into the field at <ref>: focus it first so the
+            // filler checks that exact element (type, visibility, frame origin).
+            if (action === "fill-secret") {
+              await runNative("focus", {
+                ref: stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"),
+              });
+            }
+            const target = activeEntry(session);
+            await ensureDebugger(target);
+            const fillTarget = {
+              cdp: target.view.webContents.debugger,
+              sessionId,
+              projectId,
+              pageURL: () => target.view.webContents.getURL(),
+              pageTitle: () => target.view.webContents.getTitle(),
+              documentKey: () => `${target.tabId}:${target.documentGeneration}`,
+              signal,
+              approvedOrigin: optional("approvedOrigin"),
+              requestedOrigin: optional("origin"),
+            };
+            if (action === "vault-describe") {
+              return filler.describe(fillTarget, { action: describedAction ?? "login", itemId: optional("itemId") });
+            }
+            if (action === "fill-secret") {
+              return filler.fillSecret(fillTarget, {
+                itemId: optional("itemId")!,
+                field: field as "username" | "password" | "totp",
+              });
+            }
+            return filler.login(fillTarget, { itemId: optional("itemId") });
+          }
           case "console":
             return normalizeNativeMessages(await runNative(action), action);
           case "errors": {
@@ -5207,7 +5284,10 @@ export function createBrowserViewHost(
         }
       };
       try {
-        return await run();
+        const result = await run();
+        return options.credentialFiller
+          ? options.credentialFiller.scrub(sessionId, result)
+          : result;
       } finally {
         setAgentBrowserActivity(session, action, false, commandId, "finished");
       }

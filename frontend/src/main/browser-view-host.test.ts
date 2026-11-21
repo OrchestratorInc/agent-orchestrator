@@ -155,7 +155,10 @@ function submittedAnnotationSession(
 	};
 }
 
-function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime) {
+function setupHost(
+	agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime,
+	extra: Partial<Parameters<typeof createBrowserViewHost>[0]> = {},
+) {
 	let currentURL = "";
 	let browserZoomFactor = 1;
 	const webContentsListeners = new Map<string, (...args: never[]) => void>();
@@ -323,6 +326,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		WebContentsView: function () {
 			return view;
 		} as never,
+		...extra,
 		annotatePreloadPath: "/preload.js",
 		rendererOrigin: "http://localhost:5173",
 		agentBrowserRuntime: runtime,
@@ -6878,6 +6882,148 @@ describe("hidden browser background throttling", () => {
 
 		await invoke("browser:devtools", { viewId, operation: "close" });
 		expect(throttled(views[0]!)).toBe(true);
+	});
+});
+
+describe("browser view host credential fills", () => {
+	const PASSWORD = "Host-Secret-42!";
+	const ORIGIN = "http://localhost:4173";
+
+	async function setupVaultHost(nativeResults: Record<string, unknown>) {
+		const { mkdtemp } = await import("node:fs/promises");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		const { VaultStore } = await import("./browser-vault-store");
+		const { createCredentialFiller } = await import("./browser-vault-fill");
+		const store = new VaultStore({
+			dir: await mkdtemp(path.join(os.tmpdir(), "ao-host-vault-")),
+			protector: { available: () => true, encrypt: (d) => Buffer.from(d), decrypt: (d) => Buffer.from(d) },
+		});
+		const item = await store.save({ origins: [ORIGIN], username: "alice", password: PASSWORD, allowedProjects: [] });
+		const runtime = {
+			runAction: vi.fn(async (_s: string, action: string) => nativeResults[action] ?? {}),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		const filler = createCredentialFiller({ store });
+		const page = setupHost(runtime, { credentialFiller: filler });
+		const inserted: string[] = [];
+		const original = page.debuggerSendCommand.getMockImplementation()!;
+		page.debuggerSendCommand.mockImplementation(async (method, params) => {
+			if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "top", url: `${ORIGIN}/login` } } };
+			if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
+			if (method === "Runtime.evaluate") {
+				return String(params?.expression).includes("ao-vault:probe")
+					? { result: { value: { tag: "INPUT", type: "password" } } }
+					: { result: { value: true } };
+			}
+			if (method === "Input.insertText") {
+				inserted.push(String(params?.text));
+				return {};
+			}
+			return original(method, params);
+		});
+		await page.host.execute("sess-1", "tabs");
+		page.setCurrentURL(`${ORIGIN}/login`);
+		return { ...page, item, inserted, runtime };
+	}
+
+	it("types the secret over CDP, never through the agent-browser process, and returns a mask", async () => {
+		const { host, item, inserted, runtime } = await setupVaultHost({});
+		const result = await host.execute("sess-1", "fill-secret", {
+			ref: "e2",
+			itemId: item.id,
+			field: "password",
+			projectId: "proj",
+			approvedOrigin: ORIGIN,
+		});
+		expect(inserted).toEqual([PASSWORD]);
+		expect(JSON.stringify(result)).not.toContain(PASSWORD);
+		expect(result).toMatchObject({ filled: true, value: "••••" });
+		const nativeCalls = JSON.stringify(vi.mocked(runtime.runAction).mock.calls);
+		expect(nativeCalls).toContain('"focus"');
+		expect(nativeCalls).not.toContain(PASSWORD);
+	});
+
+	it("masks the filled secret in get value and snapshot output afterwards", async () => {
+		const { host, item } = await setupVaultHost({
+			get: { value: PASSWORD },
+			snapshot: { snapshot: `- textbox "Password": ${PASSWORD} [ref=e2]`, refs: {} },
+		});
+		await host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "proj", approvedOrigin: ORIGIN });
+		const value = await host.execute("sess-1", "get", { property: "value", ref: "e2" });
+		const snapshot = await host.execute("sess-1", "snapshot", {});
+		expect(JSON.stringify([value, snapshot])).not.toContain(PASSWORD);
+		expect(JSON.stringify(snapshot)).toContain("••••");
+	});
+
+	it("describes the fill for the approval prompt without the secret or a focus", async () => {
+		const { host, item, inserted, runtime } = await setupVaultHost({});
+		const described = await host.execute("sess-1", "vault-describe", { action: "login", projectId: "proj" });
+		expect(described).toMatchObject({ origin: ORIGIN, item: { id: item.id, username: "alice" } });
+		expect(JSON.stringify(described)).not.toContain(PASSWORD);
+		expect(inserted).toEqual([]);
+		expect(vi.mocked(runtime.runAction).mock.calls.map((call) => call[1])).not.toContain("focus");
+	});
+
+	it("refuses a fill the daemon did not approve", async () => {
+		const { host, item, inserted } = await setupVaultHost({});
+		await expect(
+			host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "proj" }),
+		).rejects.toThrow(/not approved/);
+		expect(inserted).toEqual([]);
+	});
+
+	it("lets a standalone session (empty project) use an all-projects item", async () => {
+		const { host, item, inserted } = await setupVaultHost({});
+		await host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "", approvedOrigin: ORIGIN });
+		expect(inserted).toEqual([PASSWORD]);
+	});
+
+	it("refuses agent screenshots while the filler reports a 2FA code on screen", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			screenshot: vi.fn(async () => ({ data: "cG5n", width: 1, height: 1, untrustedExternalContent: true as const })),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		const screenshotBlocked = vi.fn(async (_sessionId: string, _documentKey: string, _cdp: unknown) => "A 2FA code is on screen" as string | undefined);
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		page.setCurrentURL(`${ORIGIN}/2fa`);
+		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
+		expect(screenshotBlocked).toHaveBeenCalledWith("sess-1", expect.stringMatching(/^.+:\d+$/), expect.objectContaining({ sendCommand: expect.any(Function) }));
+		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
+	});
+
+	it("re-checks screenshot protection for the tab the queued capture actually reads", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			screenshot: vi.fn(async () => ({ data: "cG5n", width: 1, height: 1, untrustedExternalContent: true as const })),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		// Allowed when the command is admitted; by the time the queued capture
+		// runs, the tab it reads holds a typed 2FA code.
+		const screenshotBlocked = vi
+			.fn<(sessionId: string, documentKey: string, cdp: unknown) => Promise<string | undefined>>()
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValue("A 2FA code is on screen");
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
+		expect(screenshotBlocked).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
+	});
+
+	it("refuses fills without a daemon-stamped project", async () => {
+		const { host, item, inserted } = await setupVaultHost({});
+		await expect(
+			host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password" }),
+		).rejects.toMatchObject({ code: "BROWSER_VAULT_UNAVAILABLE" });
+		expect(inserted).toEqual([]);
 	});
 });
 

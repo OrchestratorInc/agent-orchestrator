@@ -385,6 +385,14 @@ export const aoBridge: AoBridge =
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
 		},
+		vault: {
+			list: async () => ({ available: false, items: [] }),
+			save: async () => {
+				throw new Error("Saved passwords need the desktop app");
+			},
+			delete: async () => undefined,
+			audit: async () => [],
+		},
 		browserProfiles: {
 			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {

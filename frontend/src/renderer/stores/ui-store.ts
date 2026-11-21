@@ -38,6 +38,7 @@ export type GlobalSettingsSection =
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
+	| "passwords"
 	| "computerUse"
 	| "diagnostics"
 	| "updates"
