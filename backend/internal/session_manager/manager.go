@@ -2021,8 +2021,9 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	if cfg.Harness == domain.HarnessGrok && cfg.RequestedMode == domain.SessionModeChat {
 		// Project/role effort may be tuned for another harness or Grok model.
 		// Only an explicit request should override the live ACP model's default;
-		// its advertised reasoning_effort catalog validates that request.
-		if !cfg.EffortOverride {
+		// its advertised reasoning_effort catalog validates that request. The
+		// level the orchestrator's own Grok Chat runs is kept as well.
+		if !cfg.EffortOverride && !cfg.EffortInherited {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -2407,7 +2408,9 @@ func (m *Manager) inheritedSpawnModel(ctx context.Context, projectID domain.Proj
 		return "", "", nil
 	}
 	model, effort := parent.Metadata.Model, parent.Metadata.Effort
-	if conversations, ok := m.store.(conversationSettingsStore); ok {
+	// Only a Chat orchestrator runs its Chat pick. One switched to a terminal
+	// keeps the old conversation, but its terminal runs the launch model.
+	if conversations, ok := m.store.(conversationSettingsStore); ok && parent.Mode == domain.SessionModeChat {
 		conversation, err := conversations.ConversationForSession(ctx, parentID)
 		switch {
 		case errors.Is(err, domain.ErrNoConversation):

@@ -2157,9 +2157,12 @@ func TestSpawn_InheritsOrchestratorModel(t *testing.T) {
 		}
 		return spawnResult{agent.lastConfig.Model, agent.lastConfig.Effort}
 	}
-	orchestrator := func(harness domain.AgentHarness, kind domain.SessionKind, project domain.ProjectID) *domain.SessionRecord {
-		return &domain.SessionRecord{ID: parent, ProjectID: project, Kind: kind, Harness: harness,
+	orchestratorIn := func(mode domain.SessionMode, harness domain.AgentHarness, kind domain.SessionKind, project domain.ProjectID) *domain.SessionRecord {
+		return &domain.SessionRecord{ID: parent, ProjectID: project, Kind: kind, Harness: harness, Mode: mode,
 			Metadata: domain.SessionMetadata{Model: "orchestrator-launch-model", Effort: "high"}}
+	}
+	orchestrator := func(harness domain.AgentHarness, kind domain.SessionKind, project domain.ProjectID) *domain.SessionRecord {
+		return orchestratorIn(domain.SessionModeChat, harness, kind, project)
 	}
 	chatPick := &domain.ConversationSettings{Model: "orchestrator-chat-model", ReasoningEffort: "xhigh"}
 	explicitEffort := "low"
@@ -2174,6 +2177,10 @@ func TestSpawn_InheritsOrchestratorModel(t *testing.T) {
 		{name: "orchestrator's Chat pick", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatPick,
 			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"orchestrator-chat-model", "xhigh"}},
 		{name: "orchestrator's launch model without a Chat pick", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"),
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"orchestrator-launch-model", "high"}},
+		// After a Chat-to-terminal switch the old Chat pick is still stored, but
+		// the terminal runs the launch model.
+		{name: "terminal orchestrator ignores a leftover Chat pick", parent: orchestratorIn(domain.SessionModeTUI, domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatPick,
 			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"orchestrator-launch-model", "high"}},
 		{name: "explicit --model wins", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatPick,
 			cfg: ports.SpawnConfig{ParentSessionID: parent, AgentConfig: ports.AgentConfig{Model: "explicit-model"}}, want: spawnResult{"explicit-model", ""}},
