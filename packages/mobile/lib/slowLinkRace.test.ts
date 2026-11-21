@@ -12,6 +12,7 @@ vi.mock("./hosts", () => ({
 import { endpointStillAnswers, forgetSlowLinks, PROBE_TIMEOUT_MS, probeEndpoint, raceWithSlowLinkRetry, SLOW_LINK_MEMORY_MS, SLOW_LINK_PROBE_TIMEOUT_MS } from "./connectRuntime";
 import { recoveryDelayMs } from "./reRace";
 import type { Endpoint } from "./endpoints";
+import { TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { IncompatibleHostVersionError, ProbeTimeoutError, raceEndpoints } from "./race";
 
 const lan: Endpoint = { kind: "lan", host: "192.168.1.42", port: 3011, secure: false };
@@ -39,6 +40,30 @@ describe("a slow link", () => {
 		vi.useFakeTimers();
 		vi.stubGlobal("fetch", slowIdentity(60_000));
 		const probe = probeEndpoint(lan, new AbortController().signal, { retryTunnel: false });
+		const caught = probe.catch((error: unknown) => error);
+		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+		expect(await caught).toBeInstanceOf(ProbeTimeoutError);
+	});
+
+	it("keeps retrying a timed-out tunnel for a caller with no slow race behind it, as pairing calls it", async () => {
+		vi.useFakeTimers();
+		// The first attempt runs out the quick timeout; the retry answers at once.
+		const slow = slowIdentity(60_000);
+		const fetchMock = vi.fn((url: string, init?: { signal?: AbortSignal }) => fetchMock.mock.calls.length === 1
+			? slow(url, init)
+			: Promise.resolve({ ok: true, json: async () => ({ hostId: "h_paired", apiVersion: 1 }) }));
+		vi.stubGlobal("fetch", fetchMock);
+		// The way app/pair.tsx races: probeEndpoint with no options.
+		const outcome = raceEndpoints([tunnel], "h_paired", probeEndpoint);
+		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + TUNNEL_PROBE_RETRY_DELAY_MS + 100);
+		await expect(outcome).resolves.toMatchObject({ ok: true, endpoint: tunnel, hostId: "h_paired" });
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("ends a timed-out tunnel's attempt at once only when asked to", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal("fetch", slowIdentity(60_000));
+		const probe = probeEndpoint(tunnel, new AbortController().signal, { endOnTimeout: true });
 		const caught = probe.catch((error: unknown) => error);
 		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
 		expect(await caught).toBeInstanceOf(ProbeTimeoutError);

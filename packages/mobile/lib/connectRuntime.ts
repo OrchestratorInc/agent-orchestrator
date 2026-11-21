@@ -44,6 +44,19 @@ export const PROBE_TIMEOUT_MS = 3_000;
  */
 export const SLOW_LINK_PROBE_TIMEOUT_MS = 12_000;
 
+export type ProbeOptions = {
+	retryTunnel?: boolean;
+	timeoutMs?: number;
+	/**
+	 * Whether our own timeout ends the attempt at once instead of earning a
+	 * tunnel propagation retry. Set only by raceWithSlowLinkRetry, which gives
+	 * an endpoint that ran out its time one longer try of its own; every other
+	 * caller (pairing, push, manual connect) has no slow race behind it and
+	 * keeps the retry. A tunnel that fails fast is still retried either way.
+	 */
+	endOnTimeout?: boolean;
+};
+
 /**
  * Asks an endpoint which machine it is.
  *
@@ -51,7 +64,7 @@ export const SLOW_LINK_PROBE_TIMEOUT_MS = 12_000;
  * is safe to send a credential to, so it has to come first. See
  * docs/adr/0003-unauthenticated-identity-probe.md.
  */
-export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: { retryTunnel?: boolean; timeoutMs?: number } = {}): Promise<ProbeAnswer> {
+export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: ProbeOptions = {}): Promise<ProbeAnswer> {
 	// A tunnel hostname may simply not have propagated yet; see probeRetry.
 	const startedAt = Date.now();
 	for (;;) {
@@ -60,10 +73,10 @@ export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, opt
 		} catch (e) {
 			if (signal.aborted) throw e; // The race already has a winner.
 			if (e instanceof IncompatibleHostVersionError) throw e;
-			// Our own timeout is not a hostname still propagating: the slow
-			// race (raceWithSlowLinkRetry) gives this endpoint its one longer
-			// try, so retrying here would only stretch a dead tunnel's attempt.
-			if (e instanceof ProbeTimeoutError) throw e;
+			// When the slow race (raceWithSlowLinkRetry) follows, it gives this
+			// endpoint its one longer try, so retrying a timeout here would only
+			// stretch a dead tunnel's attempt.
+			if (options.endOnTimeout && e instanceof ProbeTimeoutError) throw e;
 			if (options.retryTunnel === false || !shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
 			await waitOrAbort(TUNNEL_PROBE_RETRY_DELAY_MS, signal);
 		}
@@ -229,7 +242,7 @@ export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], host
 		if (!outcome.ok) slowLinkAt.delete(hostId);
 		return outcome;
 	}
-	const quick = await raceEndpoints(endpoints, hostId, probe);
+	const quick = await raceEndpoints(endpoints, hostId, (endpoint, signal) => probe(endpoint, signal, { endOnTimeout: true }));
 	if (quick.ok || !quick.timedOut?.length) return quick;
 	const outcome = await raceEndpoints(quick.timedOut, hostId, slow);
 	if (outcome.ok && hostId !== "") slowLinkAt.set(hostId, now());
