@@ -29,8 +29,6 @@ export type CloudSessionMenuState = {
 	interfaceSwitch?: { to: "chat" | "tui"; switching: boolean };
 	/** The open (or newest) pull request, whose review page PR Review opens. */
 	pullRequest?: { number: number };
-	/** The project's name, when the session's project is known. */
-	projectName?: string;
 	/** Its artifact files, where the organization has artifacts and there are some. */
 	artifactCount?: number;
 };
@@ -56,7 +54,6 @@ export function cloudSessionMenuGroups(state: CloudSessionMenuState): Conversati
 	const open: ConversationMenuItem[] = [
 		...(state.terminated ? [] : [item("shell")]),
 		...(state.canShowAgentTerminal ? [item("agent_terminal")] : []),
-		...(state.projectName ? [{ ...item("project"), subtitle: state.projectName }] : []),
 		...(state.artifactCount ? [item("artifacts")] : []),
 	];
 	const worker: ConversationMenuItem[] = [

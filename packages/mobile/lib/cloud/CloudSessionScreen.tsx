@@ -363,9 +363,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		canShowAgentTerminal: tui && current === "chat",
 		interfaceSwitch: canSwitch ? { to: switchTo, switching } : undefined,
 		pullRequest: prNumber === undefined ? undefined : { number: prNumber },
-		projectName: project?.displayName,
 		artifactCount: artifactsOffered ? artifactCount : undefined,
-	}) : undefined, [artifactCount, artifactsOffered, canSwitch, current, hasSession, pinned, prNumber, project?.displayName, switchTo, switching, terminated, tui]);
+	}) : undefined, [artifactCount, artifactsOffered, canSwitch, current, hasSession, pinned, prNumber, switchTo, switching, terminated, tui]);
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
 	useEffect(() => {
@@ -394,7 +393,6 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const menuActions: Partial<Record<ConversationMenuAction, () => void>> = {
 		shell: () => router.push({ pathname: "/cloud/terminal", params: { sessionId, kind: "workspace" } }),
 		agent_terminal: () => setView("agent"),
-		project: () => { if (project) router.push({ pathname: "/project/[id]", params: { id: project.id, hostId: CLOUD_HOST_ID } }); },
 		pin: () => void setWorkerPinned(sessionId, !pinned, CLOUD_HOST_ID).then(() => haptics.success(), (error: unknown) => {
 			haptics.error();
 			Alert.alert("Couldn't update pin", cloudErrorMessage(error));

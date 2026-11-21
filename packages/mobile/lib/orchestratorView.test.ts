@@ -13,8 +13,6 @@ import {
 	orchestratorButtonCopy,
 	projectBlockerLine,
 	projectCardSummary,
-	projectDetailSessions,
-	projectPageStats,
 	projectRailTone,
 	projectRowChips,
 	workersOf,
@@ -515,37 +513,6 @@ describe("orchestratorButtonCopy", () => {
 	it("says it is working while a launch is in flight", () => {
 		expect(orchestratorButtonCopy(rowWith("start"), true).label).toBe("Starting…");
 		expect(orchestratorButtonCopy(rowWith("resume"), true).label).toBe("Resuming…");
-	});
-});
-
-describe("projectDetailSessions", () => {
-	// A project's own page is where its history belongs, so finished work stays.
-	it("keeps archived sessions alongside live ones", () => {
-		const sessions = [
-			session({ id: "a", projectId: "proj", status: "working" }),
-			session({ id: "b", projectId: "proj", status: "terminated", isTerminated: true }),
-			session({ id: "c", projectId: "other" }),
-		];
-		expect(projectDetailSessions("proj", sessions).map((item) => item.id)).toEqual(["a", "b"]);
-	});
-});
-
-describe("projectPageStats", () => {
-	it("counts live workers by board zone and archived ones apart", () => {
-		const stats = projectPageStats([
-			session({ id: "a", status: "working" }),
-			session({ id: "b", status: "needs_input" }),
-			session({ id: "c", status: "terminated", isTerminated: true }),
-		]);
-		expect(stats.workers).toBe(2);
-		expect(stats.archived).toBe(1);
-		expect(stats.needsYou).toBe(1);
-	});
-
-	it("counts an orchestrator that is waiting on you", () => {
-		const sessions = [session({ id: "a", status: "needs_input" })];
-		expect(projectPageStats(sessions, link({ status: "needs_input" })).needsYou).toBe(2);
-		expect(projectPageStats(sessions, link({ status: "working" })).needsYou).toBe(1);
 	});
 });
 

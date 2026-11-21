@@ -7,11 +7,12 @@ describe("sessionTopbarActionIds", () => {
 		expect(sessionTopbarActionIds({ orchestrator: false, projectId: "app" })).toEqual(["orchestrator"]);
 	});
 
-	it("gives an orchestrator its board, then New task", () => {
-		expect(sessionTopbarActionIds({ orchestrator: true, projectId: "app" })).toEqual(["board", "new-task"]);
+	// Its workers are under it on home, so there is no board to open.
+	it("gives an orchestrator New task", () => {
+		expect(sessionTopbarActionIds({ orchestrator: true, projectId: "app" })).toEqual(["new-task"]);
 	});
 
-	// A standalone agent has no project, so no orchestrator and no board.
+	// A standalone agent has no project, so no orchestrator and no New task.
 	it("adds nothing for a session with no project", () => {
 		expect(sessionTopbarActionIds({ orchestrator: false })).toEqual([]);
 		expect(sessionTopbarActionIds({ orchestrator: true, projectId: "" })).toEqual([]);

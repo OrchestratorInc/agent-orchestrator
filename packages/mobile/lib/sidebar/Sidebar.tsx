@@ -234,11 +234,6 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 		go(projectId ? { pathname: "/spawn", params: { projectId, ...(hostId ? { hostId } : {}) } } : "/spawn");
 	}, [go]);
 
-	const openProject = useCallback((node: SidebarProjectNode) => {
-		if (!node.project.hostId) return;
-		go({ pathname: "/project/[id]", params: { id: node.project.id, hostId: node.project.hostId } });
-	}, [go]);
-
 	const launchOrchestrator = useCallback((node: SidebarProjectNode) => {
 		const row = projectRowsRef.current.get(node.key);
 		if (!row) return;
@@ -399,7 +394,6 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 						node={node}
 						expanded={item.expanded}
 						pinned={prefs.pinnedProjects.includes(node.key)}
-						active={pathname.startsWith("/project/") && params.id === node.project.id}
 						orchestratorAction={row?.action}
 						orchestratorBusy={busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id))}
 						colors={colors}
@@ -407,7 +401,6 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 						onToggle={toggleProject}
 						onOrchestrator={launchOrchestrator}
 						onNewTask={newProjectTask}
-						onOpenProject={openProject}
 						onTogglePin={pinProject}
 					/>
 				);
@@ -764,18 +757,16 @@ function ShowMore({ label, onPress, styles }: { label: string; expanded: boolean
 const PROJECT_MENU_SYMBOLS: Record<string, { icon: FeatherIconName; systemImage: SFSymbol }> = {
 	"new-task": { icon: "plus", systemImage: "plus" },
 	orchestrator: { icon: "layers", systemImage: "point.3.connected.trianglepath.dotted" },
-	board: { icon: "layout-grid", systemImage: "square.grid.2x2" },
 	pin: { icon: "pin", systemImage: "pin" },
 	unpin: { icon: "pin-off", systemImage: "pin.slash" },
 };
 
-type ProjectMenuId = "new-task" | "orchestrator" | "board" | "pin" | "unpin";
+type ProjectMenuId = "new-task" | "orchestrator" | "pin" | "unpin";
 
 type ProjectRowProps = {
 	node: SidebarProjectNode;
 	expanded: boolean;
 	pinned: boolean;
-	active: boolean;
 	/** The project's orchestrator, when it has one: what pressing it does, and whether it is on its way. */
 	orchestratorAction?: "open" | "start" | "resume";
 	orchestratorBusy: boolean;
@@ -784,7 +775,6 @@ type ProjectRowProps = {
 	onToggle(node: SidebarProjectNode): void;
 	onOrchestrator(node: SidebarProjectNode): void;
 	onNewTask(node: SidebarProjectNode): void;
-	onOpenProject(node: SidebarProjectNode): void;
 	onTogglePin(node: SidebarProjectNode): void;
 };
 
@@ -799,7 +789,6 @@ function sameProjectRow(a: ProjectRowProps, b: ProjectRowProps): boolean {
 		&& a.node.activity === b.node.activity
 		&& a.expanded === b.expanded
 		&& a.pinned === b.pinned
-		&& a.active === b.active
 		&& a.orchestratorAction === b.orchestratorAction
 		&& a.orchestratorBusy === b.orchestratorBusy
 		&& a.colors === b.colors
@@ -807,11 +796,10 @@ function sameProjectRow(a: ProjectRowProps, b: ProjectRowProps): boolean {
 		&& a.onToggle === b.onToggle
 		&& a.onOrchestrator === b.onOrchestrator
 		&& a.onNewTask === b.onNewTask
-		&& a.onOpenProject === b.onOpenProject
 		&& a.onTogglePin === b.onTogglePin;
 }
 
-const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, orchestratorAction, orchestratorBusy, colors, styles, onToggle, onOrchestrator, onNewTask, onOpenProject, onTogglePin }: ProjectRowProps) {
+const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, orchestratorAction, orchestratorBusy, colors, styles, onToggle, onOrchestrator, onNewTask, onTogglePin }: ProjectRowProps) {
 	const orchestrator = orchestratorAction ? { action: orchestratorAction, busy: orchestratorBusy } : undefined;
 	const name = node.project.name;
 	const orchestratorLabel = orchestrator?.action === "open" ? "Open orchestrator" : "Start orchestrator";
@@ -819,13 +807,11 @@ const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, or
 	const actions = useMemo((): LongPressMenuAction<ProjectMenuId>[] => [
 		{ id: "new-task", title: "New task", ...PROJECT_MENU_SYMBOLS["new-task"] },
 		...(orchestratorAction ? [{ id: "orchestrator" as const, title: orchestratorLabel, ...PROJECT_MENU_SYMBOLS.orchestrator }] : []),
-		...(hasHost ? [{ id: "board" as const, title: "Open dashboard", ...PROJECT_MENU_SYMBOLS.board }] : []),
 		pinned ? { id: "unpin", title: "Unpin project", ...PROJECT_MENU_SYMBOLS.unpin } : { id: "pin", title: "Pin project", ...PROJECT_MENU_SYMBOLS.pin },
 	], [hasHost, orchestratorAction, orchestratorLabel, pinned]);
 	const onAction = (id: ProjectMenuId) => {
 		if (id === "new-task") onNewTask(node);
 		else if (id === "orchestrator") onOrchestrator(node);
-		else if (id === "board") onOpenProject(node);
 		else onTogglePin(node);
 	};
 	const collapsedMark = !expanded ? node.activity : null;
@@ -839,7 +825,7 @@ const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, or
 				onPress={() => onToggle(node)}
 				accessibilityLabel={`${name}${node.hostLabel ? `, ${node.hostLabel}` : ""}`}
 				accessibilityHint={expanded ? "Collapses the project's sessions" : "Shows the project's sessions"}
-				style={[styles.projectButton, slot.width ? { width: slot.width } : null, active && { backgroundColor: colors.active }]}
+				style={[styles.projectButton, slot.width ? { width: slot.width } : null]}
 				pressedStyle={{ backgroundColor: colors.hover }}
 			>
 				<View style={styles.projectIcon}>
@@ -854,7 +840,7 @@ const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, or
 						<View style={[styles.cornerDot, { backgroundColor: collapsedMark === "working" ? colors.working : colors.muted, borderColor: colors.bg }]} />
 					) : null}
 				</View>
-				<Text style={[styles.projectLabel, active && styles.navLabelActive]} numberOfLines={1}>{name}</Text>
+				<Text style={styles.projectLabel} numberOfLines={1}>{name}</Text>
 				{node.hostLabel ? <Text style={styles.hostBadge} numberOfLines={1}>{node.hostLabel}</Text> : null}
 				{node.cloud ? <Feather name="cloud" size={12} color={colors.passive} /> : null}
 			</LongPressMenu>

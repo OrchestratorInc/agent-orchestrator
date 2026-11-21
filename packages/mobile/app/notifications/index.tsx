@@ -1,4 +1,4 @@
-import { Stack, useFocusEffect, type Href } from "expo-router";
+import { Stack, useFocusEffect, useRouter, type Href } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { useOpenPage } from "../../lib/pageNavigation";
 import { StackRootBack } from "../../lib/StackRootBack";
@@ -81,6 +81,7 @@ function NotificationsContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
+	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { hostStates, cloud, configForHost, refreshHost, restore } = useApp();
 	// Orchestrator Cloud is one more feed here, beside each machine's.
@@ -360,7 +361,8 @@ function NotificationsContent() {
 			haptics.warning();
 			notify("This session is archived. Tap restore to bring it back.");
 		} else if (sessionId) openPage({ pathname: "/session/[id]", params: { id: sessionId, hostId: CLOUD_HOST_ID } });
-		else if (notification.projectId) openPage({ pathname: "/project/[id]", params: { id: notification.projectId, hostId: CLOUD_HOST_ID } });
+		// One about a project opens home, which lists it with its orchestrator and workers.
+		else if (notification.projectId) router.navigate("/");
 	}
 
 	function open(notification: FeedItem) {

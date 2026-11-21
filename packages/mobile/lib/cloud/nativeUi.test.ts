@@ -19,15 +19,14 @@ describe("cloud session actions sheet", () => {
 	const titles = (groups: ReturnType<typeof cloudSessionMenuGroups>) => groups.map((group) => [group.title, group.items.map((item) => item.label)]);
 
 	it("offers the shell, pin, PR Review and Archive, in the local sheet's sections", () => {
-		const groups = cloudSessionMenuGroups({ terminated: false, pinned: false, canShowAgentTerminal: false, pullRequest: { number: 42 }, projectName: "web" });
+		const groups = cloudSessionMenuGroups({ terminated: false, pinned: false, canShowAgentTerminal: false, pullRequest: { number: 42 } });
 		expect(titles(groups)).toEqual([
-			["Open", ["Shell", "Project"]],
+			["Open", ["Shell"]],
 			["Worker", ["Pin", "PR Review"]],
 			["Session", ["Archive"]],
 		]);
 		const archive = groups.at(-1)!.items[0];
 		expect(archive).toMatchObject({ action: "delete", destructive: true });
-		expect(groups[0].items[1].subtitle).toBe("web");
 		expect(groups[1].items[1]).toMatchObject({ action: "pull_requests", subtitle: "Pull request #42" });
 	});
 
@@ -76,7 +75,7 @@ describe("cloud session actions sheet", () => {
 	});
 
 	it("never offers rename: the board's row renames a session, as for a local one", () => {
-		const labels = cloudSessionMenuGroups({ terminated: false, pinned: false, canShowAgentTerminal: true, pullRequest: { number: 1 }, projectName: "p" })
+		const labels = cloudSessionMenuGroups({ terminated: false, pinned: false, canShowAgentTerminal: true, pullRequest: { number: 1 } })
 			.flatMap((group) => group.items.map((item) => item.label));
 		expect(labels).not.toContain("Rename");
 	});

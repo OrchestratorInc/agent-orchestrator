@@ -29,13 +29,13 @@ import { sessionTopbarActionIds, type SessionTopbarActionId } from "./sessionTop
 export type SessionTopbarAction = {
 	id: SessionTopbarActionId;
 	label: string;
-	symbol: "orchestrator" | "board" | "add";
+	symbol: "orchestrator" | "add";
 	disabled?: boolean;
 	onPress(): void;
 };
 
-const LABELS: Record<SessionTopbarActionId, string> = { orchestrator: "Orchestrator", board: "Board", "new-task": "New task" };
-const SYMBOLS: Record<SessionTopbarActionId, SessionTopbarAction["symbol"]> = { orchestrator: "orchestrator", board: "board", "new-task": "add" };
+const LABELS: Record<SessionTopbarActionId, string> = { orchestrator: "Orchestrator", "new-task": "New task" };
+const SYMBOLS: Record<SessionTopbarActionId, SessionTopbarAction["symbol"]> = { orchestrator: "orchestrator", "new-task": "add" };
 
 export function useSessionTopbarActions({ orchestrator, projectId, hostId }: { orchestrator: boolean; projectId?: string; hostId?: string }): SessionTopbarAction[] {
 	const router = useRouter();
@@ -57,8 +57,6 @@ export function useSessionTopbarActions({ orchestrator, projectId, hostId }: { o
 		switch (id) {
 			case "orchestrator":
 				return row ? [{ ...base, label: row.action === "open" ? "Open orchestrator" : "Start orchestrator", disabled: busy, onPress: () => openOrchestrator(row) }] : [];
-			case "board":
-				return host ? [{ ...base, onPress: () => router.push({ pathname: "/project/[id]", params: { id: projectId!, hostId: host } }) }] : [];
 			default:
 				return [{ ...base, onPress: () => router.push({ pathname: "/spawn", params: { projectId: projectId!, ...(host ? { hostId: host } : {}) } }) }];
 		}
