@@ -1,0 +1,17 @@
+Batch completed: 8/8 steps ok (64467 ms).
+[1] ok: screenshot ~/.ao/data/artifacts/agent-orchest…
+Saved ~/.ao/data/artifacts/agent-orchestrator-246/1-login-before.png (2560x1440)
+[2] ok: act Username --action fill --value ada -> matched textbox [ref=e3]
+[3] ok: act Password --action fill --value correct-horse -> matched textbox [ref=e4]
+[4] ok: screenshot ~/.ao/data/artifacts/agent-orchest…
+Saved ~/.ao/data/artifacts/agent-orchestrator-246/2-login-filled.png (2560x1440)
+[5] ok: click e2
+[6] ok: wait --text Welcome
+[7] ok: get text body
+<<<BEGIN UNTRUSTED EXTERNAL CONTENT>>>
+Welcome, ada
+
+Plan: Pro, renews 2027-01-01
+<<<END UNTRUSTED EXTERNAL CONTENT>>>
+[8] ok: screenshot ~/.ao/data/artifacts/agent-orchest…
+Saved ~/.ao/data/artifacts/agent-orchestrator-246/3-login-after.png (2560x1440)

@@ -291,6 +291,9 @@ func NewRootCommand(deps Deps) *cobra.Command {
 
 type commandContext struct {
 	deps Deps
+	// browserResultObserver, when set, receives each successful browser
+	// command's structured result; `ao browser batch` uses it to judge steps.
+	browserResultObserver func(action string, result map[string]any)
 }
 
 func shouldEmitCLIInvocation(cmd *cobra.Command) bool {

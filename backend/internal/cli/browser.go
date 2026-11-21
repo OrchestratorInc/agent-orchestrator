@@ -112,10 +112,13 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 			"\"unchanged\" or the changes since the snapshot you last received. Use --delta --full\n" +
 			"to get the full tree again.",
 		Args: noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		PreRunE: func(*cobra.Command, []string) error {
 			if snapshotFull && !snapshotDelta {
 				return usageError{errors.New("--full requires --delta")}
 			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			args := map[string]any{"interactive": interactiveOnly}
 			if snapshotDelta {
 				args["delta"] = true
@@ -442,7 +445,7 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 		Use:   "wait",
 		Short: "Wait for page load, DOM stability, time, text, selector, or URL state",
 		Args:  noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		PreRunE: func(*cobra.Command, []string) error {
 			selected := 0
 			for _, active := range []bool{
 				waitText != "",
@@ -475,6 +478,9 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 			if waitStableMS > timeoutMS {
 				return usageError{errors.New("--timeout must be at least as long as --dom-stable")}
 			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			args := map[string]any{"timeoutMs": timeoutMS}
 			switch {
 			case waitText != "":
@@ -517,13 +523,16 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 			"With --annotate, interactive elements are numbered in the image and the matching\n" +
 			"snapshot refs are listed alongside it.",
 		Args: atMostOneArg,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		PreRunE: func(_ *cobra.Command, args []string) error {
 			if screenshotBase64 && !jsonOutput {
 				return usageError{errors.New("--base64 requires --json")}
 			}
 			if screenshotBase64 && len(args) != 0 {
 				return usageError{errors.New("--base64 cannot be combined with a screenshot path")}
 			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			var actionArgs map[string]any
 			if screenshotAnnotate {
 				actionArgs = map[string]any{"annotate": true}
@@ -556,10 +565,13 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 		Use:   "start",
 		Short: "Start bounded metadata-only capture on the active tab",
 		Args:  noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		PreRunE: func(*cobra.Command, []string) error {
 			if networkDuration < 1 || networkDuration > 300 {
 				return usageError{errors.New("--duration must be between 1 and 300 seconds")}
 			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return ctx.runBrowserAction(
 				cmd,
 				"network-start",
@@ -626,6 +638,7 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 
 	cmd.AddCommand(newBrowserTargetCommand(ctx, &jsonOutput))
 	cmd.AddCommand(newBrowserChromeCommand(ctx, &jsonOutput))
+	cmd.AddCommand(newBrowserBatchCommand(ctx, &jsonOutput))
 
 	for _, action := range []string{"console", "errors"} {
 		cmd.AddCommand(&cobra.Command{
@@ -708,6 +721,9 @@ func (c *commandContext) runBrowserAction(cmd *cobra.Command, action string, arg
 	resp, err := c.browserAction(cmd.Context(), action, args)
 	if err != nil {
 		return err
+	}
+	if c.browserResultObserver != nil {
+		c.browserResultObserver(action, resp.Result)
 	}
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), resp)
