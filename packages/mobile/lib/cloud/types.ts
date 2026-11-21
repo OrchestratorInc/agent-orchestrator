@@ -133,7 +133,14 @@ export type CloudSession = {
 	branch: string;
 	/** Trust level (read-only | standard | trusted), not the interface. */
 	mode: string;
+	/** The model the session launched with; empty or absent means the agent's default. */
 	model?: string;
+	/**
+	 * The model the session runs now: its owner's Chat pick, else `model`. The
+	 * control plane always sends it, "" for the agent's default; only an older
+	 * one leaves it out (read `model` then).
+	 */
+	currentModel?: string;
 	interfaceMode: CloudInterfaceMode;
 	activityState: string;
 	status: string;

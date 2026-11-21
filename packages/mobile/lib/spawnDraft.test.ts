@@ -133,6 +133,18 @@ describe("the New task draft", () => {
 		expect(requestMatches(restored.request, request.payload, restored.attachments)).toBe(true);
 	});
 
+	// The default row's model is the catalog's, which can change before a
+	// retry: the restored Start sends the model it first went with, so the
+	// retry's body matches the request id's.
+	it("keeps the model a Start sent for the default row", async () => {
+		const request = { id: "req-2", payload: "{\"prompt\":\"Ship it\"}", attachments: attachmentsKey([]), model: "opus" };
+		await saveSpawnDraft({ prompt: "Ship it", attachments: [], request });
+		expect((await loadSpawnDraft())?.request).toEqual(request);
+		// A draft saved before the field existed restores without one.
+		store.items.set(SPAWN_DRAFT_KEY, JSON.stringify({ v: 1, savedAt: Date.now(), prompt: "x", attachments: [], request: { id: "r", payload: "{}", attachments: attachmentsKey([]), model: 3 } }));
+		expect((await loadSpawnDraft())?.request).toEqual({ id: "r", payload: "{}", attachments: attachmentsKey([]) });
+	});
+
 	// Cleared after the daemon took the Start, but the draft could not be
 	// removed: its files stay, so the restored draft is still that Start (same
 	// attachments, same request id) and the daemon answers with the same task.
