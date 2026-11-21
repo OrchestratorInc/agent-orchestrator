@@ -183,9 +183,9 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
   "project": { "id": "my-app", "path": "/Users/me/code/my-app", "defaultBranch": "main", "reused": false },
   "steps": [
     { "step": "daemon", "status": "ok", "detail": "daemon running at http://127.0.0.1:3001 (pid 4242)", "fix": "" },
-    { "step": "agent", "status": "needs_human", "detail": "using claude-code (the calling agent, detected from CLAUDECODE): agent claude-code is not signed in", "fix": "run `claude auth login`" }
+    { "step": "agent", "status": "needs_human", "detail": "using claude-code (the calling agent, detected from CLAUDECODE): agent claude-code is not signed in (or use `ao setup --agent codex`)", "fix": "claude auth login" }
   ],
-  "next_actions": ["run `claude auth login`"],
+  "next_actions": ["claude auth login"],
   "task": null
 }
 ```

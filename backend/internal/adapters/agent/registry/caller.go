@@ -49,7 +49,6 @@ var callerAIAgentAliases = map[string]domain.AgentHarness{
 type CallerMatch struct {
 	Harness domain.AgentHarness
 	Env     string
-	Value   string
 }
 
 // DetectCaller finds the coding agent that started this process from its
@@ -62,7 +61,7 @@ func DetectCaller(getenv func(string) string) (CallerMatch, bool) {
 	}
 	if raw := strings.TrimSpace(getenv(CallerAIAgentEnv)); raw != "" {
 		if harness, ok := aiAgentHarness(raw, known); ok {
-			return CallerMatch{Harness: harness, Env: CallerAIAgentEnv, Value: raw}, true
+			return CallerMatch{Harness: harness, Env: CallerAIAgentEnv}, true
 		}
 	}
 	for _, tag := range CallerEnvTags {
@@ -70,7 +69,7 @@ func DetectCaller(getenv func(string) string) (CallerMatch, bool) {
 		if !envTagSet(value) || !known[tag.Harness] {
 			continue
 		}
-		return CallerMatch{Harness: tag.Harness, Env: tag.Env, Value: value}, true
+		return CallerMatch{Harness: tag.Harness, Env: tag.Env}, true
 	}
 	return CallerMatch{}, false
 }

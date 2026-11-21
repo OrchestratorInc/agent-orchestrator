@@ -81,7 +81,7 @@ type setupStep struct {
 
 type setupAgent struct {
 	ID string `json:"id"`
-	// Source says how the agent was chosen: flag, caller, ready or project.
+	// Source says how the agent was chosen: flag, caller or ready.
 	Source string `json:"source"`
 	// DetectedFrom names the environment variable for source "caller".
 	DetectedFrom string `json:"detectedFrom,omitempty"`
@@ -114,6 +114,7 @@ type setupResult struct {
 	checked   map[string]bool
 	// agentUsable is set when the agent step passed.
 	agentUsable bool
+	authPlans   map[string]setupAuthPlan
 }
 
 func newSetupCommand(ctx *commandContext) *cobra.Command {
@@ -227,7 +228,7 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 		if daemonStep.Status == setupSkipped {
 			reason = "waits for the daemon"
 		}
-		agent := c.setupAgentWithoutDaemon(opts)
+		agent := setupAgentWithoutDaemon(opts)
 		res.Agent = agent
 		for _, name := range []string{setupStepAgent, setupStepGitHub, setupStepProject, setupStepFirstRun} {
 			add(setupStep{Step: name, Status: setupSkipped, Detail: reason})
@@ -235,7 +236,7 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 		if opts.start != "" {
 			add(setupStep{Step: setupStepStart, Status: setupSkipped, Detail: reason})
 		}
-		c.finishSetup(&res, opts)
+		finishSetup(&res, opts)
 		return res
 	}
 
@@ -250,12 +251,12 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	if opts.start != "" {
 		add(c.setupStartStep(ctx, opts, &res))
 	}
-	c.finishSetup(&res, opts)
+	finishSetup(&res, opts)
 	return res
 }
 
 // finishSetup adds the verify step, the verdict and the next actions.
-func (c *commandContext) finishSetup(res *setupResult, opts setupOptions) {
+func finishSetup(res *setupResult, opts setupOptions) {
 	blocked := false
 	seen := map[string]bool{}
 	for _, s := range res.Steps {
@@ -354,7 +355,7 @@ func (c *commandContext) setupDaemon(ctx context.Context, errOut io.Writer, opts
 
 // setupAgentWithoutDaemon names the agent setup would pick when no daemon
 // can say which agents are installed.
-func (c *commandContext) setupAgentWithoutDaemon(opts setupOptions) *setupAgent {
+func setupAgentWithoutDaemon(opts setupOptions) *setupAgent {
 	if opts.agent != "" {
 		return &setupAgent{ID: opts.agent, Source: "flag", AuthStatus: "unknown", Worker: firstNonEmpty(opts.workerAgent, opts.agent), Orchestrator: firstNonEmpty(opts.orchestratorAgent, opts.agent)}
 	}
@@ -489,12 +490,12 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 		check.fix = "pick a supported agent from `ao agent ls` and pass --agent <id>"
 	case !probe.Installed:
 		check.status = setupNeedsHuman
-		check.problem = fmt.Sprintf("agent %s is not installed", id)
-		check.fix = c.setupInstallFix(ctx, id, res.readiness)
+		check.problem = fmt.Sprintf("agent %s is not installed", id) + setupAlternative(res.readiness, id)
+		check.fix = c.setupInstallFix(ctx, id, res)
 	case check.auth == "unauthorized":
 		check.status = setupNeedsHuman
-		check.problem = fmt.Sprintf("agent %s is not signed in", id)
-		check.fix = setupSignInFix(c.signInFix(ctx, id), id, res.readiness)
+		check.problem = fmt.Sprintf("agent %s is not signed in", id) + setupAlternative(res.readiness, id)
+		check.fix = c.setupSignInFix(ctx, id, res)
 	case check.auth == "authorized" || check.auth == "not_applicable":
 		check.note = fmt.Sprintf("%s is signed in", id)
 	case check.auth == "configured":
@@ -508,10 +509,8 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 // firstReadyAgent returns the first agent the daemon calls ready, else the
 // first installed agent with a saved (unproven) sign-in.
 func firstReadyAgent(agents []agentReadinessSnapshot) string {
-	for _, a := range agents {
-		if a.EffectiveReadiness == "ready" && a.Installation.State == "installed" {
-			return a.ID
-		}
+	if id := firstReadyAgentExcept(agents, ""); id != "" {
+		return id
 	}
 	for _, a := range agents {
 		if a.Installation.State == "installed" && a.Authentication.State == "configured" {
@@ -521,13 +520,12 @@ func firstReadyAgent(agents []agentReadinessSnapshot) string {
 	return ""
 }
 
-// setupSignInFix is the agent's login command, plus the ready alternative.
-func setupSignInFix(fix, id string, agents []agentReadinessSnapshot) string {
-	fix = strings.TrimSuffix(fix, ", then retry")
-	if alt := firstReadyAgentExcept(agents, id); alt != "" {
-		fix += fmt.Sprintf(" (or use `ao setup --agent %s`)", alt)
+// setupAlternative names a ready agent the person could use instead.
+func setupAlternative(agents []agentReadinessSnapshot, skip string) string {
+	if alt := firstReadyAgentExcept(agents, skip); alt != "" {
+		return fmt.Sprintf(" (or use `ao setup --agent %s`)", alt)
 	}
-	return fix
+	return ""
 }
 
 func firstReadyAgentExcept(agents []agentReadinessSnapshot, skip string) string {
@@ -539,38 +537,62 @@ func firstReadyAgentExcept(agents []agentReadinessSnapshot, skip string) string 
 	return ""
 }
 
+type setupAuthPlan struct {
+	AgentID          string `json:"agentId"`
+	DisplayCommand   string `json:"displayCommand"`
+	Guidance         string `json:"guidance"`
+	DocumentationURL string `json:"documentationUrl"`
+}
+
+// setupAuthPlan returns the daemon's sign-in plan for an agent, reading the
+// plans once per run.
+func (c *commandContext) setupAuthPlan(ctx context.Context, id string, res *setupResult) setupAuthPlan {
+	if res.authPlans == nil {
+		var plans struct {
+			Plans []setupAuthPlan `json:"plans"`
+		}
+		res.authPlans = map[string]setupAuthPlan{}
+		if err := c.getJSON(ctx, "agents/auth-plans", &plans); err == nil {
+			for _, p := range plans.Plans {
+				res.authPlans[p.AgentID] = p
+			}
+		}
+	}
+	return res.authPlans[id]
+}
+
+// setupSignInFix is the agent's own login command, verbatim, so an agent can
+// show it to the person as is.
+func (c *commandContext) setupSignInFix(ctx context.Context, id string, res *setupResult) string {
+	plan := c.setupAuthPlan(ctx, id, res)
+	switch {
+	case strings.TrimSpace(plan.DisplayCommand) != "":
+		return strings.TrimSpace(plan.DisplayCommand)
+	case strings.TrimSpace(plan.Guidance) != "":
+		return strings.TrimSpace(plan.Guidance)
+	case strings.TrimSpace(plan.DocumentationURL) != "":
+		return fmt.Sprintf("sign %s in (see %s)", id, strings.TrimSpace(plan.DocumentationURL))
+	}
+	return fmt.Sprintf("sign %s in", id)
+}
+
 // setupInstallFix tells the person how to install an agent. Setup never
 // installs one itself.
-func (c *commandContext) setupInstallFix(ctx context.Context, id string, agents []agentReadinessSnapshot) string {
+func (c *commandContext) setupInstallFix(ctx context.Context, id string, res *setupResult) string {
 	label := id
-	for _, a := range agents {
+	for _, a := range res.readiness {
 		if a.ID == id && a.Label != "" {
 			label = a.Label
 		}
-	}
-	var plans struct {
-		Plans []struct {
-			AgentID          string `json:"agentId"`
-			DocumentationURL string `json:"documentationUrl"`
-		} `json:"plans"`
 	}
 	fix := "install the " + label
 	if !strings.HasSuffix(label, " CLI") {
 		fix += " CLI"
 	}
-	if err := c.getJSON(ctx, "agents/auth-plans", &plans); err == nil {
-		for _, p := range plans.Plans {
-			if p.AgentID == id && strings.TrimSpace(p.DocumentationURL) != "" {
-				fix += " (see " + strings.TrimSpace(p.DocumentationURL) + ")"
-				break
-			}
-		}
+	if doc := strings.TrimSpace(c.setupAuthPlan(ctx, id, res).DocumentationURL); doc != "" {
+		fix += " (see " + doc + ")"
 	}
-	fix += ", then run `ao setup` again"
-	if alt := firstReadyAgentExcept(agents, id); alt != "" {
-		fix += fmt.Sprintf(" (or use `ao setup --agent %s`)", alt)
-	}
-	return fix
+	return fix + ", then run `ao setup` again"
 }
 
 type setupGitHubAuth struct {
@@ -723,6 +745,10 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 
 	res.Project = setupProjectFrom(project, reused)
 	switch {
+	case len(actions) > 0 && opts.readOnly():
+		step.Status = setupSkipped
+		step.Detail = fmt.Sprintf("project %s is already registered; `ao setup` would ", project.ID) + strings.TrimPrefix(strings.Join(actions, "; "), "would ")
+		return step
 	case len(actions) > 0:
 		step.Status = setupFixed
 		step.Detail = strings.Join(actions, "; ")

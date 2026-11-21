@@ -254,9 +254,12 @@ func TestSetupSignedOutAgentNeedsHumanWithLoginCommand(t *testing.T) {
 	if res.Ready || agent.Status != setupNeedsHuman {
 		t.Fatalf("ready=%v agent step = %+v", res.Ready, agent)
 	}
-	want := "run `claude auth login` (or use `ao setup --agent codex`)"
+	want := "claude auth login"
 	if agent.Fix != want || !reflect.DeepEqual(res.NextActions, []string{want}) {
 		t.Fatalf("fix = %q, next_actions = %q; want %q", agent.Fix, res.NextActions, want)
+	}
+	if !strings.Contains(agent.Detail, "(or use `ao setup --agent codex`)") {
+		t.Fatalf("detail = %q, want the ready alternative", agent.Detail)
 	}
 	if stepNamed(t, res, "verify").Status != setupNeedsHuman {
 		t.Fatalf("verify = %+v", stepNamed(t, res, "verify"))
@@ -274,8 +277,8 @@ func TestSetupMissingAgentNeedsHumanWithInstallHint(t *testing.T) {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
 	agent := stepNamed(t, decodeSetup(t, out), "agent")
-	if !strings.Contains(agent.Fix, "install the Gemini CLI (see https://example.com/gemini)") || !strings.Contains(agent.Fix, "--agent codex") {
-		t.Fatalf("fix = %q, want the docs link and the ready alternative", agent.Fix)
+	if agent.Fix != "install the Gemini CLI (see https://example.com/gemini), then run `ao setup` again" || !strings.Contains(agent.Detail, "--agent codex") {
+		t.Fatalf("step = %+v, want the docs link in the fix and the ready alternative in the detail", agent)
 	}
 }
 
@@ -635,7 +638,7 @@ func TestSetupHumanOutput(t *testing.T) {
 	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
 
 	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo)
-	for _, want := range []string{"[needs_human] agent", "fix: run `claude auth login`", "Not ready yet. Next steps:", "1. run `claude auth login`"} {
+	for _, want := range []string{"[needs_human] agent", "fix: claude auth login", "Not ready yet. Next steps:", "1. claude auth login"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
@@ -678,7 +681,7 @@ func TestSetupChecksAgentsAReusedProjectKeeps(t *testing.T) {
 	}
 	res := decodeSetup(t, out)
 	project := stepNamed(t, res, "project")
-	if project.Status != setupNeedsHuman || !strings.Contains(project.Detail, "runs codex") || !strings.HasPrefix(project.Fix, "run `codex login`") {
+	if project.Status != setupNeedsHuman || !strings.Contains(project.Detail, "runs codex") || project.Fix != "codex login" {
 		t.Fatalf("project step = %+v", project)
 	}
 	if res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
@@ -723,5 +726,52 @@ func TestSetupRefusesARepositoryAtHome(t *testing.T) {
 	}
 	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; !strings.Contains(fix, "--path") {
 		t.Fatalf("fix = %q", fix)
+	}
+}
+
+func TestSetupDaemonErrorsFailTheStep(t *testing.T) {
+	cases := []struct {
+		route, step string
+	}{
+		{"POST /api/v1/agents/readiness/ensure", "agent"},
+		{"GET /api/v1/system/github-auth", "github"},
+		{"GET /api/v1/projects", "project"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.step, func(t *testing.T) {
+			d := newSetupDaemon(t)
+			repo := gitRepo(t, true)
+			registerOnPost(d, repo, "example/calc")
+			d.set(tc.route, 500, `{"code":"INTERNAL","message":"boom"}`)
+			out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+			if got := ExitCode(err); got != setupExitFailed {
+				t.Fatalf("exit = %d (%v), want 1", got, err)
+			}
+			res := decodeSetup(t, out)
+			if s := stepNamed(t, res, tc.step); s.Status != setupFailed || !strings.Contains(s.Detail, "boom") {
+				t.Fatalf("%s step = %+v", tc.step, s)
+			}
+			if v := stepNamed(t, res, "verify"); v.Status != setupFailed || !strings.Contains(v.Detail, tc.step+" step failed") {
+				t.Fatalf("verify = %+v", v)
+			}
+		})
+	}
+}
+
+func TestSetupDryRunOnRegisteredProjectReportsWouldChange(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	d.set("GET /api/v1/projects", 200, `{"projects":[{"id":"calc"}]}`)
+	d.set("GET /api/v1/projects/calc", 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"claude-code"},"orchestrator":{"agent":"claude-code"}}}}`, repo))
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--yes", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatal("--dry-run saved the project's agents")
+	}
+	project := stepNamed(t, decodeSetup(t, out), "project")
+	if project.Status != setupSkipped || !strings.Contains(project.Detail, "would set worker agent codex") {
+		t.Fatalf("project step = %+v", project)
 	}
 }
