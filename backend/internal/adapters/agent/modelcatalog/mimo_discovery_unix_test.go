@@ -91,13 +91,13 @@ wait`)
 // zombie can linger where PID 1 does not reap, and kill(pid, 0) still succeeds
 // for it. A failed inspection is an error, never proof the process stopped.
 func processRunning(pid int) (bool, error) {
-	if syscall.Kill(pid, 0) != nil {
+	if processGone(pid) {
 		return false, nil
 	}
 	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		// ps exits non-zero when pid has gone since the kill check.
-		if syscall.Kill(pid, 0) != nil {
+		if processGone(pid) {
 			return false, nil
 		}
 		return false, fmt.Errorf("inspect process %d: %w", pid, err)
@@ -107,4 +107,9 @@ func processRunning(pid int) (bool, error) {
 		return false, fmt.Errorf("inspect process %d: ps printed no state", pid)
 	}
 	return !strings.HasPrefix(state, "Z"), nil
+}
+
+// processGone reports whether kill(pid, 0) finds no process.
+func processGone(pid int) bool {
+	return syscall.Kill(pid, 0) != nil
 }
