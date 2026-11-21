@@ -985,6 +985,72 @@ describe("BrowserPanel", () => {
 		);
 	});
 
+	it("confirms a reloading profile switch in an in-app dialog, not a native one", async () => {
+		let confirmListener: ((request: { viewId: string; profileId: string | null }) => void) | undefined;
+		window.ao!.browser.onProfileSwitchConfirm = vi.fn((listener) => {
+			confirmListener = listener;
+			return () => {
+				if (confirmListener === listener) confirmListener = undefined;
+			};
+		});
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(confirmListener).toBeDefined());
+
+		// Another session's browser asked; this panel stays quiet.
+		act(() => confirmListener!({ viewId: "7:other", profileId: null }));
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+		act(() => confirmListener!({ viewId: "42:sess-1", profileId: "11111111-1111-4111-8111-111111111111" }));
+		const dialog = await screen.findByRole("dialog", { name: "Switch profile?" });
+		expect(within(dialog).getByText("Switching profiles will reload the browser pages. Unsaved page state may be lost.")).toBeInTheDocument();
+		expect(window.ao!.browser.selectProfile).not.toHaveBeenCalled();
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "Switch profile" }));
+		expect(window.ao!.browser.selectProfile).toHaveBeenCalledWith({
+			viewId: "42:sess-1",
+			profileId: "11111111-1111-4111-8111-111111111111",
+			confirmed: true,
+		});
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("leaves the profile alone when the in-app switch prompt is cancelled", async () => {
+		let confirmListener: ((request: { viewId: string; profileId: string | null }) => void) | undefined;
+		window.ao!.browser.onProfileSwitchConfirm = vi.fn((listener) => {
+			confirmListener = listener;
+			return () => undefined;
+		});
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(confirmListener).toBeDefined());
+
+		act(() => confirmListener!({ viewId: "42:sess-1", profileId: null }));
+		const dialog = await screen.findByRole("dialog", { name: "Switch profile?" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(window.ao!.browser.selectProfile).not.toHaveBeenCalled();
+	});
+
+	it("shows a failed profile switch as an in-app error toast", async () => {
+		let failedListener: ((failure: { viewId: string; message: string }) => void) | undefined;
+		window.ao!.browser.onProfileSwitchFailed = vi.fn((listener) => {
+			failedListener = listener;
+			return () => undefined;
+		});
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(failedListener).toBeDefined());
+
+		act(() => failedListener!({ viewId: "7:other", message: "Not this one." }));
+		expect(useUiStore.getState().globalToast).toBeNull();
+
+		act(() => failedListener!({ viewId: "42:sess-1", message: "Profile storage is unavailable." }));
+		expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Couldn't switch profile",
+			body: "Profile storage is unavailable.",
+			tone: "error",
+		});
+	});
+
 	it("constrains the device frame to a named preset's width, and clears it back to fit", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 		const frame = screen.getByTestId("browser-device-frame").parentElement as HTMLElement;

@@ -606,6 +606,8 @@
 	"browser.profile.switchTitle": "Switch profile?",
 	"browser.profile.switchMessage": "Switching profiles will reload the browser pages.",
 	"browser.profile.switchDetail": "Unsaved page state may be lost.",
+	"browser.profile.switchConfirm": "Switch profile",
+	"browser.profile.switchFailed": "Couldn't switch profile",
 	"browser.queued": "Queued",
 	"browser.queuedCount": "Queued ({{count}})",
 	"browser.recentlyClosed": "Recently closed",

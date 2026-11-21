@@ -76,6 +76,7 @@ import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } f
 import type { BrowserProfile } from "../../shared/browser-profiles";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -567,24 +568,33 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	}, [controlsView]);
 
 	const selectBrowserProfile = useCallback(
-		(profileId: string | null) => {
+		(profileId: string | null, confirmed = false) => {
 			if (!viewId || !window.ao?.browser) return;
-			void window.ao.browser.selectProfile({
-				viewId,
-				profileId,
-				labels: {
-					temporary: t("browser.profile.temporary"),
-					manage: t("browser.profile.manage"),
-					switchTitle: t("browser.profile.switchTitle"),
-					switchMessage: t("browser.profile.switchMessage"),
-					switchDetail: t("browser.profile.switchDetail"),
-					cancel: t("common.no"),
-					confirm: t("common.yes"),
-				},
-			});
+			void window.ao.browser.selectProfile({ viewId, profileId, confirmed }).catch(() => undefined);
 		},
-		[t, viewId],
+		[viewId],
 	);
+
+	// The main process decides whether a switch needs confirming (the page has
+	// navigated) and reports failures; both are shown here, inside the app,
+	// rather than as native dialogs detached from the window.
+	const [pendingProfileSwitch, setPendingProfileSwitch] = useState<{ profileId: string | null } | null>(null);
+	const showProfileSwitchFailure = useUiStore((state) => state.showGlobalToast);
+	useEffect(() => {
+		if (!viewId || !window.ao?.browser) return;
+		const offConfirm = window.ao.browser.onProfileSwitchConfirm((request) => {
+			if (request.viewId === viewId) setPendingProfileSwitch({ profileId: request.profileId });
+		});
+		const offFailed = window.ao.browser.onProfileSwitchFailed((failure) => {
+			if (failure.viewId === viewId) showProfileSwitchFailure(t("browser.profile.switchFailed"), failure.message, "error");
+		});
+		return () => {
+			offConfirm();
+			offFailed();
+		};
+	}, [showProfileSwitchFailure, t, viewId]);
+	// A different session's browser has its own view; never carry a prompt over.
+	useEffect(() => setPendingProfileSwitch(null), [viewId]);
 
 	useEffect(() => {
 		if (!viewId) return;
@@ -1843,6 +1853,20 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 					) : null}
 				</div>
 			</div>
+			<ConfirmDialog
+				open={pendingProfileSwitch !== null}
+				title={t("browser.profile.switchTitle")}
+				description={`${t("browser.profile.switchMessage")} ${t("browser.profile.switchDetail")}`}
+				confirmLabel={t("browser.profile.switchConfirm")}
+				onConfirm={() => {
+					if (!pendingProfileSwitch) return;
+					setPendingProfileSwitch(null);
+					selectBrowserProfile(pendingProfileSwitch.profileId, true);
+				}}
+				onOpenChange={(open) => {
+					if (!open) setPendingProfileSwitch(null);
+				}}
+			/>
 		</div>
 	);
 });

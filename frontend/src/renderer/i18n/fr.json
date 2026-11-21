@@ -648,6 +648,8 @@
 	"browser.profile.switchTitle": "Changer de profil ?",
 	"browser.profile.switchMessage": "Changer de profil rechargera les pages du navigateur.",
 	"browser.profile.switchDetail": "L’état non enregistré de la page peut être perdu.",
+	"browser.profile.switchConfirm": "Changer de profil",
+	"browser.profile.switchFailed": "Impossible de changer de profil",
 	"browser.queued": "En file d'attente",
 	"browser.queuedCount": "En file d'attente ({{count}})",
 	"browser.recentlyClosed": "Fermés récemment",
