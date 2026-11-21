@@ -33,7 +33,7 @@ describe("hostUpdateAction", () => {
 
 describe("host update flow", () => {
 	beforeEach(() => {
-		useHostUpdateStore.setState({ byUrl: {} });
+		useHostUpdateStore.setState({ byUrl: {}, hostIds: {} });
 		localStorage.clear();
 		vi.restoreAllMocks();
 	});
@@ -217,6 +217,23 @@ describe("host update flow", () => {
 		expect(start).toHaveBeenCalledOnce();
 		useHostUpdateStore.setState({ localVersion: "0.15.1" });
 		autoUpdateHosts();
+		expect(start).toHaveBeenCalledTimes(2);
+	});
+
+	it("remembers an automatic attempt by host ID, not address", () => {
+		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockRejectedValue(new Error("no user bus"));
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10"));
+		const oldUrl = "https://old-tunnel.example";
+		const newUrl = "https://new-tunnel.example";
+		useHostUpdateStore.setState({ localVersion: "0.15.0", hostIds: { [oldUrl]: "host-a" }, byUrl: { [oldUrl]: { view: view("0.14.10") } } });
+		autoUpdateHosts();
+		expect(start).toHaveBeenCalledExactlyOnceWith(oldUrl);
+		useHostUpdateStore.setState({ hostIds: { [newUrl]: "host-a" }, byUrl: { [newUrl]: { view: view("0.14.10") } } });
+		autoUpdateHosts();
+		expect(start).toHaveBeenCalledOnce();
+		useHostUpdateStore.setState({ hostIds: { [oldUrl]: "host-b" }, byUrl: { [oldUrl]: { view: view("0.14.10") } } });
+		autoUpdateHosts();
+		expect(start).toHaveBeenLastCalledWith(oldUrl);
 		expect(start).toHaveBeenCalledTimes(2);
 	});
 

@@ -20,12 +20,14 @@ type HostUpdateState = {
 type Store = {
 	byUrl: Record<string, HostUpdateState>;
 	localVersion?: string;
+	hostIds: Record<string, string>;
 	patch: (url: string, change: Partial<HostUpdateState>) => void;
 	retain: (urls: string[]) => void;
 };
 
 export const useHostUpdateStore = create<Store>((set) => ({
 	byUrl: {},
+	hostIds: {},
 	patch: (url, change) => set((state) => ({ byUrl: { ...state.byUrl, [url]: { ...(state.byUrl[url] ?? { view: null }), ...change } } })),
 	retain: (urls) => set((state) => ({ byUrl: Object.fromEntries(Object.entries(state.byUrl).filter(([url, entry]) => urls.includes(url) || entry.updating)) })),
 }));
@@ -113,12 +115,13 @@ export async function startHostUpdate(url: string): Promise<void> {
 const AUTO_ATTEMPTS_KEY = "ao.autoUpdateRemoteHostAttempts";
 
 export function autoUpdateHosts(): void {
-	const { byUrl, localVersion } = useHostUpdateStore.getState();
+	const { byUrl, hostIds, localVersion } = useHostUpdateStore.getState();
 	let attempts: Record<string, string> = {};
 	try { attempts = JSON.parse(localStorage.getItem(AUTO_ATTEMPTS_KEY) ?? "{}") ?? {}; } catch { attempts = {}; }
 	for (const [url, state] of Object.entries(byUrl)) {
-		if (!localVersion || hostUpdateAction(state, localVersion)?.kind !== "update" || attempts[url] === localVersion) continue;
-		attempts[url] = localVersion;
+		const host = hostIds[url] || url;
+		if (!localVersion || hostUpdateAction(state, localVersion)?.kind !== "update" || attempts[host] === localVersion) continue;
+		attempts[host] = localVersion;
 		localStorage.setItem(AUTO_ATTEMPTS_KEY, JSON.stringify(attempts));
 		void startHostUpdate(url);
 	}
@@ -128,9 +131,10 @@ export function useHostUpdatePolling(hosts: RemoteHost[]): void {
 	const localVersion = useAppVersion();
 	useEffect(() => { useHostUpdateStore.setState({ localVersion }); }, [localVersion]);
 	const readable = hosts.filter((host) => host.failureReason !== "unauthorized" && (host.status === "connected" || host.failureReason === "incompatible"));
-	const key = readable.map((host) => `${host.url}\n${host.status}`).join("\0");
+	const key = readable.map((host) => `${host.url}\n${host.status}\n${host.hostId}`).join("\0");
 	useEffect(() => {
 		const urls = readable.map((host) => host.url);
+		useHostUpdateStore.setState({ hostIds: Object.fromEntries(readable.map((host) => [host.url, host.hostId])) });
 		useHostUpdateStore.getState().retain(urls);
 		const readAll = () => { for (const url of urls) void refreshHostUpdate(url); };
 		readAll();
