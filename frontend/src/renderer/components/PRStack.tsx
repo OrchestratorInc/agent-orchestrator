@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CornerDownRight, Plus, RefreshCw } from "lucide-react";
+import { CornerDownRight, Plus } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey } from "../hooks/usePRStack";
@@ -80,7 +80,7 @@ function LayerRow({ current, hostId, layer, session }: { current: boolean; hostI
 			) : (
 				<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground"><LayerName layer={layer} /></span>
 			)}
-			{(layer.behindParent ?? 0) > 0 ? <span className="shrink-0 text-xs text-warning">{t("pr.stack.needsRebase")}</span> : null}
+			{(layer.behindParent ?? 0) > 0 ? <span className="shrink-0 text-xs text-muted-foreground">{t("pr.stack.needsRebase")}</span> : null}
 		</li>
 	);
 }
@@ -111,14 +111,13 @@ function StackRebaseRow({ hostId, stack }: { hostId?: string; stack: PRStack }) 
 	const { layer, below } = next;
 	const sent = asked === layer.headSha;
 	return (
-		<div className="flex min-w-0 flex-col gap-1 rounded-md border border-warning/30 bg-warning/5 px-2 py-1.5" data-testid="pr-stack-rebase">
-			<p className="m-0 text-xs leading-normal text-foreground" role="status">
+		<div className="flex min-w-0 flex-col gap-1 px-1.5" data-testid="pr-stack-rebase">
+			<p className="m-0 text-xs leading-normal text-muted-foreground" role="status">
 				{sent ? t("pr.stack.askedRebase", { number: layer.number }) : t("pr.stack.behind", { number: layer.number, below: below.number })}
 			</p>
 			<div className="flex flex-wrap items-center gap-2">
 				{layer.sessionId && !sent ? (
-					<Button className="h-6 px-2 text-xs" disabled={ask.isPending} onClick={() => ask.mutate(next)} size="sm" type="button" variant="secondary">
-						<RefreshCw aria-hidden="true" className="size-3" />
+					<Button className="-ml-2 h-6 px-2 text-xs" disabled={ask.isPending} onClick={() => ask.mutate(next)} size="sm" type="button" variant="ghost">
 						{t("pr.stack.askRebase", { number: layer.number })}
 					</Button>
 				) : null}
