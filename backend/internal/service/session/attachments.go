@@ -21,5 +21,11 @@ func (s *Service) StageAttachments(
 	id domain.SessionID,
 	attachments []ports.SpawnAttachment,
 ) ([]string, error) {
+	// Files staged into a held preparation live only in its worktree; staging
+	// counts as use so the host does not expire it under the page. Ids that
+	// are not preparations are ignored.
+	if renewer, ok := s.manager.(taskPreparationRenewer); ok {
+		renewer.RenewTaskPreparation(domain.TaskPreparationToken(id))
+	}
 	return s.manager.StageAttachments(ctx, id, attachments)
 }

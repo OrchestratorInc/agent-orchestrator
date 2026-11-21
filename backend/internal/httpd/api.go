@@ -42,6 +42,7 @@ type APIDeps struct {
 	Activity           controllers.ActivityRecorder
 	PRRefresh          controllers.PRRefresher
 	NativeSessions     ports.AgentNativeSessionResolver
+	TerminalReplies    ports.AgentResolver // Stop replies from native history; nil disables
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
 	UsageReport        controllers.UsageReportService
@@ -221,6 +222,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Activity:                 deps.Activity,
 			PRRefresh:                deps.PRRefresh,
 			NativeSessions:           deps.NativeSessions,
+			TerminalReplies:          deps.TerminalReplies,
 			DataDir:                  cfg.DataDir,
 			Usage:                    deps.UsageHooks,
 			Attachments:              attachmentstore.New(cfg.DataDir),
@@ -244,7 +246,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions)},
+		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions), Models: deps.Agents},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
@@ -365,9 +367,11 @@ func (a *API) Register(root chi.Router) {
 					}
 					// A managed preview carries the dev server's HMR socket and event
 					// streams, and the agent browser its stream socket: both stay open
-					// as long as the page does.
+					// as long as the page does. A file upload streams to disk for as
+					// long as its bytes keep coming; the handler ends one that stalls.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
-						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" {
+						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" ||
+						pattern == "/api/v1/attachment-uploads" {
 						next.ServeHTTP(w, req)
 						return
 					}
