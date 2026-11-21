@@ -2881,7 +2881,7 @@ func TestACPInterruptCancelsQuestionTheProviderKeepsOpen(t *testing.T) {
 		t.Fatalf("elicitation response = %#v, want cancel", response)
 	}
 	if err := conv.(ports.ChatInputResponder).ResolveInput(context.Background(), requestID,
-		ports.ChatInputResponse{Action: "accept", Content: map[string]any{"choice": "late"}}); err != ports.ErrChatRequestNotPending {
+		ports.ChatInputResponse{Action: "accept", Content: map[string]any{"choice": "late"}}); !errors.Is(err, ports.ErrChatRequestNotPending) {
 		t.Fatalf("late answer error = %v, want ErrChatRequestNotPending", err)
 	}
 }
