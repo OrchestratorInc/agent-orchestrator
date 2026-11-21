@@ -124,11 +124,14 @@ credential assignments, common credential flags, authorization values, and
 email addresses, and flags such as `--sort-key` remain readable; this is not
 general secret detection.
 
-Claude stop acknowledgments do not establish completion. If the SDK rejects a
-stop while the session and task still appear live, accept reconciliation and log
-the rejection; do not invent a stopped outcome. Native notifications or snapshots
-settle the task, and Stop remains retryable if it stays live. Already-settled
-tasks return not-stoppable, and closed-session failures still propagate.
+Claude stop acknowledgments do not establish completion. After an SDK rejection,
+wait up to one second for native reconciliation. An observed completion maps to
+not-stoppable; a task still live returns a visible retryable error, never a success
+or the UI's silent not-stoppable response. Native notifications or snapshots
+settle task state, and Stop remains retryable if it stays live. Closed-session
+failures still propagate. A notification arriving after the bounded wait can
+still settle the reading, but cannot retroactively turn a failed request into
+success.
 
 `GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
 `ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with

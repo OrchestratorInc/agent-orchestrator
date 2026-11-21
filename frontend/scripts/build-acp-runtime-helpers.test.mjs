@@ -130,28 +130,57 @@ describe("patchClaudeBackgroundTasks", () => {
 		const handlers = new Map();
 		const connection = { onRequest(method, _parser, handler) { handlers.set(method, handler); return connection; } };
 		const session = {};
-		const logger = { error: vi.fn() };
 		const dispatch = new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", `${readFileSync(path, "utf8")}\nreturn dispatch;`)(
-			connection, { sessions: { native: session }, logger }, "goal", p => p,
-			{ invalidParams: () => new Error("invalid session"), methodNotFound: () => new Error("unavailable") },
+			connection, { sessions: { native: session } }, "goal", p => p,
+			{ invalidParams: () => new Error("invalid session"), methodNotFound: () => new Error("unavailable"), internalError: (data, message) => Object.assign(new Error(message), { code: -32603, data }) },
 		);
-		return { emit: message => dispatch(session, message), read: () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } }), session, handlers, logger };
+		return { emit: message => dispatch(session, message), read: () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } }), session, handlers };
 	}
 
-	it("accepts an ambiguous live stop without inventing a stopped outcome or disabling retry", async () => {
+	it("reports an unacknowledged live stop and keeps retry available", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+			const failure = new Error("transport failed");
+			h.session.query = { stopTask: vi.fn(async () => { throw failure; }) };
+			const stop = () => h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } });
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const outcome = stop().catch(error => error);
+				await vi.advanceTimersByTimeAsync(1000);
+				expect(await outcome).toMatchObject({ code: -32603, message: "Stop not acknowledged; try again.", data: { retryable: true } });
+				expect(h.read().tasks).toMatchObject([{ id: "server", state: "running", stoppable: true }]);
+			}
+			expect(h.session.query.stopTask).toHaveBeenCalledTimes(2);
+			h.session.query.stopTask = async () => { h.session.queryClosed = true; throw failure; };
+			await expect(stop()).rejects.toBe(failure);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("acknowledges an SDK-accepted stop without inventing completion", async () => {
 		const h = harness();
 		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
-		const failure = new Error("transport failed");
-		h.session.query = { stopTask: vi.fn(async () => { throw failure; }) };
-		const stop = () => h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } });
-		await expect(stop()).resolves.toEqual({});
-		expect(h.read().tasks).toMatchObject([{ id: "server", state: "running", stoppable: true }]);
-		await expect(stop()).resolves.toEqual({});
-		expect(h.session.query.stopTask).toHaveBeenCalledTimes(2);
-		expect(h.logger.error).toHaveBeenCalledTimes(2);
-		expect(h.logger.error).toHaveBeenLastCalledWith(expect.stringContaining("retaining live task"), failure);
-		h.session.query.stopTask = async () => { h.session.queryClosed = true; throw failure; };
-		await expect(stop()).rejects.toBe(failure);
+		h.session.query = { stopTask: async () => {} };
+		await expect(h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } })).resolves.toEqual({});
+		expect(h.read().tasks[0]).toMatchObject({ state: "running", stoppable: true });
+		h.emit({ subtype: "task_notification", task_id: "server", status: "stopped" });
+		expect(h.read().tasks[0]).toMatchObject({ state: "stopped", stoppable: false });
+	});
+
+	it("reconciles a rejected stop when the next snapshot removes the task", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+			h.session.query = { stopTask: async () => {
+				setTimeout(() => h.emit({ subtype: "background_tasks_changed", tasks: [] }), 250);
+				throw new Error("already ended");
+			} };
+			const outcome = h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } }).catch(error => error);
+			await vi.advanceTimersByTimeAsync(250);
+			expect(await outcome).toEqual(expect.objectContaining({ message: "invalid session" }));
+			expect(h.read().tasks).toEqual([]);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("maps a terminal notification before rejection to not-running", async () => {
@@ -164,7 +193,7 @@ describe("patchClaudeBackgroundTasks", () => {
 		await expect(h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } })).rejects.toThrow("invalid session");
 	});
 
-	it.each([50, 250, 1000, 10000])("accepts a rejection before a terminal notification delayed %s ms", async (delay) => {
+	it.each([0, 50, 250, 999, 1000, 1001, 10000])("reports the native outcome or a visible error for a notification delayed %s ms", async (delay) => {
 		vi.useFakeTimers();
 		try {
 			const h = harness();
@@ -173,11 +202,14 @@ describe("patchClaudeBackgroundTasks", () => {
 				setTimeout(() => h.emit({ subtype: "task_notification", task_id: "server", status: "stopped" }), delay);
 				throw new Error("already ended");
 			} };
-			const result = h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } });
-			const outcome = result.catch(error => error);
-			await vi.advanceTimersByTimeAsync(100);
-			expect(await outcome).toEqual({});
-			if (delay > 100) expect(h.read().tasks[0]).toMatchObject({ state: "running", stoppable: true });
+			const outcome = h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } }).catch(error => error);
+			await vi.advanceTimersByTimeAsync(1000);
+			if (delay <= 1000) {
+				expect(await outcome).toEqual(expect.objectContaining({ message: "invalid session" }));
+			} else {
+				expect(await outcome).toMatchObject({ code: -32603, message: "Stop not acknowledged; try again.", data: { retryable: true } });
+				expect(h.read().tasks[0]).toMatchObject({ state: "running", stoppable: true });
+			}
 			await vi.advanceTimersByTimeAsync(delay);
 			expect(h.read().tasks[0]).toMatchObject({ state: "stopped", stoppable: false });
 		} finally { vi.useRealTimers(); }
