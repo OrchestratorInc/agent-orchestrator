@@ -111,13 +111,29 @@ func readLogTail(dir, rel string, notBefore time.Time) (raw string, dropped, ok 
 // status.txt`). It answers only for a path the shell would not expand
 // further, and never for a device such as /dev/null.
 //
-// The line is read as a POSIX shell (sh, bash, zsh, Git Bash) reads it, on
-// every platform. On Windows that means a backslash escapes, so a path written
-// with one is not followed, and only forward-slash paths are: drive-absolute
-// (C:/logs/dev.log), rooted without a drive (/tmp/dev.log, outside dir), or
-// relative to dir.
+// The line is read as a POSIX shell (sh, bash, zsh, Git Bash) reads it. On
+// Windows a line with nothing only a POSIX shell reads ($, backquotes, nohup)
+// is read as cmd.exe reads it instead, which is how Codex reports commands
+// there: see cmdLine.
 func stdoutFile(command, dir, home string) (string, bool) {
-	tokens, ok := lexShell(command)
+	return stdoutFileAs(command, dir, home, hostWindows && cmdLine(command))
+}
+
+// cmdLine reports a Windows command line that reads as cmd.exe, not a POSIX
+// shell: it has none of $, backquotes or nohup, which only a POSIX shell uses.
+func cmdLine(command string) bool {
+	return !strings.ContainsAny(command, "$`") && !strings.Contains(command, "nohup")
+}
+
+// stdoutFileAs reads command as a POSIX shell, or as cmd.exe when cmd is set.
+// cmd.exe runs the commands either side of `&` one after the other, so no
+// command is in the background, and the last one that redirects its output
+// decides (`echo start > status.txt & npm run dev > dev.log`). A backslash
+// there is a path separator (logs\dev.log), not an escape. A POSIX line on
+// Windows follows only forward-slash paths: drive-absolute (C:/logs/dev.log),
+// rooted without a drive (/tmp/dev.log, outside dir), or relative to dir.
+func stdoutFileAs(command, dir, home string, cmd bool) (string, bool) {
+	tokens, ok := lexShell(command, cmd)
 	if !ok {
 		return "", false
 	}
@@ -173,6 +189,8 @@ func stdoutFile(command, dir, home string) (string, bool) {
 				}
 			case "&":
 				switch {
+				case cmd:
+					// cmd.exe's `&` means "then": nothing runs in the background.
 				case ran.set:
 					background = &ran
 				case hadGroup >= 0:
@@ -200,7 +218,7 @@ func stdoutFile(command, dir, home string) (string, bool) {
 			}
 			// The command's last redirect decides, even one that can't be followed.
 			current = redirect{set: true}
-			if isDevice(to.text) || (hostWindows && to.escaped) {
+			if isDevice(to.text) || (hostWindows && to.escaped) || (cmd && strings.EqualFold(to.text, "NUL")) {
 				continue
 			}
 			current.target, current.found = resolveShellPath(to, cwd.dir, cwd.known, home)
@@ -208,6 +226,14 @@ func stdoutFile(command, dir, home string) (string, bool) {
 	}
 	finish()
 	chosen := background
+	if chosen == nil && cmd {
+		for i := len(commands) - 1; i >= 0; i-- {
+			if commands[i].set {
+				chosen = &commands[i]
+				break
+			}
+		}
+	}
 	if chosen == nil {
 		for i := range commands {
 			if commands[i].set {
@@ -300,8 +326,10 @@ type shellToken struct {
 // lexShell splits a command line into words, separators and redirects, as a
 // POSIX shell does for the parts that decide where output goes. ok is false
 // for a line it can't follow, such as one with a here-document or an
-// unterminated quote.
-func lexShell(line string) ([]shellToken, bool) {
+// unterminated quote. With cmd set it reads the line as cmd.exe does: a
+// backslash and a single quote are plain characters, ^ escapes, %VAR%
+// expands, and there are no comments or ~ for home.
+func lexShell(line string, cmd bool) ([]shellToken, bool) {
 	var tokens []shellToken
 	var word strings.Builder
 	current := shellToken{kind: tokenWord, literal: true}
@@ -321,6 +349,25 @@ func lexShell(line string) ([]shellToken, bool) {
 	}
 	for i := 0; i < len(line); i++ {
 		c := line[i]
+		if cmd {
+			switch c {
+			case '\\', '\'', '#', '~':
+				word.WriteByte(c)
+				inWord = true
+				continue
+			case '%':
+				current.literal, inWord = false, true
+				word.WriteByte(c)
+				continue
+			case '^':
+				if i+1 < len(line) {
+					i++
+					word.WriteByte(line[i])
+					inWord, current.quoted, current.escaped = true, true, true
+				}
+				continue
+			}
+		}
 		switch c {
 		case '\\':
 			if i+1 < len(line) {

@@ -655,11 +655,30 @@ describe("background tasks side panel", () => {
 		store.syncTaskTabs(id, [task("dev"), ...Array.from({ length: FINISHED_TASK_TABS_KEPT + 1 }, (_, n) => done(n + 2))]);
 		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
 		expect(ids).toContain("dev");
-		// The oldest finished row goes; the open one stays past the cap.
+		// The oldest finished row goes; the open one, and the rows the reading still lists, stay past the cap.
 		expect(ids).not.toContain("done-0");
 		expect(ids).toContain("done-1");
-		expect(ids.filter((taskId) => taskId !== "dev")).toHaveLength(FINISHED_TASK_TABS_KEPT + 1);
+		expect(ids.filter((taskId) => taskId !== "dev")).toHaveLength(FINISHED_TASK_TABS_KEPT + 2);
 		expect(panel().seenFailedTasks).toEqual([failedTaskKey(done(1))]);
+	});
+
+	it("drops the finished rows that ended longest ago, not the first seen", () => {
+		const store = useUiStore.getState();
+		const at = (minute: number) => `2026-11-14T10:${String(minute).padStart(2, "0")}:00Z`;
+		// A dev server seen first, which only just failed.
+		store.syncTaskTabs(id, [task("dev")]);
+		const finished = Array.from({ length: FINISHED_TASK_TABS_KEPT }, (_, n) => task(`done-${n}`, { state: "succeeded", endedAt: at(n) }));
+		store.syncTaskTabs(id, [task("dev"), ...finished]);
+		const failed = task("dev", { state: "failed", runId: "r", endedAt: at(59) });
+		store.syncTaskTabs(id, [failed]);
+		store.acknowledgeFailedTask(id, failed);
+		// The reading no longer lists the others, and one more task finishes.
+		store.syncTaskTabs(id, [failed, task("late", { state: "succeeded", endedAt: at(58) })]);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toContain("dev");
+		expect(ids).not.toContain("done-0");
+		expect(ids).toHaveLength(FINISHED_TASK_TABS_KEPT);
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(failed)]);
 	});
 
 	it("leaves a session with no tasks untouched", () => {

@@ -101,13 +101,24 @@ export const failedTaskKey = (task: BackgroundTask) => `${task.id}\n${task.runId
  */
 export const FINISHED_TASK_TABS_KEPT = 32;
 
-/** Drops the oldest finished rows past the cap, and the failures seen on them. */
-function pruneTaskTabs(tabs: BackgroundTaskTab[], active: string | undefined, seenFailedTasks: string[] | undefined) {
+/**
+ * Drops the oldest finished rows past the cap, and the failures seen on them.
+ * Oldest means ended longest ago (a row with no end time counts as oldest),
+ * then first seen. A row the latest reading still lists stays: dropping it
+ * would only bring it back as new on the next poll, raising its failure again.
+ */
+function pruneTaskTabs(tabs: BackgroundTaskTab[], active: string | undefined, seenFailedTasks: string[] | undefined, listed: ReadonlySet<string>) {
 	const finished = tabs.filter((tab) => tab.ended || (tab.task.state !== "running" && tab.task.state !== "paused"));
 	if (finished.length <= FINISHED_TASK_TABS_KEPT) return { taskTabs: tabs, seenFailedTasks };
-	// Tabs are in first-seen order, so the oldest finished ones lead.
-	const dropped = new Set(finished.slice(0, finished.length - FINISHED_TASK_TABS_KEPT).map((tab) => tab.task.id));
-	dropped.delete(active ?? "");
+	const endedAt = (tab: BackgroundTaskTab) => {
+		const at = tab.task.endedAt ? Date.parse(tab.task.endedAt) : Number.NaN;
+		return Number.isNaN(at) ? -Infinity : at;
+	};
+	// Array.prototype.sort is stable, so equal end times keep first-seen order.
+	const oldestFirst = finished.filter((tab) => tab.task.id !== active && !listed.has(tab.task.id))
+		.sort((left, right) => endedAt(left) - endedAt(right) || 0);
+	const dropped = new Set(oldestFirst.slice(0, finished.length - FINISHED_TASK_TABS_KEPT).map((tab) => tab.task.id));
+	if (dropped.size === 0) return { taskTabs: tabs, seenFailedTasks };
 	const taskTabs = tabs.filter((tab) => !dropped.has(tab.task.id));
 	return {
 		taskTabs,
@@ -919,7 +930,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, isOpen: true, view: "task", ...pruneTaskTabs(taskTabs, task.id, current.seenFailedTasks), activeTaskTab: task.id },
+					[sessionId]: { ...current, isOpen: true, view: "task", taskTabs, activeTaskTab: task.id },
 				},
 			};
 		}),
@@ -956,7 +967,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 				return { ...tab, ended: true };
 			});
 			if (!changed) return state;
-			const pruned = pruneTaskTabs([...taskTabs, ...added], current.activeTaskTab, current.seenFailedTasks);
+			const pruned = pruneTaskTabs([...taskTabs, ...added], current.activeTaskTab, current.seenFailedTasks, new Set(listed.map((task) => task.id)));
 			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, ...pruned } } };
 		}),
 	acknowledgeFailedTask: (sessionId, task) =>

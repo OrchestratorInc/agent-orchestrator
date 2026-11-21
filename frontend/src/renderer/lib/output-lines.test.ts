@@ -20,7 +20,12 @@ describe("output lines", () => {
 		["[vite] warning: unused import", "warning"],
 		["(node:4120) [DEP0040] DeprecationWarning: punycode is deprecated", "warning"],
 		["time=12:00 level=warn msg=slow", "warning"],
+		["[vite] Internal server error: Failed to resolve import './x'", "error"],
+		["Module not found: Error: Can't resolve './y' in '/app/src'", "error"],
+		["Uncaught SyntaxError: Unexpected token '<'", "error"],
+		[" FAIL  src/c.test.ts > breaks", "error"],
 		// A word only counts where a tool puts it.
+		["no FAIL here", undefined],
 		["plain line with error: inside", undefined],
 		["handled error: none", undefined],
 		["LOG_LEVEL=ERROR", undefined],

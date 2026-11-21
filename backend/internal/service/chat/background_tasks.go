@@ -168,11 +168,15 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 	if err := ctx.Err(); err != nil {
 		return ports.ChatBackgroundTaskOutput{}, err
 	}
+	// readFailed: the provider was asked and failed, rather than not reporting
+	// this task's output at all.
+	readFailed := false
 	if err != nil {
 		// A panel polls this: a controller closing mid-read, a timeout or a
 		// provider error is a moment without output, not a server failure.
 		if !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
-			s.log.Debug("background task output unavailable", "session", id, "task", taskID, "error", err)
+			readFailed = true
+			s.log.Warn("background task output read failed", "session", id, "task", taskID, "error", err)
 		}
 		output, err = ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
@@ -188,11 +192,9 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 			output = logged
 		}
 		err = nil
-	case logged.LogOutsideWorkspace:
-		// Say why the log isn't shown, rather than that there is no output.
-		if err != nil {
-			output = ports.ChatBackgroundTaskOutput{}
-		}
+	case logged.LogOutsideWorkspace && !readFailed:
+		// Say why the log isn't shown, rather than that there is no output. A
+		// failed read stays unavailable instead: the panel keeps what it read.
 		output.LogOutsideWorkspace, err = true, nil
 	}
 	if err != nil {

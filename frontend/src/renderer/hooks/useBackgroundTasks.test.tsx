@@ -95,13 +95,14 @@ describe("background task queries", () => {
 
 describe("a background task's output", () => {
 	beforeEach(() => vi.clearAllMocks());
-	function Output() {
-		const query = useBackgroundTaskOutput("s", "dev", { enabled: true, live: false });
-		return <span>{query.data ? `${query.data.availability}:${query.data.output}:${query.data.lastRead ? "last" : "live"}` : "loading"}</span>;
+	function Output({ runId = "r1", over = true }: { runId?: string; over?: boolean }) {
+		const query = useBackgroundTaskOutput("s", "dev", runId, { enabled: true, live: false, over });
+		const error = query.isError ? ":error" : "";
+		return <span>{query.data ? `${query.data.availability}:${query.data.output}:${query.data.lastRead ? "last" : "live"}${error}` : "loading"}</span>;
 	}
+	const reply = (availability: string, output: string) => ({ data: { sessionId: "s", taskId: "dev", availability, output } });
 
 	it("keeps the last output read when the daemon no longer has it, across remounts", async () => {
-		const reply = (availability: string, output: string) => ({ data: { sessionId: "s", taskId: "dev", availability, output } });
 		getMock.mockResolvedValueOnce(reply("ready", "ready on :3000"));
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const view = render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
@@ -110,6 +111,8 @@ describe("a background task's output", () => {
 		getMock.mockResolvedValue(reply("unavailable", ""));
 		await client.refetchQueries();
 		await screen.findByText("ready:ready on :3000:last");
+		// Never collected, so reopening it minutes later still shows it.
+		expect(client.getQueryCache().find({ queryKey: ["background-task-output", "s", "dev", "r1"] })?.gcTime).toBe(Infinity);
 		// Reopening the task later still shows it.
 		view.unmount();
 		const again = render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
@@ -122,6 +125,22 @@ describe("a background task's output", () => {
 		render(<QueryClientProvider client={fresh}><Output /></QueryClientProvider>);
 		await screen.findByText("unavailable::live");
 		fresh.clear();
+	});
+
+	it("treats an unavailable read of a running task as a failed poll, and never shows another run's output", async () => {
+		getMock.mockResolvedValueOnce(reply("ready", "watching"));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Output over={false} /></QueryClientProvider>);
+		await screen.findByText("ready:watching:live");
+		getMock.mockResolvedValue(reply("unavailable", ""));
+		await client.refetchQueries();
+		// Still running: the output read so far stays, not marked last read.
+		await screen.findByText("ready:watching:live:error");
+		view.unmount();
+		// A rerun under the same task id starts with nothing read.
+		render(<QueryClientProvider client={client}><Output runId="r2" /></QueryClientProvider>);
+		await screen.findByText("unavailable::live");
+		client.clear();
 	});
 });
 

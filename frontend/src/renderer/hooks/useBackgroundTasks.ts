@@ -82,17 +82,28 @@ export function useStopBackgroundTask(sessionId: string) {
 /** `lastRead`: the daemon no longer has this output, so it is the last one read. */
 export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"] & { lastRead?: boolean };
 
-export const backgroundTaskOutputQueryKey = (sessionId: string, taskId: string) => ["background-task-output", sessionId, taskId] as const;
+/** One run's output: a rerun under the same task id never shows the previous run's. */
+export const backgroundTaskOutputQueryKey = (sessionId: string, taskId: string, runId?: string) =>
+	["background-task-output", sessionId, taskId, runId ?? ""] as const;
 
 /**
  * One task's latest output (the daemon keeps the last 200 lines). Polls every
  * second while `live`; otherwise reads once. Unchanged output keeps the same
- * object, so an idle task does not re-render its tab. Output the daemon no
- * longer has, after the chat ends or the daemon restarts, stays as last read.
+ * object, so an idle task does not re-render its tab.
+ *
+ * Once the task is `over`, output the daemon no longer has (the chat ended or
+ * the daemon restarted) stays as last read. The query is never collected, so
+ * reopening the task much later still shows it. While the task runs, such a
+ * read is a failed poll instead: the output read so far stays, with the error.
  */
-export function useBackgroundTaskOutput(sessionId: string, taskId: string, { enabled, live }: { enabled: boolean; live: boolean }) {
+export function useBackgroundTaskOutput(
+	sessionId: string,
+	taskId: string,
+	runId: string | undefined,
+	{ enabled, live, over }: { enabled: boolean; live: boolean; over: boolean },
+) {
 	const queryClient = useQueryClient();
-	const queryKey = backgroundTaskOutputQueryKey(sessionId, taskId);
+	const queryKey = backgroundTaskOutputQueryKey(sessionId, taskId, runId);
 	return useQuery({
 		queryKey,
 		enabled,
@@ -106,11 +117,13 @@ export function useBackgroundTaskOutput(sessionId: string, taskId: string, { ena
 			}
 			const previous = queryClient.getQueryData<BackgroundTaskOutput>(queryKey);
 			if (data.availability === "unavailable" && previous?.availability === "ready" && previous.output) {
+				if (!over) throw new Error("Background task output unavailable");
 				return previous.lastRead ? previous : { ...previous, lastRead: true };
 			}
 			return data as BackgroundTaskOutput;
 		},
 		refetchInterval: live ? 1_000 : false,
+		gcTime: Infinity,
 		retry: false,
 	});
 }

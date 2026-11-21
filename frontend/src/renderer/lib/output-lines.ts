@@ -19,11 +19,20 @@ const tone = (symbol: string, word: string, levels: string, npm: string, level: 
 	String.raw`\blevel=(?:${level})\b`,
 ].join("|"));
 const ERROR = tone("[×✗✘]\\s", "Error|error", "ERROR|ERR!?|FATAL", "ERR!", "error|fatal");
+// What dev servers and test runners print for a failure: vite's "Internal
+// server error:", webpack's "Module not found: Error: Can't resolve", a
+// browser's "Uncaught SyntaxError:", and vitest's or jest's " FAIL " marker.
+const DEV_ERROR = new RegExp([
+	PREFIX + String.raw`(?:Internal server error|Module not found):`,
+	PREFIX + String.raw`Uncaught (?:[A-Z][A-Za-z]*)?Error\b`,
+	String.raw`\bError: Can't resolve\b`,
+	String.raw`^\s*FAIL\s`,
+].join("|"));
 const WARNING = tone("⚠", "Warning|warning|Warn|warn", "WARNING|WARN", "WARN\\b", "warn|warning");
 const OK = /^\s*[✓✔]\s/;
 
 export function lineTone(line: string): LineTone | undefined {
-	if (ERROR.test(line)) return "error";
+	if (ERROR.test(line) || DEV_ERROR.test(line)) return "error";
 	if (WARNING.test(line)) return "warning";
 	if (OK.test(line)) return "ok";
 	return undefined;

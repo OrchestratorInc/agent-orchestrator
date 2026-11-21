@@ -564,3 +564,28 @@ func TestBackgroundTaskOutputSaysALogOutsideTheWorkspaceIsNotShown(t *testing.T)
 		t.Fatalf("output=%+v err=%v", got, err)
 	}
 }
+
+func TestBackgroundTaskOutputKeepsAFailedReadUnavailableWhenTheLogIsOutsideTheWorkspace(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	outside := filepath.ToSlash(filepath.Join(t.TempDir(), "dev.log"))
+	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Command: "npm run dev > " + outside + " 2>&1", StartedAt: &started}
+	conv := &outputConversation{
+		backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}},
+		output:                 ports.ChatBackgroundTaskOutput{Text: "stderr line\n"},
+	}
+	h := newHarnessWithConversation(t, conv)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	// A good read keeps what the task printed itself, and says why the log isn't shown.
+	got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell")
+	if err != nil || got.Text != "stderr line\n" || !got.LogOutsideWorkspace {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+	// A provider error is a failed read, not an empty one.
+	conv.outputErr = errors.New("provider timed out")
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("failed read output=%+v err=%v", got, err)
+	}
+}

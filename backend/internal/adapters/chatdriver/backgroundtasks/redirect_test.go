@@ -75,12 +75,13 @@ func TestStdoutFileFollowsWhereACommandSendsItsOutput(t *testing.T) {
 		if tc.want != "" {
 			want = filepath.FromSlash(volume + tc.want)
 		}
-		got, ok := stdoutFile(command, dir, home)
+		// Read as a POSIX shell on every host; cmd.exe lines are TestStdoutFileReadsACmdLine.
+		got, ok := stdoutFileAs(command, dir, home, false)
 		if got != want || ok != (want != "") {
-			t.Errorf("stdoutFile(%q) = %q, %v; want %q", command, got, ok, want)
+			t.Errorf("stdoutFileAs(%q) = %q, %v; want %q", command, got, ok, want)
 		}
 	}
-	if got, ok := stdoutFile(`./run > out.log`, "", home); ok {
+	if got, ok := stdoutFileAs(`./run > out.log`, "", home, false); ok {
 		t.Errorf("relative path without a directory = %q", got)
 	}
 }
@@ -199,8 +200,56 @@ func TestStdoutFileOnWindowsKeepsRootedAndBackslashPathsOutOfTheWorkspace(t *tes
 	if got, ok := RedirectedOutput(`npm run dev > /tmp/dev.log 2>&1`, t.TempDir(), &started); ok || !got.LogOutsideWorkspace {
 		t.Errorf("rooted log = %+v, %v", got, ok)
 	}
-	// A backslash is a separator here, not the escape that would make logsdev.log.
-	if got, ok := stdoutFile(`npm run dev > logs\dev.log 2>&1`, dir, ""); ok {
-		t.Errorf("backslash path = %q", got)
+	// A cmd.exe line: a backslash is a separator, not the escape that would make logsdev.log.
+	if got, ok := stdoutFile(`npm run dev > logs\dev.log 2>&1`, dir, ""); !ok || got != `C:\work\logs\dev.log` {
+		t.Errorf("backslash path = %q, %v", got, ok)
+	}
+	if got, ok := stdoutFile(`cd app & npm run dev > C:\logs\dev.log`, dir, ""); !ok || got != `C:\logs\dev.log` {
+		t.Errorf("drive path = %q, %v", got, ok)
+	}
+	// A POSIX line still reads a backslash as an escape, so it is not followed.
+	if got, ok := stdoutFile(`npm run dev > logs\dev.log 2>&1 & echo $! > dev.pid`, dir, ""); ok {
+		t.Errorf("escaped path in a POSIX line = %q", got)
+	}
+}
+
+func TestStdoutFileReadsACmdLine(t *testing.T) {
+	volume := ""
+	if runtime.GOOS == "windows" {
+		volume = "C:"
+	}
+	dir := filepath.FromSlash(volume + "/work")
+	for _, tc := range []struct {
+		command string
+		want    string
+	}{
+		// `&` means "then", so the last command that redirects decides.
+		{`echo start > status.txt & npm run dev > dev.log 2>&1`, "/work/dev.log"},
+		{`npm run dev > dev.log 2>&1 & echo done`, "/work/dev.log"},
+		{`cd app & npm run dev > dev.log`, "/work/app/dev.log"},
+		{`cd app && npm run dev > logs/dev.log 2>&1`, "/work/app/logs/dev.log"},
+		{`npm run dev > %TEMP%/dev.log`, ""},
+		{`npm run dev > NUL 2>&1`, ""},
+		{`npm run dev > nul`, ""},
+		{`echo it's > out.log`, "/work/out.log"},
+	} {
+		want := ""
+		if tc.want != "" {
+			want = filepath.FromSlash(volume + tc.want)
+		}
+		got, ok := stdoutFileAs(tc.command, dir, "", true)
+		if got != want || ok != (want != "") {
+			t.Errorf("stdoutFileAs(%q, cmd) = %q, %v; want %q", tc.command, got, ok, want)
+		}
+	}
+	for command, cmd := range map[string]bool{
+		`npm run dev > dev.log & echo $! > dev.pid`: false,
+		"echo `date` > out.log":                     false,
+		`nohup ./server > out.log &`:                false,
+		`npm run dev > logs\dev.log 2>&1`:           true,
+	} {
+		if cmdLine(command) != cmd {
+			t.Errorf("cmdLine(%q) = %v, want %v", command, !cmd, cmd)
+		}
 	}
 }

@@ -214,8 +214,8 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 	const name = backgroundTaskName(task, t);
 	const now = useNow(live ? [task] : []);
 	const { stopping, failed, stop } = useTaskStops(sessionId, live ? task.id : "");
-	const output = useBackgroundTaskOutput(sessionId, task.id, { enabled: isVisible, live: live && isVisible && !stale });
-	// Output the chat no longer reports stays as last read (`lastRead`).
+	const output = useBackgroundTaskOutput(sessionId, task.id, task.runId, { enabled: isVisible, live: live && isVisible && !stale, over: !live });
+	// Output the chat no longer reports on a task that is over stays as last read (`lastRead`).
 	const shown = output.data?.availability === "ready" ? output.data : undefined;
 	// The last lines land after the task ends: read once more when it does.
 	const { refetch } = output;
@@ -447,13 +447,12 @@ export function TailedOutput({ text, truncated, label }: { text: string; truncat
 				</pre>
 			</div>
 			{!following ? (
-				<Pressable
-					className="flex h-8 w-full shrink-0 items-center justify-center gap-1.5 border-t border-border bg-card text-xs font-medium text-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover"
-					onClick={jumpToLatest}
-				>
-					<ArrowDown aria-hidden="true" className="size-3" />
-					{t("backgroundTasks.output.jumpToLatest")}
-				</Pressable>
+				<div className="flex shrink-0 justify-center border-t border-border py-1">
+					<Button type="button" variant="ghost" size="xs" onClick={jumpToLatest}>
+						<ArrowDown aria-hidden="true" className="size-3" />
+						{t("backgroundTasks.output.jumpToLatest")}
+					</Button>
+				</div>
 			) : null}
 		</div>
 	);

@@ -44,7 +44,7 @@ describe("background task panel", () => {
 		expect(screen.getByText("npm run dev -- --port 3000")).toBeVisible();
 		expect(screen.getByText("2 lines")).toBeVisible();
 		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("Local: http://localhost:3000/");
-		expect(outputMock).toHaveBeenCalledWith("s", "dev", { enabled: true, live: true });
+		expect(outputMock).toHaveBeenCalledWith("s", "dev", undefined, { enabled: true, live: true, over: false });
 		await userEvent.click(screen.getByRole("button", { name: "Stop Dev server on port 3000" }));
 		expect(mutateMock).toHaveBeenCalledWith("dev");
 	});
@@ -67,7 +67,7 @@ describe("background task panel", () => {
 		expect(screen.getByText("Failed")).toBeVisible();
 		expect(screen.getByText("11m")).toBeVisible();
 		expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
-		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: false });
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", undefined, { enabled: true, live: false, over: true });
 		rerender(<Panel isVisible sessionId="s" tab={{ task: task(), ended: true }} />);
 		expect(screen.getByText("Ended")).toBeVisible();
 		expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
@@ -77,7 +77,7 @@ describe("background task panel", () => {
 		const refetch = vi.fn();
 		outputMock.mockReturnValue({ ...outputOf("tick-1"), refetch });
 		const { rerender } = render(<Panel isVisible={false} sessionId="s" tab={{ task: task() }} />);
-		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: false, live: false });
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", undefined, { enabled: false, live: false, over: false });
 		rerender(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
 		rerender(<Panel isVisible sessionId="s" tab={{ task: task({ state: "completed", endedAt: ago(0) }) }} />);
 		expect(refetch).toHaveBeenCalledTimes(1);
@@ -87,19 +87,19 @@ describe("background task panel", () => {
 		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
 		const stopButton = () => screen.getByRole("button", { name: "Stop Dev server on port 3000" });
 		expect(stopButton()).toBeEnabled();
-		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: true });
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", undefined, { enabled: true, live: true, over: false });
 
 		rerender(<Panel isVisible sessionId="s" stale tab={{ task: task() }} />);
 		expect(screen.getByText("Running")).toBeVisible();
 		expect(screen.getByText("stale")).toBeVisible();
 		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("Local: http://localhost:3000/");
 		expect(stopButton()).toBeDisabled();
-		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: false });
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", undefined, { enabled: true, live: false, over: false });
 
 		rerender(<Panel isVisible sessionId="s" tab={{ task: task() }} />);
 		expect(screen.queryByText("stale")).toBeNull();
 		expect(stopButton()).toBeEnabled();
-		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", { enabled: true, live: true });
+		expect(outputMock).toHaveBeenLastCalledWith("s", "dev", undefined, { enabled: true, live: true, over: false });
 	});
 
 	it("shows the last output read once the chat stops reporting the task", () => {
