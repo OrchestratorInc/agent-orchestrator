@@ -1280,7 +1280,7 @@ async function createWindowInternal(): Promise<void> {
 		}
 		// Doing nothing honors the renderer's request to stay, so a quit's close
 		// did not happen and AO keeps its Dock icon.
-		desktopQuit.windowCloseCanceled();
+		if (desktopQuit.windowCloseCanceled()) preserveAgentsOnQuit = false;
 	});
 
 	mainWindow.on("close", (event) => {
@@ -1291,7 +1291,7 @@ async function createWindowInternal(): Promise<void> {
 			chatDraftDialog,
 		);
 		if (preventClose) {
-			desktopQuit.windowCloseCanceled();
+			if (desktopQuit.windowCloseCanceled()) preserveAgentsOnQuit = false;
 			event.preventDefault();
 			return;
 		}

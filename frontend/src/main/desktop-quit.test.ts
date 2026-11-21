@@ -146,9 +146,27 @@ describe("desktop quit", () => {
 		controller.startCleanupDeadline();
 		vi.advanceTimersByTime(2_000);
 		// Electron closes the window during the quit; the draft guard cancels it.
-		controller.windowCloseCanceled();
+		expect(controller.windowCloseCanceled()).toBe(true);
 		vi.advanceTimersByTime(60_000);
 		expect(options.exit).not.toHaveBeenCalled();
+		// A later cleanup start cannot rearm the declined quit.
+		controller.startCleanupDeadline();
+		vi.advanceTimersByTime(60_000);
+		expect(options.exit).not.toHaveBeenCalled();
+	});
+
+	it("backgrounds again on the next in-app Quit after the window declines an outside quit", () => {
+		const { options, controller, event, inAppQuit } = setup();
+		controller.handleBeforeQuit(event);
+		controller.windowCloseCanceled();
+		expect(inAppQuit()).toBe(true);
+		expect(options.closeWindow).toHaveBeenCalledOnce();
+	});
+
+	it("reports no pending quit when the window declines an in-app Quit's close", () => {
+		const { controller, inAppQuit } = setup();
+		inAppQuit();
+		expect(controller.windowCloseCanceled()).toBe(false);
 	});
 
 	it("does not arm a canceled outside quit when later full-quit cleanup starts", () => {

@@ -92,11 +92,20 @@ export function createDesktopQuitController(options: {
 			hideDockOnWindowClosed = false;
 			options.hideDock();
 		},
-		windowCloseCanceled(): void {
+		/**
+		 * The window's draft guard kept the window open, which also cancels any
+		 * quit in progress. Returns true when that was a full or outside quit, so
+		 * the caller can undo its quit-only state (agent preservation).
+		 */
+		windowCloseCanceled(): boolean {
 			hideDockOnWindowClosed = false;
-			// The draft guard on the window can still cancel an outside quit after
-			// the cleanup deadline started; never force an exit the person declined.
+			const quitWasPending = quitCompletelyRequested;
+			// Never force an exit the person declined, and let the next in-app
+			// Quit background the app again.
+			quitCompletelyRequested = false;
+			externalQuitRequested = false;
 			clearDeadline();
+			return quitWasPending;
 		},
 		quitCompletely(): void {
 			quitCompletelyRequested = true;
