@@ -51,7 +51,13 @@ Open the desktop app. On macOS you can do it from a terminal by its path:
 open "/Applications/Agent Orchestrator.app"
 ```
 
-If the app was installed for one user only, it is in `~/Applications/Agent Orchestrator.app` instead. On macOS, once `ao` works, `ao start` also opens the installed app. On Linux and Windows, open the installed app from the desktop's app menu: `ao start` looks only for the app locations it installs itself, and may download a fresh copy instead. Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
+If the app was installed for one user only, it is in `~/Applications/Agent Orchestrator.app` instead. Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
+
+Once `ao` works, `ao start` also opens the installed app. It looks for the app in this order, and downloads and installs the latest release only if it finds none:
+
+- **macOS:** `/Applications`, then the path the app recorded on its last launch, then `~/Applications`.
+- **Windows:** the path the app recorded on its last launch, then the default per-user (`%LOCALAPPDATA%\Programs`) and all-users (`%ProgramFiles%`) install folders.
+- **Linux:** the path the app recorded on its last launch, then the AppImage locations `ao start` uses itself. A `.deb` or `.rpm` install that has never been opened isn't found, so open it once from the desktop's app menu instead.
 
 Then check that its daemon is ready:
 
