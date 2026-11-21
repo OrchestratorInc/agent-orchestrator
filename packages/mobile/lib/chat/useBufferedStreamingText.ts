@@ -12,12 +12,9 @@ import {
 type Buffer = {
 	visible: string;
 	target: string;
-	streaming: boolean;
-	finishing: boolean;
 	graphemes: string[];
 	visibleCount: number;
-	credit: number;
-	rate: number;
+	deadline: number;
 	frame?: number;
 	lastFrameAt?: number;
 	lastGrowthAt?: number;
@@ -25,24 +22,30 @@ type Buffer = {
 };
 
 const LONG_FRAME_MS = 48;
-const FIRST_GAP_MS = 450;
-const MIN_SPREAD_MS = 250;
-const FINISH_SPREAD_MS = 650;
-const MIN_GRAPHEMES_PER_SECOND = 24;
-const MAX_GRAPHEMES_PER_SECOND = 140;
-const FINISH_MAX_GRAPHEMES_PER_SECOND = 220;
+const FIRST_WINDOW_MS = 110;
+const MIN_WINDOW_MS = 55;
+const MAX_WINDOW_MS = 180;
+const SPACE = /\s/u;
 
-function needsDrain(visible: string, target: string): boolean {
-	return target.length > visible.length && target.startsWith(visible);
+function revealEnd(graphemes: string[], start: number, count: number): number {
+	const end = Math.min(start + count, graphemes.length);
+	if (end === graphemes.length) return end;
+
+	// Prefer a nearby word ending. Code and scripts without spaces fall back to
+	// the earned grapheme boundary so a long token never holds up the stream.
+	for (let distance = 0; distance <= 4; distance++) {
+		const earlier = end - distance;
+		if (earlier > start && SPACE.test(graphemes[earlier - 1])) return earlier;
+		const later = end + distance;
+		if (later <= graphemes.length && SPACE.test(graphemes[later - 1])) return later;
+	}
+	return end;
 }
 
-/** Spread a snapshot over its arrival window, with a bounded rate when catching up. */
+/** Pace only live snapshots. The terminal snapshot is always displayed whole. */
 export function useBufferedStreamingText(text: string, streaming: boolean, reducedMotion: boolean, playFromStart = false): string {
-	const [visible, setVisible] = useState(() => playFromStart && !reducedMotion && AppState.currentState === "active" ? "" : text);
-	const buffer = useRef<Buffer>({
-		visible, target: text, streaming, finishing: !streaming && needsDrain(visible, text),
-		graphemes: [], visibleCount: 0, credit: 0, rate: MIN_GRAPHEMES_PER_SECOND,
-	});
+	const [visible, setVisible] = useState(() => playFromStart && streaming && !reducedMotion && AppState.currentState === "active" ? "" : text);
+	const buffer = useRef<Buffer>({ visible, target: text, graphemes: [], visibleCount: 0, deadline: 0 });
 	const publish = useCallback((next: string) => {
 		buffer.current.visible = next;
 		setVisible(next);
@@ -52,20 +55,15 @@ export function useBufferedStreamingText(text: string, streaming: boolean, reduc
 		if (current.frame !== undefined) cancelAnimationFrame(current.frame);
 		current.frame = undefined;
 		current.lastFrameAt = undefined;
-		current.credit = 0;
 	}, []);
 	useEffect(() => cancel, [cancel]);
 
 	useEffect(() => {
 		const current = buffer.current;
 		const previousTarget = current.target;
-		const wasStreaming = current.streaming;
-		current.finishing = !streaming && (wasStreaming || current.finishing) && needsDrain(current.visible, text);
-		current.streaming = streaming;
 		current.target = text;
-		if ((!streaming && !current.finishing) || reducedMotion || AppState.currentState === "background" || !text.startsWith(current.visible)) {
+		if (!streaming || reducedMotion || AppState.currentState === "background" || !text.startsWith(current.visible)) {
 			cancel();
-			current.finishing = false;
 			current.lastGrowthAt = undefined;
 			current.gapMs = undefined;
 			publish(text);
@@ -74,55 +72,48 @@ export function useBufferedStreamingText(text: string, streaming: boolean, reduc
 		if (text === previousTarget && text === current.visible) return;
 
 		const now = performance.now();
-		if (streaming && (text !== previousTarget || current.lastGrowthAt === undefined)) {
+		if (text !== previousTarget || current.lastGrowthAt === undefined) {
 			if (current.lastGrowthAt !== undefined) current.gapMs = streamGapMs(current.gapMs, now - current.lastGrowthAt);
 			current.lastGrowthAt = now;
 		}
+		const windowMs = current.gapMs === undefined ? FIRST_WINDOW_MS : Math.min(MAX_WINDOW_MS, Math.max(MIN_WINDOW_MS, current.gapMs * 0.7));
+		// Shorten the remaining window as snapshots stack up. Keeping the earliest
+		// deadline lets new output raise the speed without deferring older text.
+		const newDeadline = now + windowMs;
+		current.deadline = current.frame === undefined ? newDeadline : Math.min(current.deadline, newDeadline);
 		current.graphemes = Array.from(graphemeSegments(text), ({ segment }) => segment);
 		const prefix = reconciledStreamPrefix(current.visible, current.graphemes);
 		current.visibleCount = prefix.count;
 		if (prefix.text !== current.visible) publish(prefix.text);
+		if (current.frame !== undefined || current.visibleCount >= current.graphemes.length) return;
 
-		const remaining = current.graphemes.length - current.visibleCount;
-		const spread = current.finishing ? FINISH_SPREAD_MS : Math.max(MIN_SPREAD_MS, current.gapMs ?? FIRST_GAP_MS);
-		const limit = current.finishing ? FINISH_MAX_GRAPHEMES_PER_SECOND : MAX_GRAPHEMES_PER_SECOND;
-		current.rate = Math.min(limit, Math.max(MIN_GRAPHEMES_PER_SECOND, remaining * 1000 / spread));
-		if (current.frame !== undefined || remaining <= 0) return;
-
-		// Keep one clock while there is pending text. New snapshots update the
-		// target and its rate without restarting the frame or dumping its backlog.
 		const tick = () => {
 			current.frame = undefined;
-			const frameAt = performance.now();
-			if (AppState.currentState === "background" || frameAt - (current.lastFrameAt ?? now) > STREAM_STALL_MS) {
+			const nowAtFrame = performance.now();
+			const previousFrame = current.lastFrameAt;
+			if (AppState.currentState === "background" || nowAtFrame - (previousFrame ?? now) > STREAM_STALL_MS) {
 				cancel();
-				current.finishing = false;
 				publish(current.target);
 				return;
 			}
 			const interval = current.visible.length < STREAM_SMOOTH_MAX_CHARS ? STREAM_MIN_FRAME_MS : LONG_FRAME_MS;
-			const elapsed = current.lastFrameAt === undefined ? interval : frameAt - current.lastFrameAt;
+			const elapsed = previousFrame === undefined ? interval : nowAtFrame - previousFrame;
 			if (elapsed >= interval) {
-				current.lastFrameAt = frameAt;
-				const budget = current.credit + current.rate * interval / 1000;
-				const count = Math.floor(budget);
-				current.credit = budget - count;
-				const nextCount = Math.min(current.graphemes.length, current.visibleCount + count);
-				if (nextCount > current.visibleCount) {
-					const next = current.visible + current.graphemes.slice(current.visibleCount, nextCount).join("");
-					current.visibleCount = nextCount;
-					publish(next);
-				}
+				current.lastFrameAt = nowAtFrame;
+				const backlog = current.graphemes.length - current.visibleCount;
+				const timeLeft = current.deadline - nowAtFrame;
+				const framesLeft = Math.max(1, 1 + Math.ceil(timeLeft / interval));
+				const count = Math.max(1, Math.ceil(backlog / framesLeft));
+				const nextCount = revealEnd(current.graphemes, current.visibleCount, count);
+				const next = current.visible + current.graphemes.slice(current.visibleCount, nextCount).join("");
+				current.visibleCount = nextCount;
+				publish(next);
 			}
 			if (current.visibleCount < current.graphemes.length) current.frame = requestAnimationFrame(tick);
-			else {
-				current.lastFrameAt = undefined;
-				current.finishing = false;
-			}
+			else current.lastFrameAt = undefined;
 		};
 		current.frame = requestAnimationFrame(tick);
 	}, [cancel, publish, reducedMotion, streaming, text]);
 
-	const finishing = (buffer.current.streaming || buffer.current.finishing) && needsDrain(visible, text);
-	return !reducedMotion && (streaming || finishing) && text.startsWith(visible) ? visible : text;
+	return streaming && !reducedMotion && text.startsWith(visible) ? visible : text;
 }

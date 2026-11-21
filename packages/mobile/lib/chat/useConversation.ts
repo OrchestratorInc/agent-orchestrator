@@ -48,7 +48,7 @@ import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionE
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
-const REFRESH_DEBOUNCE_MS = 120;
+const REFRESH_BATCH_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -185,6 +185,7 @@ export function useMobileConversation(
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const refreshPending = useRef(false);
 	const refreshGate = useRef(createRequestGate()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
@@ -249,8 +250,22 @@ export function useMobileConversation(
 	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
 
 	const scheduleRefresh = useCallback(() => {
-		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
+		refreshPending.current = true;
+		if (refreshTimer.current !== null) return;
+		const enqueue = () => {
+			const timer = setTimeout(() => {
+				refreshPending.current = false;
+				void refresh().finally(() => {
+					if (refreshTimer.current !== timer) return;
+					refreshTimer.current = null;
+					if (refreshPending.current) enqueue();
+				});
+			}, REFRESH_BATCH_MS);
+			refreshTimer.current = timer;
+		};
+		// Start the window on the first event so a steady stream cannot keep
+		// postponing the fetch. Events during the request queue one more refresh.
+		enqueue();
 	}, [refresh]);
 
 	const loadOlder = useCallback(async () => {
@@ -287,7 +302,9 @@ export function useMobileConversation(
 		return () => {
 			mounted.current = false;
 			refreshGate.invalidate();
-			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+			if (refreshTimer.current !== null) clearTimeout(refreshTimer.current);
+			refreshTimer.current = null;
+			refreshPending.current = false;
 		};
 	}, [refresh, refreshGate]);
 

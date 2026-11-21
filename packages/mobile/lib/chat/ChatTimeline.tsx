@@ -687,6 +687,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
+	const turnSettled = Boolean(group.turn && group.turn.state !== "running" && group.turn.state !== "queued");
 	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
 	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
@@ -697,7 +698,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		: undefined;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} turnSettled={turnSettled} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -736,8 +737,9 @@ function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: numbe
 	</Animated.View>;
 }
 
-function AssistantReply({ message, completed, conversationId }: {
+function AssistantReply({ message, completed, turnSettled, conversationId }: {
 	message: ConversationMessage;
+	turnSettled: boolean;
 	completed: boolean;
 	conversationId: string;
 }) {
@@ -750,13 +752,13 @@ function AssistantReply({ message, completed, conversationId }: {
 	useLayoutEffect(() => {
 		if (playback) playback.playedThrough = Math.max(playback.playedThrough, message.sequence);
 	}, [message.sequence, playback]);
-	const text = useBufferedStreamingText(message.text, message.streaming === true, reducedMotion, playFromStart);
-	const streaming = message.streaming === true || text !== message.text;
+	const streaming = message.streaming === true && !turnSettled;
+	const text = useBufferedStreamingText(message.text, streaming, reducedMotion, playFromStart);
 	return (
 		<ChatMarkdown
 			text={text}
 			streaming={streaming}
-			fadeStreamingText={!reducedMotion}
+			fadeStreamingText={streaming && !reducedMotion}
 			continuousSelection
 			selectionSource={completed && !streaming ? { conversationId, messageId: message.id, revision: message.revision } : undefined}
 		/>
@@ -768,6 +770,7 @@ const TimelineItem = memo(function TimelineItem({
 	sessionId,
 	conversationId,
 	completed,
+	turnSettled,
 	approvalPending,
 	inputPending,
 	onDecide,
@@ -780,6 +783,7 @@ const TimelineItem = memo(function TimelineItem({
 	sessionId: string;
 	conversationId: string;
 	completed: boolean;
+	turnSettled: boolean;
 	approvalPending: boolean;
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
@@ -835,7 +839,7 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<AssistantReply message={item} completed={completed} conversationId={conversationId} />
+				<AssistantReply message={item} completed={completed} turnSettled={turnSettled} conversationId={conversationId} />
 			</View>
 		);
 	}
