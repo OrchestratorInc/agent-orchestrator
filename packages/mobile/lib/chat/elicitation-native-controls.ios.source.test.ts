@@ -35,7 +35,12 @@ describe("iOS elicitation controls", () => {
 		expect(source).not.toContain("label.length");
 	});
 
-	it("gives every action at least the 44pt target", () => {
-		expect(source).toContain("frame({ minWidth: touchTarget, minHeight: touchTarget }), contentShape(shapes.rectangle())");
+	// A large bordered button is at least the 44pt target, as the prominent one is,
+	// and reads as a button: a plain one was a bare label beside it.
+	it("gives every action a button's shape and at least the 44pt target", () => {
+		const action = source.slice(source.indexOf("export function ElicitationAction"));
+		expect(action).toContain('buttonStyle(primary ? "borderedProminent" : "bordered")');
+		expect(action).toContain('controlSize("large")');
+		expect(action).not.toContain('"plain"');
 	});
 });

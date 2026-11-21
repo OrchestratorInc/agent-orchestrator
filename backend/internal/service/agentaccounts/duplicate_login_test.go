@@ -24,7 +24,7 @@ func newDuplicateFixture(t *testing.T, device string) (*Service, *fakeClaude, *m
 func addSaved(t *testing.T, svc *Service, claude *fakeClaude, root, email string) string {
 	t.Helper()
 	ctx := context.Background()
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestAddRefusesALoginTheComputerSignedInToSinceTheLastReading(t *testing.T) 
 	}
 	claude.signedInAs[""] = "a@example.com"
 
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestAddRefusesTheLoginOfASignedOutSavedAccount(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+			start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +196,7 @@ func TestAddRefusesTheLoginOfASignedOutSavedAccount(t *testing.T) {
 
 func startAdd(t *testing.T, svc *Service, claude *fakeClaude, root, email, org string) (LoginStatus, *AccountView) {
 	t.Helper()
-	start, err := svc.StartLogin(context.Background(), domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(context.Background(), domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestSignInAgainAfterRestartIgnoresSignedOutAccountsOfUnknownOrganization(t 
 	}
 	signInAgain := func(account domain.AgentAccount, org string) (LoginStatus, *AccountView) {
 		t.Helper()
-		start, err := restarted.StartSignInAgain(ctx, account.ID)
+		start, err := restarted.StartSignInAgain(ctx, account.ID, LoginRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -402,7 +402,7 @@ func TestSavedAccountKeepsItsOrganization(t *testing.T) {
 		}
 		signInAgain := func(org string) (LoginStatus, *AccountView) {
 			t.Helper()
-			start, err := svc.StartSignInAgain(ctx, acme.Account.ID)
+			start, err := svc.StartSignInAgain(ctx, acme.Account.ID, LoginRequest{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -429,7 +429,7 @@ func TestSavedAccountKeepsItsOrganization(t *testing.T) {
 		_, acme := startAdd(t, svc, claude, root, "a@example.com", "org-1")
 		delete(claude.signedInAs, acme.Account.Home)
 		restarted := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-		start, err := restarted.StartSignInAgain(ctx, acme.Account.ID)
+		start, err := restarted.StartSignInAgain(ctx, acme.Account.ID, LoginRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -452,7 +452,7 @@ func TestSignInAgainIsNotRefusedOverTheCLIHoldingTheSameLogin(t *testing.T) {
 	}
 	claude.signedInAs[""], claude.orgOf[""] = "a@example.com", "org-1"
 
-	start, err := svc.StartSignInAgain(ctx, acme.Account.ID)
+	start, err := svc.StartSignInAgain(ctx, acme.Account.ID, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestSignInWithAnAPIKeyIsNotTakenAsWaiting(t *testing.T) {
 	ctx := context.Background()
 	svc, claude, store, root := newDuplicateFixture(t, "")
 	claude.apiKey = map[string]bool{}
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

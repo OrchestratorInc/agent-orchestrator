@@ -21,7 +21,7 @@ function cloudList<T>(data: T) {
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
-	useMatchRoute: () => ({ to }: { to: string }) => to === "/new" && route.onNewChat,
+	useRouter: () => ({ matchRoute: ({ to }: { to: string }) => to === "/new" && route.onNewChat }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: [

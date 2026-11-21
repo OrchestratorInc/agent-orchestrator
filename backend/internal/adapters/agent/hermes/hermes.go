@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -51,8 +52,23 @@ const (
 	nativeWarningPrompt  = "⚠ ❯"
 	nativeQuestionPrompt = "? ❯"
 	nativeUserEcho       = "● "
+	// display.cli_layout=modern (the default since at least v0.22.5) echoes
+	// submitted messages with the skin's prompt glyph instead of ●, between the
+	// same 40-cell transcript rules; cli_layout=classic keeps ●. Built from
+	// nativePrompt so the echo and composer markers cannot drift apart. `❯ `
+	// is more common in assistant output (shell prompts) than ●, so a match
+	// still needs exact rules on both sides, the whole message and a rising
+	// count before it acknowledges a send.
+	nativeModernUserEcho = nativePrompt + " "
 	nativeCommandEcho    = "⚙️  "
 	nativeTranscriptRule = "────────────────────────────────────────"
+	// modernSpinner holds the frames the modern layout (the v0.22 default)
+	// draws at the start of the composer's top rule while a turn or command runs.
+	modernSpinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	// modernFooter starts the status line the modern layout draws under the
+	// composer, one column in: " ☤ <model> · …". The compact busy row starts
+	// in the first column instead.
+	modernFooter = " ☤ "
 )
 
 var (
@@ -60,6 +76,8 @@ var (
 	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
 	titleUnsafe         = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+	// modernTitledRule is a composer top rule with the session title at its end.
+	modernTitledRule = regexp.MustCompile(`^─{3,} \S.* ─$`)
 	// A tagless clean checkout; a ".dirty" suffix never matches.
 	nativeSourceVersionLine = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
 	// A Homebrew bottle is built from the release tarball, which has no git
@@ -494,11 +512,15 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 
 // qualifiedReleaseLines are the major.minor release lines whose composer,
 // busy, modal and transcript chrome AO's terminal detection was checked
-// against (v0.21.6 on Linux, v0.22.2 on macOS). A newer line stays installed
-// but unverified until its markers are revalidated. Only major.minor is
+// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux,
+// and v0.23.2 live through AO's pty-host).
+// The modern layout, the default on 0.22 and 0.23, echoes submitted messages
+// with its prompt glyph, which committedMessageEchoes accepts alongside ●.
+// A newer line stays installed but unverified until its markers are
+// revalidated. Only major.minor is
 // compared: Hermes derives its banner from git tags, so the same build can
 // report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
-var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
+var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}, {0, 23}}
 
 // qualifiedSourceCheckout accepts the banner Hermes prints when its own git
 // lookup finds no release tag (`vgit.<sha>`, e.g. after a shallow or cold
@@ -1639,6 +1661,7 @@ func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 
 // DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
+	output, modernBusy := modernComposer(output)
 	// Native placeholders use italic; typed composer text has normal styling.
 	composerOutput := nativeStyleSequence.ReplaceAllStringFunc(output, func(sequence string) string {
 		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
@@ -1684,6 +1707,9 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
 			break
 		}
+	}
+	if modernBusy {
+		return domain.ActivityActive, true
 	}
 	// Below 64 columns Hermes hides the bottom input rule and draws only the
 	// state icon, without ❯ (`☤ ` busy; `⚠ `, `? `, `✎ ` and the credential icons
@@ -1733,6 +1759,60 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 	return "", false
 }
 
+// modernComposer reshapes Hermes's modern layout into the composer the checks
+// above read. That layout puts a status footer under the composer and the
+// session title, or a spinner while Hermes works, into the composer's top rule.
+// Left in place, the footer reads as the compact busy row and the title breaks
+// the matching pair of rules, so an idle terminal never reads as idle. The
+// footer is dropped and a titled top rule becomes a plain rule. busy reports
+// the spinner, which the modern layout draws at every width.
+func modernComposer(output string) (string, bool) {
+	// A CRLF capture reads as LF rows. A bare \r still splits a row, as the
+	// plain lines do, so raw and plain rows stay aligned.
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	raw := strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n")
+	plain := terminalui.PlainTerminalLines(output)
+	if len(raw) != len(plain) {
+		return output, false
+	}
+	last := len(plain) - 1
+	for last >= 0 && strings.TrimSpace(plain[last]) == "" {
+		last--
+	}
+	if last >= 1 && strings.HasPrefix(plain[last], modernFooter) && strings.Contains(plain[last], " · ") {
+		raw, plain = raw[:last], plain[:last]
+		last--
+		for last >= 0 && strings.TrimSpace(plain[last]) == "" {
+			last--
+		}
+	}
+	for i := last; i >= 1 && i >= last-7; i-- {
+		row := strings.TrimSpace(plain[i])
+		if !strings.HasPrefix(row, nativePrompt) && !strings.HasPrefix(row, "☤ ") {
+			continue
+		}
+		top := strings.TrimSpace(plain[i-1])
+		if rest, ok := strings.CutPrefix(top, "── "); ok {
+			if frame, _ := utf8.DecodeRuneInString(rest); strings.ContainsRune(modernSpinner, frame) {
+				return strings.Join(raw, "\n"), true
+			}
+		}
+		if modernTitledRule.MatchString(top) {
+			// Match the bottom rule, which a wide title character would not.
+			width := utf8.RuneCountInString(top)
+			for _, below := range plain[i+1 : last+1] {
+				if rule := strings.TrimSpace(below); len([]rune(rule)) >= 16 && strings.Trim(rule, "─") == "" {
+					width = utf8.RuneCountInString(rule)
+					break
+				}
+			}
+			raw[i-1] = strings.Repeat("─", width)
+		}
+		break
+	}
+	return strings.Join(raw, "\n"), false
+}
+
 // RequiresRenderedActivity implements the scoped native adapter contract.
 func (*Plugin) RequiresRenderedActivity() bool { return true }
 
@@ -1761,7 +1841,7 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 }
 
 // ValidateTerminalMessage refuses ordinary AO text while native decisions own input.
-func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
+func (p *Plugin) ValidateTerminalMessage(screen, _ string) error {
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
 		return fmt.Errorf("hermes: ordinary Orchestrator sends require the current empty native composer; enter approval decisions directly in the terminal")
@@ -1785,6 +1865,18 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 		return false
 	}
 	return committedMessageEchoes(message, screen) > committedMessageEchoes(message, baseline)
+}
+
+// userEchoPrefix reports which native echo prefix a rendered line starts with:
+// ● for cli_layout=classic, or the skin's prompt glyph for the modern layout
+// (the default on 0.22 and 0.23). Empty when the line is not a user echo.
+func userEchoPrefix(line string) string {
+	for _, echo := range []string{nativeUserEcho, nativeModernUserEcho} {
+		if strings.HasPrefix(line, echo) {
+			return echo
+		}
+	}
+	return ""
 }
 
 // Count complete matching native echoes outside the current composer. Comparing
@@ -1819,11 +1911,15 @@ func committedMessageEchoes(message, screen string) int {
 			count++
 			continue
 		}
-		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule || !strings.HasPrefix(line, nativeUserEcho) {
+		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule {
+			continue
+		}
+		echoPrefix := userEchoPrefix(line)
+		if echoPrefix == "" {
 			continue
 		}
 		var echo strings.Builder
-		echo.WriteString(strings.TrimPrefix(line, nativeUserEcho))
+		echo.WriteString(strings.TrimPrefix(line, echoPrefix))
 		j := i + 1
 		for j < end && strings.TrimSpace(lines[j]) != nativeTranscriptRule {
 			echo.WriteString(strings.TrimSpace(lines[j]))

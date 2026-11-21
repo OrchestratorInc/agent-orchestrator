@@ -151,3 +151,37 @@ func TestRetryAfterUpdateNeverFallsBackToFreshTerminal(t *testing.T) {
 		}
 	}
 }
+
+// The update-when-idle probe asks the adapter whether a stopped terminal could
+// resume. An adapter that looks the conversation up through its CLI needs the
+// session's environment: a credential set only in the project environment
+// reaches the session, not the daemon (a remote Stakpak profile's
+// STAKPAK_API_KEY after a daemon restart, for one). The probe issues no
+// browser capability.
+func TestTerminalResumeProbePassesTheSessionEnvironment(t *testing.T) {
+	mgr, store, rt := newChatManager(&recordingLauncher{})
+	mgr.runtime = idleWorkloadRuntime{rt}
+	agent := &recordingAgent{}
+	mgr.agents = singleAgent{agent}
+	project := store.projects[string(chatTestProject)]
+	project.Config.Env = map[string]string{"STAKPAK_API_KEY": "project-only"}
+	store.projects[string(chatTestProject)] = project
+	store.sessions["terminal"] = domain.SessionRecord{ID: "terminal", ProjectID: chatTestProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/terminal", Branch: "ao/terminal",
+			RuntimeHandleID: "pane-terminal", AgentSessionID: "native-1"}}
+
+	if _, err := mgr.BusyHarnessSessions(context.Background(), domain.HarnessCodex); err != nil {
+		t.Fatal(err)
+	}
+	if agent.restoreCalls == 0 {
+		t.Fatal("the probe never asked the adapter for a restore command")
+	}
+	if got := agent.lastRestore.Env["STAKPAK_API_KEY"]; got != "project-only" {
+		t.Fatalf("probe environment STAKPAK_API_KEY = %q, want the project's value", got)
+	}
+	if got := agent.lastRestore.Env[EnvBrowserCapability]; got != "" {
+		t.Fatalf("probe environment carries a browser capability %q", got)
+	}
+}
