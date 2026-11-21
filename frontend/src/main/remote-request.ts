@@ -11,7 +11,7 @@ import { DEVICE_TOKEN_PREFIX, type RemoteEntry } from "./remotes-store";
 export type RemoteHealth = "online" | "unauthorized" | "offline" | "not-a-daemon" | "incompatible";
 
 export class IncompatibleRemoteVersionError extends Error {
-	constructor() {
+	constructor(readonly hostId?: string) {
 		super("Orchestrator versions are incompatible. Update Orchestrator on this computer and the remote host.");
 		this.name = "IncompatibleRemoteVersionError";
 	}
@@ -57,7 +57,7 @@ export async function readRemoteIdentity(
 	const body = (await response.json()) as { hostId?: unknown; apiVersion?: unknown };
 	if (typeof body.hostId !== "string" || body.hostId === "") throw new Error("remote identity probe returned no host ID");
 	if (body.hostId === "local") throw new Error("remote identity probe returned reserved local host ID");
-	if (body.apiVersion !== 1) throw new IncompatibleRemoteVersionError();
+	if (body.apiVersion !== 1) throw new IncompatibleRemoteVersionError(body.hostId);
 	return body.hostId;
 }
 
@@ -160,4 +160,40 @@ export async function readAuthErrorCode(entry: RemoteEntry, fetchImpl: FetchImpl
 	} catch {
 		return undefined;
 	}
+}
+
+export type HostUpdateView = { version: string; supported: boolean; state: "idle" | "updating" | "failed"; error?: string };
+
+function parseHostUpdate(body: unknown): HostUpdateView | null {
+	const value = body as Partial<HostUpdateView> | null;
+	if (typeof value?.version !== "string" || typeof value.supported !== "boolean" || !["idle", "updating", "failed"].includes(value.state ?? "")) return null;
+	return { version: value.version, supported: value.supported, state: value.state!, ...(typeof value.error === "string" && value.error ? { error: value.error } : {}) };
+}
+
+export async function readHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 5_000): Promise<HostUpdateView | null> {
+	try {
+		const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update").href, {
+			method: "GET",
+			redirect: "error",
+			headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}) },
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		return response.ok ? parseHostUpdate(await response.json()) : null;
+	} catch {
+		return null;
+	}
+}
+
+export async function startHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 15_000): Promise<HostUpdateView> {
+	const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update").href, {
+		method: "POST",
+		redirect: "error",
+		headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}) },
+		signal: AbortSignal.timeout(timeoutMs),
+	});
+	const body = (await response.json().catch(() => null)) as { message?: unknown } | null;
+	if (!response.ok) throw new Error(typeof body?.message === "string" && body.message ? body.message : `the host refused the update (${response.status})`);
+	const view = parseHostUpdate(body);
+	if (!view) throw new Error("the host returned an invalid update status");
+	return view;
 }

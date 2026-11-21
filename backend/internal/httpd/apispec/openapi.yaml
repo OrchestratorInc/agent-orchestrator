@@ -6540,6 +6540,56 @@ paths:
         device's own token
       tags:
       - mobile
+  /api/v1/remote-host/update:
+    get:
+      operationId: getRemoteHostUpdate
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHostUpdateResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report this host's version and the state of its last self-hosted update
+      tags:
+      - identity
+    post:
+      operationId: startRemoteHostUpdate
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHostUpdateResponse'
+          description: Accepted
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Install the newest release of this self-hosted host's channel and restart
+        it
+      tags:
+      - identity
   /api/v1/reports:
     get:
       operationId: listReports
@@ -23121,6 +23171,25 @@ components:
           type: array
       required:
       - servers
+      type: object
+    RemoteHostUpdateResponse:
+      properties:
+        error:
+          type: string
+        state:
+          enum:
+          - idle
+          - updating
+          - failed
+          type: string
+        supported:
+          type: boolean
+        version:
+          type: string
+      required:
+      - version
+      - supported
+      - state
       type: object
     RemoveProjectResult:
       properties:

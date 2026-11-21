@@ -1,9 +1,10 @@
-import { Pencil, Server, Trash2 } from "@/components/app-icons";
+import { LoaderCircle, Pencil, Server, Trash2 } from "@/components/app-icons";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
+import { hostUpdateAction, startHostUpdate, useHostUpdateStore } from "../../hooks/useHostUpdates";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useCloudSession } from "../../lib/cloud-session";
 import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
@@ -24,6 +25,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);
 	const setEnabled = useUiStore((state) => state.setRemoteHosts);
+	const autoUpdate = useUiStore((state) => state.autoUpdateRemoteHosts);
+	const setAutoUpdate = useUiStore((state) => state.setAutoUpdateRemoteHosts);
 	const { status, signIn } = useCloudSession();
 	const { settings } = useSettings();
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
@@ -42,6 +45,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const [removeBusy, setRemoveBusy] = useState(false);
 	const [removeError, setRemoveError] = useState("");
 	const formRef = useRef<HTMLFormElement>(null);
+	const localVersion = useHostUpdateStore((state) => state.localVersion);
+	const hostUpdates = useHostUpdateStore((state) => state.byUrl);
 
 	const load = async () => {
 		setLoading(true);
@@ -145,12 +150,28 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		<SettingsSection title={t("remote.savedHosts")} grouped>
 			{loading && saved.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted" role="status">{t("remote.loadingHosts")}</div> : null}
 			{!loading && saved.length === 0 && !loadError ? <div className="settings-row-bar text-pretty text-sm text-settings-muted">{t("remote.emptyHosts")}</div> : null}
-			{saved.map((host) => (
+			{saved.length > 0 ? (
+				<SettingsRow label={t("remote.autoUpdateHosts")} description={t("remote.autoUpdateHostsDescription")}>
+					<Switch aria-label={t("remote.autoUpdateHosts")} checked={autoUpdate} onCheckedChange={setAutoUpdate} />
+				</SettingsRow>
+			) : null}
+			{saved.map((host) => {
+				const version = hostUpdates[host.url]?.view?.version;
+				const update = hostUpdateAction(hostUpdates[host.url], localVersion);
+				return (
 				<SettingsRow
 					key={host.url}
 					icon={Server}
 					label={host.label}
-					description={host.hostId ? host.url : (
+					description={host.hostId ? (
+						<>
+							{host.url}
+							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}</span> : null}
+							{update?.kind === "update" ? <span className="mt-0.5 block text-warning">{t("remote.hostBehind")}</span> : null}
+							{update?.kind === "manual" ? <span className="mt-0.5 block text-warning">{t("shell.updateOnThatComputer")}</span> : null}
+							{update?.kind === "failed" ? <span className="mt-0.5 block text-error" role="alert">{update.error || t("shell.updateFailed")}</span> : null}
+						</>
+					) : (
 						<>
 							{host.url}
 							<span className="mt-0.5 block text-warning">{t("remote.repairRequired")}</span>
@@ -158,6 +179,12 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 					)}
 				>
 					<div className="flex items-center gap-1">
+						{update?.kind === "updating" ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("shell.updating")}</span> : null}
+						{update?.kind === "update" || update?.kind === "failed" ? (
+							<Button aria-label={t("shell.updateMachine", { name: host.label })} onClick={() => void startHostUpdate(host.url)} size="sm" type="button" variant="quiet">
+								{update.kind === "failed" ? t("notify.retry") : t("shell.update")}
+							</Button>
+						) : null}
 						<Button aria-label={t("remote.editHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
 							setEditing(host);
 							setLabel(host.label);
@@ -172,7 +199,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 						}} size="icon-sm" type="button" variant="destructive-ghost"><Trash2 aria-hidden="true" className="size-icon-base" /></Button>
 					</div>
 				</SettingsRow>
-			))}
+				);
+			})}
 			{loadError ? (
 				<SettingsRow label={t("remote.savedHosts")} description={<span className="text-error" role="alert">{loadError}</span>}>
 					<Button onClick={() => void load()} size="sm" type="button" variant="quiet">{t("notify.retry")}</Button>
