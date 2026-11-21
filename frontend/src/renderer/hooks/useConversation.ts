@@ -121,6 +121,9 @@ interface ConversationSessionMutationInput {
 	targetSessionId: string;
 }
 
+/** How long Stop shows progress before it can be pressed again for the same turn. */
+const STOP_RETRY_AFTER_MS = 10_000;
+
 interface ConversationInterruptMutationInput extends ConversationSessionMutationInput {
 	/** The running turn the user pressed Stop on; the daemon refuses to stop any other. */
 	turnId?: string;
@@ -1188,7 +1191,8 @@ export function useConversationCommands(
 	});
 
 	const interrupt = useMutation({
-		mutationFn: async ({ targetSessionId, turnId }: ConversationInterruptMutationInput) => {
+		/** Resolves true when the daemon took the Stop, false when there was nothing to stop. */
+		mutationFn: async ({ targetSessionId, turnId }: ConversationInterruptMutationInput): Promise<boolean> => {
 			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/interrupt",
 				turnId
@@ -1198,7 +1202,9 @@ export function useConversationCommands(
 			// Nothing left to stop: the turn already ended, or the one now running is a
 			// later turn this Stop must not touch. That is the answer, not a failure;
 			// the refetch below shows how the turn really ended.
-			if (error && apiErrorCode(error) !== "CHAT_NO_ACTIVE_TURN") throw error;
+			if (!error) return true;
+			if (apiErrorCode(error) === "CHAT_NO_ACTIVE_TURN") return false;
+			throw error;
 		},
 		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
 		// After any Stop answer, including "nothing left to stop", the cached turn
@@ -1587,13 +1593,27 @@ export function useConversationCommands(
 	const stopRequestedRef = useRef<string | undefined>(undefined);
 	const [stopRequestedKey, setStopRequestedKey] = useState<string>();
 	const stoppingTurn = activeStopKey !== undefined && stopRequestedKey === activeStopKey;
+	const releaseStop = useCallback((key: string) => {
+		if (stopRequestedRef.current !== key) return;
+		stopRequestedRef.current = undefined;
+		setStopRequestedKey(undefined);
+	}, []);
+	// An agent that accepted the cancel but never ends the turn must not leave Stop
+	// disabled for good. After a while the button works again, so the user can retry.
+	useEffect(() => {
+		if (!stopRequestedKey) return;
+		const timer = setTimeout(() => releaseStop(stopRequestedKey), STOP_RETRY_AFTER_MS);
+		return () => clearTimeout(timer);
+	}, [releaseStop, stopRequestedKey]);
 	// A steer refusal is about the turn it was aimed at. Once that turn is gone the
 	// composer keeps its own notice beside the kept draft; this copy would go stale.
 	const steeredTurnRef = useRef(activeTurnId);
 	useEffect(() => {
 		if (steeredTurnRef.current === activeTurnId) return;
 		steeredTurnRef.current = activeTurnId;
-		steer.reset();
+		// Only a refusal goes stale. Resetting a steer still in flight would drop its
+		// pending state before the daemon answers.
+		if (steer.isError) steer.reset();
 	}, [activeTurnId, steer]);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
@@ -1626,7 +1646,7 @@ export function useConversationCommands(
 			}
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 			// Sending the draft as a message answers any "send it as a message" refusal.
-			steer.reset();
+			if (steer.isError) steer.reset();
 			return send.mutateAsync({
 				targetSessionId: sessionId,
 				clientMessageId,
@@ -1669,11 +1689,14 @@ export function useConversationCommands(
 				setStopRequestedKey(key);
 			}
 			interrupt.mutate({ targetSessionId: sessionId, turnId: activeTurnId }, {
+				// Nothing was stopping: the turn had not started, or it already ended.
+				// The refetch shows which, and Stop stays usable if it is still there.
+				onSuccess: (stopped) => {
+					if (key && !stopped) releaseStop(key);
+				},
+				// The Stop did not land, so the turn is still the user's to stop.
 				onError: () => {
-					// The Stop did not land, so the turn is still the user's to stop.
-					if (!key || stopRequestedRef.current !== key) return;
-					stopRequestedRef.current = undefined;
-					setStopRequestedKey(undefined);
+					if (key) releaseStop(key);
 				},
 			});
 		},

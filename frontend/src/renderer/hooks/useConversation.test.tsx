@@ -2265,6 +2265,50 @@ describe("Stop", () => {
 		expect(result.current.error).toBeUndefined();
 	});
 
+	// A turn the session has queued but not started yet answers "nothing to stop".
+	// Stop must stay usable, or the turn could not be stopped once it starts.
+	it("keeps Stop usable when the daemon had nothing to stop", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_NO_ACTIVE_TURN");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" }, response: { status: 409 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(false));
+
+		apiErrorCodeMock.mockReturnValue(undefined);
+		postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+	});
+
+	it("lets Stop be pressed again when the turn keeps running long after Stop landed", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+			const { result } = renderStop();
+			act(() => {
+				result.current.interrupt();
+			});
+			await waitFor(() => expect(result.current.stoppingTurn).toBe(true));
+
+			act(() => {
+				vi.advanceTimersByTime(10_000);
+			});
+			expect(result.current.stoppingTurn).toBe(false);
+			act(() => {
+				result.current.interrupt();
+			});
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("reports a Stop that failed and lets the user press it again", async () => {
 		apiErrorCodeMock.mockReturnValue("INTERNAL");
 		apiErrorMessageMock.mockReturnValue("session/cancel did not reach the agent");
@@ -2309,5 +2353,26 @@ describe("Stop", () => {
 
 		rerender({ turnId: undefined });
 		await waitFor(() => expect(result.current.steerRefusal).toBeUndefined());
+	});
+
+	it("keeps a steer that is still in flight pending when the turn changes", async () => {
+		const response = deferred<{ data: undefined; error: { code: string } }>();
+		apiErrorCodeMock.mockReturnValue("CHAT_NO_ACTIVE_TURN");
+		postMock.mockReturnValue(response.promise);
+		const { result, rerender } = renderStop();
+		let steered: Promise<unknown> | undefined;
+		act(() => {
+			steered = result.current.steer("go left");
+		});
+		await waitFor(() => expect(result.current.steerPending).toBe(true));
+
+		rerender({ turnId: undefined });
+		expect(result.current.steerPending).toBe(true);
+
+		await act(async () => {
+			response.resolve({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" } });
+			await steered;
+		});
+		await waitFor(() => expect(result.current.steerRefusal).toMatch(/Send it as a message instead/));
 	});
 });
