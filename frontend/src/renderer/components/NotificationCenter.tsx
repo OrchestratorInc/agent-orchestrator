@@ -94,19 +94,20 @@ function useNotificationPreferences(): NotificationPreferences {
 function bellUnreadCount(
 	preferences: NotificationPreferences,
 	local: NotificationsCache | undefined,
-	remoteHosts: readonly { hostId: HostId; data?: NotificationsPage }[],
+	remote: { hosts: readonly { hostId: HostId; data?: NotificationsPage }[]; totalUnreadCount: number },
 	cloud: { unreadCount: number; items: readonly CloudCpNotification[] } | undefined,
 ): number {
 	if (!preferences.enabled) return 0;
-	const everything = allowsEveryNotification(preferences);
+	if (allowsEveryNotification(preferences)) {
+		return getCachedUnreadCount(local) + remote.totalUnreadCount + (cloud?.unreadCount ?? 0);
+	}
 	const count = (unread: number, items: readonly { status: string; type: string }[], source: NotificationSource) => {
-		if (everything) return unread;
 		if (preferences.filters.mutedSources.includes(source)) return 0;
 		const ignored = items.filter((item) => item.status === "unread" && !isNotificationAllowed(preferences, item.type, source)).length;
 		return Math.max(0, unread - ignored);
 	};
 	let total = count(getCachedUnreadCount(local), getCachedNotifications(local), "local");
-	for (const host of remoteHosts) {
+	for (const host of remote.hosts) {
 		if (host.data) total += count(host.data.unreadCount, host.data.notifications, remoteNotificationSource(host.hostId));
 	}
 	if (cloud) total += count(cloud.unreadCount, cloud.items, "cloud");
@@ -253,7 +254,7 @@ export function NotificationRuntime() {
 	const unreadCount = bellUnreadCount(
 		preferences,
 		unreadQuery.data,
-		remoteUnread.hosts,
+		remoteUnread,
 		cloudAll.data ? { unreadCount: cloudAll.data.unreadCount, items: cloudItems } : undefined,
 	);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
@@ -492,7 +493,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const unreadCount = bellUnreadCount(
 		preferences,
 		unreadQuery.data,
-		remoteUnread.hosts,
+		remoteUnread,
 		cloudAll.data ? { unreadCount: cloudAll.data.unreadCount, items: allCloudItems } : undefined,
 	);
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
