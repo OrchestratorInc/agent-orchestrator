@@ -79,6 +79,11 @@ describe("cloudChatStartingInPlace", () => {
 		expect(cloudChatStartingInPlace(freestyleChat("deleted", "running"))).toBe(false);
 	});
 
+	it("holds a boat Chat session on its conversation as it does a Freestyle one", () => {
+		const boat = freestyleChat("running", "provisioning");
+		expect(cloudChatStartingInPlace({ ...boat, cloud: { ...boat.cloud!, sandboxProvider: "boat" } })).toBe(true);
+	});
+
 	it("leaves other providers and terminal sessions to the startup screen", () => {
 		expect(cloudChatStartingInPlace({ ...freestyleChat("running", "provisioning"), mode: "tui" })).toBe(false);
 		const coder = freestyleChat("running", "provisioning");

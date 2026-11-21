@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import { useStableArray } from "./useStable";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
+import { startsInPlace } from "../lib/cloud-offering";
 import { CLOUD_WORKSPACE_LAYOUT, isCloudWorkspaceProject, projectRepositoryUrls, repoDirName } from "../lib/cloud-project-repos";
 import { CloudCpError, type CloudCpClient, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
@@ -478,7 +478,7 @@ export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<
 
 /**
  * Adds a session the desktop just created to the sessions list, when it runs
- * on Freestyle, so its view opens on the in-place start instead of the
+ * on Freestyle or boat, so its view opens on the in-place start instead of the
  * startup screen shown while a session it does not know yet resolves. Other
  * providers (Coder) are left to the next list refresh, so their start is
  * unchanged.
@@ -494,7 +494,7 @@ export function seedCreatedStandaloneAgent(queryClient: QueryClient, baseUrl: st
 }
 
 export function seedCreatedFreestyleSession(queryClient: QueryClient, baseUrl: string, orgId: string, session: CloudCpSession): void {
-	if (session.sandboxProvider !== FREESTYLE_PROVIDER) return;
+	if (!startsInPlace(session.sandboxProvider)) return;
 	queryClient.setQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, baseUrl, orgId], (current) =>
 		current === undefined || current.some((candidate) => candidate.id === session.id) ? current : [...current, session]);
 }

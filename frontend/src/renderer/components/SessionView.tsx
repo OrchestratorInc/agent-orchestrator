@@ -131,7 +131,7 @@ import {
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
-import { FREESTYLE_PROVIDER, SHARE_FEATURE } from "../lib/cloud-offering";
+import { SHARE_FEATURE, startsInPlace } from "../lib/cloud-offering";
 import { useCloudSessionEventStream } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { cloudChatEventsQueryKey, recordCloudScriptStepEvents, useCachedQueryData, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
@@ -886,14 +886,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	// A Freestyle Chat session starting or waking stays on its conversation, not
+	// A Freestyle or boat Chat session starting or waking stays on its conversation, not
 	// the startup screen: its composer shimmers and its messages queue until the
 	// worker connects (cloudChatStartingInPlace). Latched until it connects, so
 	// the moment its sandbox reports running before the worker does never
 	// flashes the screen in. Other providers keep the startup screen: a Coder
 	// start shows its steps and its workspace link there.
 	const chatStartingInPlaceRef = useRef("");
-	const freestyleChat = session?.mode === "chat" && session.cloud?.sandboxProvider === FREESTYLE_PROVIDER;
+	const freestyleChat = session?.mode === "chat" && startsInPlace(session.cloud?.sandboxProvider);
 	if (cloudChatStartingInPlace(session)) chatStartingInPlaceRef.current = sessionId;
 	else if (!freestyleChat || cloudStage === "connected" || isCloudPausedStage(cloudStage)) chatStartingInPlaceRef.current = "";
 	const chatStartingInPlace = chatStartingInPlaceRef.current === sessionId;

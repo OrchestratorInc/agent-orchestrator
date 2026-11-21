@@ -20,6 +20,18 @@ import type {
 
 export const CODER_PROVIDER = "coder";
 export const FREESTYLE_PROVIDER = "freestyle";
+/** boat VMs, a hosted provider the control plane may offer like Freestyle. */
+export const BOAT_PROVIDER = "boat";
+
+/**
+ * Whether a provider's sessions start in place: the conversation (or a new
+ * project's orchestrator) shows at once while the sandbox comes up in a few
+ * seconds, instead of the startup screen. Freestyle and boat boot from prepared
+ * snapshots; Coder keeps the screen for its build steps and workspace link.
+ */
+export function startsInPlace(provider: string | undefined): boolean {
+	return provider === FREESTYLE_PROVIDER || provider === BOAT_PROVIDER;
+}
 /** Offering feature that lets an organization share sessions (WorkOS metadata feature=share). */
 export const SHARE_FEATURE = "share";
 /** Offering feature of a control plane that starts Cloud standalone agents (POST /orgs/{orgId}/standalone-agents). */
@@ -81,10 +93,11 @@ export interface ResolvedCloudOffering {
 /** Kind from the provider list, for a control plane that does not send one. */
 export function offeringKindFor(providers: readonly string[]): CloudCpOfferingKind {
 	const coder = providers.includes(CODER_PROVIDER);
-	const freestyle = providers.includes(FREESTYLE_PROVIDER);
-	if (coder && freestyle) return "both";
+	// boat VMs present like Freestyle ones.
+	const hosted = providers.includes(FREESTYLE_PROVIDER) || providers.includes(BOAT_PROVIDER);
+	if (coder && hosted) return "both";
 	if (coder) return "b2b";
-	if (freestyle) return "b2c";
+	if (hosted) return "b2c";
 	// Any other provider (docker, a local control plane) carries nothing
 	// B2B-specific, so it presents like the consumer offering.
 	return providers.length > 0 ? "b2c" : "none";

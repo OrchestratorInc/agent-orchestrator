@@ -774,6 +774,7 @@
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "Рабочее пространство разработки (Coder)",
 	"createProject.sandboxProvider.freestyle": "Мгновенный запуск",
+	"createProject.sandboxProvider.boat": "Полная ВМ",
 	"createProject.sandboxProvider.ecs": "ECS",
 	"createProject.sandboxProvider.daytona": "Daytona",
 	"createProject.addWorkspace": "Открыть рабочее пространство",

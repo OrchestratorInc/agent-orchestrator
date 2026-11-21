@@ -35,7 +35,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
-import { FREESTYLE_PROVIDER, projectSandboxProvider, SHARE_FEATURE } from "../lib/cloud-offering";
+import { projectSandboxProvider, SHARE_FEATURE, startsInPlace as providerStartsInPlace } from "../lib/cloud-offering";
 import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
@@ -98,7 +98,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
 		: projectId ? all.filter((candidate) => candidate.id === projectId) : all;
 	const workspace = projectId ? workspaces[0] : undefined;
-	// A Freestyle cloud project's orchestrator starts in place (see
+	// A Freestyle or boat cloud project's orchestrator starts in place (see
 	// OrchestratorStartingChat); its session does not exist yet, so the
 	// project's provider decides, as the control plane's does.
 	// Only this machine's cloud projects start in place: a remote host's board
@@ -108,7 +108,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const offering = useCloudOffering(localCloudBoard);
 	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);
 	const startsInPlace = localCloudBoard && cloudProject !== undefined &&
-		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
+		providerStartsInPlace(projectSandboxProvider(cloudProject.config, offering));
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions)).filter((session) => !session.needsResume || isArchivedSession(session));
