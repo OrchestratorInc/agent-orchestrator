@@ -95,7 +95,8 @@ or a file path replaces stdin. At most 50 steps.
   is non-zero when a step failed. A batch run with no `--steps`, file, or piped
   input refuses to wait on a terminal.
 - Text typed into the page (`fill` and `type` values, every `--value`, and on a
-  remote host `keyboard type` and `keyboard inserttext` text) is
+  remote host `keyboard type`, `keyboard inserttext`, `find ... fill|type`, and
+  `set credentials`) is
   shown as `<redacted>` in the step lines, `--json` results and error
   messages, because it can be a password. The page still receives the real
   value.

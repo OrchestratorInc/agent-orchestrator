@@ -582,16 +582,25 @@ func writeBrowserBatchSummary(w io.Writer, result browserBatchResult) error {
 const browserBatchRedacted = "<redacted>"
 
 // browserBatchReportArgs returns the step as it may appear in output: text
-// typed into the page (fill/type values, remote keyboard type/inserttext
-// text, and every --value) can be a
+// typed into the page (fill/type values; remote keyboard type/inserttext,
+// find ... fill|type, and set credentials; every --value) can be a
 // credential, so it is replaced. The step that runs keeps the real value.
 func browserBatchReportArgs(step []string) []string {
 	out := append([]string(nil), step...)
 	// Desktop `fill/type <ref> <text>`, and remote agent-browser
 	// `keyboard type|inserttext <text>`: everything from index 2 is text.
 	keyboardText := out[0] == "keyboard" && len(out) > 1 && (out[1] == "type" || out[1] == "inserttext")
-	if (out[0] == "fill" || out[0] == "type" || keyboardText) && len(out) > 2 {
+	// Remote `set credentials <user> <pass>` sets HTTP auth.
+	credentials := out[0] == "set" && len(out) > 1 && out[1] == "credentials"
+	if (out[0] == "fill" || out[0] == "type" || keyboardText || credentials) && len(out) > 2 {
 		for i := 2; i < len(out); i++ {
+			out[i] = browserBatchRedacted
+		}
+	}
+	// Remote `find <locator> <value> fill|type <text>`: the action is the
+	// fourth word, so a locator value that reads "fill" is not mistaken for it.
+	if out[0] == "find" && len(out) > 4 && (out[3] == "fill" || out[3] == "type") {
+		for i := 4; i < len(out); i++ {
 			out[i] = browserBatchRedacted
 		}
 	}
