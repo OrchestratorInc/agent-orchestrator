@@ -35,6 +35,7 @@ export function ChatSelectionActions({
 	checkingSide,
 	onRemove,
 	commentRef,
+	canAskAgent = true,
 }: {
 	selection: { excerpt: ChatDraftExcerptReference; range: Range };
 	viewportRef: RefObject<HTMLDivElement | null>;
@@ -44,6 +45,11 @@ export function ChatSelectionActions({
 	checkingSide?: boolean;
 	onRemove?: () => void | Promise<void>;
 	commentRef?: MutableRefObject<string>;
+	/**
+	 * Whether this person can prompt the agent. Someone who can't (a viewer, a
+	 * guest without prompt rights) is offered no way to ask it: only Comment.
+	 */
+	canAskAgent?: boolean;
 }) {
 	const { t } = useTranslation();
 	const overrides = useKeybindingsStore((state) => state.overrides);
@@ -64,6 +70,8 @@ export function ChatSelectionActions({
 	// add button are not there to type into).
 	const [askingAgent, setAskingAgent] = useState(false);
 	const choosing = Boolean(commentDraft) && !askingAgent;
+	// The agent's box: chosen with Ask the agent, or the only action without comments.
+	const agentBox = canAskAgent && !choosing;
 	const choosingRef = useRef(choosing);
 	choosingRef.current = choosing;
 	const startComment = useLatestCallback((initialText?: string) => {
@@ -151,6 +159,8 @@ export function ChatSelectionActions({
 			}, isMacPlatform(), useKeybindingsStore.getState().overrides);
 			const typing = event.key.length === 1 && event.key !== " " && !event.metaKey && !event.ctrlKey && !event.altKey;
 			if (!shortcut && !typing) return;
+			// Someone who can't prompt the agent has nothing to add to it.
+			if (shortcut && !canAskAgent) return;
 			const toolbar = buttonRef.current;
 			const origin = event.composedPath()[0];
 			const target =
@@ -184,7 +194,7 @@ export function ChatSelectionActions({
 					startComment(event.key);
 					return;
 				}
-				textareaRef.current?.focus({ preventScroll: true });
+				if (canAskAgent) textareaRef.current?.focus({ preventScroll: true });
 				return;
 			}
 			event.preventDefault();
@@ -193,15 +203,17 @@ export function ChatSelectionActions({
 		};
 		document.addEventListener("keydown", onKeyDown, true);
 		return () => document.removeEventListener("keydown", onKeyDown, true);
-	}, [position?.visible, selection, viewportRef, activate, startComment]);
+	}, [position?.visible, selection, viewportRef, activate, startComment, canAskAgent]);
 
 	const addLabel = editing ? t("chat.annotation.save") : t("sideChat.addToChat");
+	// Nothing to offer: no comments here, and no agent this person can prompt.
+	if (!commentDraft && !canAskAgent) return null;
 	return (
 		<TooltipProvider>
 			<div
 				ref={buttonRef}
 				data-chat-selection-actions=""
-				className={cn(selectionToolbarClass, "absolute max-w-[calc(100%-1rem)] items-end gap-1 rounded-xl p-1", choosing ? "w-auto" : "w-80", !position?.visible && "invisible")}
+				className={cn(selectionToolbarClass, "absolute max-w-[calc(100%-1rem)] items-end gap-1 rounded-xl p-1", agentBox ? "w-80" : "w-auto", !position?.visible && "invisible")}
 				style={{ left: position?.left ?? 0, top: position?.top ?? 0 }}
 				onMouseDown={(event) => {
 					if (event.target !== textareaRef.current) event.preventDefault();
@@ -221,7 +233,7 @@ export function ChatSelectionActions({
 						{t("comment.action")}
 					</Button>
 				) : null}
-				{choosing ? (
+				{choosing && canAskAgent ? (
 					<Button
 						type="button"
 						variant="quiet"
@@ -235,7 +247,7 @@ export function ChatSelectionActions({
 						{t("comment.askAgent")}
 					</Button>
 				) : null}
-				{choosing ? null : <>
+				{!agentBox ? null : <>
 				<textarea
 					ref={textareaRef}
 					rows={1}

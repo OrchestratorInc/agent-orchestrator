@@ -142,7 +142,7 @@ describe("chat selection actions", () => {
 
 describe("commenting on a selected passage", () => {
 	// A selected passage of an agent answer, in a session with comments.
-	async function commentSetup() {
+	async function commentSetup(extra: Partial<Parameters<typeof ChatSelectionActions>[0]> = {}) {
 		const { CommentMarkersContext } = await import("./AsideMarker");
 		const props = setup();
 		const message = document.createElement("div");
@@ -160,7 +160,7 @@ describe("commenting on a selected passage", () => {
 		const markers = { canComment: true, forMessage: () => undefined, openMessage: vi.fn(), openThread: vi.fn(), startComment };
 		render(
 			<CommentMarkersContext.Provider value={markers}>
-				<ChatSelectionActions {...props} viewportRef={{ current: message }} />
+				<ChatSelectionActions {...props} {...extra} viewportRef={{ current: message }} />
 			</CommentMarkersContext.Provider>,
 		);
 		const draft = { anchor: { sequence: 60, kind: "agent_message" }, quote: "additional", excerpt: "The time goes to the additional repositories." };
@@ -210,6 +210,37 @@ describe("commenting on a selected passage", () => {
 		await act(async () => { expect(fireEvent.keyDown(message, { key: "l", ctrlKey: true })).toBe(false); });
 		expect(props.onAdd).toHaveBeenCalledTimes(1);
 		expect(startComment).not.toHaveBeenCalled();
+	});
+
+	it("offers someone who can't prompt the agent only Comment: no Ask the agent, and neither typing nor the shortcut reaches the agent", async () => {
+		const { props, message, startComment, draft } = await commentSetup({ canAskAgent: false });
+		expect(screen.getByRole("button", { name: "Comment" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Ask the agent" })).toBeNull();
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Add to chat" })).toBeNull();
+		// The add-to-chat shortcut has no agent to add to: it is left alone.
+		await act(async () => { expect(fireEvent.keyDown(message, { key: "l", ctrlKey: true })).toBe(true); });
+		expect(props.onAdd).not.toHaveBeenCalled();
+		expect(startComment).not.toHaveBeenCalled();
+		// Typing still starts a comment for people.
+		fireEvent.keyDown(message, { key: "W" });
+		expect(startComment).toHaveBeenCalledWith({ ...draft, initialText: "W" });
+		expect(props.onAdd).not.toHaveBeenCalled();
+	});
+
+	it("offers nothing on a selection to someone who can neither comment nor prompt the agent", async () => {
+		const props = setup();
+		const viewport = document.createElement("div");
+		viewport.dataset.testChatSelection = ""; viewport.textContent = "selected chat text";
+		document.body.append(viewport);
+		props.selection.range.selectNodeContents(viewport);
+		window.getSelection()!.removeAllRanges();
+		window.getSelection()!.addRange(props.selection.range);
+		const { container } = render(<ChatSelectionActions {...props} viewportRef={{ current: viewport }} canAskAgent={false} />);
+		expect(container.querySelector("[data-chat-selection-actions]")).toBeNull();
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(fireEvent.keyDown(viewport, { key: "l", ctrlKey: true })).toBe(true);
+		expect(props.onAdd).not.toHaveBeenCalled();
 	});
 
 	it("keeps the toolbar as it was outside a session with comments", () => {

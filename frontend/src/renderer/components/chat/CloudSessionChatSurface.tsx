@@ -2792,6 +2792,8 @@ export function CloudSessionChatSurface({
 			cancelQueuedTurnPendingTurnId={cancelQueued.isPending ? cancelQueued.variables : undefined}
 			showSteerButton
 			excerptsEnabled
+			// Agent actions only for people who can prompt it (the same rule as a thread's Also send to agent).
+			canAskAgent={!readOnly && session.isTerminated !== true}
 			fileReferencesEnabled
 			filePaths={filesQuery.data?.paths}
 			filePathsTruncated={filesQuery.data?.truncated}

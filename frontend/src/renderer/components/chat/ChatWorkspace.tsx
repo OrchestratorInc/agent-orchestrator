@@ -501,6 +501,8 @@ export interface ChatWorkspaceProps {
 	/** The surface's onSend forwards transcript excerpts. Without it, "Add to
 	 * chat" is hidden so a selection cannot be cleared from the draft unsent. */
 	excerptsEnabled?: boolean;
+	/** Whether this person can prompt the agent: without it, a selection offers no way to ask the agent (only Comment, where there are comments). */
+	canAskAgent?: boolean;
 	fileReferencesEnabled?: boolean;
 	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
 	messageByteLimit?: number;
@@ -898,6 +900,7 @@ function ChatWorkspaceContent({
 	loadingOlder,
 	onLoadOlder,
 	excerptsEnabled = false,
+	canAskAgent = true,
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
 	messageByteLimit,
@@ -2371,6 +2374,7 @@ function ChatWorkspaceContent({
 									onFocusMessageDone={onFocusMessageDone}
 									historyPending={historyPending}
 									excerptsEnabled={excerptsEnabled}
+									canAskAgent={canAskAgent}
 									onDecide={onDecide}
 									busy={busy}
 									onRollback={rollbackTarget}
@@ -3408,6 +3412,7 @@ export function Timeline({
 	onFocusMessageDone,
 	historyPending: timelineHistoryPending = false,
 	excerptsEnabled,
+	canAskAgent = true,
 	onDecide,
 	busy,
 	onRollback,
@@ -3472,6 +3477,7 @@ export function Timeline({
 	/** The history is still loading: a message not in it yet may still arrive. */
 	historyPending?: boolean;
 	excerptsEnabled?: boolean;
+	canAskAgent?: boolean;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	busy?: boolean;
 	onRollback?: (turnId: string) => void;
@@ -5823,7 +5829,7 @@ export function Timeline({
 		>
 			{find.bar}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
-				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat} commentRef={selectionComment}
+				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat} commentRef={selectionComment} canAskAgent={canAskAgent}
 				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> :
 				editingAnnotation ? <ChatSelectionActions key={`edit-${editingAnnotation.excerpt.id}`} selection={editingAnnotation}
 					viewportRef={scroller} onInvalid={closeEditingAnnotation}

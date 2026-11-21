@@ -96,7 +96,7 @@ const thread: CloudCpAsideThread = {
 	hasMore: false,
 };
 
-type ChatProps = { snapshot: { items: Array<ConversationMessage | ConversationActivity> }; onSend: (...args: unknown[]) => Promise<unknown>; sidePane?: ReactNode };
+type ChatProps = { snapshot: { items: Array<ConversationMessage | ConversationActivity> }; onSend: (...args: unknown[]) => Promise<unknown>; sidePane?: ReactNode; canAskAgent?: boolean };
 const firstProps = () => cloudMocks.chatProps.mock.calls[0]?.[0] as ChatProps;
 const lastProps = () => cloudMocks.chatProps.mock.lastCall?.[0] as ChatProps;
 
@@ -357,6 +357,16 @@ describe("replying", () => {
 		expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
 		expect(cloudMocks.steerTurn).not.toHaveBeenCalled();
 		await waitFor(() => expect(pane.querySelectorAll("[data-aside-entry]")).toHaveLength(3));
+	});
+
+	it("lets only people who can prompt the agent ask it about a selection", async () => {
+		renderSurface(undefined, { ...session, cloud: { orgId: "org-1", shared: true } });
+		await waitFor(() => expect(lastProps()?.canAskAgent).toBe(false));
+	});
+
+	it("lets someone who can prompt the agent ask it about a selection", async () => {
+		renderSurface();
+		await waitFor(() => expect(lastProps()?.canAskAgent).toBe(true));
 	});
 
 	it("lets a viewer reply, with no composer lease", async () => {
