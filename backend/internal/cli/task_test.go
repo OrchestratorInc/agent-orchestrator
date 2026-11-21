@@ -443,14 +443,14 @@ func TestTaskStartOrchestratorTerminalFallsBackToSend(t *testing.T) {
 	}
 }
 
-func TestTaskWaitNeedsInputExitsTwo(t *testing.T) {
+func TestTaskWaitNeedsInputExitsThree(t *testing.T) {
 	d := newTaskDaemon(t)
 	d.set("GET /api/v1/sessions/repo-3", 200, `{"session":{"id":"repo-3","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
 	d.set("GET /api/v1/sessions/repo-3/conversation", 200, `{"turns":[{"id":"t1","state":"running"}],"activities":[{"turnId":"t1","activityKind":"approval","status":"pending"}]}`)
 
 	out, _, err := executeCLI(t, fakeClockDeps(), "task", "wait", "repo-3", "--json")
-	if got := ExitCode(err); got != 2 {
-		t.Fatalf("exit = %d (%v), want 2", got, err)
+	if got := ExitCode(err); got != 3 {
+		t.Fatalf("exit = %d (%v), want 3", got, err)
 	}
 	if res := decodeTaskResult(t, out); res["status"] != "needs_input" {
 		t.Fatalf("result = %v", res)
@@ -527,8 +527,8 @@ func TestTaskStartRejectsEmptyBrief(t *testing.T) {
 }
 
 func TestTaskExitErrorCarriesItsCode(t *testing.T) {
-	if got := ExitCode(taskExitError{code: 2, msg: "waiting"}); got != 2 {
-		t.Fatalf("ExitCode(needs input) = %d", got)
+	if got := ExitCode(taskExitError{code: taskExitNeedsInput, msg: "waiting"}); got != 3 {
+		t.Fatalf("ExitCode(needs input) = %d, want 3", got)
 	}
 	if got := ExitCode(taskExitError{code: 1, msg: "failed"}); got != 1 {
 		t.Fatalf("ExitCode(failed) = %d", got)
@@ -838,5 +838,35 @@ func TestTaskStartWaitKeepsTheTerminalWorkSeenAtStart(t *testing.T) {
 	}
 	if res := decodeTaskResult(t, out); res["status"] != "done" {
 		t.Fatalf("result = %v", res)
+	}
+}
+
+// needs_input exits 3 through the real entrypoint and is not reported as a CLI
+// usage error, while a real usage error still is.
+func TestTaskNeedsInputIsNotAUsageErrorEvent(t *testing.T) {
+	const usageEvent = "POST /internal/telemetry/cli-usage-error"
+	d := newTaskDaemon(t)
+	d.set(usageEvent, 204, ``)
+	d.set("GET /api/v1/sessions/repo-3", 200, `{"session":{"id":"repo-3","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-3/conversation", 200, `{"turns":[{"id":"t1","state":"running"}],"activities":[{"turnId":"t1","activityKind":"approval","status":"pending"}]}`)
+
+	out, _, err := executeCLIRoot(t, fakeClockDeps(), "task", "wait", "repo-3", "--json")
+	if got := ExitCode(err); got != 3 {
+		t.Fatalf("exit = %d (%v), want 3", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "needs_input" {
+		t.Fatalf("result = %v", res)
+	}
+	if d.saw(usageEvent) {
+		t.Fatal("needs_input was reported as a CLI usage error")
+	}
+
+	// Control: the same harness does see the event for a real usage error.
+	_, _, err = executeCLIRoot(t, fakeClockDeps(), "task", "status", "bad id")
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("usage error exit = %d (%v), want 2", got, err)
+	}
+	if !d.saw(usageEvent) {
+		t.Fatal("a usage error should still be reported as one")
 	}
 }

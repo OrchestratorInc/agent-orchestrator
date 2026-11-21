@@ -37,7 +37,8 @@ orchestrator as instructions for the workers it starts.
 |---|---|
 | `0` | The task started (running or done). Without `--wait` it may also still be `starting`. |
 | `1` | The task failed, or `--timeout` ran out before it started. |
-| `2` | The task is waiting on the user, such as for an approval. A usage error also exits `2`, but prints no JSON. |
+| `2` | Usage error: fix the command (for example pass `--project`). Prints no JSON. |
+| `3` | The task is waiting on the user, such as for an approval. Ask the user; do not start the task again. |
 
 `status` in the JSON is `starting`, `running`, `done`, `failed`, or
 `needs_input`. A task counts as started once its turn has finished, or has

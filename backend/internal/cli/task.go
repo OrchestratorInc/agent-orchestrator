@@ -23,7 +23,9 @@ import (
 // `ao send` and the session states unchanged.
 //
 // Exit codes: 0 the task started (running or done), 1 it failed or timed out,
-// 2 it is waiting on the user. Usage errors also exit 2 but print no JSON.
+// 2 usage error only (the CLI-wide meaning), 3 it is waiting on the user. A
+// task outcome never goes through usageError, so needs_input is not counted
+// as a usage error.
 
 // Task statuses reported in the `status` field of --json output.
 const (
@@ -37,7 +39,7 @@ const (
 // Exit codes for task statuses that are not success.
 const (
 	taskExitFailed     = 1
-	taskExitNeedsInput = 2
+	taskExitNeedsInput = 3
 )
 
 const defaultTaskTimeout = 120 * time.Second
@@ -92,7 +94,7 @@ func newTaskCommand(ctx *commandContext) *cobra.Command {
 		Long: "Start a task on a project and check whether the agent really picked it up.\n\n" +
 			"By default the project's orchestrator receives the task, plans it, and starts workers.\n" +
 			"With --worker a single worker session takes it directly.\n\n" +
-			"Exit codes: 0 started (running or done), 1 failed or timed out, 2 waiting on the user.\n" +
+			"Exit codes: 0 started (running or done), 1 failed or timed out, 2 usage error, 3 waiting on the user.\n" +
 			"With --json, stdout is {status, taskId, sessionIds, reason, fix}; status is one of\n" +
 			"starting, running, done, failed, needs_input.",
 	}

@@ -172,7 +172,8 @@ By default the project's orchestrator receives the task, plans it, and starts wo
 | --- | --- |
 | `0` | The task started: it is running or done. Without `--wait`, it may also still be starting. |
 | `1` | The task failed: the session could not start, the agent's turn failed, or `--timeout` ran out first. |
-| `2` | The task is waiting on you, for example for an approval. A usage error also exits `2`, but prints no JSON. |
+| `2` | Usage error: the command itself needs fixing. It prints no JSON. |
+| `3` | The task is waiting on you, for example for an approval. Answer it in Orchestrator; starting the task again would run it twice. |
 
 With `--json`, the command prints one object:
 
