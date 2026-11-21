@@ -1,5 +1,6 @@
 import type { AgentCatalog, AgentModelCatalog, ProjectDetail } from "../api";
 import { CLOUD_AGENT_LABELS, CLOUD_AGENTS, isAgentConnected } from "./agents";
+import { cloudModelLabel } from "./modelCatalog";
 import type { CloudChatModels, CloudProject, CloudProviderConnection } from "./types";
 
 // The spawn sheet's machine picker offers Orchestrator Cloud beside the paired machines.
@@ -42,7 +43,8 @@ export function cloudModelCatalog(agentId: string, catalog: CloudChatModels, now
 		// Each model's effort levels, so New task's effort control works as on a machine.
 		models: catalog.models.map((model) => ({
 			id: model.id,
-			label: model.displayName,
+			// "Opus 5.5", not Claude's bare alias name "Opus", as the desktop names it.
+			label: cloudModelLabel(agentId, model),
 			isDefault: model.default,
 			...(model.efforts?.length ? { efforts: model.efforts } : {}),
 			...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),

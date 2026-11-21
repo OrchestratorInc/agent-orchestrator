@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeAliasModel, defaultEffortModel, listedModels, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
+import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, listedModels, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
 
 describe("spawn agent resolution", () => {
 	it("prefers the project's worker agent when it is available", () => {
@@ -61,10 +61,48 @@ describe("spawn model resolution", () => {
 		expect(modelOverride("  opus  ", true)).toBe("opus");
 	});
 
-	it("sends nothing for the untouched Automatic state", () => {
+	it("sends nothing for a project's pin, which the server applies", () => {
 		expect(modelOverride("opus", false)).toBeUndefined();
+		expect(modelOverride("opus", false, "sonnet")).toBeUndefined();
+	});
+
+	// The default row names the catalog's default ("Opus 5.5 · Default"), and
+	// that is the only way the menu offers it: sending nothing let Claude Code
+	// start on the account's own default (Sonnet on some), so the chat named
+	// another model than New task had. The desktop's New task sends it too.
+	it("sends the default row's model when nothing is picked", () => {
+		expect(modelOverride("", false, "opus")).toBe("opus");
+		expect(modelOverride("__auto__", false, " gpt-6-astra ")).toBe("gpt-6-astra");
+		expect(modelOverride("", true, "opus")).toBe("opus");
+		expect(modelOverride("__auto__", true, "opus")).toBe("opus");
+	});
+
+	it("takes the default row's model from the agent's own loaded catalog", () => {
+		const models = [{ id: "opus", label: "Opus 5.5", isDefault: true }, { id: "sonnet", label: "Sonnet 5.5" }];
+		expect(defaultRowModelToSend({ catalog: { selectionMode: "catalog", models } })).toBe("opus");
+		expect(defaultRowModelToSend({ catalog: undefined })).toBeUndefined();
+		expect(defaultRowModelToSend({ catalog: { selectionMode: "catalog", models: [{ id: "sonnet", label: "Sonnet 5.5" }] } })).toBeUndefined();
+	});
+
+	// Desktop sends the catalog default only for a model list with nothing
+	// pinned (TaskComposer: !catalogUsesModes && !projectModelOrMode). A mode
+	// list's default sent as the model replaced a project's pinned mode: an Amp
+	// project pinned to "high" ran "medium".
+	it("sends no default for a mode list, or over a project's pinned model or mode", () => {
+		const modes = { selectionMode: "mode" as const, models: [{ id: "medium", label: "Medium", isDefault: true }, { id: "high", label: "High" }] };
+		expect(defaultRowModelToSend({ catalog: modes })).toBeUndefined();
+		const models = { selectionMode: "catalog" as const, models: [{ id: "opus", label: "Opus 5.5", isDefault: true }] };
+		expect(defaultRowModelToSend({ catalog: models, projectPin: "high" })).toBeUndefined();
+		expect(defaultRowModelToSend({ catalog: models, projectPin: "sonnet" })).toBeUndefined();
+		expect(defaultRowModelToSend({ catalog: models, projectPin: "  " })).toBe("opus");
+	});
+
+	it("sends nothing when the catalog names no concrete default", () => {
+		expect(modelOverride("", false)).toBeUndefined();
 		expect(modelOverride("", true)).toBeUndefined();
 		expect(modelOverride("__auto__", true)).toBeUndefined();
+		expect(modelOverride("", false, "default")).toBeUndefined();
+		expect(modelOverride("", false, "  ")).toBeUndefined();
 	});
 
 	it("reloads the model catalog only when its project or agent source changes", () => {
