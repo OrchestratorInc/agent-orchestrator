@@ -507,3 +507,25 @@ func TestServeAcceptsBackgroundFlag(t *testing.T) {
 		t.Fatalf("result = %#v", res)
 	}
 }
+
+// The foreground daemon reads this process's environment, so an inherited
+// AO_OWNER must be removed there too, not only from the detached child's env.
+func TestApplyProcessEnvRemovesInheritedOwner(t *testing.T) {
+	t.Setenv("AO_OWNER", "app")
+	t.Setenv("AO_SERVE_TEST_KEEP", "1")
+	before := os.Environ()
+	t.Cleanup(func() {
+		if err := applyProcessEnv(before); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := applyProcessEnv(serveEnv(os.Environ(), 4100, false, "dev")); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := os.LookupEnv("AO_OWNER"); ok {
+		t.Fatalf("AO_OWNER = %q still set for the foreground daemon", v)
+	}
+	if os.Getenv("AO_PORT") != "4100" || os.Getenv("AO_SERVE_TEST_KEEP") != "1" {
+		t.Fatalf("env not applied: AO_PORT=%q keep=%q", os.Getenv("AO_PORT"), os.Getenv("AO_SERVE_TEST_KEEP"))
+	}
+}

@@ -470,7 +470,25 @@ func envList(env map[string]string) []string {
 // runForegroundDaemon runs the daemon in this process with env applied, so
 // a supervisor (launchd, systemd, a terminal) owns it directly.
 func runForegroundDaemon(env []string) error {
-	for k, v := range envMap(env) {
+	if err := applyProcessEnv(env); err != nil {
+		return err
+	}
+	return daemon.Run(Version)
+}
+
+// applyProcessEnv makes this process's environment exactly env: it sets
+// every entry and unsets variables env leaves out, such as an inherited
+// AO_OWNER.
+func applyProcessEnv(env []string) error {
+	want := envMap(env)
+	for k := range envMap(os.Environ()) {
+		if _, ok := want[k]; !ok {
+			if err := os.Unsetenv(k); err != nil {
+				return err
+			}
+		}
+	}
+	for k, v := range want {
 		if os.Getenv(k) == v {
 			continue
 		}
@@ -478,5 +496,5 @@ func runForegroundDaemon(env []string) error {
 			return err
 		}
 	}
-	return daemon.Run(Version)
+	return nil
 }

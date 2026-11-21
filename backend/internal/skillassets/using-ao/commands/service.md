@@ -30,6 +30,7 @@ ao service uninstall [--json]
 - The service runs `ao serve --foreground` with this shell's `PATH`, `AO_DATA_DIR`, `AO_RUN_FILE`, `AO_PORT`, `DO_NOT_TRACK` and `AO_TELEMETRY_*`. Run `install` again after changing them.
 - The service restarts the daemon after a crash, and when the desktop app's own daemon quits with the app. `ao stop` stops it until the next login.
 - If a daemon is already running when you install, the service watches it instead of starting a second one, and `install` says so.
+- Exception: when the watched daemon is the desktop app's own, the service cannot tell `ao stop` from the app quitting, so it starts its own daemon. To keep Orchestrator stopped in that case, run `ao service uninstall` first.
 - `install` and `uninstall` only touch a file that `ao service install` wrote. `uninstall` stops the service and removes that file.
 - On Linux the service starts at login; `loginctl enable-linger` starts it at boot.
 
