@@ -81,7 +81,7 @@ describe("spawn composer", () => {
 		expect(finish).toContain('if (current !== "recording") return;');
 		expect(finish).toContain("device.stop();");
 		expect(finish.slice(finish.indexOf('if (current !== "recording") return;'))).not.toContain('setPhase("idle")');
-		expect(spawn).toContain('disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}');
+		expect(spawn).toContain('disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}');
 	});
 
 	// The machine's catalog loads before a project is chosen, so a project is
@@ -372,5 +372,25 @@ describe("spawn draft", () => {
 			expect(change.indexOf(reset)).toBeGreaterThan(0);
 			expect(change.indexOf(reset)).toBeLessThan(change.indexOf("restoreDraft();"));
 		}
+	});
+});
+
+// A paired machine's model catalog is the machine's: its default never reflects
+// the project's pinned model. While the project's details load (getProject and
+// the catalog load at once), or after that load failed, the pin is unknown, and
+// sending the catalog default then ran a project pinned to opus on sonnet.
+describe("spawn model default and the project's pin", () => {
+	it("sends the default row's model only once the project's details are this project's", () => {
+		expect(spawn).toContain("const projectPinKnown = !projectId || projectId === STANDALONE_PROJECT || (projectDetailLoadedFor === projectId && projectDetail?.id === projectId);");
+		expect(spawn).toContain("defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode, pinKnown: projectPinKnown })");
+	});
+
+	it("keeps Start off on a paired machine while the project's details load", () => {
+		expect(spawn).toContain("const projectDetailsPending = !cloudSelected && Boolean(projectId) && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId;");
+		expect(between(spawn, "<SpawnComposerControls", "/>\n\t\t\t</Animated.View>")).toMatch(/disabled=\{[^}]*\bprojectDetailsPending\b/);
+	});
+
+	it("drops the request a server refused, so the next Start is a new one", () => {
+		expectBefore(between(spawn, "} catch (e) {", "setBusy(false);"), "if (startRefused(e)) requestRef.current = undefined;", "setError(spawnErrorCopy(e));");
 	});
 });

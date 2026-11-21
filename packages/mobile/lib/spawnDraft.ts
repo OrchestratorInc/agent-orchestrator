@@ -110,6 +110,22 @@ export function attachmentsKey(attachments: readonly SpawnAttachment[]): string 
 	return JSON.stringify(attachments.map((attachment) => [attachment.mimeType, contentKey(attachment)]));
 }
 
+/**
+ * Whether a Start failed with a refusal the server answered (a 4xx), so no task
+ * started and the next Start may go under a new request id with the model shown
+ * then. A lost answer, a timeout, a conflict (409) or a rate limit (429) may
+ * have started one, and keep the id so the daemon answers with that task. Read
+ * from the daemon client's ApiError or a CloudError, also as a wrapped cause.
+ */
+export function startRefused(error: unknown): boolean {
+	const statusOf = (value: unknown) => {
+		const status = (value as { status?: unknown } | null | undefined)?.status;
+		return typeof status === "number" ? status : undefined;
+	};
+	const status = statusOf(error) ?? statusOf((error as { cause?: unknown } | null | undefined)?.cause);
+	return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 409 && status !== 429;
+}
+
 /** Whether a Start would send exactly what `request` sent: then it reuses its id. */
 export function requestMatches(request: SpawnDraftRequest | undefined, payload: string, attachments: readonly SpawnAttachment[]): request is SpawnDraftRequest {
 	return Boolean(request && request.payload === payload && request.attachments === attachmentsKey(attachments));

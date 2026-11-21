@@ -38,7 +38,8 @@ vi.mock("expo-file-system", () => {
 vi.mock("./account", () => ({ loadAccount: async () => store.account ? { id: store.account, email: "a@example.com" } : null }));
 vi.mock("./hosts", () => ({ loadHosts: async () => store.hosts.map((id) => ({ id })) }));
 
-import { attachmentsKey, clearSpawnDraft, clearStartedSpawnDraft, createSpawnDraftSaver, forgetSpawnDraftFor, loadSpawnDraft, requestMatches, saveBeforeStart, saveSpawnDraft, SPAWN_DRAFT_KEEP_MS, SPAWN_DRAFT_KEY } from "./spawnDraft";
+import { CloudError } from "./cloud/errors";
+import { attachmentsKey, clearSpawnDraft, clearStartedSpawnDraft, createSpawnDraftSaver, forgetSpawnDraftFor, loadSpawnDraft, requestMatches, saveBeforeStart, saveSpawnDraft, SPAWN_DRAFT_KEEP_MS, SPAWN_DRAFT_KEY, startRefused } from "./spawnDraft";
 
 const image = { name: "screen shot.png", mimeType: "image/png", data: "aW1hZ2U=", bytes: 5, previewUri: "file:///cache/picked.png" };
 const log = { name: "build.log", mimeType: "text/plain", data: "bG9n", bytes: 3 };
@@ -506,5 +507,21 @@ describe("the New task draft", () => {
 		await saveSpawnDraft({ prompt: "For a", attachments: [], owner: { hostId: "machine-a", accountId: "user-1" } });
 		await forgetSpawnDraftFor({ accountId: "user-1" });
 		expect(store.items.size).toBe(0);
+	});
+
+	// The server refused the Start (a 4xx it answered): no task started, so the
+	// next Start may go under a new id with the model shown then. Anything that
+	// may have started one (a lost answer, a timeout, a conflict, a rate limit)
+	// keeps the id, so the daemon answers with that task.
+	it("tells a Start the server refused from one that may have started a task", () => {
+		// Shaped as the daemon client's ApiError: a status the daemon answered.
+		const apiError = (status: number) => Object.assign(new Error("daemon said no"), { status });
+		expect(startRefused(apiError(400))).toBe(true);
+		expect(startRefused(apiError(422))).toBe(true);
+		expect(startRefused(Object.assign(new Error("Cloud said no"), { cause: new CloudError("bad model", { status: 400, code: "invalid_request" }) }))).toBe(true);
+		for (const status of [408, 409, 429, 500, 502]) expect(startRefused(apiError(status))).toBe(false);
+		expect(startRefused(new CloudError("unreachable", { status: 0 }))).toBe(false);
+		expect(startRefused(new Error("network request failed"))).toBe(false);
+		expect(startRefused(undefined)).toBe(false);
 	});
 });

@@ -2,7 +2,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
-import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
+import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, startRefused, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
@@ -453,7 +453,15 @@ export default function SpawnScreen() {
 	const defaultRowCatalog = modelCatalog?.agentId === harness
 		? modelCatalog
 		: cloudSelected && agentModelLists[harness]?.length ? { selectionMode: "catalog" as const, models: agentModelLists[harness] } : undefined;
-	const defaultRowModel = defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode });
+	// The project's pin is known once its details have loaded for this project;
+	// until then, or when that load failed, no default is sent and the server
+	// applies whatever the project pins. A paired machine's catalog is the
+	// machine's, so its default never reflects the pin.
+	const projectPinKnown = !projectId || projectId === STANDALONE_PROJECT || (projectDetailLoadedFor === projectId && projectDetail?.id === projectId);
+	// On a paired machine Start waits for them: sent before, an unpinned
+	// project's task would carry no model and run the agent's own default.
+	const projectDetailsPending = !cloudSelected && Boolean(projectId) && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId;
+	const defaultRowModel = defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode, pinKnown: projectPinKnown });
 	// The model the task will run, picked or the catalog's default, for its
 	// effort levels.
 	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
@@ -969,6 +977,9 @@ export default function SpawnScreen() {
 		} catch (e) {
 			holding.current = false;
 			haptics.error();
+			// Refused by the server, no task started: the next Start goes under a
+			// new id, with the model shown then rather than this one's default.
+			if (startRefused(e)) requestRef.current = undefined;
 			setError(spawnErrorCopy(e));
 			setOfferTUI(mode === "chat" && isChatPreflightError(e));
 			setBusy(false);
@@ -1062,7 +1073,7 @@ export default function SpawnScreen() {
 					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
+					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
 		</KeyboardAvoidingView>

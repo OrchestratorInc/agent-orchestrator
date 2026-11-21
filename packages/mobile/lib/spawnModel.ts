@@ -71,8 +71,11 @@ export function modelOverride(value: string, touched: boolean, catalogDefault?: 
  * mode (an Amp project pinned to "high" ran "medium"). As the desktop's New task
  * decides it (TaskComposer: !catalogUsesModes && !projectModelOrMode).
  */
-export function defaultRowModelToSend(input: { catalog: Pick<AgentModelCatalog, "selectionMode" | "models"> | undefined; projectPin?: string }): string | undefined {
-	if (!input.catalog || input.catalog.selectionMode === "mode" || input.projectPin?.trim()) return undefined;
+export function defaultRowModelToSend(input: { catalog: Pick<AgentModelCatalog, "selectionMode" | "models"> | undefined; projectPin?: string; pinKnown?: boolean }): string | undefined {
+	// `pinKnown` false: the project's details have not loaded (or failed to), so
+	// its pin is unknown. A paired machine's catalog is the machine's, and its
+	// default would override a pin it never reflects.
+	if (input.pinKnown === false || !input.catalog || input.catalog.selectionMode === "mode" || input.projectPin?.trim()) return undefined;
 	return input.catalog.models.find((model) => model.isDefault)?.id;
 }
 

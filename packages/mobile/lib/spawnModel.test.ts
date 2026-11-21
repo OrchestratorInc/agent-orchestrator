@@ -97,6 +97,18 @@ describe("spawn model resolution", () => {
 		expect(defaultRowModelToSend({ catalog: models, projectPin: "  " })).toBe("opus");
 	});
 
+	// A paired machine's catalog is the machine's, not the project's: its
+	// default never reflects the project's pinned model. Until the project's
+	// details have loaded (or when that load failed) the pin is unknown, and
+	// the catalog default sent then would override it (a project pinned to
+	// opus ran sonnet). The server applies the pin when nothing is sent.
+	it("sends no default while the project's pin is unknown", () => {
+		const catalog = { selectionMode: "catalog" as const, models: [{ id: "sonnet", label: "Sonnet 5.5", isDefault: true }] };
+		expect(defaultRowModelToSend({ catalog, pinKnown: false })).toBeUndefined();
+		expect(defaultRowModelToSend({ catalog, pinKnown: true })).toBe("sonnet");
+		expect(defaultRowModelToSend({ catalog })).toBe("sonnet");
+	});
+
 	it("sends nothing when the catalog names no concrete default", () => {
 		expect(modelOverride("", false)).toBeUndefined();
 		expect(modelOverride("", true)).toBeUndefined();
