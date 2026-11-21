@@ -1,5 +1,17 @@
 type QuitEvent = { preventDefault(): void };
 
+// How long an outside quit may spend on cleanup before the process exits anyway.
+// Homebrew's `uninstall quit:` and logout give up on an app within seconds.
+export const EXTERNAL_QUIT_DEADLINE_MS = 5_000;
+
+/**
+ * Controls macOS quit requests while the tray and daemon keep running.
+ * AO's own Quit (app menu, ⌘Q, the Quit command) closes the window and leaves
+ * the Dock. Every other quit request — an Apple Event from `osascript`,
+ * Homebrew, the Dock menu or logout, and SIGTERM — exits the process.
+ * Electron routes them all through `before-quit`, so the in-app Quit marks
+ * itself before app.quit() and anything unmarked counts as an outside quit.
+ */
 export function createDesktopQuitController(options: {
 	platform: NodeJS.Platform;
 	hasTray(): boolean;
@@ -8,9 +20,22 @@ export function createDesktopQuitController(options: {
 	closeWindow(): void;
 	hideDock(): void;
 	quit(): void;
+	/** An outside quit is about to exit the process (agents should be kept). */
+	externalQuitStarted?(): void;
+	/** Ends the process without waiting for cleanup. */
+	exit(): void;
+	externalQuitDeadlineMs?: number;
 }) {
 	let quitCompletelyRequested = false;
+	let externalQuitRequested = false;
+	let backgroundQuitRequested = false;
 	let hideDockOnWindowClosed = false;
+	let deadline: ReturnType<typeof setTimeout> | undefined;
+
+	const clearDeadline = () => {
+		if (deadline) clearTimeout(deadline);
+		deadline = undefined;
+	};
 
 	return {
 		handleBeforeQuit(event: QuitEvent): boolean {
@@ -20,6 +45,15 @@ export function createDesktopQuitController(options: {
 				quitCompletelyRequested ||
 				options.isUpdateRestartRequested()
 			) return false;
+
+			if (!backgroundQuitRequested) {
+				// Not AO's own Quit: really exit, and never hang the caller.
+				quitCompletelyRequested = true;
+				externalQuitRequested = true;
+				options.externalQuitStarted?.();
+				return false;
+			}
+			backgroundQuitRequested = false;
 
 			event.preventDefault();
 			if (options.hasWindow()) {
@@ -32,6 +66,24 @@ export function createDesktopQuitController(options: {
 				options.hideDock();
 			}
 			return true;
+		},
+		/** Start the outside-quit budget after the synchronous draft guard passes. */
+		startCleanupDeadline(): void {
+			if (!externalQuitRequested || deadline !== undefined) return;
+			deadline = setTimeout(() => {
+				options.exit();
+			}, options.externalQuitDeadlineMs ?? EXTERNAL_QUIT_DEADLINE_MS);
+		},
+		/** AO's own Quit: on macOS with the tray this only closes the window. */
+		backgroundQuit(): void {
+			backgroundQuitRequested = true;
+			try {
+				options.quit();
+			} finally {
+				// before-quit runs synchronously inside app.quit(); never let the mark
+				// leak onto a later outside quit.
+				backgroundQuitRequested = false;
+			}
 		},
 		windowClosed(): void {
 			if (!hideDockOnWindowClosed) return;
@@ -47,6 +99,8 @@ export function createDesktopQuitController(options: {
 		},
 		cancelQuit(): void {
 			quitCompletelyRequested = false;
+			externalQuitRequested = false;
+			clearDeadline();
 		},
 	};
 }

@@ -200,7 +200,11 @@ surface (`npm run sqlc`, `npm run api`).
   history and worktrees available for resume. Unexpected desktop exit also stops
   those agents after the supervisor grace period. Planned updates and restarts
   preserve them. Desktop browser targets stop with the window. Updates and system
-  shutdown still exit the app; Windows/Linux quit behavior is unchanged.
+  shutdown still exit the app. A quit from outside the app (a quit Apple Event
+  from Homebrew, `osascript` or the Dock menu, or SIGTERM) exits the process
+  within about five seconds after any unsaved-draft warning is confirmed and,
+  like an update restart, preserves agents.
+  Windows/Linux quit behavior is unchanged.
 - Shell: sidebar (projects + sessions, add/remove project), sessions board,
   session view + inspector, project settings, pull-requests page,
   spawn-orchestrator flow.
