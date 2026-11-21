@@ -1,0 +1,109 @@
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatModel, TurnSettings } from "../../types/conversation";
+import { useUiStore } from "../../stores/ui-store";
+import { ReviewerChatSurface } from "./ReviewerChatSurface";
+
+const mocks = vi.hoisted(() => ({ openSessionLink: vi.fn(), chooseSettings: vi.fn(), resumeAgent: vi.fn() }));
+
+vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock("../../hooks/useReviewerConversation", () => ({
+	useReviewerConversation: () => ({
+		snapshot: { sessionId: "review-session", controller: { state: "ready" } },
+		isLoading: false,
+		error: undefined,
+		hasOlder: false,
+		isLoadingOlder: false,
+		loadOlder: vi.fn(),
+	}),
+	useReviewerConversationModels: () => ({ models: [{ id: "review-model", displayName: "Review model", efforts: ["high"] }], error: undefined }),
+	useReviewerConversationCommands: () => ({
+		chooseSettings: mocks.chooseSettings,
+		resumeAgent: mocks.resumeAgent,
+		busy: false,
+		error: undefined,
+		send: vi.fn(),
+		resolve: vi.fn(),
+		resolveInput: vi.fn(),
+		interrupt: vi.fn(),
+	}),
+}));
+vi.mock("../../lib/use-session-link-navigation", () => ({
+	useSessionLinkNavigation: () => mocks.openSessionLink,
+}));
+vi.mock("./ChatWorkspace", () => ({
+	ChatWorkspace: ({ onOpenShell, openingShell, shellError, onResumeAgent, onSessionLinkOpen, draftOwner, models, onChooseSettings, approvalModes, annotationNavigationRequest, onAnnotationNavigationHandled }: { onOpenShell?: () => void; openingShell?: boolean; shellError?: string; onResumeAgent?: () => void; onSessionLinkOpen?: (url: string) => void; draftOwner?: { sessionId: string }; models?: ChatModel[]; onChooseSettings?: (settings: TurnSettings) => void; approvalModes?: string[]; annotationNavigationRequest?: { id: string; messageId?: string }; onAnnotationNavigationHandled?: (id: string) => void }) => (
+		<>
+		<button type="button" data-message-id={annotationNavigationRequest?.messageId} onClick={() => annotationNavigationRequest && onAnnotationNavigationHandled?.(annotationNavigationRequest.id)}>Navigation request</button>
+		<button onClick={onResumeAgent}>Resume agent</button>
+		{onOpenShell ? <button type="button" data-opening={String(Boolean(openingShell))} data-error={shellError} onClick={onOpenShell}>Open shell</button> : null}
+		<button type="button" data-draft-owner={draftOwner?.sessionId} onClick={() => onSessionLinkOpen?.("ao://sessions/project/session")}>
+			Open session
+		</button>
+		<button type="button" data-approval-modes={approvalModes?.join(",")} onClick={() => onChooseSettings?.({ model: models?.[0]?.id, reasoningEffort: "high", approvalMode: "auto" })}>Choose reviewer settings</button>
+		</>
+	),
+}));
+
+describe("ReviewerChatSurface", () => {
+	beforeEach(() => { mocks.openSessionLink.mockReset(); mocks.chooseSettings.mockReset(); });
+
+	it("connects the shared Resume control to reviewer recovery for its worker owner", () => {
+		render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "Resume agent" }));
+		expect(mocks.resumeAgent).toHaveBeenCalledWith("worker-1");
+	});
+
+	// #6064: the stopped banner promises a shell, so the reviewer pane must offer one.
+	it("forwards the worker's Open shell lever to the stopped reviewer banner", () => {
+		const openShell = vi.fn();
+		const { rerender } = render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" onOpenShell={openShell} openingShell shellError="no shell" />);
+		const button = screen.getByRole("button", { name: "Open shell" });
+		expect(openShell).not.toHaveBeenCalled();
+		expect(button).toHaveAttribute("data-opening", "true");
+		expect(button).toHaveAttribute("data-error", "no shell");
+		fireEvent.click(button);
+		expect(openShell).toHaveBeenCalledOnce();
+		// An unreachable host cannot open a shell either.
+		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" hostUnreachable onOpenShell={openShell} />);
+		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+	});
+
+	it("routes session links through in-app navigation", () => {
+		render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
+		expect(mocks.openSessionLink).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it("exposes reviewer models and effort while keeping unattended permissions fixed", () => {
+		render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
+		const choose = screen.getByRole("button", { name: "Choose reviewer settings" });
+		expect(choose).toHaveAttribute("data-approval-modes", "auto");
+		fireEvent.click(choose);
+		expect(mocks.chooseSettings).toHaveBeenCalledWith({ model: "review-model", reasoningEffort: "high", approvalMode: "auto" });
+	});
+
+	it("applies a palette hit once, to the reviewer chat it names", () => {
+		useUiStore.setState({ chatMessageFocusRequest: null });
+		const { rerender } = render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
+		act(() => useUiStore.getState().requestChatMessageFocus("worker-1", "m1", "flaky login", "review-1"));
+		const request = () => screen.getByRole("button", { name: "Navigation request" });
+		expect(request()).toHaveAttribute("data-message-id", "m1");
+		// Another review's chat in the same surface must not get review 1's target.
+		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-2" />);
+		expect(request()).not.toHaveAttribute("data-message-id");
+		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
+		expect(request()).toHaveAttribute("data-message-id", "m1");
+		// Once the chat applied it, a later mount never replays it.
+		fireEvent.click(request());
+		expect(request()).not.toHaveAttribute("data-message-id");
+	});
+
+	it("keeps reviewer drafts isolated across remote hosts", () => {
+		render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" hostId="https://remote.example" />);
+		expect(screen.getByRole("button", { name: "Open session" })).toHaveAttribute(
+		"data-draft-owner",
+		"remote:https%3A%2F%2Fremote.example:review%3Areview-1",
+	);
+	});
+});

@@ -41,6 +41,7 @@ type Error struct {
 	Code    string
 	Message string
 	Details map[string]any
+	Cause   error
 }
 
 func (e *Error) Error() string {
@@ -48,6 +49,13 @@ func (e *Error) Error() string {
 		return ""
 	}
 	return e.Message
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 // New builds an Error from its parts.
@@ -93,4 +101,11 @@ func Unavailable(code, message string) *Error {
 // Internal is a 500-class error.
 func Internal(code, message string) *Error {
 	return New(KindInternal, code, message, nil)
+}
+
+// InternalCause keeps an unclassified cause behind a safe internal API error.
+func InternalCause(code, message string, cause error) *Error {
+	e := Internal(code, message)
+	e.Cause = cause
+	return e
 }

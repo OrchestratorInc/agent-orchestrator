@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -9,10 +10,24 @@ import { CreateProjectAgentSheet, RequiredAgentField } from "./CreateProjectAgen
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 
+const remote = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock("../lib/host-clients", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/host-clients")>()),
+	clientForHost: () => ({ GET: remote.get, POST: remote.post }),
+}));
+
+// The create flow reads the daemon's intake gate and passes it in.
+const trackerIntakeGate = { enabled: true };
+
+beforeEach(() => {
+	trackerIntakeGate.enabled = true;
+	useUiStore.setState({ settingsModal: null });
+});
+
 function renderSheet(
 	onSubmit = vi.fn().mockResolvedValue(undefined),
 	queryClient?: QueryClient,
-	options: { shake?: boolean } = {},
+	options: { shake?: boolean; hostId?: string } = {},
 ) {
 	queryClient ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	if (queryClient.getQueryData(agentReadinessQueryKey) === undefined) {
@@ -27,6 +42,8 @@ function renderSheet(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<CreateProjectAgentSheet
+					hostId={options.hostId}
+					intakeVisible={trackerIntakeGate.enabled}
 					isCreating={false}
 					kind="single_repo"
 					onOpenChange={() => undefined}
@@ -41,6 +58,31 @@ function renderSheet(
 	return onSubmit;
 }
 
+it("unmounts the modal on submit and does not bring it back when creation succeeds", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(agentReadinessQueryKey, { agents: [agentReadiness("codex")] });
+	queryClient.setQueryData(workspaceQueryKey, []);
+	let finish!: () => void;
+	const pending = new Promise<void>((resolve) => { finish = resolve; });
+	function Harness() {
+		const [busy, setBusy] = useState(false);
+		const [open, setOpen] = useState(true);
+		return <QueryClientProvider client={queryClient}><TooltipProvider>
+			<CreateProjectAgentSheet open={open} isCreating={busy} kind="single_repo" path="/repo/new-project" onOpenChange={setOpen} onSubmit={async () => {
+				setBusy(true);
+				await pending;
+				setOpen(false);
+				setBusy(false);
+			}} />
+		</TooltipProvider></QueryClientProvider>;
+	}
+	render(<Harness />);
+	await userEvent.click(await screen.findByRole("button", { name: "Create and start" }));
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+	await act(async () => finish());
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+});
+
 async function chooseOption(trigger: HTMLElement, optionName: string) {
 	await userEvent.click(trigger);
 	const escaped = optionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -52,6 +94,31 @@ function hoursAgo(hours: number): string {
 }
 
 describe("CreateProjectAgentSheet", () => {
+	it("checks only the selected agent for launch readiness on a remote host", async () => {
+		remote.get.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
+		remote.post.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
+		renderSheet(undefined, undefined, { hostId: "box-a" });
+
+		await waitFor(() => expect(remote.post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", {
+			body: { agentIds: [], purpose: "display" },
+		}));
+	});
+
+	it("can create a remote project with an installed agent whose auth is unknown", async () => {
+		const agents = [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })];
+		remote.get.mockResolvedValue({ data: { agents } });
+		remote.post.mockResolvedValue({ data: { agents } });
+		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), undefined, { hostId: "box-a" });
+
+		await chooseOption(await screen.findByLabelText("Worker agent"), "OpenCode");
+		await chooseOption(screen.getByLabelText("Orchestrator agent"), "OpenCode");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+			workerAgent: "opencode",
+			orchestratorAgent: "opencode",
+		})));
+	});
+
 	it("shakes the active sheet when creation fails", () => {
 		renderSheet(undefined, undefined, { shake: true });
 
@@ -127,7 +194,7 @@ describe("CreateProjectAgentSheet", () => {
 		);
 	});
 
-	it.each(["stacked", "chip", "settings-row"] as const)("%s lists only ready agents and opens Harness without changing a saved selection", async (variant) => {
+	it.each(["stacked", "chip", "settings-row"] as const)("%s offers agents with unknown readiness and opens Harness for definite failures", async (variant) => {
 		const onChange = vi.fn();
 		useUiStore.setState({ settingsModal: null });
 		render(<RequiredAgentField
@@ -136,6 +203,7 @@ describe("CreateProjectAgentSheet", () => {
 				agentReadiness("claude-code", "Claude Code", { freshness: "stale" }),
 				agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
 				agentReadiness("aider", "Aider", { authentication: "not_applicable" }),
+				agentReadiness("fx", "fx", { authentication: "configured" }),
 				agentReadiness("cursor", "Cursor", { installation: "not_installed" }),
 				agentReadiness("opencode", "OpenCode", { authentication: "unknown" }),
 			]}
@@ -148,7 +216,11 @@ describe("CreateProjectAgentSheet", () => {
 		const role = variant === "stacked" ? "option" : "menuitem";
 		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
-		for (const name of [/Codex/, /Cursor/, /OpenCode/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
+		expect(screen.getByRole(role, { name: "fx" })).toBeInTheDocument();
+		expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
+		expect(screen.getByRole(role, { name: "OpenCode" })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByText("Auth unknown")).not.toBeInTheDocument();
+		for (const name of [/Codex/, /Cursor/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
 		await userEvent.keyboard("{End}{Enter}");
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));
 		expect(onChange).not.toHaveBeenCalled();
@@ -163,6 +235,14 @@ describe("CreateProjectAgentSheet", () => {
 		expect(screen.queryByRole("menuitem", { name: "Manage agents…" })).not.toBeInTheDocument();
 	});
 
+	it("does not send an installed configured agent back to setup", () => {
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="fx" variant="chip" onChange={() => undefined}
+			agents={[agentReadiness("fx", "fx", { authentication: "configured" })]} />);
+
+		expect(screen.getByLabelText("Agent")).toHaveTextContent("fx");
+		expect(screen.getByLabelText("Agent")).not.toHaveTextContent("Needs setup");
+	});
+
 	it("keeps agent management available with an empty ready list", async () => {
 		const onChange = vi.fn();
 		useUiStore.setState({ settingsModal: null });
@@ -172,6 +252,15 @@ describe("CreateProjectAgentSheet", () => {
 		await userEvent.click(screen.getByRole("option", { name: "Manage agents…" }));
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness" }));
 		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	it("opens management on the remote host for an unavailable selected agent", async () => {
+		useUiStore.setState({ settingsModal: null });
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="codex" hostId="box-a" onChange={() => undefined}
+			agents={[agentReadiness("codex", "Codex", { authentication: "unauthorized" })]} />);
+		await userEvent.click(screen.getByLabelText("Agent"));
+		await userEvent.click(screen.getByRole("option", { name: "Manage agents…" }));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex", hostId: "box-a" }));
 	});
 
 	it("keeps fallback agents usable until a readiness snapshot arrives", async () => {
@@ -307,6 +396,18 @@ describe("CreateProjectAgentSheet", () => {
 		});
 	});
 
+	it("omits the intake control, and submits no intake, when the daemon gate is off", async () => {
+		trackerIntakeGate.enabled = false;
+		const onSubmit = vi.fn().mockResolvedValue(undefined);
+		renderSheet(onSubmit);
+
+		expect(screen.queryByLabelText("Automatically work on assigned issues")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		expect(onSubmit.mock.calls[0]?.[0]?.trackerIntake).toBeUndefined();
+	});
+
 	it("keeps the create sheet minimal: no repo row or credential hint", async () => {
 		renderSheet();
 		// The compact setup control uses the shared switch styling; descriptive prose is not shown.
@@ -316,5 +417,75 @@ describe("CreateProjectAgentSheet", () => {
 		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
 		expect(screen.queryByText("Repository")).not.toBeInTheDocument();
 		expect(screen.queryByText(/Reads credentials from/)).not.toBeInTheDocument();
+	});
+});
+
+// Developer Mode: the project starts on the most preferred ready agent, so the
+// sheet asks for no agents and only appears for intake, setup, or an error.
+describe("CreateProjectAgentSheet without agent pickers", () => {
+	function renderAutomaticSheet(
+		options: { intakeVisible?: boolean; error?: string; repositorySetupNeeded?: boolean; settingsLoading?: boolean } = {},
+	) {
+		const onSubmit = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<TooltipProvider>
+					<CreateProjectAgentSheet
+						chooseAgents={false}
+						error={options.error}
+						intakeVisible={options.intakeVisible ?? true}
+						isCreating={false}
+						kind="single_repo"
+						onOpenChange={() => undefined}
+						onSubmit={onSubmit}
+						open={true}
+						path="/repo/new-project"
+						repositorySetupNeeded={options.repositorySetupNeeded}
+						settingsLoading={options.settingsLoading}
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		return onSubmit;
+	}
+
+	it("asks for no agents", () => {
+		renderAutomaticSheet();
+
+		expect(screen.queryByLabelText("Worker agent")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Orchestrator agent")).not.toBeInTheDocument();
+	});
+
+	it("holds Create until settings say whether intake applies", () => {
+		renderAutomaticSheet({ intakeVisible: false, settingsLoading: true });
+
+		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
+	});
+
+	it("shows a failed create and retries with the primary button", async () => {
+		const onSubmit = renderAutomaticSheet({ intakeVisible: false, error: "Setup failed: disk full" });
+
+		expect(screen.getByRole("alert")).toHaveTextContent("disk full");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ trackerIntake: undefined }));
+	});
+
+	it("shows the repository setup notice", () => {
+		renderAutomaticSheet({ intakeVisible: false, repositorySetupNeeded: true });
+
+		expect(screen.getByRole("dialog")).toHaveTextContent(/git/i);
+	});
+
+	it("submits only the intake payload", async () => {
+		const onSubmit = renderAutomaticSheet();
+
+		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
+		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
+		await userEvent.type(screen.getByLabelText("Assignee"), "octocat");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
+			trackerIntake: { enabled: true, assignee: "octocat" },
+		}));
 	});
 });

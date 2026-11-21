@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	goruntime "runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 )
 
 const (
@@ -51,9 +54,13 @@ var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // hostSession is the in-memory state for a live pty-host connection.
 type hostSession struct {
-	addr             string
-	pid              int
-	launchID         string
+	addr     string
+	pid      int
+	launchID string
+	// startedBy is the latest moment the pty-host at pid can have started:
+	// when spawn returned it, or (recovered after a restart) when it was
+	// registered. A process at pid that started later reused the pid.
+	startedBy        time.Time
 	currentOwner     bool
 	protocolVersion  int
 	protocolResolved bool
@@ -88,6 +95,8 @@ type Runtime struct {
 	unregisterHost func(context.Context, string) error
 	destroyWait    time.Duration
 	destroyPoll    time.Duration
+	// processTable reads every process, for RunningWorkloadCommands.
+	processTable func(context.Context) ([]procmem.Process, error)
 
 	mu       sync.Mutex
 	sessions map[string]*hostSession // sessionID -> live session
@@ -113,6 +122,7 @@ func New(opts Options) *Runtime {
 		unregisterHost: unregisterHost,
 		destroyWait:    500 * time.Millisecond,
 		destroyPoll:    25 * time.Millisecond,
+		processTable:   snapshotProcesses,
 		sessions:       make(map[string]*hostSession),
 	}
 }
@@ -170,7 +180,9 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: reserve pty-host ownership for %q: %w", id, err))
 	}
 
-	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env)
+	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env,
+		HostOptions{StartOnAttach: cfg.StartOnAttach, LazySurface: cfg.LazyStyledOutput, Cols: cfg.InitialCols, Rows: cfg.InitialRows, ReplayFile: cfg.ReplayFile, OutputLines: cfg.OutputLines})
+	spawnedBy := time.Now()
 	if err != nil {
 		cause := fmt.Errorf("conpty: spawn pty-host for %q: %w", id, err)
 		handle := ports.RuntimeHandle{ID: id}
@@ -192,7 +204,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 			// spawner could not prove cleanup. Retain its PID and launch fence in
 			// both memory and the restart registry. The sentinel address prevents
 			// ordinary client traffic while keeping the possible handle probeable.
-			sess := &hostSession{addr: unresolvedHostAddress, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true}
+			sess := &hostSession{addr: unresolvedHostAddress, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true, startedBy: spawnedBy}
 			r.mu.Lock()
 			r.sessions[id] = sess
 			r.mu.Unlock()
@@ -212,7 +224,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 			return ports.RuntimeHandle{}, conptyPartialCreateFailure(cause, handle, ports.RuntimeCleanupFailed)
 		}
 		r.mu.Lock()
-		r.sessions[id] = &hostSession{addr: addr, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true}
+		r.sessions[id] = &hostSession{addr: addr, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true, startedBy: spawnedBy}
 		r.mu.Unlock()
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		cleanupErr := r.Destroy(cleanupCtx, handle)
@@ -225,7 +237,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 
 	sess := &hostSession{
 		addr: addr, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true,
-		protocolVersion: conPTYHostProtocolVersion, protocolResolved: true,
+		protocolVersion: conPTYHostProtocolVersion, protocolResolved: true, startedBy: spawnedBy,
 	}
 
 	r.mu.Lock()
@@ -397,6 +409,12 @@ func (r *Runtime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) 
 	return status.Alive, nil
 }
 
+// IsUnsupervisedReviewerAlive uses the PTY host's child status for legacy
+// reviewers that predate the AO supervisor wrapper.
+func (r *Runtime) IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	return r.IsChildAlive(ctx, handle)
+}
+
 // ProbeFencedRuntime returns liveness evidence for the exact fenced runtime identity.
 func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
 	if ref.Handle.ID == "" || ref.SessionID == "" || ref.Generation == "" || ref.Handle.ID != string(ref.SessionID) {
@@ -472,6 +490,53 @@ func (r *Runtime) IsExactSupervisedProcessAlive(ctx context.Context, handle port
 		return false, errors.New("conpty: exact supervisor session and launch are required")
 	}
 	return r.IsSupervisedProcessAlive(ctx, handle, ref)
+}
+
+// ProcessRootPIDs returns the PTY host pid so memory accounting can walk the
+// agent process tree it supervises. An unregistered session yields no pids.
+func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return nil, fmt.Errorf("conpty: resolve runtime %q: %w", handle.ID, err)
+	}
+	if sess == nil || sess.pid <= 0 {
+		return nil, nil
+	}
+	return []int{sess.pid}, nil
+}
+
+// BoundedProcessRoots is ProcessRootPIDs with the latest moment the pty-host
+// can have started, so a caller can tell the host from a process that reused
+// its pid after the host exited without being unregistered.
+func (r *Runtime) BoundedProcessRoots(ctx context.Context, handle ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return nil, fmt.Errorf("conpty: resolve runtime %q: %w", handle.ID, err)
+	}
+	if sess == nil || sess.pid <= 0 {
+		return nil, nil
+	}
+	if sess.startedBy.IsZero() {
+		return nil, fmt.Errorf("conpty: no start bound for pty-host %d of %q", sess.pid, handle.ID)
+	}
+	return []ports.ProcessRoot{{PID: sess.pid, StartedBy: sess.startedBy}}, nil
+}
+
+// ServerPID has no equivalent here: ConPTY hosts one pty per session rather
+// than sharing a detached server the way tmux does.
+func (r *Runtime) ServerPID(ctx context.Context) (int, bool) {
+	return 0, false
+}
+
+// HasSupervisedProcessRecord reports whether this handle was created with an
+// AO-managed launch generation. An empty generation identifies pre-supervisor
+// sessions that still need the legacy child-liveness probe.
+func (r *Runtime) HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return false, fmt.Errorf("conpty: resolve supervised runtime %q: %w", handle.ID, err)
+	}
+	return sess != nil && strings.TrimSpace(sess.launchID) != "", nil
 }
 
 // SendMessage chunks message and writes it to the pty-host followed by Enter.
@@ -617,6 +682,11 @@ func (r *Runtime) resolveWithEvidence(ctx context.Context, id string) (*hostSess
 		}
 		// Re-populate the map so subsequent calls skip the file scan.
 		recovered := &hostSession{addr: e.PipePath, pid: e.PtyHostPID, launchID: e.LaunchID}
+		if registered, err := time.Parse(time.RFC3339, e.RegisteredAt); err == nil {
+			// RegisteredAt is truncated to the second; the host started at most
+			// within that second.
+			recovered.startedBy = registered.Add(time.Second)
+		}
 		r.mu.Lock()
 		// Only store if another goroutine hasn't beaten us.
 		if r.sessions[id] == nil {
@@ -646,3 +716,52 @@ type processKiller interface {
 // The real defaultOSProcessFinder is in pidalive_unix.go / pidalive_windows.go
 // (same files that provide pidAlive).
 var osProcessFinder = defaultOSProcessFinder
+
+var _ ports.TerminalForegroundWatcher = (*Runtime)(nil)
+
+// WatchTerminalForeground streams the host's foreground program and activity.
+func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
+	// ConPTY has no process groups, so its host would hold the watch open
+	// without ever sending a reading.
+	if goruntime.GOOS == "windows" {
+		return fmt.Errorf("conpty: no foreground process group on windows: %w", ports.ErrTerminalForegroundUnavailable)
+	}
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return fmt.Errorf("conpty: resolve runtime %q for foreground: %w", handle.ID, err)
+	}
+	if sess == nil {
+		return fmt.Errorf("conpty: session %q not found: %w", handle.ID, ports.ErrTerminalForegroundUnavailable)
+	}
+	protocolVersion, err := r.resolveHostProtocol(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if protocolVersion < conPTYForegroundProtocolVersion {
+		return fmt.Errorf("conpty: pty-host protocol version %d: %w", protocolVersion, ports.ErrTerminalForegroundUnavailable)
+	}
+	return clientWatchForeground(ctx, sess.addr, func(state ForegroundPayload) {
+		fn(ports.TerminalForeground{PGID: state.PGID, Argv: state.Argv, Busy: state.Busy, EchoOnly: state.EchoOnly})
+	})
+}
+
+var _ ports.TerminalTitleWatcher = (*Runtime)(nil)
+
+// WatchTerminalTitle streams the title the host's program last set.
+func (r *Runtime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return fmt.Errorf("conpty: resolve runtime %q for title: %w", handle.ID, err)
+	}
+	if sess == nil {
+		return fmt.Errorf("conpty: session %q not found: %w", handle.ID, ports.ErrTerminalTitleUnavailable)
+	}
+	protocolVersion, err := r.resolveHostProtocol(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if protocolVersion < conPTYTitleProtocolVersion {
+		return fmt.Errorf("conpty: pty-host protocol version %d: %w", protocolVersion, ports.ErrTerminalTitleUnavailable)
+	}
+	return clientWatchTitle(ctx, sess.addr, func(state TitlePayload) { fn(state.Title) })
+}

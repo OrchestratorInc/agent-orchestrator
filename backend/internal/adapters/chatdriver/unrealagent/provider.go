@@ -632,7 +632,7 @@ func newProviderClient(requestedModel string, getenv func(string) string) (provi
 		model = defaultOpenAIModel
 	}
 	if model == "" {
-		return nil, "", errors.New("unreal agent model must be set in AO or UNREAL_HARNESS_LLM_MODEL")
+		return nil, "", errors.New("unreal agent model must be set in Orchestrator or UNREAL_HARNESS_LLM_MODEL")
 	}
 	maxAttempts := responsesapi.DefaultMaxAttempts
 	if raw := strings.TrimSpace(getenv("UNREAL_HARNESS_LLM_MAX_ATTEMPTS")); raw != "" {

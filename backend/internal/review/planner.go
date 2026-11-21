@@ -19,7 +19,8 @@ const (
 	ReviewStateUpToDate = contract.AOReviewUpToDate
 	// ReviewStateChangesRequested means AO requested changes on the PR's current head.
 	ReviewStateChangesRequested = contract.AOReviewChangesRequested
-	// ReviewStateIneligible means the PR is closed, merged, or missing required facts.
+	// ReviewStateIneligible means the PR is closed, merged, missing required facts,
+	// or a draft excluded from automatic review.
 	ReviewStateIneligible = contract.AOReviewIneligible
 )
 
@@ -35,8 +36,8 @@ type PRReviewState struct {
 }
 
 // Plan computes per-PR review work from the currently observed PRs and existing
-// review runs. It is pure so the trigger path and API list path share exactly
-// the same eligibility/status rules.
+// review runs for explicit triggers and the API read model. Automatic review
+// paths must use PlanAuto to apply the draft policy.
 func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 	latest := latestRunsByPRAndSHA(runs)
 	reviews := make([]PRReviewState, 0, len(prs))
@@ -62,15 +63,14 @@ func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 		if run, ok := latest[review.PRURL+"\x00"+review.TargetSHA]; ok {
 			review.LatestRun = &run
 			switch {
-			case run.Status == domain.ReviewRunRunning:
+			case run.Status.IsActive():
 				review.Status = ReviewStateRunning
-			case run.Verdict == domain.VerdictApproved:
+			case run.Status == domain.ReviewRunCompleted && run.Verdict == domain.VerdictApproved:
 				review.Status = ReviewStateUpToDate
-			case run.Verdict == domain.VerdictChangesRequested:
+			case run.Status == domain.ReviewRunCompleted && run.Verdict == domain.VerdictChangesRequested:
 				review.Status = ReviewStateChangesRequested
-			case run.Status == domain.ReviewRunFailed || run.Status == domain.ReviewRunCancelled:
-				review.Status = ReviewStateNeedsReview
 			default:
+				// failed, cancelled and superseded passes never produced a review.
 				review.Status = ReviewStateNeedsReview
 			}
 		}
@@ -85,6 +85,22 @@ func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 	return reviews
 }
 
+// PlanAuto is the planner for every automatic review path. It excludes draft PRs
+// from new work while retaining active passes.
+func PlanAuto(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
+	reviews := Plan(prs, runs)
+	drafts := make(map[string]bool, len(prs))
+	for _, pr := range prs {
+		drafts[pr.URL] = pr.Draft
+	}
+	for i := range reviews {
+		if drafts[reviews[i].PRURL] && reviews[i].Status != ReviewStateRunning {
+			reviews[i].Status = ReviewStateIneligible
+		}
+	}
+	return reviews
+}
+
 func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA string) (domain.ReviewRun, bool) {
 	if prURL == "" || targetSHA == "" {
 		return domain.ReviewRun{}, false
@@ -95,7 +111,7 @@ func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA str
 		if run.PRURL != prURL || run.TargetSHA == "" || run.TargetSHA == targetSHA {
 			continue
 		}
-		if run.Status != domain.ReviewRunComplete && run.Status != domain.ReviewRunDelivered {
+		if run.Status != domain.ReviewRunCompleted {
 			continue
 		}
 		if run.Verdict != domain.VerdictApproved && run.Verdict != domain.VerdictChangesRequested {
@@ -109,6 +125,10 @@ func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA str
 	return latest, found
 }
 
+// latestRunsByPRAndSHA picks the authoritative run per PR head: the newest
+// active pass while any reviewer is still working on that head, otherwise the
+// newest pass. Several reviewers may review one head at once, so a reviewer that
+// finished first must not hide one that is still running.
 func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
 	latest := make(map[string]domain.ReviewRun)
 	for _, run := range runs {
@@ -116,7 +136,20 @@ func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
 			continue
 		}
 		key := run.PRURL + "\x00" + run.TargetSHA
-		if existing, ok := latest[key]; !ok || run.CreatedAt.After(existing.CreatedAt) {
+		existing, ok := latest[key]
+		if !ok {
+			latest[key] = run
+			continue
+		}
+		runRunning := run.Status.IsActive()
+		existingRunning := existing.Status.IsActive()
+		if runRunning != existingRunning {
+			if runRunning {
+				latest[key] = run
+			}
+			continue
+		}
+		if run.CreatedAt.After(existing.CreatedAt) {
 			latest[key] = run
 		}
 	}

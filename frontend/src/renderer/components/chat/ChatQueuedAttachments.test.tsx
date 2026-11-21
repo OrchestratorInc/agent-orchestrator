@@ -151,7 +151,7 @@ describe("queued message attachments", () => {
 		await pasteImage(screen.getByRole("combobox"));
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() =>
-			expect(edit).toHaveBeenCalledWith("q1", `inspect this\n\n${suffix}`, {
+			expect(edit).toHaveBeenCalledWith("q1", `inspect this ${path}\n\n${suffix}`, {
 				attachments: [{ mimeType: "image/png", data: expect.any(String) }],
 				retainedContent: [],
 				clientMessageId: expect.any(String), expectedRevision: 0,
@@ -167,7 +167,7 @@ describe("queued message attachments", () => {
 		await beginEdit();
 		await pasteImage(screen.getByRole("combobox"));
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", `inspect this\n\n${suffix}`, {
+		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", `inspect this ${path}\n\n${suffix}`, {
 			retainedContent: [0], clientMessageId: expect.any(String), expectedRevision: 0,
 		}));
 		expect(stage).toHaveBeenCalledOnce();
@@ -212,7 +212,7 @@ describe("queued message attachments", () => {
 		if (count === 8) await pasteImage(screen.getByRole("combobox"));
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() => expect(edit).toHaveBeenCalledWith(
-			"q1", count === 8 ? `inspect this carefully\n\n${suffix}` : "inspect this carefully",
+			"q1", count === 8 ? `inspect this carefully ${path}\n\n${suffix}` : "inspect this carefully",
 			{
 				retainedContent: resources.map((_, index) => index), clientMessageId: expect.any(String), expectedRevision: 0,
 				...(count === 8 ? { attachments: [{ mimeType: "image/png", data: expect.any(String) }] } : {}),

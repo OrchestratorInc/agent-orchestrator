@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -41,7 +43,9 @@ func (c *conversation) SetConfigOption(
 	c.mu.Lock()
 	sessionID := c.sessionID
 	closed := c.closed
-	legacyModel := c.legacyModel
+	// session/set_model returns nothing, while a config option change returns the
+	// new model's settings, such as Cursor's thinking and fast mode.
+	legacyModel := c.legacyModel && !c.modelConfigOption
 	legacyMode := c.legacyMode
 	var option *ports.ChatConfigOption
 	for i := range c.configOptions {
@@ -61,6 +65,11 @@ func (c *conversation) SetConfigOption(
 	}
 	if option == nil {
 		return nil, fmt.Errorf("%w: unknown ACP session config option %q", ports.ErrChatConfigOptionInvalid, id)
+	}
+	if id == "model" && value.Boolean == nil {
+		if err := c.checkModelSwitch(ctx, value.Select); err != nil {
+			return nil, err
+		}
 	}
 	if id == "model" && legacyModel {
 		if value.Boolean != nil || !choiceOffered(option.Choices, value.Select) {
@@ -123,12 +132,14 @@ func (c *conversation) SetConfigOption(
 	// instead would be just as wrong in the other direction — the agent applied
 	// the value, so a UI that snaps back to the old one is lying about state the
 	// provider already changed. Record the accepted value against the catalog we
-	// hold and let a later ConfigOptionUpdate deliver any rebuild.
+	// hold and let a later ConfigOptionUpdate deliver any rebuild. Callers that
+	// specifically require an authoritative provider-reported post-change catalog
+	// (such as safety guards during handoff) receive nil so they can fail closed.
 	if len(resp.ConfigOptions) == 0 {
 		c.applyAcceptedConfigOption(id, value)
-	} else {
-		c.replaceConfigOptions(resp.ConfigOptions)
+		return nil, nil
 	}
+	c.replaceConfigOptions(resp.ConfigOptions)
 	return c.ListConfigOptions(ctx)
 }
 
@@ -137,6 +148,9 @@ func (c *conversation) SetConfigOption(
 // notification and session setup — so an empty list means the session really
 // has no options and is applied as given.
 func (c *conversation) replaceConfigOptions(options []acpsdk.SessionConfigOption) {
+	if c.suppressSessionModes {
+		options = withoutModeOptions(options)
+	}
 	normalized := normalizeConfigOptions(options)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -184,6 +198,41 @@ func (c *conversation) configOptionOffers(id, value string) (offered, known bool
 		return choiceOffered(option.Choices, value), true
 	}
 	return false, false
+}
+
+// configOptionValueNamed is the value of the choice shown under name, or "".
+func (c *conversation) configOptionValueNamed(id, name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		if c.configOptions[i].ID != id {
+			continue
+		}
+		for _, choice := range c.configOptions[i].Choices {
+			if strings.EqualFold(strings.TrimSpace(choice.Name), name) {
+				return choice.Value
+			}
+		}
+	}
+	return ""
+}
+
+// configOptionCurrent is a select option's current value, or "" when the
+// session does not list it.
+func (c *conversation) configOptionCurrent(id string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.configOptionCurrentLocked(id)
+}
+
+// configOptionCurrentLocked is configOptionCurrent for a caller holding c.mu.
+func (c *conversation) configOptionCurrentLocked(id string) string {
+	for i := range c.configOptions {
+		if c.configOptions[i].ID == id && c.configOptions[i].Type == ports.ChatConfigOptionSelect {
+			return c.configOptions[i].Current.Select
+		}
+	}
+	return ""
 }
 
 func normalizeConfigOptions(options []acpsdk.SessionConfigOption) []ports.ChatConfigOption {
@@ -243,7 +292,9 @@ func normalizeSessionOptions(
 			Current: ports.ChatConfigOptionValue{Select: models.CurrentModelID}, Choices: choices,
 		})
 	}
-	if modes != nil && !seen["mode"] {
+	// pi-acp sends its thinking levels both as a config option and as legacy
+	// session modes. Shown as a mode, they would sit where permissions go.
+	if modes != nil && !seen["mode"] && !modesRepeatAnOption(out, modes) {
 		choices := make([]ports.ChatConfigOptionChoice, 0, len(modes.AvailableModes))
 		for _, mode := range modes.AvailableModes {
 			choices = append(choices, ports.ChatConfigOptionChoice{
@@ -256,6 +307,16 @@ func normalizeSessionOptions(
 		})
 	}
 	return out
+}
+
+// modesRepeatAnOption reports legacy session modes whose ids are exactly the
+// choices of a config option the agent already sent.
+func modesRepeatAnOption(options []ports.ChatConfigOption, modes *acpsdk.SessionModeState) bool {
+	return len(modes.AvailableModes) > 0 && slices.ContainsFunc(options, func(option ports.ChatConfigOption) bool {
+		return len(option.Choices) == len(modes.AvailableModes) && !slices.ContainsFunc(modes.AvailableModes, func(mode acpsdk.SessionMode) bool {
+			return !choiceOffered(option.Choices, string(mode.Id))
+		})
+	})
 }
 
 func normalizeSelectChoices(options acpsdk.SessionConfigSelectOptions) []ports.ChatConfigOptionChoice {
@@ -346,6 +407,53 @@ func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested 
 			return "", false
 		}
 		matched = choice.Value
+	}
+	return matched, matched != ""
+}
+
+func resolveModelChoice(harness domain.AgentHarness, choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
+	if resolved, ok := resolveLegacyModelChoice(choices, requested); ok {
+		return resolved, true
+	}
+	if harness != domain.HarnessHermes {
+		return "", false
+	}
+	// Hermes' session/new offers auto:<model>, the id a composer start stores,
+	// but a session/load replaces that row with the provider it resolved to. A
+	// stored auto: id that is no longer offered re-resolves through its model.
+	if model, auto := strings.CutPrefix(requested, "auto:"); auto && model != "" {
+		return resolveProviderPrefixedChoice(choices, model)
+	}
+	return resolveProviderPrefixedChoice(choices, requested)
+}
+
+// resolveProviderPrefixedChoice maps a bare model value onto an advertised
+// choice that carries a provider prefix. Hermes advertises ids such as
+// auto:anthropic/claude-opus-4.6 and openrouter:anthropic/claude-opus-4.6
+// while its CLI-facing configuration names the bare model, so the requested
+// value must equal everything after the advertised id's first ':'. Several
+// providers may list the same model: a single auto:-prefixed row wins because
+// it resolves to the session's current provider, and any other collision stays
+// ambiguous rather than guessed.
+func resolveProviderPrefixedChoice(choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
+	auto, matched, ambiguous := "", "", false
+	for _, choice := range choices {
+		provider, model, found := strings.Cut(choice.Value, ":")
+		if !found || provider == "" || model == "" || model != requested {
+			continue
+		}
+		if provider == "auto" {
+			auto = choice.Value
+			continue
+		}
+		ambiguous = ambiguous || matched != ""
+		matched = choice.Value
+	}
+	if auto != "" {
+		return auto, true
+	}
+	if ambiguous {
+		return "", false
 	}
 	return matched, matched != ""
 }

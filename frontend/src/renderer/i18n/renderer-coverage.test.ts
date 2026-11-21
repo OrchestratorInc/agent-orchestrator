@@ -10,7 +10,7 @@ const displayAttributes = new Set(["alt", "aria-label", "placeholder", "title"])
 // English UI copy. Keeping this allowlist exact makes newly introduced chrome fail.
 const approvedLiterals: Record<string, readonly string[]> = {
 	"components/BrowserPanel.tsx": [
-		"AO Preview",
+		"Orchestrator Preview",
 		"Demo app preview",
 		"The worker exposed a local Vite app with",
 		"ao preview",
@@ -21,17 +21,21 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	],
 	"components/CenterPane.tsx": ["px"],
 	"components/CreateProjectFlow.tsx": [
-		"my-workspace/", "my-project", "web-app", "main", "github_pat_…", "ghp_...",
-		"https://github.com/owner/repo", "GitHub PAT",
+		"my-workspace/", "my-project", "web-app", "main",
+		"https://github.com/owner/repo",
 	],
-	"components/DaemonStartupLoader.tsx": ["Agent Orchestrator"],
-	"components/ProjectSettingsForm.tsx": [
-		"main", "ao",
-		"No workflow settings for scratch projects.",
-		"Tracker intake is not available for scratch projects.",
-	],
+	"components/DaemonStartupLoader.tsx": ["Orchestrator"],
+	"components/onboarding/FirstRunOnboarding.tsx": ["https://github.com/owner/repo"],
+	// The app name in the preview window's titlebar, as TitlebarNav shows it.
+	"components/onboarding/OnboardingPreviews.tsx": ["Orchestrator"],
+	// Technical branch/prefix examples moved with the common settings fields.
+	"components/ProjectSettingsEditor.tsx": ["auto", "ao"],
+	// Key-cap hint beside Cancel.
+	"components/QuitConfirmDialog.tsx": ["Esc"],
+	"components/RemoteDirectoryPicker.tsx": ["/home/you/code"],
 	"components/SessionInspector.tsx": ["PR #"],
-	"components/Sidebar.tsx": ["Agent Orchestrator", "daemon"],
+	"components/Sidebar.tsx": ["Orchestrator", "daemon"],
+	"components/TitlebarNav.tsx": ["Orchestrator"],
 	"components/WindowTitlebar.tsx": [
 		"Alt+F4",
 		"Ctrl+Z",
@@ -44,7 +48,7 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"Ctrl+Shift+I",
 		"Ctrl+/",
 	],
-	"components/settings/CloudCredentialsSection.tsx": ["github_pat_…"],
+	"components/settings/CoderSettingsSection.tsx": ["grep -q '^Ready' ~/.bootstrap-status"],
 	"components/settings/ConnectMobileSetup.tsx": ["tailscale ip -4"],
 	"components/settings/UpdatesSection.tsx": ["PR #"],
 };

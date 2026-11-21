@@ -21,6 +21,11 @@ const css = readFileSync(resolve(process.cwd(), "src/renderer/styles.css"), "utf
 
 const NATIVE_COMPOSITION = 'html[data-native-browser-composition="true"]';
 const LIVE_PAGE = '.browser-panel[data-browser-native-page="live"]';
+// Published on <html> by BrowserPanel / SessionBrowserPopOut (useElementFlag)
+// instead of container-level :has() checks, which restyled the whole app on
+// every DOM change.
+const DOCKED_LIVE = "[data-browser-native-live]";
+const POPOUT_OPEN = "[data-browser-popout-open]";
 
 type Rule = { selector: string; body: string };
 
@@ -67,7 +72,7 @@ describe("native-composition transparency cascade", () => {
 		// classes, which macOS never applies — so the shell blanked the live page
 		// on macOS alone. Match it by its platform-independent class instead.
 		expect(
-			clearsBackgroundFor((selector) => selector.includes(".app-shell-root") && selector.includes(LIVE_PAGE)),
+			clearsBackgroundFor((selector) => selector.includes(".app-shell-root") && selector.includes(DOCKED_LIVE)),
 		).toBe(true);
 	});
 
@@ -94,7 +99,7 @@ describe("native-composition transparency cascade", () => {
 		// device-preset dropdown) held the shell raised.
 		expect(
 			clearsBackgroundFor(
-				(selector) => selector.includes(".app-shell-root") && selector.includes(".browser-popout-overlay"),
+				(selector) => selector.includes(".app-shell-root") && selector.includes(POPOUT_OPEN),
 			),
 		).toBe(true);
 	});
@@ -113,32 +118,40 @@ describe("native-composition transparency cascade", () => {
 		expect(clearsBackgroundFor((selector) => selector.includes(".browser-popout-frame"))).toBe(true);
 	});
 
-	it("keeps the expanded browser inset from both window edges", () => {
-		const frameRule = rules().find((rule) => rule.selector === ".browser-popout-frame");
-		expect(frameRule?.body).toMatch(/left:\s*var\(--browser-popout-inline-inset\)/);
-		expect(frameRule?.body).toMatch(/right:\s*var\(--browser-popout-inline-inset\)/);
+	it.each([".browser-popout-frame", ".files-popout-frame"])("spans the expanded %s to both window edges", (selector) => {
+		const frameRules = rules().filter((rule) => rule.selector.split(",").some((part) => part.trim().endsWith(selector)));
+		const insets = frameRules.flatMap((rule) => [...rule.body.matchAll(/(?:^|[;\s])(left|right|inset-inline):\s*([^;]+);/g)]);
+		expect(insets.map((match) => match[1])).toEqual(expect.arrayContaining(["left", "right"]));
+		for (const [, property, value] of insets) expect(`${property}: ${value.trim()}`).toBe(`${property}: 0`);
 	});
 
-	it("shifts the browser address bar clear of the inspector tabs", () => {
+	it("masks the reserved macOS titlebar band for the files popout", () => {
+		const maskRule = rules().find((rule) => rule.selector.endsWith(".files-popout-overlay--mac-windowed::before"));
+		expect(maskRule?.body).toMatch(/top:\s*calc\(-1 \* var\(--size-traffic-light-clearance\)\)/);
+		expect(maskRule?.body).toMatch(/height:\s*var\(--size-traffic-light-clearance\)/);
+		expect(maskRule?.body).toMatch(/background:\s*var\(--bg\)/);
+	});
+
+	it("centers the browser address bar between the inspector tabs and actions", () => {
 		const topbarRule = rules().find((rule) => rule.selector.endsWith(".session-inspector__topbar--browser"));
-		expect(topbarRule?.body).toMatch(
-			/grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 240px\) minmax\(0, 1fr\)/,
-		);
+		// Intrinsic side tracks: the field centers in the gap left by however many tabs there are.
+		expect(topbarRule?.body).toMatch(/grid-template-columns:\s*max-content minmax\(0, 1fr\) max-content/);
+		const hostRule = rules().find((rule) => rule.selector === ".session-inspector__topbar > .browser-panel__topbar-host");
+		expect(hostRule?.body).toMatch(/justify-self:\s*center/);
+		expect(hostRule?.body).toMatch(/width:\s*min\(100%, 240px\)/);
+		// Centered: no offset is applied to the field in any layout.
 		const addressBarRule = rules().find(
 			(rule) => rule.selector.endsWith(".browser-panel__topbar-host > .browser-panel__address-bar"),
 		);
-		expect(addressBarRule?.body).toMatch(/transform:\s*translateX\(clamp\(32px, 6cqw, 48px\)\)/);
+		expect(addressBarRule?.body ?? "").not.toMatch(/translateX/);
 		expect(css).toMatch(
-			/\.session-inspector__topbar--browser:has\(\.browser-panel__address-bar--editing\)\s*{[^}]*clamp\(240px, 52cqw, 560px\)/,
+			/\.session-inspector__topbar--browser:has\(\.browser-panel__address-bar--editing\) > \.browser-panel__topbar-host\s*{[^}]*width:\s*min\(100%, 52cqw, 560px\)/,
 		);
 		expect(css).toMatch(
 			/@container inspector \(max-width: 440px\)[\s\S]*?\.session-inspector__topbar--browser\s*{[\s\S]*?grid-template-rows:\s*var\(--size-inspector-tabs\) var\(--size-inspector-tabs\)/,
 		);
 		expect(css).toMatch(
 			/@container inspector \(max-width: 440px\)[\s\S]*?> \.browser-panel__topbar-host\s*{[\s\S]*?grid-row:\s*2;[\s\S]*?width:\s*180px/,
-		);
-		expect(css).toMatch(
-			/@container inspector \(max-width: 440px\)[\s\S]*?> \.browser-panel__topbar-host[\s\S]*?> \.browser-panel__address-bar\s*{[\s\S]*?transform:\s*none/,
 		);
 	});
 });

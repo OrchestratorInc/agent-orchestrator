@@ -215,6 +215,23 @@ func (m *Manager) CancelTaskPreparation(ctx context.Context, token domain.TaskPr
 	return err
 }
 
+// RenewTaskPreparation restarts an unclaimed preparation's expiry. The new
+// chat page that holds one reads and stages its files, so the worktree lasts
+// while that page uses it, and for taskPreparationTTL after the last use.
+// A claimed, cancelled, or unknown token is ignored.
+func (m *Manager) RenewTaskPreparation(token domain.TaskPreparationToken) {
+	token = domain.TaskPreparationToken(strings.TrimSpace(string(token)))
+	m.taskPreparationsMu.Lock()
+	defer m.taskPreparationsMu.Unlock()
+	prep := m.taskPreparations[token]
+	if prep == nil || prep.cancelled || prep.cleaning || prep.timer == nil {
+		return
+	}
+	// A timer that fired just before this call has already started expiry;
+	// rearming it only runs that idempotent cancellation once more.
+	prep.timer.Reset(m.taskPreparationTTL)
+}
+
 // scheduleTaskPreparationCleanup arms the normal expiry path. Failed cleanup
 // uses the same timer so a transient Git or database error never permanently
 // consumes the only cleanup handle.
@@ -270,6 +287,12 @@ func (m *Manager) discardClaimedTaskPreparation(ctx context.Context, prep *taskP
 	defer m.cleanupSystemPromptDir(prep.record.ID)
 	if err := m.cleanupTaskPreparation(ctx, prep); err != nil {
 		m.logger.Warn("claimed task preparation cleanup failed", "sessionID", prep.record.ID, "error", err)
+		m.taskPreparationsMu.Lock()
+		prep.cancelled = true
+		token := domain.TaskPreparationToken(prep.record.ID)
+		m.taskPreparations[token] = prep
+		m.scheduleTaskPreparationCleanup(token, prep)
+		m.taskPreparationsMu.Unlock()
 	}
 }
 

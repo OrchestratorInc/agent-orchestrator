@@ -21,6 +21,9 @@ const { FakeTray, trayInstances } = vi.hoisted(() => {
 		constructor(public icon: unknown) {
 			trayInstances.push(this);
 		}
+		setImage(icon: unknown) {
+			this.icon = icon;
+		}
 		setTitle(title: string) {
 			this.title = title;
 		}
@@ -41,7 +44,7 @@ const setTemplateImage = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
 	app: { isPackaged: false, getVersion: () => "0.0.0-test" },
-	nativeImage: { createFromPath: () => ({ isEmpty: () => false, setTemplateImage }) },
+	nativeImage: { createFromPath: (path: string) => ({ path, isEmpty: () => false, setTemplateImage }) },
 	Tray: FakeTray,
 	Menu: { buildFromTemplate: (template: MenuItem[]) => ({ template }) },
 }));
@@ -60,14 +63,20 @@ function entry(overrides: Partial<TraySessionEntry> & { sessionId: string }): Tr
 function setup() {
 	const openSession = vi.fn();
 	const focusWindow = vi.fn();
-	const controller = createTrayController({ focusWindow, openSession, locale: "en" });
+	const quitCompletely = vi.fn();
+	const controller = createTrayController({ focusWindow, openSession, quitCompletely, locale: "en" });
 	if (!controller) throw new Error("expected a tray controller");
 	const tray = trayInstances[trayInstances.length - 1];
-	return { controller, tray, openSession, focusWindow };
+	return { controller, tray, openSession, focusWindow, quitCompletely };
 }
 
 const sessionItems = (tray: { template: MenuItem[] }) =>
-	tray.template.filter((item) => typeof item.click === "function" && item.label !== "Show Agent Orchestrator");
+	tray.template.filter(
+		(item) =>
+			typeof item.click === "function" &&
+			item.label !== "Show Orchestrator" &&
+			item.label !== "Quit Orchestrator Completely",
+	);
 
 afterEach(() => {
 	trayInstances.length = 0;
@@ -75,11 +84,48 @@ afterEach(() => {
 });
 
 describe("createTrayController", () => {
+	it("keeps the awake indicator independent of attention counts and renderer resets", () => {
+		const { controller, tray } = setup();
+		controller.setAwakeState(true);
+		expect(tray.title).toBe("");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		expect(tray.tooltip).toContain("keeping this Mac awake");
+		expect(tray.template.some((i) => i.label === "Stay Awake: keeping this Mac awake" && i.enabled === false)).toBe(true);
+		controller.setState({ sessions: [entry({ sessionId: "s1" })] });
+		expect(tray.title).toBe("1");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		controller.clear();
+		expect(tray.title).toBe("");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		controller.setAwakeState(null);
+		expect(tray.title).toBe("?");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		expect(tray.tooltip).toContain("status unavailable");
+		controller.setAwakeState(false);
+		expect(tray.title).toBe("");
+		expect(tray.tooltip).toBe("Orchestrator");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayIconTemplate.png") });
+	});
+
 	it("renders an empty state with no title before any session needs attention", () => {
 		const { tray } = setup();
 		expect(tray.title).toBe("");
 		expect(tray.template.some((i) => i.label === "No sessions need attention" && i.enabled === false)).toBe(true);
-		expect(tray.template.some((i) => i.role === "quit")).toBe(true);
+		expect(tray.template.some((i) => i.label === "Quit Orchestrator Completely")).toBe(true);
+	});
+
+	it("hands the explicit quit action to the quitCompletely delegate", () => {
+		const { tray, quitCompletely } = setup();
+		const quit = tray.template.find((item) => item.label === "Quit Orchestrator Completely");
+		expect(quit?.role).toBeUndefined();
+		quit?.click?.();
+		expect(quitCompletely).toHaveBeenCalledTimes(1);
+	});
+
+	it("hands the show action to the focusWindow delegate", () => {
+		const { tray, focusWindow } = setup();
+		tray.template.find((item) => item.label === "Show Orchestrator")?.click?.();
+		expect(focusWindow).toHaveBeenCalledTimes(1);
 	});
 
 	it("uses grammatically correct singular for exactly one attention session", () => {
@@ -149,6 +195,22 @@ describe("createTrayController", () => {
 		controller.setLocale("zh-CN");
 		expect(tray.tooltip).toBe("1 个会话需要关注");
 		expect(tray.template.some((i) => i.label === "需要你处理")).toBe(true);
-		expect(tray.template.some((i) => i.label === "显示 Agent Orchestrator")).toBe(true);
+		expect(tray.template.some((i) => i.label === "显示 Orchestrator")).toBe(true);
+		expect(tray.template.some((i) => i.label === "完全退出 Orchestrator")).toBe(true);
+	});
+
+	it("uses the Russian few and many plural forms in the tooltip", () => {
+		const { controller, tray } = setup();
+		controller.setLocale("ru");
+		const tooltipFor = (count: number) => {
+			controller.setState({ sessions: Array.from({ length: count }, (_, i) => entry({ sessionId: `s${i}` })) });
+			return tray.tooltip;
+		};
+		expect([1, 2, 5, 21].map(tooltipFor)).toEqual([
+			"1 сессия требует внимания",
+			"2 сессии требуют внимания",
+			"5 сессий требуют внимания",
+			"21 сессия требует внимания",
+		]);
 	});
 });

@@ -1,0 +1,372 @@
+import { useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, StyleSheet, View } from "react-native";
+import {
+	type AgentModelCatalog,
+	type ReviewerAgentConfig,
+	type PRReviewCommentLink,
+	type PRReviewEntry,
+	type PRUnresolvedReviewer,
+	type SessionPRSummary,
+	type SessionReviews,
+} from "../../lib/api";
+import { userFacingError } from "../../lib/connectionError";
+import { haptics } from "../../lib/haptics";
+import { hostRouteMatches } from "../../lib/hostRoute";
+import { openGitHub } from "../../lib/openGitHub";
+import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from "../../lib/reviewFeedback";
+import type { ItemAction } from "../../lib/item-actions-menu.types";
+import { ReviewActionsSheet } from "../../lib/review-actions-sheet";
+import type { ReviewFeedbackItem, ReviewFeedbackSection, ReviewPolicyKey, ReviewPolicyRow } from "../../lib/review-actions-sheet.types";
+import { useReviewBackend, type ReviewSettings } from "../../lib/reviewBackend";
+import { reviewerEffortPick, reviewerModelPick, reviewerModelView, type ReviewerModelState } from "../../lib/reviewer-picker.types";
+import { reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
+import { pullRequestSummaryForURL } from "../../lib/reviewView";
+import { HostScope, useApp } from "../../lib/store";
+import type { Theme } from "../../lib/theme";
+import { useThemedStyles } from "../../lib/ThemeProvider";
+import { SHEET_SCROLL_CONTENT, SheetHeader } from "../../lib/ui";
+
+export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
+
+type ReviewPolicies = Record<ReviewPolicyKey, boolean>;
+type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: string } | { kind: "policy"; id: ReviewPolicyKey };
+
+// The desktop inspector's wording, and what each switch reads before the session loads.
+const POLICIES: readonly { key: ReviewPolicyKey; title: string; description: string; fallback: boolean }[] = [
+	{ key: "autoReviewEnabled", title: "Auto review", description: "When enabled, PRs will get auto-reviewed. When disabled, you can manually trigger the reviews.", fallback: false },
+	{ key: "autoInjectReview", title: "Automatically fix review comments", description: "Sends review comments to the worker.", fallback: true },
+	{ key: "autoInjectCI", title: "Automatically fix CI failures", description: "Sends CI failures and merge conflicts to the worker for this session's PRs.", fallback: true },
+];
+
+export default function ReviewActionsRoute() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewActionsContent /></HostScope> : <ReviewActionsContent />;
+}
+
+function ReviewActionsContent() {
+	const styles = useThemedStyles(makeStyles);
+	const { currentHostId } = useApp();
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud worker;
+	// what Cloud cannot do (pick the reviewer's model, ask a GitHub reviewer
+	// again, resolve a comment) the backend leaves out, and so does the sheet.
+	const { backend } = useReviewBackend();
+	const { sessionId = "", prUrl = "", hostId: routeHostId } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string; hostId?: string }>();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
+	const [agents, setAgents] = useState<ReviewSettings["reviewers"]>([]);
+	const [models, setModels] = useState<AgentModelCatalog>();
+	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
+	const [inheritedConfig, setInheritedConfig] = useState<ReviewSettings["inheritedConfig"]>({});
+	const [pr, setPR] = useState<SessionPRSummary>();
+	const [prMissing, setPRMissing] = useState(false);
+	const [reviews, setReviews] = useState<SessionReviews>();
+	const [reviewerOverride, setReviewerOverride] = useState("");
+	const [projectDefaultReviewer, setProjectDefaultReviewer] = useState("");
+	// The harness the next review runs under, resolved like desktop. The model
+	// catalog must follow this, not the daemon's last-run reviewerHarness.
+	const effectiveReviewer = reviewerOverride || projectDefaultReviewer;
+	const modelRequest = useRef(0);
+	const [policies, setPolicies] = useState<ReviewPolicies>();
+	const [busy, setBusy] = useState<BusyAction>();
+	const [error, setError] = useState("");
+	const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
+
+	const load = useCallback(async () => {
+		if (!hostMatches || !backend || !sessionId) return;
+		setError("");
+		try {
+			const [settings, prs, reviewState] = await Promise.all([backend.settings(sessionId), backend.pullRequests(sessionId), backend.reviews(sessionId)]);
+			setAgents(settings.reviewers);
+			setReviewerOverride(settings.selectedReviewer);
+			setProjectDefaultReviewer(settings.defaultReviewer);
+			setReviewerConfig(settings.reviewerConfig);
+			setInheritedConfig(settings.inheritedConfig);
+			const matchedPR = pullRequestSummaryForURL(prs, prUrl);
+			setPR(matchedPR);
+			setPRMissing(!matchedPR);
+			setReviews(reviewState);
+			setPolicies(settings.policies);
+		} catch (cause) {
+			setError(userFacingError(cause, "Could not load review actions."));
+		}
+	}, [backend, hostMatches, prUrl, sessionId]);
+
+	useEffect(() => { void load(); }, [load]);
+	useEffect(() => {
+		const request = ++modelRequest.current;
+		setModels(undefined);
+		const reviewerModels = backend?.reviewerModels;
+		if (!hostMatches || !reviewerModels || !effectiveReviewer) return;
+		const polling = new AbortController();
+		void reviewerModels(effectiveReviewer, polling.signal)
+			.then((result) => { if (request === modelRequest.current) setModels(result); })
+			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
+		return () => polling.abort();
+	}, [backend, effectiveReviewer, hostMatches]);
+	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
+	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);
+	// Like the spawn sheet, only offer reviewers that can run now. A saved
+	// override that has since become unavailable stays listed so it can be read.
+	const availableReviewers = useMemo(() => agents
+		.filter((agent) => agent.selectable || agent.id === reviewerOverride)
+		.map((agent) => ({ id: agent.id, label: agent.label || agent.id })), [agents, reviewerOverride]);
+	// What the next review runs with: the session's own model and effort, else
+	// the project's for this reviewer, else the catalog's defaults.
+	const modelState: ReviewerModelState = { catalog: effectiveReviewer ? models : undefined, saved: reviewerConfig, inherited: inheritedConfig[effectiveReviewer] ?? {} };
+	const modelView = reviewerModelView(modelState);
+	const comments = useMemo(() => reviewComments(pr, false), [pr]);
+	const resolvedComments = useMemo(() => reviewComments(pr, true), [pr]);
+	const externalReviews = useMemo(() => (pr?.review.reviews ?? []).filter((item) => item.reviewerId !== pr?.author && ![...aoReviewIds].some((id) => item.reviewUrl?.includes(`pullrequestreview-${id}`))), [aoReviewIds, pr]);
+
+	// The switch, the picker and the request each show their own progress, so
+	// none of them adds a haptic of its own; success is the moment worth feeling.
+	async function saveReviewer(id: string, agentConfig: ReviewerAgentConfig) {
+		if (!backend) return;
+		setBusy({ kind: "reviewer", id });
+		setError("");
+		try {
+			const selection = reviewerSwitchSelection(id, agentConfig);
+			await backend.setReviewer(sessionId, id, agentConfig);
+			setReviewerOverride(id);
+			setReviewerConfig(selection.agentConfig ?? {});
+			haptics.success();
+		} catch (cause) {
+			setError(userFacingError(cause, "Could not change reviewer."));
+		} finally {
+			setBusy(undefined);
+		}
+	}
+
+	async function confirmReviewerChange(id: string, agentConfig: ReviewerAgentConfig) {
+		if (!backend || busy) return;
+		if (!reviewerSelectionChanged(reviewerOverride, reviewerConfig, id, agentConfig)) return;
+		setBusy({ kind: "reviewer", id });
+		setError("");
+		try {
+			const latest = await backend.reviews(sessionId);
+			setReviews(latest);
+			const warning = reviewerSwitchWarning(latest.reviews.some((item) => item.status === "running"));
+			if (!warning) { await saveReviewer(id, agentConfig); return; }
+			Alert.alert("Change active reviewer?", warning, [
+				{ text: "Keep current", style: "cancel", onPress: () => setBusy(undefined) },
+				{ text: "Change reviewer", style: "destructive", onPress: () => void saveReviewer(id, agentConfig) },
+			], { cancelable: true, onDismiss: () => setBusy(undefined) });
+		} catch (cause) {
+			setError(userFacingError(cause, "Could not check the active review before changing reviewer settings."));
+			setBusy(undefined);
+		}
+	}
+
+	function chooseReviewer(id: string) {
+		const nextConfig = id && id === reviewerOverride ? reviewerConfig : {};
+		void confirmReviewerChange(id, nextConfig);
+	}
+
+	function chooseModel(value: string) {
+		void confirmReviewerChange(reviewerOverride, reviewerModelPick(modelState, value));
+	}
+
+	function chooseEffort(level: string) {
+		void confirmReviewerChange(reviewerOverride, reviewerEffortPick(modelState, level));
+	}
+
+	async function updatePolicy(key: ReviewPolicyKey, value: boolean) {
+		if (!backend || !policies || busy) return;
+		const previous = policies;
+		setPolicies({ ...policies, [key]: value });
+		setBusy({ kind: "policy", id: key });
+		setError("");
+		try {
+			await backend.setPolicy(sessionId, key, value);
+			haptics.success();
+		} catch (cause) {
+			setPolicies(previous);
+			setError(userFacingError(cause, "Could not update the review automation setting."));
+		} finally {
+			setBusy(undefined);
+		}
+	}
+
+	async function rerequest(item: PRUnresolvedReviewer) {
+		const ask = backend?.rerequest;
+		if (!ask || !pr || busy) return;
+		setBusy({ kind: "rerequest", id: item.reviewerId });
+		setError("");
+		try {
+			await ask(sessionId, pr.url, item.reviewerId);
+			haptics.success();
+		} catch (cause) {
+			setError(userFacingError(cause, "Could not request another review."));
+		} finally {
+			setBusy(undefined);
+		}
+	}
+
+	function confirmResolve(comment: PRReviewCommentLink) {
+		if (!backend?.resolveComment || !pr || busy) return;
+		Alert.alert("Resolve feedback?", comment.body?.trim() || "Mark this addressed comment as resolved on GitHub.", [
+			{ text: "Cancel", style: "cancel" },
+			{ text: "Resolve", onPress: () => void resolve(comment) },
+		]);
+	}
+
+	async function resolve(comment: PRReviewCommentLink) {
+		const resolveComment = backend?.resolveComment;
+		if (!resolveComment || !pr) return;
+		const commentUrl = comment.url;
+		if (!commentUrl) return;
+		setBusy({ kind: "resolve", id: commentUrl });
+		setError("");
+		try {
+			await resolveComment(sessionId, pr.url, commentUrl);
+			haptics.success();
+			await load();
+		} catch (cause) {
+			setError(userFacingError(cause, "Could not resolve this comment."));
+		} finally {
+			setBusy(undefined);
+		}
+	}
+
+	async function send(id: string, message: string) {
+		if (!backend || busy) return;
+		setBusy({ kind: "send", id });
+		setError("");
+		try {
+			await backend.sendToWorker(sessionId, message);
+			setSent((current) => new Set(current).add(id));
+			haptics.success();
+		} catch (cause) {
+			setError(userFacingError(cause, "Could not send this feedback to the worker."));
+		} finally {
+			setBusy(undefined);
+		}
+	}
+
+	if (!hostMatches) return <View style={styles.screen}><View style={SHEET_SCROLL_CONTENT}><SheetHeader title="Review actions" subtitle="Review belongs to another machine" /></View></View>;
+
+	const policyRows: ReviewPolicyRow[] = POLICIES.map(({ key, title, description, fallback }) => ({
+		key,
+		title,
+		description,
+		value: policies?.[key] ?? fallback,
+		busy: !policies || busy?.kind === "policy" && busy.id === key,
+	}));
+	const reviewItem = (item: PRReviewEntry): ReviewFeedbackItem => {
+		const id = item.reviewUrl || item.reviewerId;
+		const actions: ItemAction[] = [
+			...(item.reviewUrl ? [{ id: "open", label: "Open review", icon: "openExternal" as const, onPress: () => void openGitHub(item.reviewUrl!, { fromSheet: true }) }] : []),
+			...(item.body && pr && !sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatExternalReviewMessage(item, pr.url)) }] : []),
+		];
+		return {
+			key: item.reviewUrl || `${item.reviewerId}:${item.submittedAt}`,
+			author: item.reviewerId,
+			meta: sentenceCase(item.verdict.replaceAll("_", " ")),
+			body: item.body || "No written summary.",
+			bodyMissing: !item.body,
+			notInjected: item.autoInjectReview === false,
+			sent: sent.has(id),
+			menuLabel: `Actions for ${item.reviewerId}'s review`,
+			actions,
+			working: busy?.kind === "send" && busy.id === id,
+		};
+	};
+	// Desktop keeps these in a per-comment "⋯" menu rather than as buttons under every comment.
+	const commentItem = (item: ReviewCommentItem, resolved: boolean): ReviewFeedbackItem => {
+		const { reviewerId, comment } = item;
+		const id = commentKey(item);
+		const aoOwned = Boolean(comment.reviewId && aoReviewIds.has(comment.reviewId));
+		const actions: ItemAction[] = [
+			...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", icon: "openExternal" as const, onPress: () => void openGitHub(comment.url!, { fromSheet: true }) }] : []),
+			...(!sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatInlineReviewCommentMessage(comment, reviewerId)) }] : []),
+			...(!resolved && comment.url && backend?.resolveComment ? [{ id: "resolve", label: "Resolve", icon: "resolve" as const, onPress: () => confirmResolve(comment) }] : []),
+		];
+		return {
+			key: id,
+			author: reviewerId,
+			meta: `${aoOwned ? "Orchestrator review" : "GitHub"} · ${resolved ? "resolved" : "open"}`,
+			location: comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : "Inline comment",
+			body: comment.body || "No comment text.",
+			bodyMissing: !comment.body,
+			notInjected: comment.autoInjectReview === false,
+			sent: sent.has(id),
+			menuLabel: `Actions for ${reviewerId}'s comment`,
+			actions,
+			working: (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url),
+		};
+	};
+	const feedback: ReviewFeedbackSection[] = [
+		{ id: "reviews" as const, title: "GitHub reviews", footer: "Complete review summaries submitted on GitHub.", items: pr ? externalReviews.map(reviewItem) : [] },
+		{ id: "unresolved" as const, title: "Unresolved comments", footer: "Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.", items: comments.map((item) => commentItem(item, false)) },
+		{ id: "resolved" as const, title: "Resolved comments", footer: "Previously addressed Orchestrator and GitHub feedback.", items: resolvedComments.map((item) => commentItem(item, true)) },
+	].filter((section) => section.items.length > 0);
+
+	return <ReviewActionsSheet
+		subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and GitHub feedback"}
+		alerts={[
+			...(error ? [error] : []),
+			...(prMissing ? ["Pull request not found. Its URL may have changed; reopen review details from the current pull request."] : []),
+		]}
+		policies={policyRows}
+		locked={!policies || Boolean(busy)}
+		onPolicyChange={(key, value) => void updatePolicy(key, value)}
+		reviewer={availableReviewers.length || reviewerOverride ? {
+			reviewers: availableReviewers,
+			selectedReviewer: reviewerOverride,
+			effectiveReviewer,
+			onSelectReviewer: chooseReviewer,
+			model: modelView.model,
+			onSelectModel: chooseModel,
+			effort: modelView.effort,
+			onSelectEffort: chooseEffort,
+			busy: Boolean(busy),
+			modelChoice: Boolean(backend?.reviewerModels),
+		} : undefined}
+		externalReviewers={(backend?.rerequest ? externalReviewers : []).map((item) => ({
+			id: item.reviewerId,
+			detail: `${item.count} ${item.count === 1 ? "comment" : "comments"}`,
+			busy: busy?.kind === "rerequest" && busy.id === item.reviewerId,
+		}))}
+		onRerequest={(id) => {
+			const item = externalReviewers.find((reviewer) => reviewer.reviewerId === id);
+			if (item) void rerequest(item);
+		}}
+		feedback={feedback}
+		emptyFeedback={!pr && !error && !prMissing ? "No GitHub feedback is available for this pull request yet." : undefined}
+	/>;
+}
+
+function uniqueReviewers(pr: SessionPRSummary | undefined, aoReviewIds: Set<string>): PRUnresolvedReviewer[] {
+	const byId = new Map<string, PRUnresolvedReviewer>();
+	for (const item of [...(pr?.review.unresolvedBy ?? []), ...(pr?.review.resolvedBy ?? [])]) {
+		const links = item.links.filter((link) => !link.reviewId || !aoReviewIds.has(link.reviewId));
+		if (item.reviewerId && item.reviewerId !== pr?.author && links.length && !byId.has(item.reviewerId)) byId.set(item.reviewerId, { ...item, count: links.length, links });
+	}
+	for (const item of pr?.review.reviews ?? []) {
+		const isAOReview = [...aoReviewIds].some((id) => item.reviewUrl?.includes(`pullrequestreview-${id}`));
+		if (!isAOReview && item.reviewerId && item.reviewerId !== pr?.author && !byId.has(item.reviewerId)) byId.set(item.reviewerId, { reviewerId: item.reviewerId, count: 0, links: [] });
+	}
+	return [...byId.values()];
+}
+
+type ReviewCommentItem = { reviewerId: string; comment: PRReviewCommentLink };
+
+function reviewComments(pr: SessionPRSummary | undefined, resolved: boolean): ReviewCommentItem[] {
+	const result: ReviewCommentItem[] = [];
+	for (const reviewer of resolved ? pr?.review.resolvedBy ?? [] : pr?.review.unresolvedBy ?? []) {
+		for (const comment of reviewer.links ?? []) result.push({ reviewerId: reviewer.reviewerId, comment });
+	}
+	return result;
+}
+
+function commentKey({ reviewerId, comment }: ReviewCommentItem): string {
+	return comment.url || `${reviewerId}:${comment.file}`;
+}
+
+function sentenceCase(value: string): string {
+	return value ? value[0].toUpperCase() + value.slice(1) : value;
+}
+
+const makeStyles = (t: Theme) => StyleSheet.create({
+	screen: { flex: 1, backgroundColor: t.bgSurface },
+});

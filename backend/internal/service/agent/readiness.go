@@ -70,6 +70,18 @@ func (s *Service) EnsureReadiness(ctx context.Context, agentIDs []string, purpos
 	return s.withReadinessUsage(ctx, items)
 }
 
+// EnsureInstallationReadiness refreshes installation observations older than
+// the display policy, without authentication checks, and returns every
+// snapshot. Periodic work uses it so a harness installed outside AO since the
+// last observation is seen without anyone opening a page.
+func (s *Service) EnsureInstallationReadiness(ctx context.Context) (Readiness, error) {
+	items, err := s.readiness.EnsureInstallation(ctx, nil, domain.AgentReadinessPurposeDisplay)
+	if err != nil {
+		return Readiness{}, err
+	}
+	return s.withReadinessUsage(ctx, items)
+}
+
 // EnsureAgentReadiness is the narrow service boundary used by launch paths.
 func (s *Service) EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	result, err := s.EnsureReadiness(ctx, []string{agentID}, purpose)
@@ -92,6 +104,11 @@ func (s *Service) InvalidateAgentInstallation(agentID string) {
 
 // InvalidateAgentAuthentication marks an agent's authentication observation stale.
 func (s *Service) InvalidateAgentAuthentication(agentID string) {
+	if item, ok := s.agent(agentID); ok {
+		if cache, ok := item.Agent.(ports.AgentAuthCacheInvalidator); ok {
+			cache.InvalidateAuthCache()
+		}
+	}
 	s.readiness.Invalidate(agentID, readinessInvalidateAuthentication)
 	s.InvalidateModelCatalogs(agentID)
 	if agentID == string(domain.HarnessCodex) && s.codexAccounts != nil {
@@ -110,8 +127,22 @@ func (s *Service) RecheckAgent(agentID string) {
 	}()
 }
 
-// WarmReadiness starts the coordinator's bounded asynchronous warm-up.
-func (s *Service) WarmReadiness() { s.readiness.Warm() }
+// WarmReadiness starts the coordinator's bounded asynchronous warm-up and
+// signals after its installation and authentication passes finish. Model
+// catalog updates wait for the first pass; the saved catalog is served before it.
+func (s *Service) WarmReadiness() <-chan struct{} {
+	done := s.readiness.Warm()
+	if s.readinessWarm == nil {
+		return done
+	}
+	out := make(chan struct{})
+	go func() {
+		<-done
+		s.readinessWarmOnce.Do(func() { close(s.readinessWarm) })
+		close(out)
+	}()
+	return out
+}
 
 func (s *Service) withReadinessUsage(ctx context.Context, snapshots []domain.AgentReadinessSnapshot) (Readiness, error) {
 	if s.sessions == nil {
@@ -203,6 +234,9 @@ func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error
 	if _, ok := s.agent(agentID); !ok {
 		return ProbeResult{Agent: Info{ID: agentID}, Supported: false, Installed: false}, nil
 	}
+	if agentID == string(domain.HarnessCodex) {
+		s.reconcileCodexDeviceCredentialForRecheck(ctx)
+	}
 	s.InvalidateAgentAuthentication(agentID)
 	readiness, err := s.EnsureReadiness(ctx, []string{agentID}, domain.AgentReadinessPurposeLaunch)
 	if err != nil {
@@ -262,10 +296,10 @@ func readinessInfo(snapshot domain.AgentReadinessSnapshot) Info {
 	switch snapshot.Authentication.State {
 	case domain.AgentAuthenticationAuthorized, domain.AgentAuthenticationNotApplicable:
 		status = ports.AgentAuthStatusAuthorized
-	case domain.AgentAuthenticationUnauthorized:
-		status = ports.AgentAuthStatusUnauthorized
 	case domain.AgentAuthenticationConfigured:
 		status = ports.AgentAuthStatusConfigured
+	case domain.AgentAuthenticationUnauthorized:
+		status = ports.AgentAuthStatusUnauthorized
 	}
 	return Info{
 		ID: snapshot.ID, Label: snapshot.Label, AuthStatus: status,

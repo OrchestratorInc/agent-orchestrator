@@ -41,6 +41,9 @@ type Review struct {
 	ControllerError        string                `json:"controllerError"`
 	CreatedAt              time.Time             `json:"createdAt"`
 	UpdatedAt              time.Time             `json:"updatedAt"`
+
+	// IsArchived retires the reviewer surface without deleting its history.
+	IsArchived bool `json:"-"`
 }
 
 // ReviewerInterfaceMode selects the durable UI surface for a reviewer.
@@ -72,13 +75,15 @@ type ReviewRun struct {
 	// legacy/single-run delivery.
 	BatchID string          `json:"batchId"`
 	Harness ReviewerHarness `json:"harness"`
-	// TriggerSource records whether this pass was requested by a user or by the
-	// daemon auto-review coordinator.
-	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,auto"`
+	// RequesterSessionID is the agent to notify when this pass ends.
+	RequesterSessionID SessionID `json:"-"`
+	// TriggerSource records whether this pass was requested by a user, by an
+	// AO agent session through the CLI, or by the daemon auto-review coordinator.
+	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,agent,auto"`
 	PRURL         string              `json:"prUrl"`
 	// TargetSHA is the PR head commit this pass reviewed.
 	TargetSHA string          `json:"targetSha"`
-	Status    ReviewRunStatus `json:"status"`
+	Status    ReviewRunStatus `json:"status" enum:"queued,launching,running,cancelling,completed,failed,cancelled,superseded"`
 	Verdict   ReviewVerdict   `json:"verdict"`
 	// Body is the review text the reviewer submitted. It is recorded for AO's
 	// own tracking; the reviewer also posts the review to the PR itself.
@@ -94,7 +99,67 @@ type ReviewRun struct {
 	// AutoInjectReview snapshots the session policy when this result is first
 	// recorded. Later toggle changes must not rewrite or deliver this run.
 	AutoInjectReview bool `json:"autoInjectReview"`
+	// ReviewerModel is the model the reviewer ran with for this pass; empty
+	// means the harness default.
+	ReviewerModel string `json:"-"`
+	// WorkerNotice tracks the one "review done" message owed to the requesting session
+	// once this pass is final. The store marks it pending on the final status
+	// write when the session receives review feedback.
+	WorkerNotice ReviewWorkerNotice `json:"workerNotice,omitempty" enum:",pending,sent,failed"`
+	// WorkerNoticeAttempts counts failed attempts to deliver the notice;
+	// WorkerNoticeError and WorkerNoticeAttemptedAt describe the latest one.
+	// A failed send keeps the notice pending and is retried with backoff.
+	WorkerNoticeAttempts    int        `json:"workerNoticeAttempts,omitempty"`
+	WorkerNoticeError       string     `json:"workerNoticeError,omitempty"`
+	WorkerNoticeAttemptedAt *time.Time `json:"workerNoticeAttemptedAt,omitempty"`
+	// FailureReason is set only on failed runs.
+	FailureReason ReviewFailureReason `json:"failureReason,omitempty" enum:"preflight_failed,launch_failed,never_started,exited_during_launch,turn_ended_without_submit,process_exited,timed_out,daemon_restarted,cancel_unconfirmed"`
+	// CancelledBy is set only on cancelled runs.
+	CancelledBy ReviewCancelledBy `json:"cancelledBy,omitempty" enum:"user,worker_lifecycle"`
+	// LaunchID is the reviewer launch serving this run; only activity carrying
+	// it counts as this run's first activity.
+	LaunchID          string     `json:"-"`
+	LaunchingAt       *time.Time `json:"launchingAt,omitempty"`
+	StartedAt         *time.Time `json:"startedAt,omitempty"`
+	FirstActivityAt   *time.Time `json:"firstActivityAt,omitempty"`
+	CancelRequestedAt *time.Time `json:"cancelRequestedAt,omitempty"`
+	EndedAt           *time.Time `json:"endedAt,omitempty"`
 }
+
+// ReviewWorkerNotice is the delivery state of a pass's "review done" message.
+type ReviewWorkerNotice string
+
+// Review done notice states.
+const (
+	// ReviewWorkerNoticeNone marks a pass that owes no notice: still running,
+	// recorded before notices existed, or the session had feedback delivery off.
+	ReviewWorkerNoticeNone ReviewWorkerNotice = ""
+	// ReviewWorkerNoticePending marks a final pass whose notice is not yet sent.
+	ReviewWorkerNoticePending ReviewWorkerNotice = "pending"
+	// ReviewWorkerNoticeSent marks a pass whose notice reached the worker.
+	ReviewWorkerNoticeSent ReviewWorkerNotice = "sent"
+	// ReviewWorkerNoticeFailed marks a notice that gave up after
+	// ReviewWorkerNoticeMaxAttempts failed sends. It is derived on read from a
+	// pending notice and its attempt count; WorkerNoticeError keeps the last
+	// failure.
+	ReviewWorkerNoticeFailed ReviewWorkerNotice = "failed"
+)
+
+// ReviewWorkerNoticeMaxAttempts bounds failed sends of one notice. A failed
+// send can still have reached the worker (a partly written paste), so retries
+// are capped rather than repeated forever.
+const ReviewWorkerNoticeMaxAttempts = 5
+
+// Recorded reasons for review passes that end without a result. The "review
+// done" notice reads them to tell the worker whether another review is worth
+// requesting.
+const (
+	// ReviewRunSupersededReason marks a pass replaced by a trigger for a newer
+	// head commit; the newer pass is already running.
+	ReviewRunSupersededReason = "superseded by a review trigger for a newer commit"
+	// ReviewRunCancelledByUserReason marks a pass the user stopped on purpose.
+	ReviewRunCancelledByUserReason = "cancelled by user"
+)
 
 // ReviewTriggerSource identifies who initiated a review pass.
 type ReviewTriggerSource string
@@ -102,21 +167,141 @@ type ReviewTriggerSource string
 const (
 	// ReviewTriggerManual marks a user-initiated review pass.
 	ReviewTriggerManual ReviewTriggerSource = "manual"
+	// ReviewTriggerAgent marks a pass an AO agent session (a worker reviewing
+	// its own PR, or an orchestrator) requested through `ao review trigger`.
+	ReviewTriggerAgent ReviewTriggerSource = "agent"
 	// ReviewTriggerAuto marks a daemon-initiated review pass.
 	ReviewTriggerAuto ReviewTriggerSource = "auto"
 )
 
-// ReviewRunStatus is the lifecycle state of a single review pass.
-type ReviewRunStatus = contract.AOReviewRunStatus
+// ReviewRunStatus is the lifecycle state of a single review pass. It is the
+// daemon's own type: AO Cloud's contract.AOReviewRunStatus keeps its original
+// values, and ContractStatus projects a daemon run onto it.
+type ReviewRunStatus string
 
-// Review run statuses.
+// Review run statuses. queued, launching, running and cancelling are active:
+// every active run has an owner and a time limit (see internal/review's run
+// supervisor). The rest are final and are never overwritten.
 const (
-	ReviewRunRunning   = contract.AOReviewRunRunning
-	ReviewRunComplete  = contract.AOReviewRunComplete
-	ReviewRunDelivered = contract.AOReviewRunDelivered
-	ReviewRunFailed    = contract.AOReviewRunFailed
-	ReviewRunCancelled = contract.AOReviewRunCancelled
+	// ReviewRunQueued means the trigger accepted the pass and wrote the row; no
+	// reviewer has been touched yet.
+	ReviewRunQueued ReviewRunStatus = "queued"
+	// ReviewRunLaunching means the daemon is starting a reviewer or sending the
+	// task to a live one.
+	ReviewRunLaunching ReviewRunStatus = "launching"
+	// ReviewRunRunning means the task prompt was delivered to the reviewer.
+	ReviewRunRunning ReviewRunStatus = "running"
+	// ReviewRunCancelling means a stop was requested and is not confirmed yet.
+	ReviewRunCancelling ReviewRunStatus = "cancelling"
+	// ReviewRunCompleted means the reviewer submitted a verdict.
+	ReviewRunCompleted ReviewRunStatus = "completed"
+	// ReviewRunFailed means the pass ended without a verdict; FailureReason
+	// says why.
+	ReviewRunFailed ReviewRunStatus = "failed"
+	// ReviewRunCancelled means a person or the worker lifecycle stopped the pass
+	// and the stop was confirmed; CancelledBy says who.
+	ReviewRunCancelled ReviewRunStatus = "cancelled"
+	// ReviewRunSuperseded means a newer commit on the same PR made the pass
+	// pointless.
+	ReviewRunSuperseded ReviewRunStatus = "superseded"
 )
+
+// ActiveReviewRunStatuses lists the states that hold a review lock for their
+// PR head and reviewer harness.
+var ActiveReviewRunStatuses = []ReviewRunStatus{ReviewRunQueued, ReviewRunLaunching, ReviewRunRunning, ReviewRunCancelling}
+
+// IsActive reports whether the run still has an owner working towards a final
+// state.
+func (s ReviewRunStatus) IsActive() bool {
+	switch s {
+	case ReviewRunQueued, ReviewRunLaunching, ReviewRunRunning, ReviewRunCancelling:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsFinal reports whether the run reached a final state.
+func (s ReviewRunStatus) IsFinal() bool {
+	switch s {
+	case ReviewRunCompleted, ReviewRunFailed, ReviewRunCancelled, ReviewRunSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContractStatus projects a daemon run status onto AO Cloud's unchanged
+// contract vocabulary.
+func (s ReviewRunStatus) ContractStatus() contract.AOReviewRunStatus {
+	switch s {
+	case ReviewRunQueued, ReviewRunLaunching, ReviewRunRunning, ReviewRunCancelling:
+		return contract.AOReviewRunRunning
+	case ReviewRunCompleted:
+		return contract.AOReviewRunComplete
+	case ReviewRunCancelled:
+		return contract.AOReviewRunCancelled
+	default:
+		return contract.AOReviewRunFailed
+	}
+}
+
+// ReviewFailureReason is the daemon-assigned reason a run failed. The reviewer
+// never reports one. Clients show one generic message; the code is kept for
+// `ao review ls`, telemetry and auto-review retry decisions.
+type ReviewFailureReason string
+
+// Review failure reasons.
+const (
+	ReviewFailureNone                   ReviewFailureReason = ""
+	ReviewFailurePreflightFailed        ReviewFailureReason = "preflight_failed"
+	ReviewFailureLaunchFailed           ReviewFailureReason = "launch_failed"
+	ReviewFailureNeverStarted           ReviewFailureReason = "never_started"
+	ReviewFailureExitedDuringLaunch     ReviewFailureReason = "exited_during_launch"
+	ReviewFailureTurnEndedWithoutSubmit ReviewFailureReason = "turn_ended_without_submit"
+	ReviewFailureProcessExited          ReviewFailureReason = "process_exited"
+	ReviewFailureTimedOut               ReviewFailureReason = "timed_out"
+	ReviewFailureDaemonRestarted        ReviewFailureReason = "daemon_restarted"
+	ReviewFailureCancelUnconfirmed      ReviewFailureReason = "cancel_unconfirmed"
+)
+
+// AutoRetryable reports whether auto review may retry a head after a run
+// failed for this reason. A failed preflight needs a person to fix the
+// harness, and an unconfirmed cancel may still have a reviewer working.
+func (r ReviewFailureReason) AutoRetryable() bool {
+	return r != ReviewFailurePreflightFailed && r != ReviewFailureCancelUnconfirmed
+}
+
+// ReviewCancelledBy records who stopped a cancelled run.
+type ReviewCancelledBy string
+
+// Who cancelled a run.
+const (
+	ReviewCancelledByNone            ReviewCancelledBy = ""
+	ReviewCancelledByUser            ReviewCancelledBy = "user"
+	ReviewCancelledByWorkerLifecycle ReviewCancelledBy = "worker_lifecycle"
+)
+
+// ReviewRunPatch carries the fields one guarded transition writes alongside
+// the new status. Nil and empty fields leave the stored value unchanged.
+type ReviewRunPatch struct {
+	Verdict          ReviewVerdict
+	Body             *string
+	GithubReviewID   *string
+	AutoInjectReview *bool
+	ReviewerModel    *string
+	FailureReason    ReviewFailureReason
+	CancelledBy      ReviewCancelledBy
+	LaunchID         string
+	LaunchingAt      *time.Time
+	StartedAt        *time.Time
+	FirstActivityAt  *time.Time
+	// ClearFirstActivity drops recorded first activity: a relaunch must earn
+	// its own. FirstActivityAt is ignored when set.
+	ClearFirstActivity bool
+	CancelRequestedAt  *time.Time
+	EndedAt            *time.Time
+}
 
 // ReviewVerdict is the outcome a reviewer reports. The empty verdict marks a
 // run that has not produced an outcome yet.
@@ -139,4 +324,25 @@ type CurrentHeadReviewRun struct {
 	Verdict   ReviewVerdict
 	ID        string
 	CreatedAt time.Time
+	// FailedAutoRuns counts every failed auto review pass on this PR head.
+	FailedAutoRuns int
+	// AutoRetryBlocked reports a cancelled pass or a verdict on this PR head for
+	// this harness, either of which stops auto review from retrying the head.
+	AutoRetryBlocked bool
+}
+
+// AutoReviewFailedRetryLimit is how many failed auto review passes one PR head
+// gets before auto review stops retrying it.
+const AutoReviewFailedRetryLimit = 3
+
+// ReviewerHandle names one live reviewer pane's runtime handle, independent
+// of whether the worker session that spawned it still exists. A reviewer has
+// no session row of its own — its identity is this review's id and
+// SessionID (the worker it reviews) plus Harness — so the memory diagnostic
+// needs this to find it by anything other than walking session roots.
+type ReviewerHandle struct {
+	ReviewID  string
+	SessionID SessionID
+	Harness   ReviewerHarness
+	HandleID  string
 }

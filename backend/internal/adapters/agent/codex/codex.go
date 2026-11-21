@@ -19,10 +19,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -45,6 +48,9 @@ func New() *Plugin {
 // EmitsSubmitActivity signals Codex fires a user-prompt-submit hook under AO's
 // launch. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
+
+// InterruptKey uses Ctrl+C to cancel work without closing Codex.
+func (*Plugin) InterruptKey() string { return "\x03" }
 
 // EmitsSemanticMessageAcceptance reports that the Codex prompt hook includes
 // the accepted prompt, allowing AO delivery ids to be correlated semantically.
@@ -100,20 +106,13 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys Codex understands.
+// GetConfigSpec reports the per-project agent config keys Codex understands:
+// a model override and a reasoning-effort override (forwarded as
+// `-c model_reasoning_effort=<effort>`; empty defers to the model default).
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.ConfigSpec{}, err
-	}
-	return ports.ConfigSpec{
-		Fields: []ports.ConfigField{
-			{
-				Key:         "model",
-				Type:        ports.ConfigFieldString,
-				Description: "Model override passed to `codex --model`.",
-			},
-		},
-	}, nil
+	return agentbase.ModelEffortConfigSpec(ctx,
+		"Model override passed to `codex --model`.",
+		"Reasoning effort override passed to `codex -c model_reasoning_effort`.")
 }
 
 // GetLaunchCommand builds the argv to start a new Codex session, applying the
@@ -133,6 +132,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -172,6 +172,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -185,6 +186,17 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
 		ProviderArgs:     providerArgs,
 	})
+}
+
+// appendFastTierFlag starts Codex on its faster service tier. "priority" is the
+// tier's id in Codex's own model list and session records.
+func appendFastTierFlag(args *[]string, launch domain.AgentLaunchOptions) {
+	switch {
+	case launch.FastMode:
+		*args = append(*args, "-c", "service_tier="+codexTOMLConfigString("priority"))
+	case launch.FastModeOff:
+		*args = append(*args, "-c", "service_tier="+codexTOMLConfigString("default"))
+	}
 }
 
 func appendReasoningEffortFlag(args *[]string, effort string) {
@@ -259,6 +271,11 @@ func (p *Plugin) NativeConversationExists(
 
 	found := false
 	sessionsDir := filepath.Join(codexHome, "sessions")
+	// An account home links its sessions to the computer's own; WalkDir does
+	// not descend into a root that is itself a link.
+	if resolved, err := filepath.EvalSymlinks(sessionsDir); err == nil {
+		sessionsDir = resolved
+	}
 	err := filepath.WalkDir(sessionsDir, func(_ string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -310,21 +327,123 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
+	if provider, ok := customModelProvider(); ok {
+		// `codex login status` only covers the OpenAI login, which this provider does not use.
+		if provider.EnvKey != "" && authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, provider.EnvKey) != "" {
+			return ports.AgentAuthStatusConfigured, nil
+		}
+		return ports.AgentAuthStatusUnknown, nil
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	out, err := aoprocess.CommandContext(probeCtx, binary, "login", "status").CombinedOutput()
+	started := time.Now()
+	cmd := aoprocess.CommandContext(probeCtx, binary, "login", "status")
+	// The probe sees what Codex sessions see, without a key AO holds back.
+	cmd.Env = authprobe.Environ(ctx, agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary))
+	out, err := cmd.CombinedOutput()
+	status, recognized := codexAuthStatusFromOutput(out)
+	if !recognized {
+		status = ports.AgentAuthStatusUnknown
+	}
+	ports.RecordAuthDiagnostic(ctx, authprobe.CommandStep(binary, []string{"login", "status"}, status, err, probeCtx.Err(), started))
 	if probeCtx.Err() != nil {
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
-	if status, ok := codexAuthStatusFromOutput(out); ok {
+	if recognized {
+		if status == ports.AgentAuthStatusAuthorized {
+			evidence := domain.CommandSource(binary, "login", "status").WithMethod(codexLoginMethod(out))
+			if evidence.Method == domain.AgentAccountMethodAccount {
+				evidence.Email, evidence.Name = codexLoginIdentity(ctx)
+			}
+			ports.RecordAuthEvidence(ctx, evidence)
+		}
 		return status, nil
 	}
 	// The probe is advisory. Version skew, transient startup failures, and
 	// unfamiliar output are not proof that credentials are invalid; the actual
 	// launch remains the authoritative check.
-	_ = err
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+// codexLoginIdentity reads who a ChatGPT login belongs to from the id_token
+// Codex stores in CODEX_HOME/auth.json.
+func codexLoginIdentity(ctx context.Context) (email, name string) {
+	home := codexHomeDir()
+	if home == "" {
+		return "", ""
+	}
+	return authprobe.CodexAuthFileIdentity(ctx, filepath.Join(home, "auth.json"))
+}
+
+// codexHomeDir is CODEX_HOME, or ~/.codex when it is unset.
+func codexHomeDir() string {
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return home
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil || userHome == "" {
+		return ""
+	}
+	return filepath.Join(userHome, ".codex")
+}
+
+type codexModelProvider struct {
+	EnvKey             string `toml:"env_key"`
+	RequiresOpenAIAuth bool   `toml:"requires_openai_auth"`
+}
+
+// UsesCustomModelProvider reports whether config.toml points Codex at a model
+// provider other than OpenAI, such as a LiteLLM proxy. Codex's own login and
+// AO's Codex accounts do not apply to that provider.
+func UsesCustomModelProvider() bool {
+	_, ok := customModelProvider()
+	return ok
+}
+
+func customModelProvider() (codexModelProvider, bool) {
+	home := codexHomeDir()
+	if home == "" {
+		return codexModelProvider{}, false
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		return codexModelProvider{}, false
+	}
+	var config struct {
+		ModelProvider string `toml:"model_provider"`
+		Profile       string `toml:"profile"`
+		Profiles      map[string]struct {
+			ModelProvider string `toml:"model_provider"`
+		} `toml:"profiles"`
+		ModelProviders map[string]codexModelProvider `toml:"model_providers"`
+	}
+	if toml.Unmarshal(data, &config) != nil {
+		return codexModelProvider{}, false
+	}
+	name := config.ModelProvider
+	if profile := config.Profiles[config.Profile].ModelProvider; profile != "" {
+		name = profile
+	}
+	provider := config.ModelProviders[name]
+	if name == "" || name == "openai" || provider.RequiresOpenAIAuth {
+		return codexModelProvider{}, false
+	}
+	return provider, true
+}
+
+// codexLoginMethod reads how `codex login status` says it is signed in. Only
+// the method is kept; the output can include a key fragment.
+func codexLoginMethod(out []byte) domain.AgentAccountMethod {
+	text := strings.ToLower(string(out))
+	switch {
+	case strings.Contains(text, "api key"):
+		return domain.AgentAccountMethodAPIKey
+	case strings.Contains(text, "chatgpt"):
+		return domain.AgentAccountMethodAccount
+	default:
+		return ""
+	}
 }
 
 func codexAuthStatusFromOutput(out []byte) (ports.AgentAuthStatus, bool) {
@@ -344,6 +463,9 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if managed, ok := binaryutil.ManagedBinary("codex"); ok {
+		return resolveNativeWindowsCodex(managed, runtime.GOOS), nil
+	}
 
 	if runtime.GOOS == "windows" {
 		candidates := []string{}
@@ -361,7 +483,7 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 		candidates = append(candidates, binaryutil.WindowsPackageManagerBinCandidates("codex")...)
 		for _, candidate := range candidates {
 			if fileExists(candidate) {
-				return resolveNativeWindowsCodex(candidate), nil
+				return resolveNativeWindowsCodex(candidate, runtime.GOOS), nil
 			}
 			if err := ctx.Err(); err != nil {
 				return "", err
@@ -374,7 +496,7 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 				if isWindowsAppsCodexExecutable(path) {
 					continue
 				}
-				return resolveNativeWindowsCodex(path), nil
+				return resolveNativeWindowsCodex(path, runtime.GOOS), nil
 			}
 			if err := ctx.Err(); err != nil {
 				return "", err
@@ -419,8 +541,11 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)
 }
 
-func resolveNativeWindowsCodex(path string) string {
-	if runtime.GOOS != "windows" || !strings.EqualFold(filepath.Ext(path), ".cmd") {
+// resolveNativeWindowsCodex unwraps an npm command shim, including AO's managed
+// launcher, to the native executable it starts. The Chat driver starts Codex
+// directly, which needs the executable rather than a batch file.
+func resolveNativeWindowsCodex(path, goos string) string {
+	if goos != "windows" || !strings.EqualFold(filepath.Ext(path), ".cmd") {
 		return path
 	}
 	for _, candidate := range windowsNativeCodexCandidatesForShim(path) {
@@ -432,7 +557,17 @@ func resolveNativeWindowsCodex(path string) string {
 }
 
 func windowsNativeCodexCandidatesForShim(shim string) []string {
-	dir := filepath.Dir(shim)
+	candidates := windowsNativeCodexCandidatesInPrefix(filepath.Dir(shim))
+	// AO's managed launcher lives apart from the npm prefix it starts; the
+	// native executable is in the current managed release, reached through
+	// current so a later update is picked up without resolving again.
+	if current, ok := binaryutil.ManagedCurrentDir(shim, "codex"); ok {
+		candidates = append(windowsNativeCodexCandidatesInPrefix(current), candidates...)
+	}
+	return candidates
+}
+
+func windowsNativeCodexCandidatesInPrefix(dir string) []string {
 	return []string{
 		filepath.Join(dir, "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe"),
 		filepath.Join(dir, "node_modules", "@openai", "codex", "bin", "codex.exe"),
@@ -531,3 +666,10 @@ var fileExists = func(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

@@ -3,10 +3,14 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -62,6 +66,27 @@ func (s installCapabilitiesStub) Probe(ctx context.Context) (ports.InstallCapabi
 	}, nil
 }
 
+func TestOpenCodeV2NPMPlanUsesPrivatePrefixWhenGlobalPrefixIsReadOnly(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/usr/local", writable: false}
+	privatePrefix := s.privateNPMPrefixes[TargetOpencodeV2]
+	var probed string
+	s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
+		probed = path
+		return true, nil
+	})
+	plan := s.planNPM(TargetOpencodeV2, "@opencode/cli")
+	if plan.Unsupported {
+		t.Fatalf("plan = %+v, want private install available", plan)
+	}
+	if probed != privatePrefix || plan.ExpectedDestination != filepath.Join(privatePrefix, "bin") {
+		t.Fatalf("private prefix probe/destination = (%q, %q), want %q", probed, plan.ExpectedDestination, privatePrefix)
+	}
+	if !slices.Contains(plan.Command, privatePrefix) {
+		t.Fatalf("command = %v, want private prefix %q", plan.Command, privatePrefix)
+	}
+}
+
 func TestAgentPlansSnapshotsCapabilitiesOnce(t *testing.T) {
 	calls := 0
 	s := newTestService("darwin", "npm", "brew")
@@ -101,8 +126,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 28 {
-		t.Fatalf("got %d plans, want 28", len(plans))
+	if len(plans) != 44 {
+		t.Fatalf("got %d plans, want 44", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -116,6 +141,174 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
 		}
+	}
+	if !seen["mastra-code"] {
+		t.Fatal("missing install plan for mastra-code")
+	}
+}
+
+func TestOpenCodeV2RecipesNeverReplaceV1(t *testing.T) {
+	for _, tc := range []struct {
+		goos string
+		want map[string]string
+	}{
+		{goos: "darwin", want: map[string]string{
+			"homebrew":           "brew install anomalyco/tap/opencode-v2; brew unlink opencode-v2",
+			"npm":                "npm install -g --prefix",
+			"official-installer": "https://opencode.ai/v2/install> --no-modify-path",
+		}},
+		{goos: "linux", want: map[string]string{
+			"npm":                "npm install -g --prefix",
+			"official-installer": "https://opencode.ai/v2/install> --no-modify-path",
+		}},
+		{goos: "windows", want: map[string]string{
+			"npm": "npm install -g --prefix",
+		}},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			s := newTestService(tc.goos, "brew", "npm", "bash")
+			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", homebrewPrefix: t.TempDir(), writable: true}
+			plans, err := s.AgentPlans(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got AgentPlan
+			for _, plan := range plans {
+				if plan.AgentID == "opencode-v2" {
+					got = plan
+					break
+				}
+			}
+			if got.AgentID == "" {
+				t.Fatal("OpenCode 2 install plan is missing")
+			}
+			if got.DocumentationURL != "https://opencode.ai/v2/docs" {
+				t.Fatalf("OpenCode 2 plan metadata = %+v", got)
+			}
+			if len(got.Methods) != len(tc.want) {
+				t.Fatalf("OpenCode 2 methods = %+v, want %d official choices", got.Methods, len(tc.want))
+			}
+			for _, method := range got.Methods {
+				want, ok := tc.want[method.ID]
+				if !ok {
+					t.Fatalf("unexpected OpenCode 2 method %+v", method)
+				}
+				if !strings.Contains(method.Command, want) {
+					t.Errorf("%s command = %q, want %q", method.ID, method.Command, want)
+				}
+				if method.Notice != "" {
+					t.Errorf("%s notice = %q, want none: no method replaces OpenCode 1", method.ID, method.Notice)
+				}
+				if method.ID == "npm" && !strings.Contains(method.Command, "opencode-v2-home") {
+					t.Errorf("npm method must install into the private prefix: %+v", method)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenCodeV2OfficialInstallerRunsWithPrivateHome(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan Plan
+	for _, candidate := range planner.agentMethodPlans(TargetOpencodeV2, AgentOperationInstall) {
+		if candidate.Method == "official-installer" {
+			plan = candidate
+		}
+	}
+	if plan.Unsupported || plan.Script == nil {
+		t.Fatalf("official installer plan = %+v, want an available script", plan)
+	}
+	wantHome := "HOME=" + s.privateInstallerHomes[TargetOpencodeV2]
+	if !slices.Contains(plan.Script.Env, wantHome) || !slices.Contains(plan.Script.Args, "--no-modify-path") {
+		t.Fatalf("installer env/args = %v / %v, want %q and --no-modify-path", plan.Script.Env, plan.Script.Args, wantHome)
+	}
+
+	s.privateInstallerHomes = nil
+	planner, err = s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range planner.agentMethodPlans(TargetOpencodeV2, AgentOperationInstall) {
+		if candidate.Method == "official-installer" && (!candidate.Unsupported || candidate.Script != nil) {
+			t.Fatalf("installer without a private home = %+v, want unsupported rather than the default location", candidate)
+		}
+	}
+}
+
+func TestOpenCodeV2HomebrewUnlinksItselfAndRestoresLinkedV1(t *testing.T) {
+	for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationUpdate} {
+		t.Run(string(operation), func(t *testing.T) {
+			prefix := t.TempDir()
+			linked := filepath.Join(prefix, "var", "homebrew", "linked")
+			if err := os.MkdirAll(linked, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Homebrew's marker is a symlink; any entry counts, and a plain file
+			// needs no symlink privilege on Windows runners.
+			if err := os.WriteFile(filepath.Join(linked, "opencode"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s := newTestService("darwin", "brew")
+			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", homebrewPrefix: prefix, writable: true}
+			planner, err := s.newRequestPlanner(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var plan Plan
+			for _, candidate := range planner.agentMethodPlans(TargetOpencodeV2, operation) {
+				if candidate.Method == "homebrew" {
+					plan = candidate
+				}
+			}
+			if plan.Unsupported {
+				t.Fatalf("homebrew plan = %+v, want available", plan)
+			}
+			if plan.homebrewV1Prefix != prefix {
+				t.Fatalf("Homebrew prefix = %q, want %q", plan.homebrewV1Prefix, prefix)
+			}
+			plan = plan.withLinkedOpenCodeV1()
+			if len(plan.Prepare) == 0 || strings.Join(plan.Prepare[len(plan.Prepare)-1], " ") != "brew unlink opencode" {
+				t.Fatalf("Prepare = %v, want OpenCode 1 unlinked last", plan.Prepare)
+			}
+			wantCleanup := [][]string{{"brew", "unlink", "opencode-v2"}, {"brew", "link", "opencode"}}
+			if !slices.EqualFunc(plan.Cleanup, wantCleanup, slices.Equal[[]string]) {
+				t.Fatalf("Cleanup = %v, want %v", plan.Cleanup, wantCleanup)
+			}
+			if !slices.Equal(plan.alsoChanges, []Target{TargetOpencode}) {
+				t.Fatalf("alsoChanges = %v, want OpenCode 1 held while unlinked", plan.alsoChanges)
+			}
+		})
+	}
+}
+
+func TestPlanCleanupRunsAfterFailedCommand(t *testing.T) {
+	s := newTestService("darwin")
+	var ran []string
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		ran = append(ran, strings.Join(command.Argv, " "))
+		if command.Argv[1] == "install" {
+			return errors.New("conflict")
+		}
+		return nil
+	})
+	plan := Plan{
+		Target: TargetOpencodeV2, Method: "homebrew",
+		Prepare: [][]string{{"brew", "unlink", "opencode"}},
+		Command: []string{"brew", "install", "anomalyco/tap/opencode-v2"},
+		Cleanup: [][]string{{"brew", "unlink", "opencode-v2"}, {"brew", "link", "opencode"}},
+	}
+	job := &Job{Target: TargetOpencodeV2, Method: "homebrew", Status: StatusInstalling}
+	s.runAgentOperation(context.Background(), plan, AgentOperationInstall, job, nil)
+	want := []string{"brew unlink opencode", "brew install anomalyco/tap/opencode-v2", "brew unlink opencode-v2", "brew link opencode"}
+	if !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want %v", ran, want)
+	}
+	if job.Status != StatusFailed || !strings.Contains(job.Error, "conflict") {
+		t.Fatalf("job = %+v, want the install's own failure", job)
 	}
 }
 
@@ -132,6 +325,8 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 		{"codex npm", "linux", TargetCodex, []string{"npm"}, "npm", "npm install -g @openai/codex"},
 		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
 		{"vibe pipx", "linux", TargetVibe, []string{"pipx"}, "pipx", "pipx install mistral-vibe"},
+		{"openhands uv", "windows", TargetOpenHands, []string{"uv"}, "uv", "uv tool install openhands"},
+		{"docker agent brew", "darwin", TargetDockerAgent, []string{"brew"}, "homebrew", "brew install docker-agent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -140,6 +335,31 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 				t.Fatalf("plan = %+v, want method %q command %q", plan, tt.wantMethod, tt.wantCommand)
 			}
 		})
+	}
+}
+
+func TestDockerAgentWindowsPlanStatesPlatformRestriction(t *testing.T) {
+	plan := newTestService("windows", "winget", "npm").planAgent(TargetDockerAgent)
+	if !plan.Unsupported || plan.Method != "manual" || len(plan.Command) != 0 ||
+		!strings.Contains(plan.Reason, "macOS and Linux only") {
+		t.Fatalf("Windows Docker Agent plan = %+v, want an unsupported manual plan naming the platform limit", plan)
+	}
+}
+
+func TestGeminiMacInstallUsesSupportedNPMRelease(t *testing.T) {
+	s := newTestService("darwin", "brew", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetGemini, AgentOperationInstall)
+	if len(plans) != 1 || plans[0].Method != "npm" || plans[0].Unsupported ||
+		strings.Join(plans[0].Command, " ") != "npm install -g @google/gemini-cli@latest" {
+		t.Fatalf("Gemini install plans = %+v, want supported npm release only", plans)
+	}
+	if _, err := planner.resolveAgentMethod(TargetGemini, "homebrew", AgentOperationInstall); err == nil {
+		t.Fatal("Homebrew method should not be offered while its Gemini CLI formula is below the required version")
 	}
 }
 
@@ -165,6 +385,9 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 		{"windows", TargetAgy, []string{"pwsh"}, "https://antigravity.google/cli/install.ps1", "pwsh"},
 		{"linux", TargetKimchi, []string{"sh"}, "https://github.com/getkimchi/kimchi/releases/latest/download/install.sh", "sh"},
 		{"linux", TargetPrimeAgent, []string{"sh"}, "https://app.primeintellect.ai/prime-agent/install.sh", "sh"},
+		{"darwin", TargetMiniMaxCode, []string{"bash"}, "https://filecdn.minimax.chat/public/install.sh", "bash"},
+		{"linux", TargetMiniMaxCode, []string{"bash"}, "https://filecdn.minimax.chat/public/install.sh", "bash"},
+		{"windows", TargetMiniMaxCode, []string{"powershell.exe"}, "https://filecdn.minimax.chat/public/install.ps1", "powershell.exe"},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.target)+"/"+tt.goos, func(t *testing.T) {
@@ -177,6 +400,30 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 			}
 			if len(plan.Command) != 0 {
 				t.Fatalf("remote plan exposed executable argv: %v", plan.Command)
+			}
+		})
+	}
+}
+
+func TestOpenInterpreterInstallerPinsInspectedRelease(t *testing.T) {
+	if openInterpreterInstallRelease != openinterpreter.InspectedRelease {
+		t.Fatalf("installer release %q differs from adapter release %q", openInterpreterInstallRelease, openinterpreter.InspectedRelease)
+	}
+	for _, tc := range []struct {
+		goos, shell, url string
+	}{
+		{"darwin", "sh", "https://www.openinterpreter.com/install"},
+		{"linux", "sh", "https://www.openinterpreter.com/install"},
+		{"windows", "pwsh.exe", "https://www.openinterpreter.com/install.ps1"},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			plan := newTestService(tc.goos, tc.shell).planAgent(TargetOpenInterpreter)
+			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil || plan.Script.URL != tc.url {
+				t.Fatalf("install plan = %+v", plan)
+			}
+			want := "OPEN_INTERPRETER_RELEASE=" + openinterpreter.InspectedRelease
+			if !slices.Equal(plan.Script.Env, []string{want}) {
+				t.Fatalf("installer env = %v, want %q", plan.Script.Env, want)
 			}
 		})
 	}
@@ -229,6 +476,37 @@ func TestGooseWindowsUsesPowerShellInstallerCommand(t *testing.T) {
 	}
 	if !slices.Equal(plan.Script.Env, []string{"CONFIGURE=false"}) {
 		t.Fatalf("Goose Windows installer env = %v, want CONFIGURE=false", plan.Script.Env)
+	}
+}
+
+func TestHermesPrefersHomebrewAndFallsBackToOfficialInstaller(t *testing.T) {
+	for _, tc := range []struct {
+		goos, shell, url string
+		args             []string
+	}{
+		{"darwin", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"linux", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"windows", "powershell.exe", "https://hermes-agent.nousresearch.com/install.ps1", []string{"-NonInteractive"}},
+	} {
+		t.Run(tc.goos+" without Homebrew", func(t *testing.T) {
+			plan := newTestService(tc.goos, tc.shell).planAgent(TargetHermes)
+			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil {
+				t.Fatalf("Hermes plan = %+v, want available official installer", plan)
+			}
+			if plan.Script.URL != tc.url || !slices.Equal(plan.Script.Args, tc.args) {
+				t.Fatalf("Hermes installer = %s %v, want %s %v", plan.Script.URL, plan.Script.Args, tc.url, tc.args)
+			}
+			if !strings.HasSuffix(displayCommand(plan), strings.Join(tc.args, " ")) {
+				t.Fatalf("display omits installer arguments: %q", displayCommand(plan))
+			}
+		})
+	}
+	// The official installer clones GitHub, so Homebrew's release bottle wins.
+	s := newTestService("darwin", "brew", "bash")
+	s.installCapabilities = installCapabilitiesStub{homebrewPrefix: "/opt/homebrew", writable: true}
+	plan := s.planAgent(TargetHermes)
+	if plan.Unsupported || plan.Method != "homebrew" || plan.Package != "hermes-agent" {
+		t.Fatalf("Hermes plan with Homebrew = %+v, want homebrew hermes-agent", plan)
 	}
 }
 
@@ -576,5 +854,26 @@ func TestAgentTargetsAreValidButPrerequisitesAreNotHarnessRows(t *testing.T) {
 		if !Valid(target) || IsAgentTarget(target) {
 			t.Fatalf("prerequisite target %q was classified incorrectly", target)
 		}
+	}
+}
+
+func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
+	plan := newTestService("darwin", "brew", "npm", "sh").planAgent(TargetCodewhale)
+	if !plan.Unsupported || plan.Method != "manual" || len(plan.Command) != 0 || plan.Script != nil {
+		t.Fatalf("Codewhale plan = %+v, want command-free manual plan", plan)
+	}
+	if plan.DocsURL != "https://github.com/Hmbown/Codewhale" {
+		t.Fatalf("Codewhale documentation URL = %q", plan.DocsURL)
+	}
+	if !strings.Contains(plan.Reason, "does not automatically install Codewhale") {
+		t.Fatalf("Codewhale reason = %q", plan.Reason)
+	}
+}
+
+func TestTauInstallUsesLatestRelease(t *testing.T) {
+	s := newTestService("darwin", "uv")
+	plan := s.planAgent(TargetTau)
+	if plan.Unsupported || plan.Method != "uv" || strings.Join(plan.Command, " ") != "uv tool install tau-ai" {
+		t.Fatalf("Tau plan = %+v", plan)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -40,8 +41,19 @@ func reviewServer(t *testing.T, status int, respBody string) (*httptest.Server, 
 
 func aliveDeps() Deps { return Deps{ProcessAlive: func(int) bool { return true }} }
 
-func TestReviewSubmitReadsBodyFile(t *testing.T) {
+// setReviewEnv is setConfigEnv for review commands, which default to the
+// calling AO session: it clears inherited session ids so the suite stays
+// hermetic when it runs inside an AO worker or reviewer.
+func setReviewEnv(t *testing.T) testConfig {
+	t.Helper()
 	cfg := setConfigEnv(t)
+	t.Setenv("AO_SESSION_ID", "")
+	t.Setenv("AO_REVIEW_SESSION_ID", "")
+	return cfg
+}
+
+func TestReviewSubmitReadsBodyFile(t *testing.T) {
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -68,7 +80,7 @@ func TestReviewSubmitReadsBodyFile(t *testing.T) {
 }
 
 func TestReviewSubmitReadsBodyFromStdin(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -89,7 +101,7 @@ func TestReviewSubmitReadsBodyFromStdin(t *testing.T) {
 }
 
 func TestReviewSubmitAcceptsUnderscoreFlags(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -109,7 +121,7 @@ func TestReviewSubmitAcceptsUnderscoreFlags(t *testing.T) {
 }
 
 func TestReviewSubmitBatchReadsReviewsFromStdin(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"reviews":[{"id":"run-1","verdict":"changes_requested"},{"id":"run-2","verdict":"approved"}]}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -135,7 +147,7 @@ func TestReviewSubmitBatchReadsReviewsFromStdin(t *testing.T) {
 }
 
 func TestReviewSubmitBatchRetriesAcrossDaemonRestart(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"reviews":[{"id":"run-1","verdict":"changes_requested"}]}`)
 
 	deps := aliveDeps()
@@ -175,7 +187,7 @@ func TestReviewSubmitRetriesUncertainTransportFailureWithIdenticalPayload(t *tes
 		{name: "closed pipe in response body", bodyErr: io.ErrClosedPipe},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := setConfigEnv(t)
+			cfg := setReviewEnv(t)
 			srv, _ := reviewServer(t, http.StatusOK, `{}`)
 			writeRunFileFor(t, cfg, srv)
 
@@ -234,7 +246,7 @@ func TestReviewSubmitDoesNotRetryInvalidJSONResponse(t *testing.T) {
 		`{"reviews":[{"createdAt":"invalid timestamp"}]}`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			cfg := setConfigEnv(t)
+			cfg := setReviewEnv(t)
 			srv, _ := reviewServer(t, http.StatusOK, body)
 			writeRunFileFor(t, cfg, srv)
 
@@ -249,7 +261,7 @@ func TestReviewSubmitDoesNotRetryInvalidJSONResponse(t *testing.T) {
 }
 
 func TestReviewRestartDoesNotRetryResponseBodyFailure(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -278,7 +290,7 @@ func TestReviewRestartDoesNotRetryResponseBodyFailure(t *testing.T) {
 }
 
 func TestReviewSubmitDoesNotRetryDaemonAPIRejection(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusConflict, `{"message":"review run already recorded a different body","code":"REVIEW_INVALID"}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -295,7 +307,7 @@ func TestReviewSubmitDoesNotRetryDaemonAPIRejection(t *testing.T) {
 }
 
 func TestReviewSubmitCancellationStopsUnavailableRetry(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	deps := aliveDeps()
 	waits := 0
@@ -316,7 +328,7 @@ func TestReviewSubmitCancellationStopsUnavailableRetry(t *testing.T) {
 }
 
 func TestReviewSubmitUsesSessionFlag(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-7","verdict":"approved"}}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -329,7 +341,7 @@ func TestReviewSubmitUsesSessionFlag(t *testing.T) {
 }
 
 func TestReviewSubmitTooManyArgsIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "submit", "mer-1", "mer-2")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -337,7 +349,7 @@ func TestReviewSubmitTooManyArgsIsUsageError(t *testing.T) {
 }
 
 func TestReviewSubmitMissingVerdictIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "submit", "mer-1", "--run", "run-1")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -345,7 +357,7 @@ func TestReviewSubmitMissingVerdictIsUsageError(t *testing.T) {
 }
 
 func TestReviewSubmitMissingWorkerIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "submit", "--run", "run-1", "--verdict", "approved")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -353,7 +365,7 @@ func TestReviewSubmitMissingWorkerIsUsageError(t *testing.T) {
 }
 
 func TestReviewSubmitMissingRunIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "submit", "mer-1", "--verdict", "approved")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -361,7 +373,7 @@ func TestReviewSubmitMissingRunIsUsageError(t *testing.T) {
 }
 
 func TestReviewStopPostsCancel(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -378,7 +390,7 @@ func TestReviewStopPostsCancel(t *testing.T) {
 }
 
 func TestReviewStopUsesSessionFlag(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -391,7 +403,7 @@ func TestReviewStopUsesSessionFlag(t *testing.T) {
 }
 
 func TestReviewStopMissingSessionIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "stop")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -399,7 +411,7 @@ func TestReviewStopMissingSessionIsUsageError(t *testing.T) {
 }
 
 func TestReviewStopTooManyArgsIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "stop", "mer-1", "mer-2")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -412,7 +424,7 @@ func TestReviewStopTooManyArgsIsUsageError(t *testing.T) {
 }
 
 func TestReviewRestartTooManyArgsIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "restart", "mer-1", "mer-2")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -425,7 +437,7 @@ func TestReviewRestartTooManyArgsIsUsageError(t *testing.T) {
 }
 
 func TestReviewRestartPostsTriggerCreated(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	// 201 with created:true means a new review pass was started.
 	srv, capture := reviewServer(t, http.StatusCreated, `{"created":true}`)
 	writeRunFileFor(t, cfg, srv)
@@ -443,7 +455,7 @@ func TestReviewRestartPostsTriggerCreated(t *testing.T) {
 }
 
 func TestReviewRestartPostsTriggerReused(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	// 200 with created:false means an existing run for the same commit was reused.
 	srv, capture := reviewServer(t, http.StatusOK, `{"created":false}`)
 	writeRunFileFor(t, cfg, srv)
@@ -461,7 +473,7 @@ func TestReviewRestartPostsTriggerReused(t *testing.T) {
 }
 
 func TestReviewRestartUsesSessionFlag(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -474,7 +486,7 @@ func TestReviewRestartUsesSessionFlag(t *testing.T) {
 }
 
 func TestReviewRestartMissingSessionIsUsageError(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 	_, _, err := executeCLI(t, aliveDeps(), "review", "restart")
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
@@ -482,7 +494,7 @@ func TestReviewRestartMissingSessionIsUsageError(t *testing.T) {
 }
 
 func TestReviewListGetsReviews(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{
 		"reviewerHandleId":"handle-1",
 		"reviews":[{
@@ -510,8 +522,51 @@ func TestReviewListGetsReviews(t *testing.T) {
 	}
 }
 
+// A review done message that failed to reach the worker is shown with its
+// last error, so a missed notice can be diagnosed without daemon logs.
+func TestReviewListShowsUndeliveredReviewDoneMessage(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviews":[{
+			"prUrl":"https://github.com/example/repo/pull/42",
+			"prNumber":42,
+			"title":"Fix session resume",
+			"status":"approved",
+			"latestRun":{"id":"run-1","verdict":"approved","workerNotice":"pending","workerNoticeAttempts":3,"workerNoticeError":"guard mer-1: send: no chat controller"}
+		},{
+			"prUrl":"https://github.com/example/repo/pull/43",
+			"prNumber":43,
+			"status":"approved",
+			"latestRun":{"id":"run-2","verdict":"approved","workerNotice":"sent","workerNoticeAttempts":1,"workerNoticeError":"earlier failure"}
+		},{
+			"prUrl":"https://github.com/example/repo/pull/44",
+			"prNumber":44,
+			"status":"approved",
+			"latestRun":{"id":"run-3","verdict":"approved","workerNotice":"failed","workerNoticeAttempts":5,"workerNoticeError":"bad \u001b[31merror"}
+		}]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if want := "#42: review done message for run run-1 not delivered yet after 3 failed attempt(s): guard mer-1: send: no chat controller"; !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if want := "#44: review done message for run run-3 not delivered, gave up after 5 failed attempt(s): bad [31merror"; !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("control characters from the error reached the terminal: %q", out)
+	}
+	if strings.Contains(out, "earlier failure") {
+		t.Fatalf("a delivered message was reported as undelivered: %q", out)
+	}
+}
+
 func TestReviewListJSONPreservesResponse(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{
 		"reviewerHandleId":"handle-1",
 		"reviews":[{
@@ -546,7 +601,7 @@ func TestReviewListJSONPreservesResponse(t *testing.T) {
 }
 
 func TestReviewListEmpty(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{"reviewerHandleId":"","reviews":[]}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -560,7 +615,7 @@ func TestReviewListEmpty(t *testing.T) {
 }
 
 func TestReviewListRequiresExactlyOneArgument(t *testing.T) {
-	setConfigEnv(t)
+	setReviewEnv(t)
 
 	for _, args := range [][]string{
 		{"review", "ls"},
@@ -574,7 +629,7 @@ func TestReviewListRequiresExactlyOneArgument(t *testing.T) {
 }
 
 func TestReviewListSurfacesDaemonError(t *testing.T) {
-	cfg := setConfigEnv(t)
+	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusNotFound, `{"message":"session not found","code":"SESSION_NOT_FOUND","requestId":"req-2"}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -601,7 +656,7 @@ func TestReviewActionCommandNames(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := setConfigEnv(t)
+			cfg := setReviewEnv(t)
 			srv, capture := reviewServer(t, http.StatusOK, `{}`)
 			writeRunFileFor(t, cfg, srv)
 
@@ -612,5 +667,145 @@ func TestReviewActionCommandNames(t *testing.T) {
 				t.Fatalf("request = %s %s", capture.method, capture.path)
 			}
 		})
+	}
+}
+
+func TestReviewTriggerDefaultsToCallingSessionAsAgent(t *testing.T) {
+	cfg := setReviewEnv(t)
+	t.Setenv("AO_SESSION_ID", "mer-9")
+	srv, capture := reviewServer(t, http.StatusCreated, `{"created":true,"autoInjectEnabled":true,"reviews":[{"prUrl":"https://github.com/acme/app/pull/4","prNumber":4,"status":"running","latestRun":{"id":"run-4","harness":"codex","prUrl":"https://github.com/acme/app/pull/4","targetSha":"0123456789abcdef","status":"running"}}]}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "trigger")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/mer-9/reviews/trigger" {
+		t.Fatalf("path = %q, want the calling session", capture.path)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.body), &body); err != nil {
+		t.Fatalf("decode body %q: %v", capture.body, err)
+	}
+	if body["requesterSessionId"] != "mer-9" || body["source"] != "agent" || body["rejectReviewedHead"] != true || body["enableAutoInject"] != true {
+		t.Fatalf("body = %v, want source=agent, rejectReviewedHead and enableAutoInject", body)
+	}
+	if _, ok := body["rerun"]; ok {
+		t.Fatalf("body = %v, want no rerun by default", body)
+	}
+	for _, want := range []string{"started a new review for mer-9", "codex reviewing https://github.com/acme/app/pull/4 at 0123456789ab (run run-4)", "turned on review auto-inject for mer-9"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want %q", out, want)
+		}
+	}
+}
+
+func TestReviewTriggerForwardsReviewerAndPolicyFlags(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, capture := reviewServer(t, http.StatusCreated, `{"created":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "trigger", "mer-1", "--agent", "codex", "--model", "gpt-5.5", "--effort", "high", "--rerun", "--no-inject", "--pr", "https://github.com/o/r/pull/4")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.body), &body); err != nil {
+		t.Fatalf("decode body %q: %v", capture.body, err)
+	}
+	cfgBody, _ := body["agentConfig"].(map[string]any)
+	if body["harness"] != "codex" || cfgBody["model"] != "gpt-5.5" || cfgBody["effort"] != "high" {
+		t.Fatalf("body = %v, want codex/gpt-5.5/high", body)
+	}
+	if body["rerun"] != true {
+		t.Fatalf("body = %v, want rerun", body)
+	}
+	if body["prUrl"] != "https://github.com/o/r/pull/4" {
+		t.Fatalf("body = %v, want the --pr URL as prUrl", body)
+	}
+	for _, key := range []string{"rejectReviewedHead", "enableAutoInject", "source"} {
+		if _, ok := body[key]; ok {
+			t.Fatalf("body = %v, want no %s", body, key)
+		}
+	}
+	if !strings.Contains(out, "left review auto-inject unchanged for mer-1") {
+		t.Fatalf("stdout = %q, want the unchanged-inject note", out)
+	}
+}
+
+func TestReviewTriggerRefusesInsideReviewer(t *testing.T) {
+	cfg := setReviewEnv(t)
+	t.Setenv("AO_REVIEW_SESSION_ID", "review-1")
+	srv, capture := reviewServer(t, http.StatusCreated, `{"created":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, aliveDeps(), "review", "trigger", "mer-1")
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("exit code = %d, want 2; err=%v", got, err)
+	}
+	if !strings.Contains(err.Error(), "cannot run inside a reviewer") {
+		t.Fatalf("err = %v, want the reviewer refusal", err)
+	}
+	if strings.Contains(capture.path, "/reviews/") {
+		t.Fatalf("a reviewer must not start a review, got %s", capture.path)
+	}
+}
+
+func TestReviewTriggerSurfacesAlreadyReviewedConflict(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusConflict, `{"message":"review: conflict: head already reviewed: PR #4 head 0123456789ab was already reviewed (approved); push new commits, or pass --rerun to review this commit again","code":"REVIEW_HEAD_ALREADY_REVIEWED","requestId":"req-9"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, aliveDeps(), "review", "trigger", "mer-1")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit code = %d, want 1; err=%v", got, err)
+	}
+	for _, want := range []string{"REVIEW_HEAD_ALREADY_REVIEWED", "pass --rerun", "req-9"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %q, want %q", err, want)
+		}
+	}
+}
+
+func TestReviewListDefaultsToCallingSession(t *testing.T) {
+	cfg := setReviewEnv(t)
+	t.Setenv("AO_SESSION_ID", "mer-3")
+	srv, capture := reviewServer(t, http.StatusOK, `{"reviews":[]}`)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, aliveDeps(), "review", "ls"); err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/mer-3/reviews" {
+		t.Fatalf("path = %q, want the calling session", capture.path)
+	}
+}
+
+func TestReviewPostGitHubEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"repos/o/r/pulls/1?extra/reviews", "repos/o/r/pulls/1/more/reviews", "repos/o/../pulls/1/reviews", "repos/o/r/pulls/1 --extra/reviews"} {
+		input := `{"endpoint":"` + endpoint + `","review":{"event":"COMMENT"}}`
+		_, _, err := executeCLI(t, Deps{In: strings.NewReader(input)}, "review", "post-github")
+		if err == nil || !strings.Contains(err.Error(), "expected a GitHub pull request reviews endpoint") {
+			t.Fatalf("endpoint %q: %v", endpoint, err)
+		}
+	}
+}
+
+func TestReviewPostGitHubForwardsReview(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX gh fixture")
+	}
+	bin := t.TempDir()
+	// Echo the argv and stdin so the test checks the exact provider call.
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\ncat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	const review = `{"event":"COMMENT","body":"summary","comments":[{"path":"main.go","line":2,"body":"check this"}]}`
+	input := `{"endpoint":"repos/o/r/pulls/1/reviews","review":` + review + `}`
+	out, _, err := executeCLI(t, Deps{In: strings.NewReader(input)}, "review", "post-github")
+	want := "api\n--method\nPOST\nrepos/o/r/pulls/1/reviews\n--input\n-\n--jq\n.id\n" + review
+	if err != nil || out != want {
+		t.Fatalf("got %q, %v; want %q", out, err, want)
 	}
 }

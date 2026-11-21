@@ -42,6 +42,15 @@ func TestReviewerConversationRoutesDispatchToReviewOwner(t *testing.T) {
 		t.Fatalf("snapshot = status %d body %s, call = %q %d %d", status, body, service.reviewID, service.reviewBefore, service.reviewLimit)
 	}
 
+	status, body = reviewConversationRequest(t, server.Client(), http.MethodGet, base+"/models", "")
+	if status != http.StatusOK || service.reviewOwner != domain.ReviewConversationOwner("review-1") {
+		t.Fatalf("models status=%d body=%s owner=%+v", status, body, service.reviewOwner)
+	}
+	status, body = reviewConversationRequest(t, server.Client(), http.MethodPatch, base+"/settings", `{"model":"review-model","reasoningEffort":"high","approvalMode":"auto"}`)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"model":"review-model"`)) || service.reviewOwner != domain.ReviewConversationOwner("review-1") {
+		t.Fatalf("settings status=%d body=%s owner=%+v", status, body, service.reviewOwner)
+	}
+
 	status, body = reviewConversationRequest(t, server.Client(), http.MethodPost, base+"/messages", `{"text":"check this","clientMessageId":"client-1"}`)
 	if status != http.StatusAccepted || service.reviewOwner != domain.ReviewConversationOwner("review-1") || service.sent.Text != "check this" {
 		t.Fatalf("send = status %d body %s, owner = %#v message = %#v", status, body, service.reviewOwner, service.sent)
@@ -75,6 +84,7 @@ func TestReviewerConversationRoutesValidateRequests(t *testing.T) {
 	}{
 		{http.MethodGet, "?beforeSequence=0", "", "CONVERSATION_CURSOR_INVALID"},
 		{http.MethodGet, "?limit=501", "", "CONVERSATION_LIMIT_INVALID"},
+		{http.MethodPatch, "/settings", `{"approvalMode":"invalid"}`, "CHAT_APPROVAL_MODE_INVALID"},
 		{http.MethodPost, "/messages", `{}`, "CHAT_MESSAGE_EMPTY"},
 		{http.MethodPost, "/approvals/request-1/resolve", `{}`, "CHAT_DECISION_REQUIRED"},
 		{http.MethodPost, "/inputs/request-1/resolve", `{"action":"unknown"}`, "CHAT_INPUT_ACTION_INVALID"},
@@ -113,7 +123,14 @@ func TestReviewerConversationRoutesPreserveServiceErrorEnvelope(t *testing.T) {
 		{http.MethodPost, "/interrupt", ""},
 	} {
 		status, body := reviewConversationRequest(t, server.Client(), tc.method, base+tc.path, tc.body)
-		if status != http.StatusInternalServerError || !bytes.Contains(body, []byte(`"code":"INTERNAL_ERROR"`)) || !bytes.Contains(body, []byte(`"requestId":"`)) {
+		wantCode := "INTERNAL_ERROR"
+		switch tc.path {
+		case "/messages":
+			wantCode = "CHAT_DELIVERY_FAILED"
+		case "":
+			wantCode = "CONVERSATION_READ_FAILED"
+		}
+		if status != http.StatusInternalServerError || !bytes.Contains(body, []byte(`"code":"`+wantCode+`"`)) || !bytes.Contains(body, []byte(`"requestId":"`)) {
 			t.Fatalf("%s %s = status %d body %s", tc.method, tc.path, status, body)
 		}
 	}

@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -35,7 +38,22 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 // JSON a client actually parses is what is checked.
 
 type fakeConversationService struct {
+	switchRequest     domain.ProviderSwitchRequest
+	switchErr         error
+	switchResult      domain.ProviderSwitchResult
+	history           []domain.HandoffTurn
+	historyTotal      int
+	historyOffset     int
+	historyLimit      int
+	historyErr        error
+	viewID            string
+	viewActive        bool
+	viewSessionID     domain.SessionID
+	viewCalls         int
 	snapshot          chatsvc.Snapshot
+	sendErr           error
+	sendCtxErr        error
+	switchCtxErr      error
 	skills            []ports.ChatSkill
 	skillErr          error
 	configOptions     []ports.ChatConfigOption
@@ -59,6 +77,75 @@ type fakeConversationService struct {
 	reviewInterrupted bool
 }
 
+func (f *fakeConversationService) SetChatView(_ context.Context, sessionID domain.SessionID, viewID string, active bool) error {
+	f.viewSessionID = sessionID
+	f.viewID = viewID
+	f.viewActive = active
+	f.viewCalls++
+	return nil
+}
+
+func TestConversationAdvertisesVerifiedExcerpts(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Get(server.URL + "/api/v1/sessions/p1-1/conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var body struct {
+		SupportsExcerpts bool `json:"supportsExcerpts"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.SupportsExcerpts {
+		t.Fatal("daemon did not advertise verified excerpt support")
+	}
+}
+
+func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	for _, tc := range []struct {
+		body       string
+		status     int
+		code       string
+		wantActive bool
+	}{
+		{body: `{"viewId":"","active":true}`, status: http.StatusBadRequest},
+		{body: `{"viewId":"viewer-1"}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
+		{body: `{"viewId":"viewer-1","active":null}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
+		{body: `{"viewId":"viewer-1","active":true}`, status: http.StatusNoContent, wantActive: true},
+		{body: `{"viewId":"viewer-1","active":false}`, status: http.StatusNoContent},
+	} {
+		resp, err := http.Post(server.URL+"/api/v1/sessions/p1-1/chat-view", "application/json", bytes.NewBufferString(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != tc.status {
+			t.Fatalf("POST %s status = %d, want %d", tc.body, resp.StatusCode, tc.status)
+		}
+		if tc.code != "" && !bytes.Contains(body, []byte(`"code":"`+tc.code+`"`)) {
+			t.Fatalf("POST %s body = %s, want code %s", tc.body, body, tc.code)
+		}
+		if tc.status == http.StatusNoContent && service.viewActive != tc.wantActive {
+			t.Fatalf("POST %s active = %v, want %v", tc.body, service.viewActive, tc.wantActive)
+		}
+	}
+	if service.viewCalls != 2 || service.viewSessionID != "p1-1" || service.viewID != "viewer-1" || service.viewActive {
+		t.Fatalf("forwarded view = %+v", service)
+	}
+}
+
 func (f *fakeConversationService) EditMessage(context.Context, domain.SessionID, string, ports.ChatUserMessage) (chatsvc.EditMessageResult, error) {
 	return chatsvc.EditMessageResult{}, nil
 }
@@ -71,9 +158,10 @@ func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (c
 	return f.snapshot, nil
 }
 
-func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
+func (f *fakeConversationService) Send(ctx context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	f.sent = message
-	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, nil
+	f.sendCtxErr = ctx.Err()
+	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, f.sendErr
 }
 
 func (f *fakeConversationService) Resolve(_ context.Context, _ domain.SessionID, requestID string, decision ports.ChatDecision) error {
@@ -115,6 +203,15 @@ func (f *fakeConversationService) InterruptForOwner(_ context.Context, owner dom
 	return f.reviewErr
 }
 
+func (f *fakeConversationService) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return f.Models(ctx, "")
+}
+func (f *fakeConversationService) SetTurnSettingsForOwner(_ context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return settings, nil
+}
+
 func (f *fakeConversationService) Models(context.Context, domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error) {
 	return nil, domain.ConversationSettings{}, nil
 }
@@ -139,8 +236,12 @@ func (f *fakeConversationService) Compact(context.Context, domain.SessionID) (po
 
 // History operations belong to a sibling slice; stubbed so this fake satisfies the
 // controller's interface without pretending to implement them.
-func (f *fakeConversationService) Rollback(context.Context, domain.SessionID, string) (int, error) {
+func (f *fakeConversationService) Rollback(context.Context, domain.SessionID, string, string) (int, error) {
 	return 0, nil
+}
+
+func (f *fakeConversationService) RollbackPreview(context.Context, domain.SessionID, string) (chatsvc.RollbackPreview, error) {
+	return chatsvc.RollbackPreview{}, nil
 }
 
 func (f *fakeConversationService) RetryTurn(context.Context, domain.SessionID, string) (domain.ConversationTurn, error) {
@@ -158,6 +259,26 @@ func (f *fakeConversationService) ReloadMCPServers(
 	return f.mcpServers, f.reloadErr
 }
 
+func (f *fakeConversationService) SwitchProviderReport(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error) {
+	f.switchRequest = request
+	f.switchCtxErr = ctx.Err()
+	return f.switchResult, f.switchErr
+}
+
+// SwitchProviderAndSend is the service's: a retry after the switch went through finds the target active.
+func (f *fakeConversationService) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, message ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	if _, err := f.SwitchProviderReport(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		return domain.ConversationTurn{}, false, err
+	}
+	turn, err := f.Send(ctx, id, message)
+	return turn, true, err
+}
+
+func (f *fakeConversationService) SessionHistory(_ context.Context, _ domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error) {
+	f.historyOffset, f.historyLimit = offset, limit
+	return f.history, f.historyTotal, f.historyErr
+}
+
 func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]ports.ChatSkill, error) {
 	return f.skills, f.skillErr
 }
@@ -166,6 +287,11 @@ func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]p
 // way a client sees it.
 func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[string]any {
 	t.Helper()
+	return conversationSnapshotBodyQuery(t, snapshot, "")
+}
+
+func conversationSnapshotBodyQuery(t *testing.T, snapshot chatsvc.Snapshot, query string) map[string]any {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
 		Sessions:      newFakeSessionService(),
@@ -173,7 +299,7 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 	}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation")
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation" + query)
 	if err != nil {
 		t.Fatalf("GET conversation: %v", err)
 	}
@@ -188,6 +314,45 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 		t.Fatalf("decode: %v", err)
 	}
 	return decoded
+}
+
+func TestConversationSnapshotCarriesTheSendersClientMessageID(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "sent", TurnID: "t1", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "hi", ClientMessageID: "client-key-1", CreatedAt: now},
+			{ID: "reply", TurnID: "t1", Sequence: 2, Role: domain.MessageRoleAssistant, Origin: domain.MessageOriginProvider, Text: "hello", CreatedAt: now},
+		},
+	})
+
+	messages := body["messages"].([]any)
+	if got := messages[0].(map[string]any)["clientMessageId"]; got != "client-key-1" {
+		t.Fatalf("user message clientMessageId = %#v, want client-key-1: the renderer matches its optimistic echo on it", got)
+	}
+	if _, exists := messages[1].(map[string]any)["clientMessageId"]; exists {
+		t.Fatalf("a message with no sender key must omit clientMessageId, got %#v", messages[1])
+	}
+}
+
+func TestConversationSnapshotCarriesHumanPromptFactWithoutPagedMessage(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Turns: []domain.ConversationTurn{
+			{ID: "human", State: domain.TurnStateFailed, HasHumanPrompt: true, RequestedAt: now},
+			{ID: "automation", State: domain.TurnStateFailed, RequestedAt: now},
+		},
+	})
+	turns := body["turns"].([]any)
+	if got := turns[0].(map[string]any)["hasHumanPrompt"]; got != true {
+		t.Errorf("human prompt fact = %#v, want true despite absent paged messages", got)
+	}
+	if got := turns[1].(map[string]any)["hasHumanPrompt"]; got != nil && got != false {
+		t.Errorf("automation prompt fact = %#v, want absent or false", got)
+	}
 }
 
 func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.T) {
@@ -337,6 +502,21 @@ func TestSendConversationPreservesNativeImageAndResourceContent(t *testing.T) {
 	}
 	if service.sent.Content[0].Type != "image" || service.sent.Content[1].Type != "resource_link" || service.sent.Content[2].Type != "resource" {
 		t.Fatalf("content = %#v", service.sent.Content)
+	}
+}
+
+func TestSendConversationMapsChangedClientMessageToConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: domain.ErrClientMessageConflict}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages",
+		`{"text":"changed work","clientMessageId":"same-id"}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_MESSAGE_IDEMPOTENCY_CONFLICT" {
+		t.Fatalf("status=%d code=%q, want 409/CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", status, response.Code)
 	}
 }
 
@@ -601,6 +781,49 @@ func TestSnapshotPrefersStreamedOutputOverAggregate(t *testing.T) {
 	}
 }
 
+// outputLimit keeps the head and tail of a long output on rune boundaries and
+// reports the full size; a short output is untouched.
+func TestSnapshotOutputLimitKeepsHeadAndTail(t *testing.T) {
+	long := "spawned session w-1\n" + strings.Repeat("é", 100) + "\nresult: ok\n"
+	body := conversationSnapshotBodyQuery(t, chatsvc.Snapshot{
+		SessionID: domain.SessionID("p1-1"),
+		Mode:      domain.SessionModeChat,
+		Activities: []domain.ConversationActivity{
+			{ID: "long", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, CommandOutput: long, CreatedAt: time.Now().UTC()},
+			{ID: "short", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, CommandOutput: "ok\n", CreatedAt: time.Now().UTC()},
+		},
+	}, "?outputLimit=64")
+	activities := body["activities"].([]any)
+	cut := activities[0].(map[string]any)["detail"].(map[string]any)
+	output, _ := cut["output"].(string)
+	if !utf8.ValidString(output) || !strings.HasPrefix(output, "spawned session w-1\n") || !strings.HasSuffix(output, "\nresult: ok\n") || !strings.Contains(output, "\n…\n") {
+		t.Fatalf("cut output = %q", output)
+	}
+	if len(output) > 64+len("\n…\n") || cut["outputBytes"] != float64(len(long)) {
+		t.Fatalf("cut output is %d bytes, outputBytes = %#v, want <= 64 and %d", len(output), cut["outputBytes"], len(long))
+	}
+	short := activities[1].(map[string]any)["detail"].(map[string]any)
+	if short["output"] != "ok\n" || short["outputBytes"] != nil {
+		t.Fatalf("short detail = %#v", short)
+	}
+
+	for _, bad := range []string{"?outputLimit=1", "?afterSequence=0"} {
+		log := slog.New(slog.NewTextHandler(io.Discard, nil))
+		srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+			Sessions: newFakeSessionService(), Conversations: &fakeConversationService{},
+		}, httpd.ControlDeps{}))
+		resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation" + bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		srv.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s status = %d, want 400", bad, resp.StatusCode)
+		}
+	}
+}
+
 // With no streamed output at all the aggregate stands, labelled as such.
 func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	aggregate, err := json.Marshal(map[string]any{
@@ -631,5 +854,140 @@ func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	}
 	if _, present := detail["outputTruncated"]; present {
 		t.Error("untruncated output still carried the truncation flag")
+	}
+}
+
+func TestSnapshotOutputTruncationFollowsSelectedSource(t *testing.T) {
+	aggregateOutput := strings.Repeat("a", 64*1024)
+	aggregate, err := json.Marshal(map[string]any{
+		"output":          aggregateOutput,
+		"outputSource":    "aggregate",
+		"outputTruncated": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		stream          string
+		streamTruncated bool
+		wantSource      string
+		wantTruncated   bool
+	}{
+		{"uncut stream replaces capped aggregate", strings.Repeat("s", 60*1024), false, "stream", false},
+		{"capped stream replaces capped aggregate", strings.Repeat("s", 64*1024), true, "stream", true},
+		{"no stream keeps capped aggregate", "", false, "aggregate", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := conversationSnapshotBody(t, chatsvc.Snapshot{
+				SessionID: domain.SessionID("p1-1"),
+				Mode:      domain.SessionModeChat,
+				Activities: []domain.ConversationActivity{{
+					ID: "act-1", Kind: domain.ActivityKindCommand,
+					Status: domain.ActivityStatusCompleted, Summary: "run tests",
+					Detail: aggregate, CommandOutput: tc.stream,
+					CommandOutputTruncated: tc.streamTruncated,
+					CreatedAt:              time.Now().UTC(),
+				}},
+			})
+			detail := body["activities"].([]any)[0].(map[string]any)["detail"].(map[string]any)
+			wantOutput := aggregateOutput
+			if tc.stream != "" {
+				wantOutput = tc.stream
+			}
+			if detail["output"] != wantOutput || detail["outputSource"] != tc.wantSource {
+				t.Fatalf("output did not come from %s", tc.wantSource)
+			}
+			truncated, present := detail["outputTruncated"]
+			if tc.wantTruncated && truncated != true || !tc.wantTruncated && present {
+				t.Errorf("outputTruncated = %#v (present=%v), want truncated=%v", truncated, present, tc.wantTruncated)
+			}
+		})
+	}
+}
+
+func TestSendConversationCarriesContinuation(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json",
+		bytes.NewReader([]byte(`{"text":"Continue from where you stopped.","continuation":true}`)))
+	if err != nil {
+		t.Fatalf("POST message: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusAccepted {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, body = %s", response.StatusCode, got)
+	}
+	if !service.sent.Continuation || service.sent.Origin != domain.MessageOriginHuman {
+		t.Fatalf("sent = %#v, want a human continuation", service.sent)
+	}
+}
+
+func TestConversationSnapshotMarksContinuation(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "asked", TurnID: "turn-asked", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "write the migration", CreatedAt: now},
+			{ID: "continued", TurnID: "turn-continued", Sequence: 2, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "Continue from where you stopped.", Continuation: true, CreatedAt: now},
+		},
+	})
+	messages := body["messages"].([]any)
+	if _, present := messages[0].(map[string]any)["continuation"]; present {
+		t.Fatalf("ordinary message carries continuation: %#v", messages[0])
+	}
+	if messages[1].(map[string]any)["continuation"] != true {
+		t.Fatalf("continuation message = %#v, want continuation: true", messages[1])
+	}
+}
+
+func TestContinuationUnavailableIsAConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: chatsvc.ErrContinuationUnavailable}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages", `{"text":"Continue","continuation":true}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_CONTINUATION_UNAVAILABLE" {
+		t.Fatalf("stale Continue response: %d %s", status, body)
+	}
+}
+
+func TestConversationFileAnnotationsRoundTripAndValidateOwnership(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	input := map[string]any{"text": "why?", "fileReferences": []any{map[string]any{"id": "file-one", "order": 2, "sessionId": "p1-1", "path": "src/a.ts", "side": "file", "line": 1, "endLine": 1, "source": map[string]any{"kind": "workspace"}, "lines": []any{map[string]any{"kind": "context", "oldNo": 1, "newNo": 1, "text": "captured();"}}}}}
+	encoded, _ := json.Marshal(input)
+	response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status %d: %s", response.StatusCode, body)
+	}
+	if service.sent.Text != "why?" || len(service.sent.Content) != 1 || service.sent.Content[0].FileReference.Lines[0].Text != "captured();" {
+		t.Fatalf("lost annotation: %+v", service.sent)
+	}
+	content, _ := json.Marshal(service.sent.Content)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{Conversation: domain.ConversationRecord{ID: "c"}, SessionID: "p1-1", Messages: []domain.ConversationMessage{{ID: "m", Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "why?", DeliveryContentJSON: string(content)}}})
+	messages := body["messages"].([]any)
+	summary := messages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if summary["type"] != "file_reference" || summary["fileReference"].(map[string]any)["path"] != "src/a.ts" {
+		t.Fatalf("summary: %+v", summary)
+	}
+	wrong := bytes.Replace(encoded, []byte(`"p1-1"`), []byte(`"other"`), 1)
+	rejected, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json", bytes.NewReader(wrong))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rejected.Body.Close()
+	if rejected.StatusCode != http.StatusBadRequest {
+		t.Fatalf("cross-session status %d", rejected.StatusCode)
 	}
 }

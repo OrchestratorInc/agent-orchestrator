@@ -24,6 +24,11 @@ type refreshableConversation struct {
 	*conversation
 	loadMu      sync.Mutex
 	loadRequest acpsdk.LoadSessionRequest
+	// closeBeforeReload closes the session before every session/load after the
+	// first, for agents that refuse to load a session this connection already
+	// holds. See Config.CloseSessionBeforeReload.
+	closeBeforeReload bool
+	loaded            bool
 }
 
 var _ ports.ChatHistoryRefresher = (*refreshableConversation)(nil)
@@ -45,6 +50,11 @@ func (c *refreshableConversation) loadHistory(ctx context.Context) (acpsdk.LoadS
 		return acpsdk.LoadSessionResponse{}, err
 	}
 
+	if c.loaded && c.closeBeforeReload {
+		if _, err := c.conn.CloseSession(ctx, acpsdk.CloseSessionRequest{SessionId: c.loadRequest.SessionId}); err != nil {
+			return acpsdk.LoadSessionResponse{}, fmt.Errorf("close ACP session before reload: %w", err)
+		}
+	}
 	c.beginHistoryReplay(string(c.loadRequest.SessionId))
 	response, err := c.conn.LoadSession(ctx, c.loadRequest)
 	if err != nil {
@@ -57,6 +67,7 @@ func (c *refreshableConversation) loadHistory(ctx context.Context) (acpsdk.LoadS
 		c.abortHistoryReplay()
 		return acpsdk.LoadSessionResponse{}, err
 	}
+	c.loaded = true
 	return response, nil
 }
 
@@ -153,6 +164,7 @@ func (c *conversation) beginHistoryReplay(sessionID string) {
 	c.sessionID = sessionID
 	c.activeTurn = ""
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -203,7 +215,11 @@ func (c *conversation) finishHistoryReplay() {
 
 	c.historyMu.Lock()
 	if c.history != nil {
-		c.historyEvents = append([]ports.ChatEvent(nil), c.history.events...)
+		events := append([]ports.ChatEvent(nil), c.history.events...)
+		if c.historyReconciler != nil {
+			events = c.historyReconciler(events)
+		}
+		c.historyEvents = events
 		c.historyErr = nil
 		c.historyLoaded = true
 	}
@@ -266,6 +282,10 @@ func (c *conversation) historyReplayActive() bool {
 }
 
 func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMessageChunk) {
+	text := historicalUserContent(chunk.Content)
+	if c.historyNotice != nil && c.historyNotice(text) {
+		return
+	}
 	messageID := ""
 	if chunk.MessageId != nil {
 		messageID = strings.TrimSpace(*chunk.MessageId)
@@ -278,12 +298,17 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 		return
 	}
 	if messageID == "" {
-		if c.history.pendingUserID != "" {
+		if c.historyUserChunkIsMessage {
+			c.history.fallbackID++
+			messageID = fmt.Sprintf("user-%d", c.history.fallbackID)
+		} else if c.history.pendingUserID != "" {
 			messageID = c.history.pendingUserID
-		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" {
+		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" && !c.history.turnHasProvider {
 			// An absent message id cannot describe a reliable boundary. Keep
 			// contiguous chunks together; conforming agents (including Claude) send
-			// stable UUIDs, so this is only a compatibility fallback.
+			// stable UUIDs, so this is only a compatibility fallback. Once the agent
+			// has answered, the next user chunk is a new prompt: merging id-less
+			// turns broke every checkpoint match on a Terminal to Chat switch.
 			messageID = c.history.turnUserID
 		} else {
 			c.history.fallbackID++
@@ -302,7 +327,6 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 		c.startHistoryTurn(messageID)
 	}
 
-	text := historicalUserContent(chunk.Content)
 	c.historyMu.Lock()
 	if c.history != nil {
 		c.history.pendingUserID = messageID
@@ -420,6 +444,7 @@ func (c *conversation) resetHistoryItems(turnID string) {
 	c.mu.Lock()
 	c.activeTurn = turnID
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -504,10 +529,40 @@ func optionalMessageID(id *string) string {
 	return strings.TrimSpace(*id)
 }
 
+const (
+	standingOpen  = "<ao-standing-instructions>"
+	standingClose = "</ao-standing-instructions>"
+)
+
+// StandingInstructionsBlock carries AO's standing instructions as prompt text;
+// history drops it again from a replayed first message.
+func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
+	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
+}
+
+const (
+	plainStandingOpen  = "Standing instructions from Agent Orchestrator. Follow them for this whole session:\n<ao_standing_instructions>"
+	plainStandingClose = "</ao_standing_instructions>"
+)
+
+// PlainStandingInstructionsBlock carries AO's standing instructions behind a
+// lead sentence, for agents that follow them only when introduced that way
+// (Antigravity, DeepSeek Harness). History drops it from a replayed first
+// message just like StandingInstructionsBlock.
+func PlainStandingInstructionsBlock(text string) acpsdk.ContentBlock {
+	return acpsdk.TextBlock(plainStandingOpen + "\n" + strings.ReplaceAll(text, plainStandingClose, "") + "\n" + plainStandingClose)
+}
+
 func historicalUserContent(content acpsdk.ContentBlock) string {
 	switch {
 	case content.Text != nil:
-		return content.Text.Text
+		text := content.Text.Text
+		for _, block := range [][2]string{{standingOpen, standingClose}, {plainStandingOpen, plainStandingClose}} {
+			if _, rest, ok := strings.Cut(text, block[1]); ok && strings.HasPrefix(text, block[0]) {
+				return strings.TrimLeft(rest, "\n")
+			}
+		}
+		return text
 	case content.Image != nil:
 		return "[Image]"
 	case content.Audio != nil:

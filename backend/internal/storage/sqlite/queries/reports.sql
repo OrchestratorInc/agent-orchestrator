@@ -19,6 +19,12 @@ SELECT * FROM report_outputs WHERE report_id = ? ORDER BY position;
 -- name: ListReportsBySession :many
 SELECT * FROM reports WHERE session_id = ? ORDER BY created_at, id;
 
+-- name: ListReportedPRURLs :many
+SELECT o.reference FROM report_outputs o
+JOIN reports r ON r.id = o.report_id
+WHERE r.session_id = ? AND o.kind = 'pr_created'
+ORDER BY r.created_at, r.id, o.position;
+
 -- name: ListReportsByProject :many
 SELECT * FROM reports WHERE project_id = ? ORDER BY created_at, id;
 
@@ -33,6 +39,13 @@ SELECT * FROM reports
 WHERE project_id = ? AND delivery_state = 'pending'
 ORDER BY available_at, created_at, id
 LIMIT ?;
+
+-- name: ListPendingReportsOfDoneProjects :many
+SELECT * FROM reports
+WHERE delivery_state = 'pending' AND project_id IN (
+  SELECT project_id FROM reports WHERE delivery_state = 'pending' AND state = 'done'
+)
+ORDER BY project_id, available_at, created_at, id;
 
 -- name: AssignPendingReportsToBatch :exec
 UPDATE reports
@@ -68,6 +81,13 @@ RETURNING *;
 UPDATE reports
 SET delivery_state = 'pending', available_at = max(available_at, sqlc.arg(available_at)),
     claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
+WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
+  AND claim_token = sqlc.arg(claim_token)
+RETURNING *;
+
+-- name: FailReportBatch :many
+UPDATE reports
+SET delivery_state = 'failed', claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
 RETURNING *;
@@ -112,3 +132,10 @@ UPDATE reports
 SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
     last_error = 'delivery claim recovered after daemon restart'
 WHERE delivery_state = 'claimed';
+
+-- name: IncrementUnacknowledgedReportBatch :many
+UPDATE reports
+SET unacknowledged_attempts = unacknowledged_attempts + 1
+WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
+  AND claim_token = sqlc.arg(claim_token)
+RETURNING unacknowledged_attempts;

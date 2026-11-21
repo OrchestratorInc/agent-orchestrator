@@ -13,6 +13,8 @@ declare global {
 }
 
 test.describe("live renderer performance workloads", () => {
+	// AO_PERF_PRODUCTION=1 AO_PERF_BENCH=1 AO_E2E_PORT=5497 \
+	//   npm run test:e2e -- chat-performance --grep chatRenderCost --repeat-each=5 --workers=1
 	test.skip(
 		process.env.AO_PERF_BENCH !== "1",
 		"Opt-in benchmark; timings are evidence, not hardware-dependent CI assertions",
@@ -21,8 +23,10 @@ test.describe("live renderer performance workloads", () => {
 	for (const workload of [
 		"events",
 		"streaming",
+		"markdownBlocks",
 		"highlighting",
 		"history",
+		"chatRenderCost",
 	] as const) {
 		test(workload, async ({ page, browser }, testInfo) => {
 			test.setTimeout(120_000);
@@ -37,7 +41,13 @@ test.describe("live renderer performance workloads", () => {
 			);
 			if ("exact" in result) expect(result.exact).toBe(true);
 			if ("textPreserved" in result) expect(result.textPreserved).toBe(true);
-			if ("mountedTurns" in result) expect(result.mountedTurns).toBe(250);
+			if (workload === "history") {
+				expect(result.loadedTurns).toBe(250);
+				expect(result.mountedTurns).toBeGreaterThan(0);
+				expect(result.mountedTurns).toBeLessThan(250);
+			}
+			if (workload === "chatRenderCost") expect(result.mountedTurns).toBe(18);
+			if ("latestCallback" in result) expect(result.latestCallback).toBe(true);
 			const label = process.env.AO_PERF_LABEL ?? "sample";
 			const record = {
 				label,

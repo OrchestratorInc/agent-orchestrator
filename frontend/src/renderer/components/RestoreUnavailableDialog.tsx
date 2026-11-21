@@ -1,13 +1,15 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Loader2, X } from "lucide-react";
+import { Loader2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWorkspaceScope } from "../hooks/useWorkspaceQuery";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
+import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { useUiStore } from "../stores/ui-store";
 import { hasConfiguredOrchestratorAgent, isOrchestratorSession } from "../types/workspace";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	settingsDialogBodyClass,
 	settingsDialogContentClass,
@@ -18,13 +20,14 @@ import {
 type RestoreUnavailableDialogProps = {
 	open: boolean;
 	session: WorkspaceSession;
+	hostId?: string;
 	onOpenChange: (open: boolean) => void;
 	onRecreated: (newOrchestratorId: string) => void;
 };
 
-export function RestoreUnavailableDialog({ open, session, onOpenChange, onRecreated }: RestoreUnavailableDialogProps) {
+export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, onRecreated }: RestoreUnavailableDialogProps) {
 	const { t } = useTranslation();
-	const workspaceQuery = useWorkspaceScope(session.workspaceId);
+	const workspaceQuery = useWorkspaceScope(session.workspaceId, undefined, hostId);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | undefined>();
 	const orchestrator = isOrchestratorSession(session);
@@ -36,13 +39,18 @@ export function RestoreUnavailableDialog({ open, session, onOpenChange, onRecrea
 		if (checkingProject) return;
 		if (!hasOrchestratorAgent) {
 			onOpenChange(false);
-			useUiStore.getState().openProjectSettings(session.workspaceId);
+			useUiStore.getState().openProjectSettings(
+				session.workspaceId,
+				session.cloud?.orgId ? { cloudOrgId: session.cloud.orgId } : hostId,
+			);
 			return;
 		}
 		setBusy(true);
 		setError(undefined);
 		try {
-			const id = await spawnOrchestrator(session.workspaceId, "restore_dialog", true);
+			const id = hostId
+				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true, "restore_dialog")
+				: await spawnOrchestrator(session.workspaceId, "restore_dialog", true);
 			onOpenChange(false);
 			onRecreated(id);
 		} catch (err) {
@@ -59,15 +67,7 @@ export function RestoreUnavailableDialog({ open, session, onOpenChange, onRecrea
 				<Dialog.Content
 					className={`${settingsDialogContentClass} fixed left-1/2 top-1/2 w-dialog-md -translate-x-1/2 -translate-y-1/2 data-[state=open]:animate-modal-in`}
 				>
-					<button
-						type="button"
-						className="settings-dialog-close-button settings-close-button"
-						aria-label={t("common.close")}
-						disabled={busy}
-						onClick={() => onOpenChange(false)}
-					>
-						<X className="size-5" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("common.close")} disabled={busy} onClick={() => onOpenChange(false)} />
 					<div className={settingsDialogHeaderClass}>
 						<Dialog.Title className="settings-dialog-title">{t("restoreUnavailable.title")}</Dialog.Title>
 						<Dialog.Description className="text-control text-settings-muted">
@@ -80,13 +80,13 @@ export function RestoreUnavailableDialog({ open, session, onOpenChange, onRecrea
 						</div>
 					) : null}
 					<div className={settingsDialogFooterClass}>
-						<Button type="button" variant="footer" onClick={() => onOpenChange(false)} disabled={busy}>
+						<Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
 							{orchestrator ? t("confirm.cancel") : t("restoreUnavailable.close")}
 						</Button>
 						{orchestrator ? (
 							<Button
 								type="button"
-								variant="footer-primary"
+								variant="primary"
 								onClick={recreate}
 								disabled={busy || checkingProject}
 							>

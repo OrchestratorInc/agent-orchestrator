@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -26,17 +27,40 @@ const (
 	// WorkspaceDir is the worktree-relative directory named in chat messages.
 	WorkspaceDir = ".ao/attachments"
 	durableDir   = "attachments"
-	// MaxFileBytes matches the HTTP attachment limit and also bounds legacy
-	// imports from agent-writable worktrees.
+	// uploadsDir holds files streamed in through Upload until an attachment
+	// names them. It sits beside durableDir so attaching one is a hard link.
+	uploadsDir = "attachment-uploads"
+	// MaxFileBytes bounds the files the daemon reads whole into memory: renders,
+	// and legacy worktree files imported without an AO-written canonical copy
+	// (agent-writable bytes AO never accepted). Message attachments are streamed
+	// to and from disk and have no size cap.
 	MaxFileBytes = 50 << 20
+	// UploadTTL is how long an upload waits to be attached before a later
+	// upload sweeps it. An attached upload is hard-linked into canonical
+	// storage, so sweeping it frees nothing the session still uses.
+	UploadTTL = 24 * time.Hour
+	// noLimit leaves a write or open without a size cap.
+	noLimit = 0
 )
 
 var (
 	// ErrExists reports that the generated name is already owned by history.
-	ErrExists   = errors.New("attachment already exists")
-	errEmpty    = errors.New("attachment is empty")
-	errTooLarge = errors.New("attachment is too large")
+	ErrExists = errors.New("attachment already exists")
+	// ErrEmpty reports an attachment or upload with no bytes.
+	ErrEmpty = errors.New("attachment is empty")
+	// ErrUploadNotFound reports an upload id that names no pending upload: it
+	// was never made here, or it waited past UploadTTL and was swept.
+	ErrUploadNotFound = errors.New("attachment upload not found")
+	errTooLarge       = errors.New("attachment is too large")
 )
+
+// Source is one attachment's bytes: Data held in memory (small files sent
+// inline as base64), or Upload naming a file streamed in earlier through
+// Upload. Exactly one is set.
+type Source struct {
+	Data   []byte
+	Upload string
+}
 
 // Store persists canonical attachment bytes beneath an AO data directory.
 type Store struct {
@@ -63,13 +87,20 @@ func New(dataDir string) *Store {
 // Returning success therefore means both the history copy and the agent-visible
 // copy exist.
 func (s *Store) Put(ctx context.Context, id domain.SessionID, workspacePath, name string, data []byte) error {
+	return s.PutSource(ctx, id, workspacePath, name, Source{Data: data})
+}
+
+// PutSource is Put for bytes held in memory or streamed in through Upload. The
+// worktree copy is streamed from the canonical file, so neither copy is ever
+// read whole into memory.
+func (s *Store) PutSource(ctx context.Context, id domain.SessionID, workspacePath, name string, src Source) error {
 	lock := s.projectionLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 	if strings.TrimSpace(workspacePath) == "" {
 		return errors.New("attachment workspace path is empty")
 	}
-	if err := s.PutCanonical(ctx, id, name, data); err != nil {
+	if err := s.PutCanonicalSource(ctx, id, name, src); err != nil {
 		return err
 	}
 	sessionRoot, err := s.openCanonicalSession(ctx, id, true)
@@ -77,11 +108,19 @@ func (s *Store) Put(ctx context.Context, id domain.SessionID, workspacePath, nam
 		return fmt.Errorf("open canonical attachment directory: %w", err)
 	}
 	defer func() { _ = sessionRoot.Close() }()
-	if err := writeReaderAtomicUnder(ctx, workspacePath, filepath.FromSlash(WorkspaceDir), name, bytes.NewReader(data), false); err != nil {
+	rollback := func(cause error) error {
 		if removeErr := sessionRoot.Remove(name); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
-			return errors.Join(fmt.Errorf("write workspace attachment: %w", err), fmt.Errorf("rollback canonical attachment: %w", removeErr))
+			return errors.Join(cause, fmt.Errorf("rollback canonical attachment: %w", removeErr))
 		}
-		return fmt.Errorf("write workspace attachment: %w", err)
+		return cause
+	}
+	canonical, _, err := openRegularFile(ctx, sessionRoot, name, noLimit)
+	if err != nil {
+		return rollback(fmt.Errorf("open canonical attachment: %w", err))
+	}
+	defer func() { _ = canonical.Close() }()
+	if err := writeReaderAtomicUnder(ctx, workspacePath, filepath.FromSlash(WorkspaceDir), name, canonical, false, noLimit); err != nil {
+		return rollback(fmt.Errorf("write workspace attachment: %w", err))
 	}
 	return nil
 }
@@ -92,6 +131,12 @@ func (s *Store) Put(ctx context.Context, id domain.SessionID, workspacePath, nam
 // canonical copy is already the durable source of truth, and
 // MaterializeWorkspace replays it once the worktree lands.
 func (s *Store) PutCanonical(ctx context.Context, id domain.SessionID, name string, data []byte) error {
+	return s.PutCanonicalSource(ctx, id, name, Source{Data: data})
+}
+
+// PutCanonicalSource is PutCanonical for bytes held in memory or streamed in
+// through Upload. An upload is hard-linked into place rather than copied.
+func (s *Store) PutCanonicalSource(ctx context.Context, id domain.SessionID, name string, src Source) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -101,11 +146,95 @@ func (s *Store) PutCanonical(ctx context.Context, id domain.SessionID, name stri
 	if err := validateName(name); err != nil {
 		return err
 	}
+	if src.Upload != "" {
+		return s.linkUpload(ctx, id, name, src.Upload)
+	}
+	if len(src.Data) == 0 {
+		return ErrEmpty
+	}
+	return s.writeCanonicalReader(ctx, id, name, bytes.NewReader(src.Data), noLimit)
+}
+
+// writeCanonical stores in-memory bytes in a session's canonical directory
+// only, up to MaxFileBytes. Callers validate the name first: attachment names
+// and render names follow different rules.
+func (s *Store) writeCanonical(ctx context.Context, id domain.SessionID, name string, data []byte) error {
 	if len(data) == 0 {
-		return errEmpty
+		return ErrEmpty
 	}
 	if len(data) > MaxFileBytes {
 		return errTooLarge
+	}
+	return s.writeCanonicalReader(ctx, id, name, bytes.NewReader(data), MaxFileBytes)
+}
+
+func (s *Store) writeCanonicalReader(ctx context.Context, id domain.SessionID, name string, source io.Reader, maxBytes int64) error {
+	if s.dataDir == "" {
+		return errors.New("attachment data directory is empty")
+	}
+	sessionRoot, err := s.openCanonicalSession(ctx, id, true)
+	if err != nil {
+		return fmt.Errorf("open canonical attachment directory: %w", err)
+	}
+	defer func() { _ = sessionRoot.Close() }()
+	if err := writeReaderAtomicRoot(ctx, sessionRoot, ".", name, source, false, maxBytes); err != nil {
+		return fmt.Errorf("write canonical attachment: %w", err)
+	}
+	return nil
+}
+
+// Upload streams body to disk as a pending upload and returns its id and size.
+// It has no size cap: the bytes never sit in memory, and disk space is the only
+// bound. An attachment then names the id instead of carrying its bytes inline.
+// Uploads older than UploadTTL are swept first.
+func (s *Store) Upload(ctx context.Context, body io.Reader) (string, int64, error) {
+	if s.dataDir == "" {
+		return "", 0, errors.New("attachment data directory is empty")
+	}
+	root, err := s.openUploadsRoot(ctx)
+	if err != nil {
+		return "", 0, fmt.Errorf("open attachment uploads: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	sweepUploads(ctx, root, time.Now())
+	var suffix [16]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", 0, err
+	}
+	id := uploadPrefix + hex.EncodeToString(suffix[:])
+	if err := writeReaderAtomicRoot(ctx, root, ".", id, body, false, noLimit); err != nil {
+		return "", 0, err
+	}
+	info, err := root.Lstat(id)
+	if err != nil {
+		return "", 0, err
+	}
+	return id, info.Size(), nil
+}
+
+const uploadPrefix = "upload-"
+
+// ValidateUploadID reports whether id has the shape Upload mints, so a caller
+// can refuse a malformed id before any file is touched.
+func ValidateUploadID(id string) error {
+	suffix, ok := strings.CutPrefix(id, uploadPrefix)
+	if !ok || len(suffix) != 32 {
+		return fmt.Errorf("invalid attachment upload id %q", id)
+	}
+	if _, err := hex.DecodeString(suffix); err != nil || strings.ToLower(suffix) != suffix {
+		return fmt.Errorf("invalid attachment upload id %q", id)
+	}
+	return nil
+}
+
+// linkUpload makes a pending upload the canonical copy of a session
+// attachment. A hard link costs no copy and no extra disk; the upload itself
+// stays until it is swept, so a retried request can still name it. A data
+// directory that cannot hard-link (another volume mounted inside it) gets a
+// streamed copy instead.
+func (s *Store) linkUpload(ctx context.Context, id domain.SessionID, name, upload string) error {
+	if ValidateUploadID(upload) != nil {
+		return ErrUploadNotFound
 	}
 	if s.dataDir == "" {
 		return errors.New("attachment data directory is empty")
@@ -115,10 +244,67 @@ func (s *Store) PutCanonical(ctx context.Context, id domain.SessionID, name stri
 		return fmt.Errorf("open canonical attachment directory: %w", err)
 	}
 	defer func() { _ = sessionRoot.Close() }()
-	if err := writeReaderAtomicRoot(ctx, sessionRoot, ".", name, bytes.NewReader(data), false); err != nil {
+	dataRoot, err := os.OpenRoot(s.dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dataRoot.Close() }()
+	source := filepath.Join(uploadsDir, upload)
+	file, info, err := openRegularFile(ctx, dataRoot, source, noLimit)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ErrUploadNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("open attachment upload: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	if info.Size() == 0 {
+		return ErrEmpty
+	}
+	linkErr := dataRoot.Link(source, filepath.Join(durableDir, string(id), name))
+	if linkErr == nil {
+		return nil
+	}
+	if errors.Is(linkErr, fs.ErrExist) {
+		return ErrExists
+	}
+	if err := writeReaderAtomicRoot(ctx, sessionRoot, ".", name, file, false, noLimit); err != nil {
 		return fmt.Errorf("write canonical attachment: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) openUploadsRoot(ctx context.Context) (*os.Root, error) {
+	if err := os.MkdirAll(s.dataDir, 0o750); err != nil {
+		return nil, err
+	}
+	dataRoot, err := os.OpenRoot(s.dataDir)
+	if err != nil {
+		return nil, err
+	}
+	root, err := openChildDir(ctx, dataRoot, uploadsDir, true, 0o700)
+	_ = dataRoot.Close()
+	return root, err
+}
+
+// sweepUploads removes uploads, and temporary files a crash left behind, last
+// written more than UploadTTL ago. Best effort: a failure leaves the file for
+// the next sweep. A cancelled request stops it between entries.
+func sweepUploads(ctx context.Context, root *os.Root, now time.Time) {
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || now.Sub(info.ModTime()) < UploadTTL {
+			continue
+		}
+		_ = root.Remove(entry.Name())
+	}
 }
 
 // ImportWorkspace migrates legacy worktree-only attachments into canonical
@@ -149,7 +335,7 @@ func (s *Store) ImportWorkspace(ctx context.Context, id domain.SessionID, worksp
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("open workspace AO directory: %w", err)
+		return fmt.Errorf("open workspace .ao directory: %w", err)
 	}
 	defer func() { _ = aoRoot.Close() }()
 	sourceRoot, err := openChildDir(ctx, aoRoot, "attachments", false, 0)
@@ -178,23 +364,29 @@ func (s *Store) ImportWorkspace(ctx context.Context, id domain.SessionID, worksp
 		if entry.Type()&os.ModeSymlink != 0 || validateName(entry.Name()) != nil {
 			continue
 		}
-		file, _, openErr := openRegularFile(ctx, sourceRoot, entry.Name())
+		if sessionRoot == nil {
+			sessionRoot, err = s.openCanonicalSession(ctx, id, true)
+			if err != nil {
+				return fmt.Errorf("open canonical attachment root: %w", err)
+			}
+		}
+		// A file AO staged already has its canonical copy; checking first spares
+		// copying a large one only to discard it.
+		if _, statErr := sessionRoot.Lstat(entry.Name()); statErr == nil {
+			continue
+		}
+		// What is left was written into the worktree without AO: legacy files,
+		// or an agent's. Those are held to MaxFileBytes.
+		file, _, openErr := openRegularFile(ctx, sourceRoot, entry.Name(), MaxFileBytes)
 		if errors.Is(openErr, fs.ErrNotExist) {
 			continue
 		}
 		if openErr != nil {
 			return fmt.Errorf("open workspace attachment %q: %w", entry.Name(), openErr)
 		}
-		if sessionRoot == nil {
-			sessionRoot, err = s.openCanonicalSession(ctx, id, true)
-			if err != nil {
-				_ = file.Close()
-				return fmt.Errorf("open canonical attachment root: %w", err)
-			}
-		}
-		copyErr := writeReaderAtomicRoot(ctx, sessionRoot, ".", entry.Name(), file, false)
+		copyErr := writeReaderAtomicRoot(ctx, sessionRoot, ".", entry.Name(), file, false, MaxFileBytes)
 		closeErr := file.Close()
-		if errors.Is(copyErr, ErrExists) || errors.Is(copyErr, errEmpty) || errors.Is(copyErr, errTooLarge) {
+		if errors.Is(copyErr, ErrExists) || errors.Is(copyErr, ErrEmpty) || errors.Is(copyErr, errTooLarge) {
 			continue
 		}
 		if copyErr != nil {
@@ -248,7 +440,7 @@ func (s *Store) MaterializeWorkspace(ctx context.Context, id domain.SessionID, w
 		if entry.Type()&os.ModeSymlink != 0 || validateName(entry.Name()) != nil {
 			continue
 		}
-		file, _, openErr := openRegularFile(ctx, sessionRoot, entry.Name())
+		file, _, openErr := openRegularFile(ctx, sessionRoot, entry.Name(), noLimit)
 		if errors.Is(openErr, fs.ErrNotExist) {
 			continue
 		}
@@ -264,7 +456,7 @@ func (s *Store) MaterializeWorkspace(ctx context.Context, id domain.SessionID, w
 			}
 			prepared = true
 		}
-		copyErr := writeReaderAtomicUnder(ctx, workspacePath, filepath.FromSlash(WorkspaceDir), entry.Name(), file, true)
+		copyErr := writeReaderAtomicUnder(ctx, workspacePath, filepath.FromSlash(WorkspaceDir), entry.Name(), file, true, noLimit)
 		closeErr := file.Close()
 		if copyErr != nil {
 			return false, fmt.Errorf("materialize attachment %q: %w", entry.Name(), copyErr)
@@ -296,7 +488,7 @@ func (s *Store) Open(ctx context.Context, id domain.SessionID, name string) (*os
 		return nil, nil, fs.ErrNotExist
 	}
 	defer func() { _ = sessionRoot.Close() }()
-	return openRegularFile(ctx, sessionRoot, name)
+	return openRegularFile(ctx, sessionRoot, name, noLimit)
 }
 
 // RemoveSession removes canonical files only when the owning session row was
@@ -467,7 +659,8 @@ func validNamePart(part string, allowDot bool) bool {
 	return true
 }
 
-func writeReaderAtomicUnder(ctx context.Context, rootPath, dir, name string, source io.Reader, replace bool) error {
+// writeReaderAtomicUnder is writeReaderAtomicRoot for a directory path.
+func writeReaderAtomicUnder(ctx context.Context, rootPath, dir, name string, source io.Reader, replace bool, maxBytes int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -476,10 +669,12 @@ func writeReaderAtomicUnder(ctx context.Context, rootPath, dir, name string, sou
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	return writeReaderAtomicRoot(ctx, root, dir, name, source, replace)
+	return writeReaderAtomicRoot(ctx, root, dir, name, source, replace, maxBytes)
 }
 
-func writeReaderAtomicRoot(ctx context.Context, root *os.Root, dir, name string, source io.Reader, replace bool) error {
+// writeReaderAtomicRoot streams source into dir/name through a temporary file.
+// maxBytes caps the size; noLimit streams any size.
+func writeReaderAtomicRoot(ctx context.Context, root *os.Root, dir, name string, source io.Reader, replace bool, maxBytes int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -500,14 +695,18 @@ func writeReaderAtomicRoot(ctx context.Context, root *os.Root, dir, name string,
 		_ = tmp.Close()
 		_ = root.Remove(tmpName)
 	}()
-	written, err := io.Copy(tmp, io.LimitReader(contextReader{ctx: ctx, reader: source}, MaxFileBytes+1))
+	var reader io.Reader = contextReader{ctx: ctx, reader: source}
+	if maxBytes > noLimit {
+		reader = io.LimitReader(reader, maxBytes+1)
+	}
+	written, err := io.Copy(tmp, reader)
 	if err != nil {
 		return err
 	}
 	if written == 0 {
-		return errEmpty
+		return ErrEmpty
 	}
-	if written > MaxFileBytes {
+	if maxBytes > noLimit && written > maxBytes {
 		return errTooLarge
 	}
 	if err := tmp.Sync(); err != nil {
@@ -550,7 +749,9 @@ func writeReaderAtomicRoot(ctx context.Context, root *os.Root, dir, name string,
 	return nil
 }
 
-func openRegularFile(ctx context.Context, root *os.Root, name string) (*os.File, fs.FileInfo, error) {
+// openRegularFile opens a non-empty regular file that was not swapped while
+// opening. maxBytes refuses a larger one; noLimit opens any size.
+func openRegularFile(ctx context.Context, root *os.Root, name string, maxBytes int64) (*os.File, fs.FileInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -570,7 +771,7 @@ func openRegularFile(ctx context.Context, root *os.Root, name string) (*os.File,
 		_ = file.Close()
 		return nil, nil, err
 	}
-	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || openedInfo.Size() == 0 || openedInfo.Size() > MaxFileBytes {
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || openedInfo.Size() == 0 || (maxBytes > noLimit && openedInfo.Size() > maxBytes) {
 		_ = file.Close()
 		return nil, nil, fs.ErrNotExist
 	}

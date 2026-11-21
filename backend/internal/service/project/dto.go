@@ -37,16 +37,61 @@ type ClonePreparationResult struct {
 	PreparationID string `json:"preparationId"`
 }
 
+// CloneProgressPhase names the git clone step a checkout is in.
+type CloneProgressPhase string
+
+// The steps a clone reports, in the order git reaches them.
+const (
+	ClonePhaseEnumeratingObjects CloneProgressPhase = "enumerating_objects"
+	ClonePhaseCountingObjects    CloneProgressPhase = "counting_objects"
+	ClonePhaseCompressingObjects CloneProgressPhase = "compressing_objects"
+	ClonePhaseReceivingObjects   CloneProgressPhase = "receiving_objects"
+	ClonePhaseResolvingDeltas    CloneProgressPhase = "resolving_deltas"
+	ClonePhaseUpdatingFiles      CloneProgressPhase = "updating_files"
+	ClonePhaseFilteringContent   CloneProgressPhase = "filtering_content"
+	// ClonePhaseRetrying starts another attempt after a temporary connection failure.
+	ClonePhaseRetrying CloneProgressPhase = "retrying"
+)
+
+// CloneProgress reports the step a running clone has reached. It never
+// carries git's own output: git can print the remote URL, which may hold
+// credentials.
+type CloneProgress struct {
+	Phase CloneProgressPhase `json:"phase" enum:"enumerating_objects,counting_objects,compressing_objects,receiving_objects,resolving_deltas,updating_files,filtering_content,retrying"`
+	// Attempt is the 1-based clone attempt the phase belongs to.
+	Attempt int `json:"attempt" minimum:"1"`
+	// Percent is how far git says the phase is, when it reports one.
+	Percent *int `json:"percent,omitempty" minimum:"0" maximum:"100"`
+}
+
+// CloneDestination reports local destination readiness without contacting the remote.
+type CloneDestination struct {
+	RemoteURL      string `json:"remoteUrl"`
+	Path           string `json:"path"`
+	Exists         bool   `json:"exists"`
+	CanUseExisting bool   `json:"canUseExisting"`
+}
+
 // ClonePreparationCleanupInput identifies a checkout created by prepare-clone
 // that the user abandoned before project registration.
 type ClonePreparationCleanupInput struct {
 	Path          string `json:"path" minLength:"1"`
 	PreparationID string `json:"preparationId" minLength:"1"`
+	KeepCheckout  bool   `json:"keepCheckout,omitempty"`
 }
 
 // InitializeRepositoryInput is the body shape for POST /api/v1/projects/initialize.
 type InitializeRepositoryInput struct {
 	Path string `json:"path"`
+	// Create makes Path, which must not exist yet, before initializing it: a
+	// new, empty project. Missing parent folders are created too. The folder is
+	// removed again when initialization fails.
+	Create bool `json:"create,omitempty"`
+	// CreateID names one create request, so a retry after a lost response
+	// resumes the folder that request made instead of failing on PATH_EXISTS.
+	// It is recorded in the new repository's local Git config; a folder that
+	// does not carry it is never taken over.
+	CreateID string `json:"createId,omitempty" maxLength:"64"`
 }
 
 // InitializeRepositoryResult reports the repository path initialized for onboarding.

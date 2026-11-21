@@ -18,10 +18,25 @@ export type AgentAvailability = Schemas["AgentAvailability"];
 export type AgentProfile = Schemas["AgentProfile"];
 
 export type Project = Schemas["Project"];
+export type ProjectConfig = Schemas["ProjectConfig"];
+export type ProjectCoderConfig = Schemas["ProjectCoderConfig"];
+export type ProjectAgentConfig = Schemas["ProjectAgentConfig"];
+export type ProjectRoleConfig = Schemas["ProjectRoleConfig"];
+export type ProjectReviewer = Schemas["ProjectReviewer"];
+export type ProjectSettingsInput = Schemas["ProjectSettingsInput"];
 export type CreateProjectInput = Schemas["CreateProjectInput"];
 export type UpdateProjectInput = Schemas["UpdateProjectInput"];
 export type DeleteProjectResponse = Schemas["DeleteProjectResponse"];
 export type ProjectPage = Schemas["ProjectPage"];
+export type ProjectTrackerIntake = Schemas["ProjectTrackerIntake"];
+export type ProjectEnvironment = Schemas["ProjectEnvironment"];
+export type ProjectEnvironmentVariable = Schemas["ProjectEnvironmentVariable"];
+export type PutProjectEnvironmentInput = Schemas["PutProjectEnvironmentInput"];
+export type ProjectIntakeStatus = Schemas["ProjectIntakeStatus"];
+export type Cue = Schemas["Cue"];
+export type CueDefinitionInput = Schemas["CueDefinitionInput"];
+export type InvokeCueInput = Schemas["InvokeCueInput"];
+export type InvokeCueResult = Schemas["InvokeCueResult"];
 
 export type GitHubInstallationStatus = Schemas["GitHubInstallationStatus"];
 export type GitHubSyncStatus = Schemas["GitHubSyncStatus"];
@@ -42,6 +57,20 @@ export type CreateGitHubScratchProjectResponse =
   Schemas["CreateGitHubScratchProjectResponse"];
 
 export type Session = Schemas["Session"];
+export type SessionArtifact = Schemas["SessionArtifact"];
+export type SessionArtifactList = Schemas["SessionArtifactList"];
+export type SessionArtifactAccess = Schemas["SessionArtifactAccess"];
+export type SessionArtifactResult = Schemas["SessionArtifactResult"];
+export type SaveSessionArtifactInput = Schemas["SaveSessionArtifactInput"];
+export type SessionArtifactVersionSummary = Schemas["SessionArtifactVersionSummary"];
+export type SessionArtifactVersionList = Schemas["SessionArtifactVersionList"];
+export type SessionArtifactVersion = Schemas["SessionArtifactVersion"];
+export type ChatSearchHit = Schemas["ChatSearchHit"];
+export type ChatSearchResults = Schemas["ChatSearchResults"];
+export type LinkedPullRequest = Schemas["LinkedPullRequest"];
+export type SessionOutputType = Schemas["SessionOutputType"];
+export type RequestedOutput = Schemas["RequestedOutput"];
+export type SessionStartupError = Schemas["SessionStartupError"];
 export type SessionKind = Schemas["SessionKind"];
 export type SessionMode = Schemas["SessionMode"];
 export type SessionActivityState = Schemas["SessionActivityState"];
@@ -49,7 +78,20 @@ export type SessionStatus = Schemas["SessionStatus"];
 export type Turn = Schemas["Turn"];
 export type CreateSessionInput = Schemas["CreateSessionInput"];
 export type DeleteSessionResponse = Schemas["DeleteSessionResponse"];
+export type UpdateSessionInput = Schemas["UpdateSessionInput"];
+export type SessionPinResponse = Schemas["SessionPinResponse"];
 export type SessionPage = Schemas["SessionPage"];
+export type SessionInterfaceMode = Schemas["SessionInterfaceMode"];
+export type SessionInterfaceTransitionPolicy =
+  Schemas["SessionInterfaceTransitionPolicy"];
+export type SessionInterfaceTransitionPhase =
+  Schemas["SessionInterfaceTransitionPhase"];
+export type SessionInterfaceTransition =
+  Schemas["SessionInterfaceTransition"];
+export type SessionInterfaceTransitionStatus =
+  Schemas["SessionInterfaceTransitionStatus"];
+export type StartSessionInterfaceTransitionInput =
+  Schemas["StartSessionInterfaceTransitionInput"];
 
 export type PullRequestState = Schemas["PullRequestState"];
 export type CIState = Schemas["CIState"];
@@ -133,6 +175,24 @@ export type WorkerCheckoutGrantResponse =
   Schemas["WorkerCheckoutGrantResponse"];
 export type CreateWorkerChildInput = Schemas["CreateWorkerChildInput"];
 export type SendMessageInput = Schemas["SendMessageInput"];
+export type ChatMessageInput = Schemas["ChatMessageInput"];
+export type ChatApprovalDecisionInput = Schemas["ChatApprovalDecisionInput"];
+export type TurnSteeredEvent = Schemas["TurnSteeredEvent"];
+export type TurnSteerRequestedEvent = Schemas["TurnSteerRequestedEvent"];
+export type TurnSteerFailedEvent = Schemas["TurnSteerFailedEvent"];
+export type AgentSwitchedEvent = Schemas["AgentSwitchedEvent"];
+export type CloudAgentAccount = Schemas["CloudAgentAccount"];
+export type AddAgentAccountInput = Schemas["AddAgentAccountInput"];
+export type RenameAgentAccountInput = Schemas["RenameAgentAccountInput"];
+export type SessionAgentAccount = Schemas["SessionAgentAccount"];
+export type SwitchSessionAgentAccountInput = Schemas["SwitchSessionAgentAccountInput"];
+export type EditQueuedMessageInput = Schemas["EditQueuedMessageInput"];
+export type UserMessageEditedEvent = Schemas["UserMessageEditedEvent"];
+export type ChatModel = Schemas["ChatModel"];
+export type ChatModelsResponse = Schemas["ChatModelsResponse"];
+export type CloudHarnessVersions = Schemas["CloudHarnessVersions"];
+export type CloudHarnessVersion = Schemas["CloudHarnessVersion"];
+export type CloudHarnessInstallInput = Schemas["CloudHarnessInstallInput"];
 export type WorkerWorkspaceListPayload =
   Schemas["WorkerWorkspaceListPayload"];
 export type WorkerWorkspaceReadPayload =

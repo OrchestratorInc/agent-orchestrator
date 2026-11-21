@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +22,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
@@ -62,12 +66,17 @@ type harnessProbe struct {
 	Name                  string
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
+	// DaemonInstalled is true when the running daemon reports the agent
+	// installed.
+	DaemonInstalled bool
 }
 
 type harnessProbeSpec struct {
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
 }
 
@@ -87,15 +96,29 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"kiro":        {BinaryName: "kiro-cli", VersionArg: "--version"},
 	"kilocode":    {BinaryName: "kilocode", VersionArg: "--version"},
 	"omp":         {BinaryName: "omp", VersionArg: "--version"},
+	"codewhale":   {BinaryName: "codewhale", VersionArg: "--version"},
 	"cursor":      {BinaryName: "cursor-agent"},
 	"continue":    {BinaryName: "cn"},
+	// Command Code's binary is `cmd` on Unix and `cmdc` on Windows, where `cmd`
+	// is the built-in shell; the full name resolves on every platform.
+	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
+	"mastra-code":  {BinaryName: "mastracode"},
+	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
+	"hermes":       {BinaryName: "hermes", VersionArg: "--version"},
+	"stakpak":      {BinaryName: "stakpak", VersionArg: "--version"},
+	// MiniMax Code's CLI is `mcode`, not its harness ID.
+	"minimax-code": {BinaryName: "mcode", VersionArg: "--version"},
+	// Open Interpreter is pinned to its inspected Rust release; the older Python
+	// CLI also installs `interpreter`, so the version line must identify it.
+	"open-interpreter": {BinaryName: "interpreter", VersionArg: "--version", ExpectedVersionPrefix: "interpreter 0.0.56"},
+	"tau":              {BinaryName: "tau", VersionArg: "--version", VersionCheck: tau.CheckVersion},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Run local AO health checks",
+		Short: "Run local Orchestrator health checks",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			checks := ctx.runDoctor(cmd.Context())
@@ -202,6 +225,29 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		c.checkTerminalRuntime(ctx),
 		c.checkAOBinary(daemonExe),
 	)
+	if check, ok := c.checkAOLoginShell(ctx, daemonExe, cfg.DataDir); ok {
+		checks = append(checks, check)
+	}
+	// The daemon launches agents, so its inventory decides what is installed:
+	// it finds agents outside this shell's PATH, and a built-in agent has no
+	// binary to find.
+	daemonInstalled := map[string]bool{}
+	if err == nil && st.State == stateReady {
+		// The daemon re-probes agents whose cached state has expired, which
+		// takes longer than a health probe.
+		inventoryCtx, cancel := context.WithTimeout(ctx, 5*probeTimeout)
+		inventory, err := c.fetchAgentInventory(inventoryCtx, false)
+		cancel()
+		if err != nil {
+			checks = append(checks, doctorCheck{
+				Level: doctorWarn, Section: doctorSectionAgents, Name: "agent-inventory",
+				Message: fmt.Sprintf("could not read the running daemon's agent list (%v); the lines below reflect this shell's PATH only", err),
+			})
+		}
+		for _, agent := range inventory.Installed {
+			daemonInstalled[agent.ID] = true
+		}
+	}
 	for _, ha := range registry.Harnessed() {
 		id := string(ha.Harness)
 		spec := harnessProbeSpecs[id]
@@ -213,7 +259,9 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 			Name:                  id,
 			BinaryName:            binaryName,
 			VersionArg:            spec.VersionArg,
+			VersionCheck:          spec.VersionCheck,
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
+			DaemonInstalled:       daemonInstalled[id],
 		}))
 	}
 	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx), c.checkGitLabToken(ctx))
@@ -323,6 +371,115 @@ func sameBinary(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
 }
 
+// loginShellProbeTimeout matches the desktop's own login-shell environment
+// probe (SHELL_ENV_TIMEOUT_MS in frontend/src/main.ts).
+const loginShellProbeTimeout = 3 * time.Second
+
+// checkAOLoginShell reports which ao a login shell runs when it starts the way
+// every AO session starts one: the app's ao first on PATH, plus the wrappers
+// that put it back after the user's startup files in zsh and bash. Codex runs
+// each agent command through such a shell, and a new terminal is one. A
+// startup file that prepends a directory holding another ao still wins in a
+// shell AO cannot wrap (sh, dash, ksh), and an alias or function wins in any,
+// which checkAOBinary cannot see from doctor's own PATH (#3562). ok is false
+// when there is nothing to probe: Windows, a shell this probe does not speak,
+// or a binary not named ao, which sessions never pin. dataDir holds the ao
+// shim and wrappers sessions use.
+func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataDir string) (check doctorCheck, ok bool) {
+	const name = "ao-login-shell"
+	if runtime.GOOS == "windows" {
+		return doctorCheck{}, false
+	}
+	want, wantLabel := daemonExe, "the running daemon's binary"
+	if want == "" {
+		self, err := c.deps.Executable()
+		if err != nil {
+			return doctorCheck{}, false
+		}
+		want, wantLabel = self, "this binary"
+	}
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	shellName := filepath.Base(shell)
+	switch shellName {
+	case "sh", "bash", "zsh", "dash", "ksh":
+	default:
+		return doctorCheck{}, false
+	}
+	if !filepath.IsAbs(shell) || filepath.Base(want) != "ao" {
+		return doctorCheck{}, false
+	}
+
+	couldNotRun := func(err error) (doctorCheck, bool) {
+		return doctorCheck{
+			Level: doctorWarn, Section: doctorSectionTools, Name: name,
+			Message: fmt.Sprintf("could not run a %s login shell to see which ao it runs: %v", shellName, err),
+		}, true
+	}
+	dir, err := os.MkdirTemp("", "ao-doctor-login-shell-*")
+	if err != nil {
+		return couldNotRun(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	answerPath := filepath.Join(dir, "ao")
+	pinned := agentlaunch.PinnedDir(func() (string, error) { return want, nil }, dataDir)
+	if pinned == "" {
+		pinned = filepath.Dir(want)
+	}
+	path := pinned
+	if current := os.Getenv("PATH"); current != "" {
+		path += string(os.PathListSeparator) + current
+	}
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, nil, dataDir)
+	if err != nil {
+		return couldNotRun(err)
+	}
+	args := []string{"-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh", "/usr/bin/env", "PATH=" + path}
+	for _, key := range slices.Sorted(maps.Keys(loginEnv)) {
+		args = append(args, key+"="+loginEnv[key])
+	}
+	args = append(args, shell, "-l", "-c", `command -v ao >"$1"`, shellName, answerPath)
+	reqCtx, cancel := context.WithTimeout(ctx, loginShellProbeTimeout)
+	defer cancel()
+	// The shell answers into a file, and its stdout and stderr point at
+	// /dev/null before any startup file runs. A process a startup file leaves
+	// running then cannot hold doctor's output pipe open past the timeout; the
+	// desktop's probe likewise settles when the shell exits.
+	_, err = c.deps.CommandOutput(reqCtx, "/bin/sh", args...)
+	answer, readErr := os.ReadFile(answerPath) //nolint:gosec // path is inside doctor's own temp dir
+	resolved := strings.TrimSpace(string(answer))
+	timedOut := errors.Is(reqCtx.Err(), context.DeadlineExceeded)
+	if readErr != nil || (resolved == "" && timedOut) {
+		switch {
+		case timedOut:
+			err = fmt.Errorf("timed out after %s", loginShellProbeTimeout)
+		case err == nil:
+			err = errors.New("a startup file ended the shell before it checked")
+		}
+		return couldNotRun(err)
+	}
+
+	var msg string
+	switch {
+	case resolved == "":
+		msg = fmt.Sprintf("a %s login shell finds no ao even with %s first on PATH: a startup file replaces PATH, so agent commands that run in a login shell (Codex's) and new terminals cannot run ao", shellName, pinned)
+	case !filepath.IsAbs(resolved):
+		msg = fmt.Sprintf("a %s login shell resolves ao to %q, not %s %s: an alias or function from a startup file shadows it in agent commands that run in a login shell (Codex's) and new terminals", shellName, resolved, wantLabel, want)
+	case sameBinary(want, resolved) || (pinned != filepath.Dir(want) && sameBinary(filepath.Join(pinned, "ao"), resolved)):
+		// The second form is the shim sessions pin when want's directory holds
+		// other tools; it execs want.
+		return doctorCheck{
+			Level: doctorPass, Section: doctorSectionTools, Name: name,
+			Message: fmt.Sprintf("a %s login shell still runs %s (%s)", shellName, wantLabel, want),
+		}, true
+	default:
+		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.profile puts its directory first, and Orchestrator puts its own ao back only in zsh and bash, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
+		if agentlaunch.IsDevLauncher(resolved, agentlaunch.DevLauncherBuildPaths(os.Getenv)) {
+			msg += fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, and `rm '%s'` removes it", strings.ReplaceAll(resolved, "'", `'\''`))
+		}
+	}
+	return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: name, Message: msg}, true
+}
+
 func (c *commandContext) checkGit(ctx context.Context) doctorCheck {
 	path, err := c.deps.LookPath("git")
 	if err != nil || path == "" {
@@ -343,7 +500,7 @@ func (c *commandContext) checkGit(ctx context.Context) doctorCheck {
 		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version unknown: %s)", path, firstOutputLine(out))}
 	}
 	if cmp < 0 {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; AO expects >= %s for worktrees)", path, version, minGitVersion)}
+		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; Orchestrator expects >= %s for worktrees)", path, version, minGitVersion)}
 	}
 	return doctorCheck{Level: doctorPass, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; supports worktrees)", path, version)}
 }
@@ -425,6 +582,12 @@ func checkHooksLog(dataDir string, now time.Time) doctorCheck {
 func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe) doctorCheck {
 	path, err := c.deps.LookPath(harness.BinaryName)
 	if err != nil || path == "" {
+		if harness.DaemonInstalled {
+			return doctorCheck{
+				Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name,
+				Message: fmt.Sprintf("installed according to the running daemon (%s is not on this shell's PATH)", harness.BinaryName),
+			}
+		}
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
 			Message: fmt.Sprintf("%s not found in PATH", harness.BinaryName),
@@ -445,6 +608,14 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 	version := firstOutputLine(out)
 	if version == "" {
 		version = "version output was empty"
+	}
+	if harness.VersionCheck != nil {
+		if err := harness.VersionCheck(version); err != nil {
+			return doctorCheck{
+				Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
+				Message: fmt.Sprintf("%s resolves to %s, but reports %q: %v", harness.BinaryName, path, version, err),
+			}
+		}
 	}
 	if harness.ExpectedVersionPrefix != "" && !strings.HasPrefix(version, harness.ExpectedVersionPrefix) {
 		return doctorCheck{
@@ -475,17 +646,17 @@ func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck 
 		if err != nil {
 			return doctorCheck{
 				Level: doctorWarn, Section: doctorSectionAgents, Name: name,
-				Message: fmt.Sprintf("codex rejected AO's launch flags (`codex %s`: %v) — codex sessions may spawn without activity hooks; a codex CLI update likely changed its flag/config surface", strings.Join(probe, " "), err),
+				Message: fmt.Sprintf("codex rejected Orchestrator's launch flags (`codex %s`: %v) — codex sessions may spawn without activity hooks; a codex CLI update likely changed its flag/config surface", strings.Join(probe, " "), err),
 			}
 		}
 		if strings.Contains(string(out), "unknown configuration field") {
 			return doctorCheck{
 				Level: doctorWarn, Section: doctorSectionAgents, Name: name,
-				Message: fmt.Sprintf("codex no longer recognizes one of AO's config overrides (%s) — codex sessions may spawn without activity hooks", firstOutputLine(out)),
+				Message: fmt.Sprintf("codex no longer recognizes one of Orchestrator's config overrides (%s) — codex sessions may spawn without activity hooks", firstOutputLine(out)),
 			}
 		}
 	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "codex accepts AO's hook/trust launch flags"}
+	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "codex accepts Orchestrator's hook/trust launch flags"}
 }
 
 func (c *commandContext) checkGitHubToken(ctx context.Context) doctorCheck {

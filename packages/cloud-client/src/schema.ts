@@ -20,6 +20,371 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUserProviderConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/providers/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putUserAgentConnection"];
+        post?: never;
+        delete: operations["deleteUserAgentConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The authenticated user's coding-agent accounts: every login or key they saved for Claude Code, Codex, Cursor and opencode. Present only on a control plane whose CurrentAccount reports agentAccounts. */
+        get: operations["listAgentAccounts"];
+        put?: never;
+        /** @description Validates, encrypts and saves another account for an agent. The first account of an agent becomes its default. 409 AGENT_ACCOUNT_DUPLICATE when the user already saved the same login. */
+        post: operations["addAgentAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Removes an account. 409 AGENT_ACCOUNT_IN_USE while a live session runs on it: move or end those sessions first. Removing an agent's default makes its most recently checked other account the default. */
+        delete: operations["removeAgentAccount"];
+        options?: never;
+        head?: never;
+        patch: operations["renameAgentAccount"];
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Makes the account its agent's default, the one new sessions run on. Sessions already running keep their own account. */
+        post: operations["makeAgentAccountDefault"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Signs an account in again. The credential must be the same kind (subscription login or key) and, where the login names one, the same account: 409 AGENT_ACCOUNT_MISMATCH otherwise, since sessions running on the account were set up for it. Save a different login with addAgentAccount. */
+        put: operations["replaceAgentAccountCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. unlimited is true when the user is an active member of a paid, contract or otherwise entitled organization: the limit then does not apply. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        get: operations["listArtifactShares"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Revokes a link: it stops serving at once, its stored file is deleted at once, and it frees its slot for another document. Publishing the same document again uploads it again and restores the link, under a new URL, when a slot is free; the revoked URL never serves again. A link already revoked returns 404. Who the link was shared with is deleted with it: publishing again starts with nobody invited. */
+        delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        /** @description Makes an active link private (restricted: only its owner and the emails it is shared with, signed in with that verified email) or public (anyone with the link). The URL never changes, so a link already sent starts or stops opening for people without an invite, and who it is shared with is kept either way. 409 artifact_share_private_unavailable for restricted when the control plane's viewer has no sign-in (ArtifactShareList.privateLinks false). A link the caller does not own, or revoked, returns 404. */
+        patch: operations["setArtifactShareAccess"];
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Lists who an active link of the caller's is shared with, oldest first: people by email in grants, and, on a team workspace, its teams and the whole workspace. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
+        get: operations["listArtifactShareGrants"];
+        put?: never;
+        /** @description Shares an active link of the caller's with emails and, on a team workspace, with its teams or everyone in it, at once, and lists everyone it is shared with now. Each person gets view access once they sign in with that verified email; each member of a team or the workspace gets it while they are one, and the link is listed in their Artifacts. A team or workspace grant works only while the link's owner is an active member of that workspace too: if the owner leaves or is removed, it stays, dormant (listed to the owner unnamed, to remove), and works again if they are added back. Email grants do not depend on it. Nobody is emailed. Emails are matched case-insensitively; one already listed, the owner's own, and a team or workspace already listed change nothing. 400 for a value that is not a bare email address, more than 50 at once, nothing to share with, or teams or workspace without orgId; 403 when the caller is not an active member of orgId, and 403 team_workspace_required when orgId is a personal workspace: teams and workspaces are for team workspaces on a paid Cloud plan; 404 for a team that is not one of orgId's; 409 artifact_share_grant_limit past 200 emails, or 50 teams and workspaces, on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
+        post: operations["addArtifactShareGrants"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}/grants/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Stops a link being shared with one email, team or workspace, by the grant's id. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
+        delete: operations["removeArtifactShareGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. The images and other files an HTML page refers to by relative path are uploaded under this upload with createArtifactShareFileUpload and listed when finalizing. */
+        post: operations["createArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Presigns up to 100 parts of an upload. Each URL signs its part's length and SHA-256: send method to url with exactly headers and the part's bytes, and keep the response's ETag for finalizing. A URL works until expiresAt; presign again after that. */
+        post: operations["presignArtifactShareParts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Cancels an upload and discards its parts. */
+        post: operations["abortArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts uploading one file the page being uploaded (uploadToken, from createArtifactShareUpload) refers to by relative path, such as an image. The link serves it at path under its root, so <img src="images/a.png"> in the page loads the file whose path is images/a.png. Any file type but video may be included, and there is no file size limit. Its parts go as the page's do (presignArtifactShareParts, PUT each, abortArtifactShareUpload to cancel); finish it with completeArtifactShareFileUpload. 400 invalid_request for a path that is absolute, has an empty, "." or ".." segment, a backslash or a control character, or is reserved (raw, or under _ao/ or a first segment starting with ~); 429 artifact_share_rate_limited past the hourly allowance. A control plane that predates included files answers 404. 415 artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm, .ogv, .avi, .mkv), as for a link's own file. */
+        post: operations["createArtifactShareFileUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/files/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Finishes an included file's upload from every one of its parts, in order, and answers the fileToken finalizeArtifactShare lists. Errors are finalizeArtifactShare's. A file no finalize lists before expiresAt is deleted. */
+        post: operations["completeArtifactShareFileUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired, or a fileToken that is not one of this upload's link; 400 artifact_share_too_many_files for more than 200 files; 409 artifact_share_upload_gone when an included file's upload expired. */
+        post: operations["finalizeArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, and the URL its file is served at. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown, revoked or private link returns 404, with the same body: a private link's details come only from viewArtifactShare. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        get: operations["getPublicArtifactShare"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Returns what the viewer page shows a signed-in person for a link: the same details as getPublicArtifactShare, for a public link, a link they own, or a private link shared with their verified email. For a private link contentUrl carries a view token (?vt=) that opens the file for 10 minutes; the file host checks the token and the link's grants on every request, so removing someone or unpublishing takes effect at once. Any other link, private or not there at all, returns 404, so the answer never says that a private link exists. For the link's owner the answer adds you, with the link's ID, so they can unpublish it from the viewer page. Rate-limited per person (429 rate_limited). */
+        post: operations["viewArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/shared-artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists the active links other people published and shared with the signed-in person, newest change first: links shared with their verified email, and links shared with a team they are in, private or public. They are listed without being opened; opening a link never lists it. A link shared both ways is listed once. An unpublished link is no longer listed; their own links never are. No owner is named. A link's file opens through viewArtifactShare. Available only when artifact share links are on; otherwise 404. */
+        get: operations["listSharedArtifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/providers/{agent}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        /** @description The models and reasoning efforts a new Cloud task for this agent runs with, for the authenticated user in this organization. The list is what the next task's worker runs, not a suggestion, and needs no live worker: `source` says whether a Cloud worker running the same CLI version with the user's current credential reported it, or it is the list the control plane's pinned CLI version supports. A task that names no model keeps the project's or the agent's default. A listed model without `efforts` takes no reasoning effort; every model that takes one lists its levels. */
+        get: operations["listUserAgentModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -114,13 +479,193 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        get: operations["getProject"];
         put?: never;
         post?: never;
         delete: operations["deleteProject"];
         options?: never;
         head?: never;
         patch: operations["updateProject"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Merge supplied settings only. Omitted fields are preserved, nested role objects merge, and reviewers replace the array. Null is rejected. */
+        patch: operations["updateProjectSettings"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description The project's environment variables, which every session of the project gets (its coding agent, shells, and Setup and Cleanup commands), except sessions issue intake starts. They are stored encrypted. Only an organization owner or admin sees their values here; other members see their names. That is not a secrecy boundary: everyone who can use one of the project's sessions, and its coding agent, can read every value. */
+        get: operations["getProjectEnvironment"];
+        /** @description Replace the project's environment variables as a whole; an empty map removes them. Organization owners and admins only. They are delivered into the sandbox of every new session of the project, except sessions issue intake starts, where everyone using the session and its coding agent can read them. A reserved name, in any case, is refused with 422 validation_error and a message naming it. */
+        put: operations["putProjectEnvironment"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/intake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description How the project's issue intake (config.trackerIntake) last went. */
+        get: operations["getProjectIntakeStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/cues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listProjectCues"];
+        put?: never;
+        /** @description Add a cue. A name the project already has is refused with CUE_NAME_TAKEN. */
+        post: operations["createProjectCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description The project's share links, newest first, revoked ones included. No link carries its token, url, code or shortUrl: only the create response does. joinedCount says how many people the link still gives more than what was shared with them directly. */
+        get: operations["listProjectShareLinks"];
+        put?: never;
+        /** @description Mint a share link for the whole project, or one of its sessions with sessionId. Omitted fields default to role viewer, accessScope anyone and interaction view. 400 invalid_request for a body that is not JSON or names an unknown field; 422 validation_error for a role, accessScope, interaction or modeCap outside its enum, or a recipient that is not an email address. The response is the only one that carries the link's token and url, and its code and shortUrl when the control plane issues short codes. */
+        post: operations["createProjectShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares/{linkId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Turn a share link off. Without a body, or with removeJoined false, only the link stops working: what it already granted stays, and a link that is unknown or already revoked is 404 not_found. With removeJoined true the people who joined by the link lose what it gave them too (access it alone gave is revoked; access also shared directly drops back to that level), the answer is 200 with how many grants changed, and a link already revoked is processed the same way: only an unknown link is 404. */
+        post: operations["revokeProjectShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/share-links/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Redeem a share link, by its short code or by its organization and token, into the caller's own access grant (an existing one is only ever raised). Someone already in the project's organization gets no grant: member is true and grant is empty. 400 invalid_request for a code that is not 22 letters and digits, or without a code, an orgId that is not a UUID or an empty token. 404 not_found for an unknown, revoked or expired link, or an archived project. 403 forbidden when the caller created the link, or the link is restricted to recipients that do not include the caller's email. */
+        post: operations["redeemShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/cues/{cueId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteProjectCue"];
+        options?: never;
+        head?: never;
+        /** @description Replace a cue's whole definition. */
+        patch: operations["updateProjectCue"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/cues/{cueId}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Run a cue into one of its project's sessions. An agent cue's prompt is sent to the session as the caller's message (a shared session's composer lease applies). A command cue is returned for the client to run in a new shell of the session's sandbox. Accepts an optional Idempotency-Key. */
+        post: operations["invokeProjectCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/cloud/v1/orgs/{orgId}/github/installations": {
@@ -208,7 +753,8 @@ export interface paths {
         };
         get: operations["listGitHubRepositories"];
         put?: never;
-        post?: never;
+        /** @description Create an empty private GitHub repository, for a folder uploaded from the desktop, in an account the organization's GitHub App installation covers, and grant it to the organization. With several accounts connected, owner names the one (422 repository_owner_required without it). An empty private repository of that name that already exists is connected instead (200, created false); a public one is refused (422 repository_create_refused), as is a repository the member's own GitHub account cannot push to when the installation is user-scoped. Push the folder to pushPath, relative to the control plane, with the same bearer token. That endpoint only accepts pushes to a repository this operation returned for the organization, only pushes that create branches, and answers 403 otherwise; GitHub's own refusals (for example of .github/workflows changes the App may not make) reach git's output unchanged. 422 codes: repository_owner_required, github_installation_required, github_installation_ineligible, repository_create_on_github, repository_create_refused, validation_error. 502 SCM_BROKER_FAILED when GitHub could not be reached or did not grant the repository in time; retry later. */
+        post: operations["createGitHubRepository"];
         delete?: never;
         options?: never;
         head?: never;
@@ -251,6 +797,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/projects/standalone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create a project with no repository. Its sessions start in an empty, git-initialized folder, for a workspace template that brings its own code or work that needs none. It takes the same config as a repository project except additional repositories, and cannot open pull requests. Its repositoryUrl is a placeholder, https://scratch.ao.local/<id>. */
+        post: operations["createStandaloneProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/standalone-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Start a standalone agent: one worker session with no repository and no orchestrator, the caller's own. The control plane makes it a standalone project the caller owns (standaloneAgent) and starts its one session there, refused as a session create would be. Only its owner lists the agent or is a member of it; anyone else reaches it through a share. Offered when offering.features lists standalone_agents. */
+        post: operations["createStandaloneAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/chat-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Returns, newest first, the chat messages of the organization's sessions in live projects whose text contains q, case insensitively: prompts, and assistant replies assembled from their streamed text. Only the organization's most recent chat events are searched. */
+        get: operations["searchChats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions": {
         parameters: {
             query?: never;
@@ -263,6 +866,25 @@ export interface paths {
         get: operations["listSessions"];
         put?: never;
         post: operations["createSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ask the reconciler to resume the user's idle-paused sandboxes. */
+        post: operations["wakePausedSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -285,6 +907,107 @@ export interface paths {
         delete: operations["deleteSession"];
         options?: never;
         head?: never;
+        /** @description Renames the session: the title every viewer sees. Anyone who may write in the session may rename it; a viewer is refused. */
+        patch: operations["updateSession"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Pins the session in the caller's sidebar. A pin is one person's: nobody else sees the session move. Pinning a pinned session keeps its first pin time. */
+        post: operations["pinSession"];
+        delete: operations["unpinSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSessionAgentAccount"];
+        /** @description Moves the session's agent to another of its creator's accounts for the same agent, through the session's interface transition: the agent stops (after its turn with drain, at once with interrupt) and resumes the same conversation on the new account, or stays on the old one if that fails. Only the session's creator may move it. 409 AGENT_ACCOUNT_UNCHANGED for the account it runs on, 422 AGENT_ACCOUNT_UNUSABLE for an account that is not signed in or is another agent's. */
+        put: operations["switchSessionAgentAccount"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSessionInterfaceTransition"];
+        put?: never;
+        post: operations["startSessionInterfaceTransition"];
+        /** @description An agent switch or a move to another account can be cancelled only by the session's creator (403 forbidden otherwise); an interface-only switch by any member who may switch it. */
+        delete: operations["cancelSessionInterfaceTransition"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["acknowledgeSessionInterfaceTransitionNotice"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/startup-retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        post: operations["retrySessionStartup"];
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -302,6 +1025,169 @@ export interface paths {
         get: operations["listSessionChildren"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Lists the session's committed artifact files, sorted by path. Reads Postgres only and never wakes or resumes the sandbox. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        get: operations["listSessionArtifacts"];
+        put?: never;
+        post?: never;
+        /** @description Deletes one of the session's artifact files: its row, its stored object version, and, through a request to a connected worker, the file on the worker's disk (a worker that is not connected removes it when it next starts). An invalid path answers 400 invalid_path. Only the person who started the session (Session.createdByUserId) deletes a file; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        delete: operations["deleteSessionArtifact"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Returns a short-lived path prefix that serves this session's artifact files without a bearer header, for a sandboxed frame. Append a file's URL-escaped path to filesPrefix; relative links inside an HTML file resolve against the same prefix. A prefix lasts ten minutes and stops working when the caller leaves the organization; request a new one before expiresAt. */
+        post: operations["createSessionArtifactAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Only the person who started the session (Session.createdByUserId) saves an edit: any other member of its organization, who may still read the file, gets 403 artifact_not_owner, as does everyone for a session with no creator on record. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        put: operations["saveSessionArtifact"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Lists the kept versions of one artifact file, newest first; the first is the committed file. A session keeps the newest twenty versions of each file. */
+        get: operations["listSessionArtifactVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        /** @description Returns one kept version of an artifact file with the start of its UTF-8 text (the first 256 KiB; truncated says when it was cut). */
+        get: operations["getSessionArtifactVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. Only the person who started the session restores a version; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. */
+        post: operations["restoreSessionArtifactVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
+        post: operations["restartSessionAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video.
+         *     Only a person publishes: the route accepts only a signed-in account session, the bearer token of every user route. Worker, sandbox and host credentials get 401, so a cloud session's agent cannot publish its own files. Only the person who created the session shares its files, under their own link limit: another member of the organization, who may read them, gets 403 artifact_share_not_owner, as does anyone for a session with no creator on record; a guest of a shared project gets 404. */
+        post: operations["shareSessionArtifact"];
         delete?: never;
         options?: never;
         head?: never;
@@ -346,6 +1232,208 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["triggerSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendSessionReviewToWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        /** @description One review conversation's events after a sequence, for a review whose run reports interfaceMode chat. */
+        get: operations["listReviewChatEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Queues a message to the reviewer of a review that runs in Chat. A conversation that stopped after its verdict starts again. */
+        post: operations["sendReviewChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["interruptReviewChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The next message the person could send after a settled turn. The
+         *     session's agent reads the supplied recent transcript once, with no
+         *     tools. An empty prompt means no clear next step; a worker that cannot
+         *     suggest fails the request.
+         *      */
+        post: operations["suggestChatPrompt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateSessionPreferences"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["inspectSessionReviewerHarnesses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses/{harness}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["installSessionReviewerHarness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/messages": {
         parameters: {
             query?: never;
@@ -365,6 +1453,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Model and reasoning-effort choices available to this session's agent. */
+        get: operations["listChatModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/cancel": {
         parameters: {
             query?: never;
@@ -378,7 +1486,353 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. A running turn is stopped by its worker (chat.interrupt_requested, then chat.turn_interrupted). A turn still queued is deleted: it ends at once with chat.turn_interrupted of attempt 0 and reason deleted, and stopping it again answers 202. 409 TURN_FINISHED once the turn ended otherwise. */
         post: operations["cancelTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/acquire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease when it is free and nobody is ahead in line, or renew it when already held. Viewers are refused with 403. */
+        post: operations["composerAcquire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Extend a held grant. typing reports a keystroke since the last renewal; a holder who has not typed for 45 seconds loses the lease. */
+        post: operations["composerRenew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Give up a held grant; the next person in line gets the lease. Releasing a grant no longer held does nothing. */
+        post: operations["composerRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Get in line for the composer lease. A free lease passes at once to the first person in line who has the session open. */
+        post: operations["composerRequestTurn"];
+        /** @description Leave the line for the composer lease. */
+        delete: operations["composerLeaveQueue"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease from whoever holds it. Only the session's creator and the organization's owners and admins may; others get 403. */
+        post: operations["composerTakeOver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Share what the holder is typing, so everyone else in the session sees it live, read-only. Counts as a keystroke, renewing the grant. Anyone not holding the grant they present is refused with granted false. */
+        post: operations["composerPublishDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the model, reasoning effort, mode and approval mode the session's turns run with. Only the session's owner may; everyone else gets 403 and sees the change on their live stream. */
+        put: operations["sessionSetChatSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests/{number}/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ask the owner of a shared project to merge one of the session's pull requests. Only someone the project or session was shared with, who may write in the session, asks; a merge by them is refused with MERGE_NEEDS_APPROVAL. Asking again while a request is pending returns it. The session's creator is notified. */
+        post: operations["requestPullRequestMerge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description A project's merge requests, pending first, then newest first. A member of the organization sees them all; someone the project was shared with sees their own. */
+        get: operations["listProjectMergeRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Merge the requested pull request as the approving owner (the session's creator, or an organization owner or admin), through the same readiness checks as their own merge, and tell the guest. A pull request that cannot merge leaves the request pending. */
+        post: operations["approveMergeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Decline a pending merge request and tell the guest. */
+        post: operations["rejectMergeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/session-participants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Who is in each of the named sessions that someone has shared, for a board. Sessions the caller may not open, or that nobody has shared, are left out. Reading this does not make the caller present in any session. */
+        get: operations["listSessionParticipants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["steerTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/edit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Replace the text and files of a message whose turn is still queued, before the agent starts on it. Only the message's author may edit it (403 NOT_MESSAGE_AUTHOR otherwise). The message keeps its model and settings and, like every queued message, runs within the access its author holds when the agent starts on it; a display it recorded (displayText, content) is dropped. 409 TURN_NOT_QUEUED once the agent took the turn or it was stopped, and 409 SESSION_TERMINATED once the session ended. Offered when offering.features lists queued-edit. */
+        post: operations["editQueuedMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take back a message whose turn is still queued, before the agent starts on it: the turn ends at once with chat.turn_interrupted of attempt 0 and reason deleted, and a client drops the message. Unlike cancelTurn it never stops a turn that left the queue. Allowed for whoever may stop the turn: the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins. Deleting a message already deleted answers 202 again. Offered when offering.features lists queued-delete. A message being steered into the running turn (steerQueuedMessage) deletes too: if the worker has not taken the steer yet it is withdrawn (chat.turn_steer_failed with deleteRequested) and the message deleted at once; if the worker is taking it, the answer is 202 with pending and the steer's outcome decides: chat.turn_interrupted of reason deleted when the agent did not take it, or chat.turn_steered with deleteRequested when it did (the message was delivered). Deleting another queued message is unaffected by a steer in flight. */
+        post: operations["deleteQueuedMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer-queued": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Steer a message whose turn is still queued into the session's running turn, instead of leaving it to run as a turn of its own. The text steered is the queued message's own; a steer carries text alone, so a message with files (or with no text) is refused and runs as its own turn. Allowed for whoever may stop the queued turn (see deleteQueuedMessage) and, like a steer, only with the composer lease. Answers chat.turn_steer_requested naming the queued turn (payload.queuedTurnId). The message leaves the queue only once the agent takes the guidance: chat.turn_steered with its queuedTurnId, then chat.turn_interrupted of reason steered for the queued turn. When the agent does not take it (it refused, the running turn ended, the worker did not answer in time) chat.turn_steer_failed names the queued turn and says why, and the message stays queued, in its place. While a steer of a queued message is in flight the queue waits for it, so a message is never both steered and run. Offered when offering.features lists queued-steer. */
+        post: operations["steerQueuedMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Answer an approval prompt. Allowed for the same people who may stop its turn (see cancelTurn); anyone else gets 403. */
+        post: operations["decideChatApproval"];
         delete?: never;
         options?: never;
         head?: never;
@@ -449,8 +1903,37 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Upgrade to a terminal WebSocket using a short-lived ticket. */
+        /**
+         * Upgrade to a terminal WebSocket using a short-lived ticket.
+         * @description On the agent terminal, keystrokes are talking to the agent, so they need
+         *     the session's composer lease: typing takes it when it is free and nobody
+         *     is waiting, and renews it while the typist keeps typing. While someone
+         *     else holds it or is waiting for it, input is dropped and the server
+         *     sends `{"type":"input_refused","inputId":...,"message":...}` instead of
+         *     `input_ack`; the connection stays open.
+         *
+         */
         get: operations["connectTerminal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-files/{token}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one artifact file through an access prefix.
+         * @description Streams the committed version of one artifact file. The token comes from createSessionArtifactAccess and binds one organization and session. Every response carries a Content-Security-Policy sandbox without allow-same-origin, X-Content-Type-Options nosniff, and an ETag of the file's SHA-256. A listed file whose stored object is gone returns 404 with code artifact_unavailable.
+         */
+        get: operations["getSessionArtifactFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -461,7 +1944,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/files": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -480,7 +1966,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -499,7 +1988,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file/diff": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -519,7 +2011,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/diff": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -529,6 +2024,26 @@ export interface paths {
         };
         /** @description Changed-file summary and line counts relative to the session compare base. */
         get: operations["getWorkspaceDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description The session's repository checkouts: the main one and, for a project with additional repositories, one per additional repository. A checkout's name is the value the workspace endpoints take as ?repository=. A single-repository session lists only the main checkout. */
+        get: operations["listWorkspaceRepositories"];
         put?: never;
         post?: never;
         delete?: never;
@@ -561,7 +2076,7 @@ export interface paths {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -569,6 +2084,146 @@ export interface paths {
         put: operations["putAgentProviderConnection"];
         post?: never;
         delete: operations["deleteAgentProviderConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sandbox-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the organization's default sandbox provider: the one sessions get when neither the request nor the project picks one (org admins). Only an organization offered more than one provider may set it (409 no_provider_choice otherwise); a provider the deployment does not offer is 403 provider_forbidden. An empty defaultProvider clears the choice. */
+        put: operations["putOrgSandboxProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The release of each coding-agent CLI the organization's new Cloud sessions run, the newest release its publisher has, and how the last install of a release the organization chose went (any member). A harness runs the release AO tested (`defaultVersion`) until an organization admin chooses a newer one (`selectedVersion`). Each entry carries the local daemon's install plan, update advisory and install job shapes, so a client shows AO Cloud's harnesses the way it shows a computer's. `editable` says whether the caller may change them. */
+        get: operations["listOrgHarnessVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions/{agent}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Have the organization's new sessions run `expectedVersion` of this harness in place of the AO-tested release (organization admins). The version must be a stable release newer than the AO-tested one that the publisher has (the npm registry, or Cursor's download host). Only the harness's CLI moves: the tools it also runs (Claude Code's Chat adapter) keep the release AO tested. Each new session's worker installs the release and checks it against what the publisher listed; when that fails the session runs the AO-tested release and the failure shows as the entry's failed `job`. Sessions already running keep their release. */
+        post: operations["installOrgHarnessVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Have the organization's new sessions run the AO-tested release of this harness's CLI again (organization admins; 403 ORG_ADMIN_REQUIRED otherwise). */
+        delete: operations["resetOrgHarnessVersion"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization may not run on Coder; configured=false when it has no connection. */
+        get: operations["getOrgCoderConfig"];
+        /** @description Create or replace the organization's bring-your-own Coder connection (org admins). The token is required on first save and when baseUrl changes; otherwise an omitted token keeps the stored one. An omitted owner is derived from the token. */
+        put: operations["putOrgCoderConfig"];
+        post?: never;
+        delete: operations["deleteOrgCoderConfig"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        /** @description The coder_parameter inputs the template's active version declares, read from the organization's own Coder connection (or the deployment's Coder when it has none). 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 502 coder_unavailable when Coder cannot be read. */
+        get: operations["getCoderTemplateParameters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The template's parameters with the given draft values applied. A template using Coder's dynamic parameters can declare a parameter only for certain values of another (for example a custom repository URL once "Other" is selected); evaluating with the draft values lists it, and each parameter carries Coder's diagnostics for its value. A template on Coder's classic parameter flow, or a Coder without dynamic parameters, answers with the same static parameters as the GET. 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 422 validation_error for invalid values; 502 coder_unavailable when Coder cannot be read. */
+        post: operations["evaluateCoderTemplateParameters"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -631,7 +2286,13 @@ export interface paths {
         /** @description Publishes one allowlisted event. `agent.activity` carries an explicit
          *     coding-agent lifecycle hook signal. `worker.ready` must identify the
          *     authenticated worker and epoch. `chat.assistant_delta` is fenced by both
-         *     the token epoch and the claimed turn attempt.
+         *     the token epoch and the claimed turn attempt. `workspace.setup` reports
+         *     the outcome of the project's Setup commands and is appended to the
+         *     session's event stream. `workspace.script.step` reports one step of a
+         *     Setup run (its start, live output updates and outcome, and the steps a
+         *     failure skipped); its output is redacted again and bounded before it
+         *     is appended. A control plane that predates an event type refuses it
+         *     with 400 `INVALID_EVENT_TYPE`.
          *      */
         post: operations["publishWorkerEvent"];
         delete?: never;
@@ -733,7 +2394,8 @@ export interface paths {
             cookie?: never;
         };
         /** @description Returns the valid default coding-agent credential selected by the
-         *     session harness. The secret must never be logged or persisted.
+         *     session harness, or the durable reviewer harness when reviewRunId is supplied.
+         *     The secret must never be logged or persisted.
          *      */
         get: operations["getWorkerCredential"];
         put?: never;
@@ -758,6 +2420,96 @@ export interface paths {
          *     the sandbox. The token must never be logged or persisted.
          *      */
         post: operations["createWorkerCheckoutGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Compares the worker's artifact directory listing against the
+         *     session's committed files and returns the paths whose size or SHA-256
+         *     differ, including new paths. Requires `worker:connect`. Absent when
+         *     the deployment does not keep artifacts.
+         *      */
+        post: operations["compareWorkerArtifactManifest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/blob/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Streams one artifact file to storage under the worker's own session.
+         *     Content-Length is required and the body's SHA-256 must match the
+         *     X-AO-Artifact-SHA256 header; storage rejects a mismatch without
+         *     keeping it. Returns the stored version for the commit. Requires
+         *     `worker:connect`.
+         *      */
+        put: operations["putWorkerArtifactBlob"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records uploaded versions and deletions for the worker's own session
+         *     in one transaction and appends an artifact.changed event. Each
+         *     version must exist with the given size and SHA-256
+         *     (artifact_version_missing or artifact_version_mismatch otherwise).
+         *     Requires `worker:connect`.
+         *      */
+        post: operations["commitWorkerArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Registers the committed files at paths in the worker's own session as
+         *     its deliverables, including the files inside a bundle directory, which
+         *     is what ao artifact add calls, and returns every file the session has
+         *     registered. A path with no committed file registers nothing and is
+         *     absent from the result, so the caller asks again once the worker's sync
+         *     has committed it. Registering a file again changes nothing; a newly
+         *     registered file appends an artifact.changed event and moves its
+         *     updatedAt. Requires `worker:connect`.
+         *      */
+        post: operations["registerWorkerArtifacts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -900,6 +2652,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/interface/chat-start-fallback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The session's current worker reports it cannot start the session's
+         *     Chat controller (code CHAT_ADAPTER_UNAVAILABLE: Claude's Chat needs the
+         *     Claude ACP adapter, which the workspace lacks and the worker could not
+         *     install in time; CHAT_START_UNSUPPORTED: the worker cannot start
+         *     sessions in Chat). A session created in Chat that never started (no
+         *     interface transition ever touched it, no turn was claimed or settled,
+         *     and the agent never reported its conversation) moves to tui: its
+         *     terminal launches without the prompt and its queued first turn stays
+         *     for the terminal's turn forwarder, which delivers it once after the
+         *     agent starts (a session whose launch still carries the prompt has that
+         *     turn settled instead), and a failed tui-to-chat interface transition
+         *     carries the notice the desktop shows. A session the person switched to Chat, or
+         *     whose Chat already ran, does not move; the worker then stays on Chat.
+         *     Requires the worker:connect scope. A worker that reports the
+         *     agent.chat-start capability uses it; for one that does not, the
+         *     control plane makes the same move itself at bootstrap and reconnect.
+         *      */
+        post: operations["fallBackWorkerChatStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/terminals/agent": {
         parameters: {
             query?: never;
@@ -957,11 +2742,450 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Durably accepts one agent notification event for the authenticated worker epoch. */
+        post: operations["publishWorkerNotificationEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The organization's plan, its limits and its usage against them, for
+         *     any member. billingMode is self_serve only when the deployment has
+         *     Stripe and the organization is offered a billed provider; otherwise
+         *     plans do not apply and nothing is enforced. A self-serve organization
+         *     without an entitled subscription (active, trialing, or past due
+         *     within the grace period) is on Free, which runs no billed sessions:
+         *     creating or waking one answers 402 PLAN_REQUIRED. Usage counts every
+         *     running billed session per minute. Plans lists what the organization
+         *     can buy, cheapest first, for self-serve organizations only.
+         *      */
+        get: operations["getOrgBilling"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCloudNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Returns durable events as JSON, or an SSE replay/live stream when requested with Accept text/event-stream. */
+        get: operations["listCloudNotificationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/{notificationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["markCloudNotificationRead"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markAllCloudNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/hosts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRemoteHosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/hosts/{hostId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Lists a machine in the account, or updates its listing. A new `token`,
+         *     or listing a removed machine again, retires its standing fixed tunnel:
+         *     a run token fetched with the old credential stops working, and the
+         *     machine gets a new tunnel at the same address. A registration that
+         *     makes a tunnel can take more than a minute.
+         *      */
+        put: operations["putRemoteHost"];
+        post?: never;
+        /** @description Removes the machine from the account and deletes its fixed tunnel;
+         *     when Cloudflare fails, a later cleanup deletes it. The fixed address
+         *     counts against the account's limit until that cleanup, usually within
+         *     15 minutes.
+         *      */
+        delete: operations["deleteRemoteHost"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/push-devices/{installId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Registers this app install's Expo push token, so the account's new
+         *     cloud notifications reach the phone as pushes, or replaces the
+         *     install's earlier registration. Registrations follow the account, not
+         *     an organization; an account keeps its 20 most recent. A token already
+         *     registered under another account or install moves to this one. A
+         *     deployment that does not send pushes still accepts registrations.
+         *      */
+        put: operations["putPushDevice"];
+        post?: never;
+        /** @description Stops pushes to this app install, as on sign-out. Removing an install
+         *     that is not registered also succeeds.
+         *      */
+        delete: operations["deletePushDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine publishes the address it serves now to every account that
+         *     lists it under this credential.
+         *      */
+        post: operations["publishRemoteHostAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine fetches the run token of the fixed tunnel an account gives
+         *     it: the account that lists the machine under the credential it
+         *     presents. If several do, one with a standing tunnel is preferred. The
+         *     deployment makes the tunnel when there is none. A deployment that
+         *     predates this route answers 404 without an error envelope.
+         *      */
+        post: operations["ensureRemoteHostTunnel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        RemoteHost: {
+            hostId: string;
+            label: string;
+            /** @description The address devices reach the machine at. */
+            url: string;
+            /** @description The credential a device presents to the machine. */
+            token: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        RemoteHostList: {
+            hosts: components["schemas"]["RemoteHost"][];
+            /** @description Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`. */
+            fixedAddresses?: boolean;
+            /** @description Whether this deployment takes `hostKey` on a registration; absent means false, and such a deployment refuses a registration that carries one. */
+            hostKeys?: boolean;
+        };
+        RemoteHostRegistration: {
+            /** @description At most 64 bytes, after surrounding whitespace is trimmed. */
+            label: string;
+            /** @description The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes. */
+            url?: string;
+            token: string;
+            /** @description The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it. */
+            hostKey?: string;
+        };
+        BillingSummary: {
+            /** @description Stripe billing is configured on the deployment. */
+            enabled: boolean;
+            /**
+             * @description Plans apply only to self_serve. contract is no longer sent and is kept for older clients.
+             * @enum {string}
+             */
+            billingMode: "self_serve" | "contract" | "off";
+            /** @description Always false; kept for older desktop releases. */
+            exempt: boolean;
+            /** @description The plan recorded on the organization; free without a subscription. */
+            plan: string;
+            /** @description Stripe's status for the subscription (active, trialing, past_due, canceled, ...). */
+            subscriptionStatus?: string;
+            /** @description The subscription may run billed sessions now. */
+            entitled: boolean;
+            /** Format: date-time */
+            currentPeriodEnd?: string;
+            /**
+             * Format: date-time
+             * @description When a subscription set to cancel ends and the organization moves to Free.
+             */
+            cancelAt?: string;
+            limits?: components["schemas"]["PlanLimits"];
+            usage?: components["schemas"]["BillingUsage"];
+            /** @description Paywalled features the organization's plan includes. */
+            features: string[];
+            /** @description Plans the organization can choose, cheapest first; empty unless billingMode is self_serve. */
+            plans: components["schemas"]["PlanOffer"][];
+        };
+        /** @description A plan's limits, from its Stripe product metadata. */
+        PlanLimits: {
+            plan: string;
+            /** @description Sessions with a sandbox, running or paused, orchestrators included. */
+            maxActiveSandboxes: number;
+            /** @description How many of them may run at once. */
+            maxRunningSandboxes: number;
+            /** @description Running slots reserved for orchestrators. */
+            orchestratorSlots: number;
+            /** @description Length of the rolling usage window. */
+            windowHours: number;
+            windowSessionHours: number;
+            weeklySessionHours: number;
+            manualResetsPerMonth: number;
+            features?: string[];
+        };
+        /** @description Usage against the plan, in session-minutes of running billed sandbox time. */
+        BillingUsage: {
+            windowUsedMinutes: number;
+            windowLimitMinutes: number;
+            windowHours: number;
+            /** Format: date-time */
+            windowResetsAt?: string;
+            weeklyUsedMinutes: number;
+            weeklyLimitMinutes: number;
+            /** Format: date-time */
+            weeklyResetsAt?: string;
+            manualResetsAllowed: number;
+            manualResetsUsed: number;
+            /** Format: date-time */
+            manualResetsRenewAt?: string;
+            activeOrchestrators: number;
+            activeWorkers: number;
+            runningOrchestrators: number;
+            runningWorkers: number;
+        };
+        /** @description A plan the organization can choose. The price fields are zero or empty when Stripe could not be read. */
+        PlanOffer: {
+            name: string;
+            /** @description The Stripe price. */
+            id: string;
+            /**
+             * Format: int64
+             * @description In the currency's smallest unit.
+             */
+            unitAmount: number;
+            currency: string;
+            interval: string;
+            limits?: components["schemas"]["PlanLimits"];
+            /** @description Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial. */
+            trialDays?: number;
+        };
+        PutPushDeviceInput: {
+            /** @description The Expo push token the app minted. */
+            token: string;
+            /** @enum {string} */
+            platform: "ios" | "android";
+            /** @description The phone's name, shown wherever the account lists its devices. */
+            deviceName?: string;
+        };
+        RemoteHostAddress: {
+            /**
+             * Format: uri
+             * @description An https origin with no path, query, fragment or user info.
+             */
+            url: string;
+        };
+        RemoteHostTunnelRequest: {
+            /** @description Replace the tunnel under the same address. A repair within a minute of the tunnel's last change returns the current tunnel with `repaired` unset. */
+            repair?: boolean;
+        };
+        RemoteHostTunnel: {
+            /** @description The fixed address's host name. */
+            hostname: string;
+            /** @description The Cloudflare run token for the machine's connector. */
+            runToken: string;
+            /**
+             * Format: date-time
+             * @description When the address was made; it may not resolve for a short time after.
+             */
+            since: string;
+            /** @description Set when a repair request got a new tunnel. */
+            repaired?: boolean;
+        };
         EmptyObject: Record<string, never>;
+        AgentNotificationEvent: {
+            eventId: string;
+            /** @enum {string} */
+            type: "needs_input" | "agent_failed" | "agent_completed";
+            /** Format: date-time */
+            occurredAt: string;
+            payload: Record<string, never>;
+        };
+        NotificationAcceptance: {
+            /** @constant */
+            accepted: true;
+            eventId: string;
+            duplicate: boolean;
+        };
+        CloudNotification: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** Format: uuid */
+            projectId?: string;
+            /** Format: uuid */
+            sessionId?: string;
+            /** @constant */
+            source: "cloud";
+            type: string;
+            title: string;
+            body: string;
+            /** @enum {string} */
+            status: "unread" | "read";
+            eventId?: string;
+            metadata: Record<string, never>;
+            /** Format: date-time */
+            resolvedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CloudNotificationEvent: {
+            /** Format: int64 */
+            sequence: number;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** @enum {string} */
+            kind: "notification_created" | "notification_updated" | "notification_resolved";
+            eventId: string;
+            notification: components["schemas"]["CloudNotification"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        NotificationPage: {
+            items: components["schemas"]["CloudNotification"][];
+            page: {
+                hasMore: boolean;
+                nextCursor?: string;
+            };
+            unreadCount: number;
+            /** Format: int64 */
+            latestSequence: number;
+        };
+        NotificationEventPage: {
+            items: components["schemas"]["CloudNotificationEvent"][];
+            hasMore: boolean;
+        };
         /** @enum {string} */
         AuthProvider: "workos" | "local";
         /** @enum {string} */
@@ -980,10 +3204,146 @@ export interface components {
             slug: string;
             displayName: string;
             role: components["schemas"]["OrganizationRole"];
+            offering?: components["schemas"]["Offering"];
+            /**
+             * @description Whether this is someone's own workspace or a team's. Only /me reports it; an older control plane leaves it out.
+             * @enum {string}
+             */
+            kind?: "personal" | "team" | "enterprise";
+        };
+        PutOrgSandboxProviderInput: {
+            /** @description A provider from the organization's offering, or empty to clear the choice. */
+            defaultProvider: string;
+        };
+        CloudHarnessVersions: {
+            /** @description The caller administers the organization, so may change the versions. */
+            editable: boolean;
+            agents: components["schemas"]["CloudHarnessVersion"][];
+        };
+        /** @description One harness as the organization's new Cloud sessions run it. */
+        CloudHarnessVersion: {
+            /** @enum {string} */
+            agentId: "claude-code" | "codex" | "cursor";
+            /** @description The release of the harness's CLI that AO tested and its images bake. */
+            defaultVersion: string;
+            /** @description The newer release the organization chose in its place; absent while it runs the default. */
+            selectedVersion?: string;
+            /** @description A release the organization chose that AO's tested release has since caught up with or passed. New sessions run `defaultVersion` instead, never an older CLI than AO tests; absent otherwise. */
+            supersededVersion?: string;
+            plan: components["schemas"]["CloudHarnessInstallPlan"];
+            advisory: components["schemas"]["CloudHarnessUpdateAdvisory"];
+            job?: components["schemas"]["CloudHarnessInstallJob"];
+            /** @description Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter). They always run the release AO tested; clients show them read-only. */
+            components?: components["schemas"]["CloudHarnessComponent"][];
+        };
+        CloudHarnessComponent: {
+            tool: string;
+            version: string;
+            defaultVersion: string;
+        };
+        /** @description The local daemon's AgentInstallPlan shape. AO Cloud has one method, ao-cloud. */
+        CloudHarnessInstallPlan: {
+            agentId: string;
+            automatic: boolean;
+            available: boolean;
+            documentationUrl: string;
+            method: string;
+            methods: components["schemas"]["CloudHarnessInstallMethod"][];
+        };
+        /** @description The local daemon's AgentInstallMethod shape. updateAvailable is false for a caller who may not change the version, with updateReason saying why. */
+        CloudHarnessInstallMethod: {
+            id: string;
+            label: string;
+            available: boolean;
+            recommended: boolean;
+            reinstallAvailable: boolean;
+            updateAvailable: boolean;
+            updateReason?: string;
+        };
+        /** @description The local daemon's AgentUpdateAdvisory shape. currentVersion is the release new sessions run; latestVersion the newest the publisher has. */
+        CloudHarnessUpdateAdvisory: {
+            agentId: string;
+            /** Format: date-time */
+            checkedAt: string;
+            currentVersion?: string;
+            latestVersion?: string;
+            maintenanceMethod?: string;
+            source?: string;
+            /** @enum {string} */
+            reason?: "lookup_failed" | "build_unordered";
+            /** @enum {string} */
+            status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
+        };
+        /** @description The local daemon's InstallJob shape, for the latest install of the organization's chosen release a session's worker reported: failed when it could not be installed (that session ran the AO-tested release), succeeded once one installed it. */
+        CloudHarnessInstallJob: {
+            target: string;
+            /** @enum {string} */
+            status: "succeeded" | "failed";
+            method?: string;
+            error?: string;
+            /** @description The end of the installer's output. */
+            output?: string;
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CloudHarnessInstallInput: {
+            /** @enum {string} */
+            method?: "ao-cloud";
+            /** @enum {string} */
+            operation?: "update";
+            /** @description The release to run, as the advisory listed it (its latestVersion). */
+            expectedVersion: string;
+        };
+        /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
+        Offering: {
+            /** @description Sandbox providers the organization may use: coder and freestyle when the deployment offers them, and any other offered provider the capability gate allows. Freestyle sessions are billed; Coder sessions are billed unless the organization holds the coder capability. */
+            providers: string[];
+            /** @description Provider a session gets when none is chosen. With more than one provider, the organization's own choice (PUT /orgs/{orgId}/sandbox-provider) comes first. Then coder for an organization with the coder capability, freestyle for everyone else, then the deployment default when offered, then the first provider, then empty (no cloud sessions). A new project records this provider, so changing it later moves no existing project. */
+            defaultProvider: string;
+            /**
+             * @description off when the deployment has no Stripe configured or the organization is offered no billed provider; self_serve otherwise. Billed sandboxes need a plan for every organization, contract, internal and grandfathered ones included. contract is no longer sent and is kept for older clients.
+             * @enum {string}
+             */
+            billingMode: "self_serve" | "contract" | "off";
+            /**
+             * @description b2b when coder is the only allowed provider, b2c when only other providers are allowed, both for a mix, none when no provider is allowed.
+             * @enum {string}
+             */
+            kind: "b2b" | "b2c" | "both" | "none";
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder). Empty when none apply. */
+            features: string[];
+            /**
+             * Format: int64
+             * @description The largest file one session attachment may be, in bytes. Sent with attachments in features and omitted without it.
+             */
+            maxAttachmentBytes?: number;
+            /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
+            customCoder?: boolean;
+            /** @description Whether cloud sessions keep artifact files. When false the artifact routes return 404 and requestedOutput "artifact" is rejected. Older control planes omit it. */
+            artifacts?: boolean;
+            /** @description A Coder session whose worker runs as the dedicated ao-worker user checks the main repository out in the project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). When false, a project's working folder applies only with the workspace user. Absent from older control planes; clients treat absent as false. */
+            coderWorkerWorkingFolder?: boolean;
+        };
+        /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
+        SandboxProviders: {
+            available: string[];
+            default: string;
         };
         CurrentAccount: {
             user: components["schemas"]["CurrentUser"];
             organizations: components["schemas"]["OrganizationMembership"][];
+            offering?: components["schemas"]["Offering"];
+            sandboxProviders?: components["schemas"]["SandboxProviders"];
+            /** @description Harnesses a session can start in, or switch to, Chat with. */
+            chatHarnesses?: string[];
+            /** @description Harnesses a running session can switch its coding agent to (startSessionInterfaceTransition with targetHarness). Absent from a control plane that cannot switch a session's agent. */
+            agentSwitchHarnesses?: components["schemas"]["CloudAgentHarness"][];
+            /** @description The control plane keeps several accounts per coding agent (listAgentAccounts) and moves a session between them (switchSessionAgentAccount). Absent or false otherwise. */
+            agentAccounts?: boolean;
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -1021,6 +3381,366 @@ export interface components {
             hasMore: boolean;
             nextCursor?: string;
         };
+        /** @enum {string} */
+        CloudAgentHarness: "claude-code" | "codex" | "cursor" | "opencode";
+        ProjectAgentConfig: {
+            model?: string;
+            /**
+             * @description Cursor CLI mode. Omit or use an empty string for the agent default.
+             * @enum {string}
+             */
+            mode?: "" | "plan" | "ask";
+            /**
+             * @description Reasoning effort for Codex or Claude Code. Claude Code does not accept xhigh.
+             * @enum {string}
+             */
+            effort?: "" | "low" | "medium" | "high" | "xhigh" | "max";
+            /**
+             * @description Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+             * @enum {string}
+             */
+            permissions?: "" | "default" | "auto" | "accept-edits" | "bypass-permissions";
+        };
+        ProjectRoleConfig: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectRoleConfigPatch: {
+            agent?: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectReviewer: {
+            harness: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        /** @description Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence. */
+        ProjectConfig: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            worker?: components["schemas"]["ProjectRoleConfig"];
+            orchestrator?: components["schemas"]["ProjectRoleConfig"];
+            /** @description Empty or absent uses the session agent for reviews. */
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            /** @description Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery. */
+            autoReview?: boolean;
+            coder?: components["schemas"]["ProjectCoderConfig"];
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
+            repos?: components["schemas"]["ProjectAdditionalRepositories"];
+            agentStartsIn?: components["schemas"]["ProjectAgentStartsIn"];
+            workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
+            agentRules?: components["schemas"]["ProjectRules"];
+            orchestratorRules?: components["schemas"]["ProjectRules"];
+            workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
+            coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
+            trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
+            /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
+            source?: string;
+            layout?: components["schemas"]["ProjectLayout"];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * @description "workspace" lays the project out like a local workspace: every session checks the main repository and each additional one (repos) out side by side inside one workspace folder, and the agent starts in that folder (agentStartsIn is treated as parent). Set only when the project is created; any settings write that includes layout is refused (422), even with the project's current value. A standalone project has no repository, so creating one with this layout is refused (422).
+         * @enum {string}
+         */
+        ProjectLayout: "workspace";
+        /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. A repository whose name starts with a dot is refused. Only organization owners and admins may set it. */
+        ProjectAdditionalRepositories: components["schemas"]["ProjectRepository"][];
+        ProjectRepository: {
+            /**
+             * Format: uri
+             * @description https://github.com/<owner>/<name>; stored canonicalized.
+             */
+            url: string;
+            /** @description Branch to clone; empty clones the repository's default branch. */
+            branch?: string;
+        };
+        /**
+         * @description Where the coding agent starts: repository (the default) is the main repository's checkout, with access to every other checkout; parent is the folder that holds every checkout.
+         * @enum {string}
+         */
+        ProjectAgentStartsIn: "repository" | "parent";
+        /** @description Where sessions work in a bring-your-own Coder workspace when AO runs as the workspace user, for example ~/work/{repo}; it overrides the Coder connection's working directory. Ignored otherwise. */
+        ProjectWorkingDirectory: string;
+        /** @description Standing instructions added to every session's system prompt (agentRules for workers, orchestratorRules for orchestrators). Only organization owners and admins may set them, like repos, agentStartsIn and workingDirectory. */
+        ProjectRules: string;
+        ProjectScriptStep: {
+            command: string;
+            /**
+             * Format: uri
+             * @description The project repository the command runs in (its URL, the main repository or one of repos); absent runs it in the main repository's checkout. Accepted on input only: the project stores every step as a plain command, a step in an additional repository as "(\ncd -- '../<folder>' || exit 1\n<command>\n)", so releases that predate per-repository steps keep and run it.
+             */
+            repository?: string;
+            /** @description The step's own time limit in whole minutes; absent is the default, 30 for a Setup step and 10 for a Cleanup step. Accepted on input only: a step with a limit is stored as a plain command led by the shell comment line "# ao-timeout: <N>m", so releases that predate per-step limits keep and run it (with their default limit). */
+            timeoutMinutes?: number;
+        };
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within its time limit (30 minutes unless the step sets timeoutMinutes, 1 to 120); a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder, Freestyle and Docker), best effort, each within its time limit (10 minutes unless the step sets timeoutMinutes) and the whole run within the sum of them (at least 10 minutes, at most 2 hours). Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. A stored step whose first line is "# ao-timeout: <N>m" runs with a time limit of N minutes (1 to 120). Only organization owners and admins may set them. */
+        ProjectScriptCommands: (string | components["schemas"]["ProjectScriptStep"])[];
+        /** @description Coder dev-kit settings inherited by every Coder session of the project. */
+        ProjectCoderConfig: {
+            /**
+             * Format: uuid
+             * @description Coder template; absent uses the organization or deployment default.
+             */
+            templateId?: string;
+            /** @enum {string} */
+            size?: "small" | "medium" | "large";
+            startupScript?: string;
+            extraRepos?: components["schemas"]["ProjectCoderRepository"][];
+            workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+            parameters?: components["schemas"]["CoderTemplateParameterValues"];
+        };
+        /** @description Values for the chosen template's coder_parameter inputs, by parameter name. A list(string) value is a JSON array string and a bool is "true" or "false". Requires a chosen template; names must be parameters the template declares. At workspace create they override the organization connection's parameters and are overridden by size and startupScript. */
+        CoderTemplateParameterValues: {
+            [key: string]: string;
+        };
+        CoderTemplateParameter: {
+            name: string;
+            displayName: string;
+            description: string;
+            /** @description Coder parameter type: "string", "number", "bool" or "list(string)". */
+            type: string;
+            /** @description Coder's form hint (for example dropdown, multi-select, switch); may be empty. */
+            formType: string;
+            /** @description False when the value can only be set when a workspace is created. */
+            mutable: boolean;
+            required: boolean;
+            defaultValue: string;
+            options: {
+                name: string;
+                value: string;
+                description: string;
+            }[];
+            order: number;
+            /** @description Coder's problems with the parameter's value; only set when evaluated against draft values. */
+            diagnostics?: {
+                /** @description "error" or "warning". */
+                severity: string;
+                summary: string;
+                detail?: string;
+            }[];
+        };
+        OrgCoderConfig: {
+            baseUrl: string;
+            owner: string;
+            templateId: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            startupTimeoutSeconds?: number;
+            workerUser: components["schemas"]["CoderWorkerUser"];
+            /** @description Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0. */
+            readyProbe?: string;
+            /** @description Ready check budget, measured from the agent becoming ready. 900 when a ready check is set without one. On timeout the session fails with startup error workspace_setup_not_ready. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user. */
+            reuseExistingCheckout: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. */
+            protectSecretFiles: boolean;
+        };
+        /**
+         * @description Who runs AO's worker and agent in the workspace: a dedicated ao-worker user (default; added to the docker group when one exists), or the workspace's own login user with its real HOME, groups and environment.
+         * @enum {string}
+         */
+        CoderWorkerUser: "ao-worker" | "workspace";
+        OrgCoderConfigResponse: {
+            configured: boolean;
+            /** @description The organization may save a connection (it holds the coder capability). False for an organization that may only read and clear a stored connection. Absent from older control planes, which only answer organizations that may save. */
+            editable?: boolean;
+            coderConfig?: components["schemas"]["OrgCoderConfig"];
+            validationState?: string;
+            /** Format: date-time */
+            validatedAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        PutOrgCoderConfigInput: {
+            /** @description Coder API token. Required on first save and when baseUrl changes; omit to keep the stored token. */
+            token?: string;
+            baseUrl: string;
+            /** @description Omit to derive from the token. */
+            owner?: string;
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            /** @description 0 (default 20 minutes) or 60..7200. */
+            startupTimeoutSeconds?: number;
+            workerUser?: components["schemas"]["CoderWorkerUser"];
+            readyProbe?: string;
+            /** @description 0 (default 900 when readyProbe is set) or 30..3600. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Omit for the default (true with the workspace user). */
+            reuseExistingCheckout?: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. Omit to keep the stored value (true when never set). */
+            protectSecretFiles?: boolean;
+        };
+        ProjectCoderRepository: {
+            /** Format: uri */
+            url: string;
+            branch?: string;
+        };
+        /** @description Names new Coder workspaces <prefix>-<short session id> (at most 32 characters). Lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen. Empty keeps the default ao-<id>; existing sessions keep their workspace. */
+        CoderWorkspaceNamePrefix: string;
+        ProjectSettingsConfigPatch: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            /** @description Null removes the worker override and uses the session agent selection. */
+            worker?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            /** @description Null removes the orchestrator override and uses the session agent selection. */
+            orchestrator?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            autoReview?: boolean;
+            /** @description Only the workspace name prefix and the template parameters are editable after the project is created. parameters replaces the stored values as a whole and needs a project with a chosen template. */
+            coder?: {
+                workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+                parameters?: components["schemas"]["CoderTemplateParameterValues"];
+            };
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
+            repos?: components["schemas"]["ProjectAdditionalRepositories"];
+            agentStartsIn?: components["schemas"]["ProjectAgentStartsIn"];
+            workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
+            agentRules?: components["schemas"]["ProjectRules"];
+            orchestratorRules?: components["schemas"]["ProjectRules"];
+            workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
+            coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
+            trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
+        };
+        /**
+         * @description Where the orchestrator of a project whose sessions run on Coder runs. freestyle, the default and the same as absent, runs it on an instant VM; coder runs it on the organization's Coder exactly as the project's workers run (the project's template and the organization's own Coder deployment and workspace rules). The project's workers run on Coder either way. Setting coder needs a project whose sessions run on Coder and an organization whose offering lists orchestrator-on-coder; otherwise the write is refused with 422 provider_unavailable. It is read when an orchestrator session is created, so an orchestrator that is running, paused or restored stays where it was created. When the organization can no longer run orchestrators on Coder, a new orchestrator runs on an instant VM. It has no effect on a project on any other provider, or on a deployment without instant VMs, where the orchestrator of a Coder project already runs on Coder.
+         * @enum {string}
+         */
+        ProjectOrchestratorSandboxProvider: "freestyle" | "coder";
+        /** @description Workers request AO's review of their own pull request once it is pushed and ready, instead of waiting to be asked. Defaults to off. */
+        ProjectWorkersRequestReview: boolean;
+        /** @description Commits a session's agent makes carry a Co-authored-by trailer naming the AO GitHub App's bot account, so GitHub shows the App as a co-author beside the person the commit is authored as. Defaults to on. */
+        ProjectCoAuthorCommits: boolean;
+        /** @description Issue intake: while enabled, every open GitHub issue of the project's repository (or repo) that assignee matches gets one worker session, started as the organization owner or admin who last saved the rule. Only issues opened by the repository's owners, members and collaborators are taken; an issue anyone else opens is skipped. The sessions intake starts get none of the project's environment variables. An enabled rule needs an assignee. A patch merges into the stored rule. Setting it requires an organization owner or admin. */
+        ProjectTrackerIntake: {
+            enabled?: boolean;
+            /** @enum {string} */
+            provider?: "github";
+            /** @description owner/name; empty uses the project's repository. */
+            repo?: string;
+            /** @description A GitHub login, "*" for any assigned issue, or "none" for unassigned issues. */
+            assignee?: string;
+        };
+        ProjectEnvironment: {
+            variables: components["schemas"]["ProjectEnvironmentVariable"][];
+            /** @description Whether the caller may change the variables (an organization owner or admin). */
+            editable: boolean;
+        };
+        ProjectEnvironmentVariable: {
+            name: string;
+            /** @description Omitted for a member who cannot change the variables. */
+            value?: string;
+        };
+        PutProjectEnvironmentInput: {
+            /** @description Name to value. Names are shell variable names, unique without case; AO_* and HOME, PATH, PWD, SHELL, USER and TERM are reserved, and so are coding-agent logins and model relay settings (ANTHROPIC_API_KEY, OPENAI_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and the like), which belong in the coding agent's connection instead. Values are text of at most 32 KB, 64 KB in all, readable by everyone who can use the project's sessions. */
+            variables: {
+                [key: string]: string;
+            };
+        };
+        ProjectIntakeStatus: {
+            enabled: boolean;
+            /** Format: date-time */
+            lastPolledAt?: string;
+            /** @description Why the last poll failed; absent when it did not. */
+            lastError?: string;
+        };
+        /** @description One of a project's reusable quick actions, run into a session from the desktop's top bar. */
+        Cue: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            name: string;
+            /** @enum {string} */
+            type: "command" | "agent";
+            command?: string;
+            prompt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CueDefinitionInput: {
+            /** @description Unique within the project; trimmed. */
+            name: string;
+            /** @enum {string} */
+            type: "command" | "agent";
+            /** @description The shell command of a command cue; cleared for an agent cue. */
+            command?: string;
+            /** @description The agent instruction of an agent cue; cleared for a command cue. */
+            prompt?: string;
+        };
+        CueList: {
+            cues: components["schemas"]["Cue"][];
+        };
+        CueEnvelope: {
+            cue: components["schemas"]["Cue"];
+        };
+        InvokeCueInput: {
+            /**
+             * Format: uuid
+             * @description A session of the cue's project.
+             */
+            sessionId: string;
+        };
+        InvokeCueResult: {
+            /** @enum {string} */
+            kind: "agent" | "command";
+            /** Format: uuid */
+            sessionId: string;
+            /** @description For a command cue, the command to run in a new shell of the session. */
+            command?: string;
+        };
+        ProjectSettingsInput: {
+            displayName?: string;
+            defaultBranch?: string;
+            config?: components["schemas"]["ProjectSettingsConfigPatch"];
+        };
+        CreateStandaloneProjectInput: {
+            displayName: string;
+            config?: components["schemas"]["ProjectConfig"];
+        };
+        WorkspaceRepositoryList: {
+            repositories: components["schemas"]["WorkspaceRepository"][];
+        };
+        WorkspaceRepository: {
+            /** @description The checkout's folder name, the value ?repository= selects it with. Empty for the main checkout of a single-repository session. */
+            name: string;
+            /** @description The name to show when it differs from the folder name, such as the main repository's own name. */
+            label?: string;
+            /** @description The repository's GitHub owner/name, when it is on GitHub. */
+            repository?: string;
+            /** @description Branch an additional repository was cloned from. */
+            branch?: string;
+            main?: boolean;
+            /** @description False for an additional repository that could not be cloned. */
+            present: boolean;
+        };
+        ProjectResponse: {
+            project: components["schemas"]["Project"];
+        };
         Project: {
             /** Format: uuid */
             id: string;
@@ -1032,9 +3752,11 @@ export interface components {
             defaultBranch: string;
             /** @description GitHub's integer repository ID encoded as a decimal string to preserve precision. */
             githubRepositoryId?: string;
-            config: {
-                [key: string]: unknown;
-            };
+            /** @description True for a project with no repository; its repositoryUrl is a placeholder that is never cloned. */
+            standalone?: boolean;
+            /** @description True for a standalone agent's project: its owner's one worker session, with no orchestrator. Only its owner lists it. */
+            standaloneAgent?: boolean;
+            config: components["schemas"]["ProjectConfig"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -1048,6 +3770,7 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+            coder?: components["schemas"]["ProjectCoderConfig"];
         };
         UpdateProjectInput: {
             displayName: string;
@@ -1065,6 +3788,157 @@ export interface components {
             page: components["schemas"]["PageInfo"];
         };
         /** @enum {string} */
+        ShareRole: "viewer" | "editor";
+        /** @enum {string} */
+        ShareModeCap: "read-only" | "standard" | "trusted";
+        ShareLink: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            projectId: string;
+            /**
+             * Format: uuid
+             * @description The one session the link shares; absent, the whole project.
+             */
+            sessionId?: string;
+            role: components["schemas"]["ShareRole"];
+            /** @enum {string} */
+            status: "active" | "revoked";
+            /**
+             * @description anyone redeems the link; restricted, only the recipients.
+             * @enum {string}
+             */
+            accessScope: "anyone" | "restricted";
+            /** @description Lowercased email addresses; empty unless accessScope is restricted. */
+            recipients: string[];
+            /** @enum {string} */
+            interaction: "view" | "interact";
+            /** @description Absent when there is no cap beyond the session's own mode. */
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands: string[];
+            /**
+             * Format: date-time
+             * @description Absent when the link never expires.
+             */
+            expiresAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description How many people the link still gives more than what was shared with them directly: the grants a revoke with removeJoined changes. 0 on a link just created. Absent from control planes that predate it, which also ignore removeJoined. */
+            joinedCount?: number;
+        };
+        /** @description A share link as its create returns it, the only time its secrets are sent: the store keeps only their hashes. */
+        CreatedShareLink: components["schemas"]["ShareLink"] & {
+            /** @description The link's raw token; with orgId it redeems the link. */
+            token: string;
+            /**
+             * Format: uri
+             * @description <scheme>://<host>/share/<orgId>/<token>, built from the host this request reached (X-Forwarded-* when present). A convenience for non-browser callers; browsers build the link from their own origin and token.
+             */
+            url: string;
+            /** @description The link's short code, which redeems it on its own. Present only when the control plane issues codes (AO_CLOUD_SHARE_LINK_CODES); the client then shares a /s/<code> link instead of the token. */
+            code?: string;
+            /**
+             * Format: uri
+             * @description <origin>/s/<code> on the public share-link origin (AO_CLOUD_SHARE_LINK_ORIGIN). Present only with a code and when that origin is configured; the client shares it as is.
+             */
+            shortUrl?: string;
+        };
+        ShareLinkList: {
+            links: components["schemas"]["ShareLink"][];
+        };
+        CreatedShareLinkEnvelope: {
+            link: components["schemas"]["CreatedShareLink"];
+        };
+        CreateShareLinkInput: {
+            /**
+             * Format: uuid
+             * @description Shares one session of the project; omitted, the whole project.
+             */
+            sessionId?: string;
+            /** @description Defaults to viewer. */
+            role?: components["schemas"]["ShareRole"];
+            /**
+             * @description Defaults to anyone. restricted lets only the recipients redeem it.
+             * @enum {string}
+             */
+            accessScope?: "anyone" | "restricted";
+            recipients?: string[];
+            /**
+             * @description Defaults to view.
+             * @enum {string}
+             */
+            interaction?: "view" | "interact";
+            /** @description Omitted, no cap beyond the session's own mode. */
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands?: string[];
+            /** @description Hours until the link expires; omitted, zero or negative, it never expires. */
+            expiresInHours?: number;
+        };
+        RevokeShareLinkInput: {
+            /** @description Also remove what the link gave the people who joined by it. */
+            removeJoined?: boolean;
+        };
+        RevokeShareLinkResult: {
+            /** @description How many grants were revoked or dropped back to their direct level. */
+            removedGrants: number;
+        };
+        RedeemShareLinkInput: {
+            /** @description The link's short code; it names the organization itself. */
+            code: string;
+        } | {
+            /** Format: uuid */
+            orgId: string;
+            token: string;
+        };
+        /** @description The caller's grant. Empty when member is true: id, role and status are empty strings, deniedCommands is null and redeemedAt is the zero time. */
+        SharedProjectGrant: {
+            /** @description The grant's UUID, or empty when member is true. */
+            id: string;
+            /** @enum {string} */
+            role: "viewer" | "editor" | "";
+            /** @enum {string} */
+            status: "active" | "revoked" | "";
+            userEmail?: string;
+            userDisplayName?: string;
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands: string[] | null;
+            /** Format: date-time */
+            redeemedAt: string;
+        };
+        /** @description A project, or one of its sessions, shared with the caller. */
+        SharedProject: {
+            grant: components["schemas"]["SharedProjectGrant"];
+            project: components["schemas"]["Project"];
+            /** @description True when the caller already belongs to the project's organization and needs no grant; the link only says where to go. */
+            member?: boolean;
+            /**
+             * Format: uuid
+             * @description The shared session; absent when the whole project is shared.
+             */
+            sessionId?: string;
+            sessionName?: string;
+            sharedByEmail?: string;
+            sharedByName?: string;
+            /**
+             * Format: uuid
+             * @description The team this reaches the caller through, when not shared with them directly.
+             */
+            viaTeamId?: string;
+            viaTeamName?: string;
+            /**
+             * @description How the caller got it. Absent when member is true.
+             * @enum {string}
+             */
+            source?: "link" | "direct" | "team";
+        };
+        SharedProjectEnvelope: {
+            shared: components["schemas"]["SharedProject"];
+        };
+        /** @enum {string} */
         GitHubInstallationStatus: "active" | "suspended" | "removed";
         /** @enum {string} */
         GitHubSyncStatus: "pending" | "syncing" | "ready" | "retry" | "failed";
@@ -1079,6 +3953,11 @@ export interface components {
             status: components["schemas"]["GitHubInstallationStatus"];
             /** @enum {string} */
             repositorySelection: "all" | "selected";
+            /**
+             * @description installation: the installation's whole repository selection. user: only the repositories the connecting user can access on GitHub.
+             * @enum {string}
+             */
+            accessScope?: "installation" | "user";
             syncStatus: components["schemas"]["GitHubSyncStatus"];
             /** Format: date-time */
             lastSyncedAt?: string;
@@ -1150,6 +4029,18 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        CreateGitHubRepositoryInput: {
+            name: string;
+            /** @description The GitHub account login to create the repository in. */
+            owner?: string;
+            description?: string;
+        };
+        CreateGitHubRepositoryResponse: {
+            repository: components["schemas"]["GitHubRepository"];
+            created: boolean;
+            /** @description The repository's push-only git smart HTTP endpoint, relative to the control plane (/api/cloud/v1/orgs/{orgId}/github/git/{owner}/{name}.git). */
+            pushPath: string;
+        };
         CreateGitHubScratchProjectInput: {
             displayName: string;
             githubInstallationId: string;
@@ -1159,6 +4050,8 @@ export interface components {
                 /** @enum {string} */
                 harness: "claude-code" | "codex" | "cursor";
                 prompt?: string;
+                /** @description The user's default session interface, as on a session create. With it the orchestrator starts in chat where its harness can; omitted, it starts in tui. The workers it spawns resolve their interface from the default stored here when the orchestrator is created, not from the user's current default. */
+                defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
             };
         };
         CreateGitHubScratchProjectResponse: {
@@ -1210,10 +4103,17 @@ export interface components {
             prompt: string;
             agentSessionId?: string;
             mode: components["schemas"]["SessionMode"];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
+            /** @description Coding-agent model to launch with; empty uses the harness default. */
+            model?: string;
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
             deniedCommands: string[];
             /** Format: uri */
             repositoryUrl: string;
             defaultBranch: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description When true the worker syncs the session's artifact directory through the worker artifact routes and names that directory in the agent prompt and AO_SESSION_ARTIFACTS_DIR. Workers that do not advertise the session.artifacts capability ignore it. */
+            artifacts?: boolean;
         };
         WorkerBootstrapResponse: {
             /**
@@ -1281,7 +4181,7 @@ export interface components {
             /** @enum {string} */
             harness: "claude-code" | "codex" | "cursor";
             /** @enum {string} */
-            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "notification" | "session-end";
+            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "stop-failure" | "notification" | "session-end";
             state?: components["schemas"]["SessionActivityState"];
             toolName?: string;
             toolUseId?: string;
@@ -1295,7 +4195,132 @@ export interface components {
             type: "agent.activity";
             payload: components["schemas"]["WorkerActivityPayload"];
         };
-        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"];
+        WorkerSetupPayload: {
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "timed_out";
+            /** @description The 1-based Setup command that failed or timed out; absent on success. */
+            step?: number;
+            /** @description The failed command's exit status; -1 when it timed out or could not run. */
+            exitCode: number;
+            durationMs: number;
+            /** @description Redacted tail of the failed (or last) command's combined output, at most 2 KiB. */
+            output?: string;
+            /** @description The failed step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. */
+            command?: string;
+            /** @description The repository folder the failed step ran in; absent for the main repository. */
+            repository?: string;
+            /** @description The directory the failed step ran in. */
+            dir?: string;
+            /** @description The Linux user the failed step ran as. */
+            user?: string;
+            /** @description The Linux groups the failed step ran with. */
+            groups?: string[];
+            /** @description The file in the sandbox that holds the failed step's full output. */
+            logPath?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
+            /** @description The failed step's time limit in minutes; absent from a worker that predates per-step limits (the step had the Setup default, 30 minutes). */
+            timeoutMinutes?: number;
+            /** @description Set by the control plane, true on the event served to someone outside the session's organization (a share-grant holder): output, logPath, user, groups, dir and hint are absent. */
+            outputHidden?: boolean;
+        };
+        WorkerSetupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.setup";
+            payload: components["schemas"]["WorkerSetupPayload"];
+        };
+        /** @description One step of a project's Setup or Cleanup run. The newest event for a run's step carries everything needed to show it: a live update repeats the step's facts with the latest output tail. */
+        ScriptStepPayload: {
+            /** @enum {string} */
+            phase: "setup" | "cleanup";
+            /** @description The same for every step of one run of the whole list. */
+            runId: string;
+            /** @description 1-based. */
+            step: number;
+            /** @description Number of steps in the run. */
+            total: number;
+            /** @description The step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. Empty when a Cleanup run's output no longer names it. */
+            command: string;
+            /** @description The repository folder the step ran in; empty for the main repository. */
+            repository: string;
+            /**
+             * @description skipped is a step that never ran because an earlier one failed; it is sent once, at the end of the run.
+             * @enum {string}
+             */
+            status: "running" | "succeeded" | "failed" | "timed_out" | "skipped";
+            /** @description Set once the step finished (not on running or skipped); -1 when it timed out or could not run. */
+            exitCode?: number;
+            /**
+             * Format: date-time
+             * @description When the step started. Absent on a skipped step and on a Cleanup step whose start the output no longer shows.
+             */
+            startedAt?: string;
+            /** @description Set once the step finished, except on a Cleanup step whose start the output no longer shows. */
+            durationMs?: number;
+            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step, and when outputHidden. */
+            output: string;
+            /** @description True when the output's beginning was dropped. */
+            outputTruncated: boolean;
+            /** @description Set by the control plane, true on an event served to someone outside the session's organization (a share-grant holder): output is empty and logPath, user, groups, dir and hint are absent. Only the organization's members see a run's output. */
+            outputHidden?: boolean;
+            /** @description The file in the sandbox with the full output (for Cleanup, the whole run's). */
+            logPath?: string;
+            /** @description The Linux user a failed or timed-out step ran as. */
+            user?: string;
+            /** @description The Linux groups a failed or timed-out step ran with. */
+            groups?: string[];
+            /** @description The directory a failed or timed-out step ran in. */
+            dir?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
+            /** @description The step's time limit in minutes. Absent when it is not known (a worker or Cleanup hook that predates per-step limits, whose steps had their kind's default, 30 minutes for Setup and 10 for Cleanup). */
+            timeoutMinutes?: number;
+            /**
+             * Format: date-time
+             * @description Set by the control plane on a running step's live update: when the step last wrote any output, by the control plane's clock (from the worker's outputAgeMs). It moves even when the output tail looks the same (a repeated line, a progress line redrawn with a carriage return): a worker updates a step that keeps writing at least every minute. Absent from an older worker; clients then use the event's createdAt.
+             */
+            outputAt?: string;
+        };
+        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
+        WorkerScriptStepEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"] & {
+                /** @enum {string} */
+                phase?: "setup";
+                /** @description On a running step's live update: how many milliseconds before the update the step last wrote any output. The control plane turns it into outputAt with its own clock and does not keep it; an outputAt the worker sends is replaced. */
+                outputAgeMs?: number;
+            };
+        };
+        /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands) and start the terminal agent a switch to the terminal made meanwhile. A failure becomes the session's startup error and stays until a later ready report clears it. */
+        WorkerWorkspaceStartupPayload: {
+            /** @enum {string} */
+            status: "failed" | "ready";
+            /**
+             * @description Required when status is failed.
+             * @enum {string}
+             */
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed";
+            /** @description User-facing explanation; required when status is failed. */
+            message?: string;
+            /** @description Redacted excerpt, for Setup the failed command's output tail. */
+            detail?: string;
+        };
+        WorkerWorkspaceStartupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.startup";
+            payload: components["schemas"]["WorkerWorkspaceStartupPayload"];
+        };
+        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"] | components["schemas"]["WorkerScriptStepEventInput"];
         WorkerOKResponse: {
             /** @constant */
             ok: true;
@@ -1341,9 +4366,94 @@ export interface components {
             deniedCommands?: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. A name that breaks git's branch rules or reads as another ref, the project's default branch, the session prefix, and an additional repository's base branch are refused with 422 invalid_branch; a branch a live session of the project already works on is refused with 409 branch_in_use. The error's details carry the reason and, for branch_in_use, the session id. */
+            branch?: string;
+            /** @description Coding-agent model the worker runs (harness-native id). One the account cannot run is refused with MODEL_UNAVAILABLE. Omitted, the worker runs the project's worker model; without one, a worker on the orchestrator's harness runs the orchestrator's current model, else the harness default. */
+            model?: string;
+            /**
+             * @description Reasoning effort the worker's opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+        };
+        ChatMessageInput: {
+            /** @description The message. It may be empty only when attachmentIds names at least one file. */
+            text: string;
+            /** @description Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message. */
+            attachmentIds?: string[];
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
+            /** @description How the message reads in the transcript when `text` carries quoted messages or file selections inlined for the agent. Recorded on the chat.user_message event only; the agent receives `text`. */
+            displayText?: string;
+            /** @description The quoted messages and file selections the message attaches, as the transcript shows them. Recorded on the chat.user_message event only. */
+            content?: ({
+                type: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+        };
+        MessageAttachment: {
+            /** Format: uuid */
+            id: string;
+            fileName: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+        };
+        ChatApprovalDecisionInput: {
+            decisionId: string;
+        };
+        ChatModel: {
+            id: string;
+            displayName: string;
+            description?: string;
+            default: boolean;
+            efforts?: string[];
+            defaultEffort?: string;
+            /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
+            approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
+            /** @description The model the account's provider listed behind this entry: its own ID, or the model an alias such as opus resolves to. Absent when the provider did not confirm the entry for the account, or from an older worker. Only such a confirmation says the account runs the model an alias describes. */
+            providerId?: string;
+            /** @description On a session's own list, a model its worker added only so the session keeps its own selection. The account's provider did not list it, so it is not kept as the account's. */
+            sessionOnly?: boolean;
+        };
+        ChatModelsResponse: {
+            models: components["schemas"]["ChatModel"][];
+            /**
+             * @description Where the list came from. worker: reported by a Cloud worker running this CLI version with the user's current credential. release: the models the control plane's pinned CLI version supports.
+             * @enum {string}
+             */
+            source?: "worker" | "release";
+            /** @description The harness CLI version the list is for. */
+            cliVersion?: string;
+            /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
+            accountListed?: boolean;
+            /** @description On a session's list, true when its worker marks the models it added for the session (sessionOnly). A Claude Code list without it does not become the user's catalog. */
+            sessionOnlyMarked?: boolean;
         };
         SendMessageInput: {
             text: string;
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
+        };
+        /** @description A queued message's new text and files. Text may be empty only when attachmentIds names a file. */
+        EditQueuedMessageInput: {
+            text: string;
+            /** @description Every file the edited message carries, attached to the session first (uploadSessionAttachment). A file the message carried and this list leaves out is dropped from it. */
+            attachmentIds?: string[];
         };
         WorkerWorkspaceListPayload: {
             path: string;
@@ -1519,6 +4629,13 @@ export interface components {
             /** @description Worker-safe failure message, limited by the server to 4 KiB. */
             message: string;
         };
+        WorkerChatStartFallbackInput: {
+            /** @enum {string} */
+            code: "CHAT_ADAPTER_UNAVAILABLE" | "CHAT_START_UNSUPPORTED";
+        };
+        WorkerChatStartFallbackResponse: {
+            movedToTui: boolean;
+        };
         WorkerAgentTerminalResponse: {
             /** Format: uuid */
             terminalId: string;
@@ -1541,6 +4658,78 @@ export interface components {
                 /** @constant */
                 desiredState: "deleted";
             };
+            /** @description Whether the session's artifact files were deleted. */
+            artifactsDeleted?: boolean;
+        };
+        SessionResponse: {
+            session: components["schemas"]["Session"];
+        };
+        /** @enum {string} */
+        SessionInterfaceMode: "tui" | "chat";
+        /** @enum {string} */
+        SessionInterfaceTransitionPolicy: "drain" | "interrupt";
+        /** @enum {string} */
+        SessionInterfaceTransitionPhase: "requested" | "preflighting" | "draining" | "source_stopping" | "source_stopped" | "target_starting" | "activating" | "completed" | "failed" | "cancelled" | "recovery_required";
+        SessionInterfaceTransition: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sessionId: string;
+            sourceMode: components["schemas"]["SessionInterfaceMode"];
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            phase: components["schemas"]["SessionInterfaceTransitionPhase"];
+            nativeConversationId?: string;
+            errorCode?: string;
+            errorDetail?: string;
+            /** Format: date-time */
+            noticeAcknowledgedAt?: string;
+            /** @description The agent the session ran before an agent switch. Set only on an agent switch. */
+            sourceHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The agent an agent switch moves the session to. Set only on an agent switch; the session's harness becomes it once the switch commits, and goes back to sourceHarness if it fails. */
+            targetHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The model the session ran before an agent switch. */
+            sourceModel?: string;
+            /** @description The model the switched-to agent starts with. */
+            targetModel?: string;
+            /** @description The effort the switched-to agent starts at. */
+            targetReasoningEffort?: string;
+            /**
+             * Format: uuid
+             * @description The account the session ran on before an account move. Set only on an account move.
+             */
+            sourceAccountId?: string;
+            /**
+             * Format: uuid
+             * @description The account an account move moves the session to. Set only on an account move; the session runs on it once the move commits.
+             */
+            targetAccountId?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            completedAt?: string;
+        };
+        SessionInterfaceTransitionStatus: {
+            supported: boolean;
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            reasonCode?: string;
+            reason?: string;
+            transition?: components["schemas"]["SessionInterfaceTransition"];
+        };
+        StartSessionInterfaceTransitionInput: {
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            /** @description Switches the session's coding agent to this harness (one of the current account's agentSwitchHarnesses), in the same sandbox and checkout. targetMode may then be the session's current mode. The new agent starts a new conversation with a handoff note of the conversation so far, even when the session ran it before. Messages sent while the switch runs reach the new agent. A control plane without agent switching refuses the field. Only the session's creator may switch its agent, since the new agent runs on their login for it. Anyone else, an org admin included, gets 403 forbidden, whatever logins the creator has. */
+            targetHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. With targetHarness, the model the new agent starts with (any target mode); its default model when omitted. */
+            model?: string;
+            /**
+             * @description The effort the terminal agent starts at, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's effort. With targetHarness, the effort the new agent starts at.
+             * @enum {string}
+             */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
         };
         Session: {
             /** Format: uuid */
@@ -1551,36 +4740,622 @@ export interface components {
             projectId: string;
             kind: components["schemas"]["SessionKind"];
             harness: string;
+            reviewerHarness?: string;
+            autoReviewEnabled: boolean;
+            autoInjectCI: boolean;
+            autoInjectReview: boolean;
+            terminateOnPrMerge: boolean;
             displayName: string;
             branch: string;
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launched with; empty means the harness default. */
+            model?: string;
+            /** @description Coding-agent model the session runs now: its owner's Chat pick, else the model it launched with. The control plane always sends it; an empty string means the harness default. Absent only from older control planes, which predate it; read `model` then. */
+            currentModel?: string;
+            /**
+             * @description Reasoning effort the session's turns run with now: its owner's Chat pick, else the effort it launched with. Omitted when that is the model's default.
+             * @enum {string}
+             */
+            currentReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
             deniedCommands: string[];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
             status: components["schemas"]["SessionStatus"];
             capabilities?: components["schemas"]["AgentCapability"][];
             runtimeConnected: boolean;
             runtimeState?: string;
             runtimeError?: string;
+            startupError?: components["schemas"]["SessionStartupError"];
+            /**
+             * Format: uri
+             * @description The session's workspace page on the organization's own (bring-your-own) Coder deployment, as <baseUrl>/@<owner>/<workspace name>. Present only for sessions on a bring-your-own Coder connection, from the session's creation (the workspace may not exist yet); never set for AO's managed Coder or other providers.
+             */
+            coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /**
+             * Format: uuid
+             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleteSessionArtifact); every other member of the organization sees them read-only. Omitted when none is on record.
+             */
+            createdByUserId?: string;
+            /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
+            requestedBy?: {
+                userId: string;
+                name: string;
+            };
+            outputType?: components["schemas"]["SessionOutputType"];
+            /** @description How many committed artifact files the session has, on the session read and list routes while the deployment keeps artifacts. */
+            artifactCount?: number;
+            /**
+             * Format: date-time
+             * @description When the newest of the session's artifact files was committed. It changes whenever a commit changes the files, and only then, so a client can keep a file list until it moves. Absent without files.
+             */
+            artifactsUpdatedAt?: string;
+            /** @description The session's committed artifact files, on the session read route while the deployment keeps artifacts. The list route sends only artifactCount; listSessionArtifacts returns the files. */
+            artifactFiles?: components["schemas"]["SessionArtifact"][];
+            /** @description Whether the caller pinned the session in their sidebar, on the session read, list and rename routes. A pin is one person's; absent means not pinned. */
+            pinned?: boolean;
+            /**
+             * Format: date-time
+             * @description When the caller pinned the session; present only while pinned.
+             */
+            pinnedAt?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /**
+         * @description The deliverable a session was created for. artifact asks the agent for a file in its artifact directory instead of a pull request.
+         * @enum {string}
+         */
+        RequestedOutput: "artifact";
+        /**
+         * @description What the session owns, a pull request, artifact files, or both.
+         * @enum {string}
+         */
+        SessionOutputType: "none" | "pr" | "artifact" | "pr_artifact";
+        SessionArtifact: {
+            /**
+             * Format: uuid
+             * @description The artifact's identity. It stays the same when the session's agent renames or moves the file, so a client keys anything it keeps about the file, such as its share link, by it. Absent from a control plane that does not track artifacts across renames.
+             */
+            id?: string;
+            /** @description Slash-separated path in the session's artifact directory. */
+            path: string;
+            name: string;
+            /** @enum {string} */
+            kind: "html" | "markdown" | "file";
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /**
+             * Format: date-time
+             * @description When the control plane last committed a new version of the file, or registered it as a deliverable.
+             */
+            updatedAt: string;
+            /** @description Set on a file the session's agent registered as a deliverable with ao artifact add, or inside a bundle directory it registered. Absent otherwise. A client lists only registered files as the session's artifacts, or the files at the root of its artifact directory when none is registered. */
+            registered?: boolean;
+            /** @description The paths the artifact had before it was renamed, most recent last, so a link naming one still opens it. Absent when it was never renamed. */
+            previousPaths?: string[];
+        };
+        SessionArtifactResult: {
+            artifact: components["schemas"]["SessionArtifact"];
+        };
+        SaveSessionArtifactInput: {
+            path: string;
+            /** @description The file's new UTF-8 text, 8 MiB at most. */
+            content: string;
+            /** @description The committed file's SHA-256 the edit started from. */
+            expectedSha256: string;
+        };
+        SessionArtifactVersionSummary: {
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Hex SHA-256 of the version's content. */
+            fileFingerprint: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * @description Who wrote it, the session's agent or a person through a save or restore.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** @description The session's agent when the version was recorded. */
+            harness?: string;
+            /**
+             * Format: int64
+             * @description The version this one restored, when it is a restore.
+             */
+            restoredFrom?: number;
+        };
+        SessionArtifactVersionList: {
+            versions: components["schemas"]["SessionArtifactVersionSummary"][];
+        };
+        SessionArtifactVersion: components["schemas"]["SessionArtifactVersionSummary"] & {
+            path: string;
+            /** @description The version's UTF-8 text, cut short when truncated is set. */
+            content: string;
+            truncated?: boolean;
+        };
+        ChatSearchHit: {
+            /** Format: uuid */
+            sessionId: string;
+            sessionTitle: string;
+            /** Format: uuid */
+            projectId: string;
+            /**
+             * Format: int64
+             * @description The message's first event in the session's chat.
+             */
+            sequence: number;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            /** @description The matched text around the match, on one line. */
+            snippet: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ChatSearchResults: {
+            results: components["schemas"]["ChatSearchHit"][];
+        };
+        SessionArtifactList: {
+            artifacts: components["schemas"]["SessionArtifact"][];
+        };
+        SessionArtifactAccess: {
+            /** @description Path on this control plane ending in "/", for example /api/cloud/v1/artifact-files/<token>/. */
+            filesPrefix: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ArtifactShare: {
+            /** Format: uuid */
+            id: string;
+            /** @description The link's public ID, 26 random characters of a-z and 2-7, and its subdomain label under the share origin. */
+            slug: string;
+            /** @description The same as contentUrl, kept for clients that predate it. */
+            url: string;
+            /** @description Where the link's file is served, for example https://<slug>.orchestratorusercontent.com/. */
+            contentUrl: string;
+            /** @description The public page that shows the link, for example https://orchestrator.inc/artifact/<slug>. Absent when the control plane has no viewer configured; share contentUrl instead. */
+            viewerUrl?: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The file's SHA-256 as declared when it was published. For a local file it is the uploader's claim, not checked against the bytes (each part is checked against its own declared SHA-256); for a cloud session's file it is the committed file's. It names no link and no version: ETags come from the link and its stored version. */
+            sha256: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /**
+             * Format: date-time
+             * @description When the link was revoked. A revoked link serves nothing and uses no slot.
+             */
+            revokedAt?: string;
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description How many emails the link is shared with. Absent from a control plane that predates private links. */
+            grantCount?: number;
+            /** @description How many files the link serves beside its own, at their paths under contentUrl (see createArtifactShareFileUpload). Absent from a control plane that predates included files. */
+            fileCount?: number;
+        };
+        /**
+         * @description Who a link opens for. restricted: only its owner and the emails it is shared with, once they sign in with that verified email; its file needs a view token (viewArtifactShare), so share viewerUrl, never contentUrl. anyone: everyone with the link, no sign-in. Absent from a control plane that predates private links, where every link is anyone.
+         * @enum {string}
+         */
+        ArtifactShareAccess: "restricted" | "anyone";
+        ArtifactShareAccessInput: {
+            access: components["schemas"]["ArtifactShareAccess"];
+        };
+        ArtifactShareGrant: {
+            /** Format: uuid */
+            id: string;
+            /** @description The invited email, lowercased. */
+            email: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ArtifactShareGrantList: {
+            /** @description The people the link is shared with, by email. */
+            grants: components["schemas"]["ArtifactShareGrant"][];
+            /** @description The teams the link is shared with. */
+            teams: components["schemas"]["ArtifactShareSubjectGrant"][];
+            /** @description The workspaces the link is shared with, everyone in each. */
+            workspaces: components["schemas"]["ArtifactShareSubjectGrant"][];
+        };
+        ArtifactShareSubjectGrant: {
+            /**
+             * Format: uuid
+             * @description The grant's id, for removeArtifactShareGrant.
+             */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /**
+             * Format: uuid
+             * @description The team; absent for a workspace.
+             */
+            teamId?: string;
+            /** @description The team's or workspace's name; empty when the owner is no longer a member of the workspace. */
+            name: string;
+            /** @description Its members now; 0 when the owner is no longer one of the workspace. */
+            memberCount: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description At least one of emails, teamIds and workspace. */
+        ArtifactShareGrantsInput: {
+            /** @description Bare email addresses to share the link with. */
+            emails?: string[];
+            /**
+             * Format: uuid
+             * @description The team workspace teamIds and workspace belong to; required with either.
+             */
+            orgId?: string;
+            /** @description Teams of orgId to share the link with. */
+            teamIds?: string[];
+            /** @description Share the link with everyone in orgId. */
+            workspace?: boolean;
+        };
+        ArtifactSharePublishResult: {
+            share: components["schemas"]["ArtifactShare"];
+            /** @description True when publishing replaced the version of the document's existing link. */
+            replaced: boolean;
+        };
+        ArtifactShareList: {
+            shares: components["schemas"]["ArtifactShare"][];
+            /** @description The free plan's limit of active links; it does not apply when unlimited is true. */
+            limit: number;
+            /** @description True when the user's plan has no limit of active links. Absent or false means limit applies. */
+            unlimited?: boolean;
+            /** @description How many active links the user holds; revoked links do not count. */
+            used: number;
+            /** @description True when links may be private here: the viewer has sign-in. Absent or false, links are public only, and publishing restricted, inviting, or switching a link to restricted returns 409 artifact_share_private_unavailable. */
+            privateLinks?: boolean;
+        };
+        ArtifactShareUploadInput: {
+            /** @description The file name, without a directory. */
+            name: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The whole file's SHA-256, as the uploader computed it. The control plane records it on the link but does not check it against the bytes; each part is checked against its own SHA-256. */
+            sha256: string;
+            /** @description With feature and name, the document the file is. On an update it is optional: when sent, the link follows a file moved to another document, as one moved to another folder. */
+            project?: string;
+            feature?: string;
+            /**
+             * Format: uuid
+             * @description Set to update this active link instead of publishing a document.
+             */
+            shareId?: string;
+        };
+        ArtifactShareUpload: {
+            /** @description Names the upload in the calls that follow; opaque. */
+            uploadToken: string;
+            /**
+             * Format: date-time
+             * @description When the upload can no longer be finalized.
+             */
+            expiresAt: string;
+            /** Format: int64 */
+            partSize: number;
+            partCount: number;
+        };
+        ArtifactShareUploadRef: {
+            uploadToken: string;
+        };
+        ArtifactShareUploadPartsInput: {
+            uploadToken: string;
+            parts: {
+                partNumber: number;
+                /** @description The part's SHA-256. */
+                sha256: string;
+            }[];
+        };
+        ArtifactSharePresignedParts: {
+            parts: {
+                partNumber: number;
+                method: string;
+                url: string;
+                headers: {
+                    [key: string]: string;
+                };
+                /**
+                 * Format: int64
+                 * @description The part's length in bytes.
+                 */
+                size: number;
+            }[];
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ArtifactShareCompletedPart: {
+            partNumber: number;
+            sha256: string;
+            /** @description The ETag the part's PUT returned. */
+            etag: string;
+        };
+        /** @description An included file's upload and every one of its parts, in order. It takes no access, emails or files: those are the page's, set when the page is finalized. */
+        ArtifactShareFileCompleteInput: {
+            /** @description The file's uploadToken, from createArtifactShareFileUpload. */
+            uploadToken: string;
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
+        };
+        ArtifactShareFinalizeInput: {
+            uploadToken: string;
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
+            /** @description The access a new or restored link starts with. Absent, it is anyone, as before links could be private. An active link keeps its own access. */
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
+            emails?: string[];
+            /** @description Every file the link serves beside its own from now on, each from completeArtifactShareFileUpload under this upload, at most one per path; an empty list leaves it none. Absent, an active link keeps the files it has and a new or restored one has none. A private link's page that has files, opened at contentUrl with its view token in the query, is redirected to /~vt/<token>/ under the same host, so the files it refers to by relative path carry the token. */
+            files?: {
+                /** @description From completeArtifactShareFileUpload; opaque. */
+                fileToken: string;
+            }[];
+        };
+        ArtifactShareFileUploadInput: {
+            /** @description The page's upload, from createArtifactShareUpload. */
+            uploadToken: string;
+            /** @description Where the link serves the file: slash-separated, relative to the page, as a browser asks for it once it resolves the page's relative URL (images/a.png, not ./images/a.png). */
+            path: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The whole file's SHA-256, as for the page. */
+            sha256: string;
+        };
+        ArtifactShareFileUploaded: {
+            /** @description Lists the file in finalizeArtifactShare; opaque. */
+            fileToken: string;
+            path: string;
+            /**
+             * Format: date-time
+             * @description When the file can no longer be listed.
+             */
+            expiresAt: string;
+        };
+        SessionArtifactShareInput: {
+            /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
+            path: string;
+            /** @description The SessionArtifact.sha256 the person was shown. When the session has committed another version since, the route answers 409 artifact_share_source_changed and shares nothing. */
+            sha256: string;
+            /**
+             * Format: uuid
+             * @description An active link of the caller's to point at this file, also after the file was renamed.
+             */
+            shareId?: string;
+            /** @description The access a new or restored link starts with. Absent, it is anyone, as before links could be private. An active link keeps its own access. */
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
+            emails?: string[];
+        };
+        /** @description A link someone else published and shared with the signed-in person, as their Artifacts list shows it. */
+        SharedArtifact: {
+            /** @description The link's public ID, for viewArtifactShare. */
+            linkId: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When the link last served a new version.
+             */
+            updatedAt: string;
+            /** @enum {string} */
+            access: "restricted" | "anyone";
+            /** @description The viewer page of the link; absent without a viewer. */
+            viewerUrl?: string;
+            /**
+             * @description How it reached them, the first that holds: direct, shared with their email; team, with a team they are in; workspace, with a workspace they are a member of.
+             * @enum {string}
+             */
+            via: "direct" | "team" | "workspace";
+            /** @description Every team of theirs the link is shared with; empty when none. */
+            teams: {
+                id: string;
+                name: string;
+            }[];
+            /** @description Every workspace of theirs the link is shared with; empty when none. */
+            workspaces: {
+                id: string;
+                name: string;
+            }[];
+            /**
+             * Format: date-time
+             * @description When it was first shared with them.
+             */
+            sharedAt: string;
+        };
+        PublicArtifactShare: {
+            linkId: string;
+            name: string;
+            /** @description The document title when available, otherwise the filename without its extension. */
+            title?: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            updatedAt: string;
+            owner: {
+                /** @description The owner's display name; empty when they set none. */
+                displayName: string;
+            };
+            /** @description Where the link's file is served; the viewer frames it. For a private link (viewArtifactShare) it carries a short-lived view token in its vt query parameter. */
+            contentUrl: string;
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description The link's viewer page; absent where the control plane has no viewer. The desktop app opens a link sent from a viewer page only when it came from this origin. */
+            viewerUrl?: string;
+            /** @description Only from viewArtifactShare, and only for the link's owner: what the viewer page needs to manage the link. shareId unpublishes it (deleteArtifactShare); grantCount is how many emails it is shared with. Absent for everyone else. */
+            you?: {
+                owner: boolean;
+                /** Format: uuid */
+                shareId: string;
+                /**
+                 * Format: date-time
+                 * @description When you first created this artifact link.
+                 */
+                createdAt?: string;
+                grantCount: number;
+            };
+        };
+        WorkerArtifactFile: {
+            path: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+        };
+        WorkerArtifactManifestInput: {
+            files: components["schemas"]["WorkerArtifactFile"][];
+        };
+        WorkerArtifactManifestResponse: {
+            changed: string[];
+        };
+        WorkerArtifactBlobResponse: {
+            path: string;
+            versionId: string;
+        };
+        WorkerArtifactCommitFile: {
+            path: string;
+            versionId: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /** Format: date-time */
+            mtime?: string;
+        };
+        WorkerArtifactCommitInput: {
+            files?: components["schemas"]["WorkerArtifactCommitFile"][];
+            /** @description Paths this worker previously synced and has since removed. */
+            deleted?: string[];
+            /** @description Files this worker previously synced that were renamed or moved: each keeps its artifact, registration and version history at its new path. Moves apply before files, so a file both moved and changed is listed in both, with its new path in files. */
+            moved?: components["schemas"]["WorkerArtifactMove"][];
+        };
+        WorkerArtifactMove: {
+            from: string;
+            to: string;
+        };
+        WorkerArtifactRegistrationInput: {
+            paths: string[];
+        };
+        WorkerArtifactRegistrationResult: {
+            /** @description Every file the session has registered. */
+            registered: string[];
+        };
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
+        SessionStartupError: {
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed or agent_start_failed (the terminal agent could not start in the ready workspace), all reported by the worker. Clients must tolerate codes added later. */
+            code: string;
+            /** @description Human-readable explanation suitable for display as-is. */
+            message: string;
+            /** Format: date-time */
+            at: string;
+            /** @description Redacted detail behind the error: operator detail for an organization's own (bring-your-own) compute, and the failed command's output for project_setup_failed. */
+            detail?: string;
         };
         CreateSessionInput: {
             /** Format: uuid */
             projectId: string;
             kind: components["schemas"]["SessionKind"];
             harness: string;
+            /**
+             * Format: uuid
+             * @description The creator's account for harness the session runs on; the harness's default account when omitted. Accepted only by a control plane whose CurrentAccount reports agentAccounts.
+             */
+            agentAccountId?: string;
             displayName: string;
             prompt: string;
             /** @default trusted */
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
+            model?: string;
+            /**
+             * @description Reasoning effort the opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /**
+             * @description Approval mode the opening prompt's turn runs with in a session that starts in chat. Optional; empty lets the worker derive it from the session's mode, as for any turn sent without one.
+             * @enum {string}
+             */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Sandbox provider the session runs on, one the deployment offers (see /me). Optional; empty uses the organization's default. A project set up for a provider, or a worker linked to the project's orchestrator, runs there instead. */
+            provider?: string;
             /** @default [] */
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
+            defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+        };
+        /** @description A session create's body without projectId and kind (POST /standalone-agents). */
+        CreateStandaloneAgentInput: {
+            harness: string;
+            displayName: string;
+            prompt: string;
+            /** @default trusted */
+            mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
+            model?: string;
+            /**
+             * @description Reasoning effort the opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /**
+             * @description Approval mode the opening prompt's turn runs with in a session that starts in chat. Optional; empty lets the worker derive it from the session's mode, as for any turn sent without one.
+             * @enum {string}
+             */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Sandbox provider the session runs on, one the deployment offers (see /me). Optional; empty uses the organization's default. A project set up for a provider, or a worker linked to the project's orchestrator, runs there instead. */
+            provider?: string;
+            /** @default [] */
+            deniedCommands: string[];
+            /** Format: uuid */
+            sandboxProviderConnectionId?: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
+            defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+        };
+        UpdateSessionInput: {
+            /** @description The session's new title, trimmed. */
+            displayName: string;
+        };
+        SessionPinResponse: {
+            /** Format: uuid */
+            sessionId: string;
+            pinned: boolean;
+            /** Format: date-time */
+            pinnedAt?: string;
+        };
+        UpdateSessionPreferencesInput: {
+            reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
+            autoReviewEnabled?: boolean;
+            autoInjectCI?: boolean;
+            autoInjectReview?: boolean;
+            terminateOnPrMerge?: boolean;
+        };
+        /** @enum {string} */
+        CloudReviewerHarness: "claude-code" | "codex" | "cursor";
+        HarnessStatus: {
+            harness: components["schemas"]["CloudReviewerHarness"];
+            /** @enum {string} */
+            status: "missing" | "ready" | "failed";
+            version?: string;
+            error?: string;
+        };
+        HarnessInspectResponse: {
+            harnesses: components["schemas"]["HarnessStatus"][];
         };
         SessionPage: {
             items: components["schemas"]["Session"][];
@@ -1665,6 +5440,14 @@ export interface components {
             pullRequestUrl: string;
             conflictFiles: components["schemas"]["PullRequestConflictFile"][];
         };
+        /** @description The person who started the session behind a pull request the AO GitHub App opened, so its author is the App's bot. Shown only to organization members. */
+        PullRequestOpener: {
+            /** @description Their AO display name; empty when they have none. */
+            name: string;
+            /** @description Their GitHub login, when they connected GitHub to AO. */
+            githubLogin?: string;
+            avatarUrl?: string;
+        };
         PullRequestSummary: {
             url: string;
             htmlUrl?: string;
@@ -1675,6 +5458,7 @@ export interface components {
             repository: string;
             author: string;
             authorAvatarUrl?: string;
+            openedBy?: components["schemas"]["PullRequestOpener"];
             sourceBranch: string;
             targetBranch: string;
             headSha: string;
@@ -1700,6 +5484,14 @@ export interface components {
         SessionPullRequests: {
             sessionId: string;
             pullRequests: components["schemas"]["PullRequestSummary"][];
+            /** @description GitHub pull requests the session's agent reported that AO does not track, such as one in a repository the session has no grant for. */
+            linkedPullRequests?: components["schemas"]["LinkedPullRequest"][];
+        };
+        LinkedPullRequest: {
+            url: string;
+            /** @description owner/name */
+            repository: string;
+            number: number;
         };
         /** @enum {string} */
         AOReviewRunStatus: "running" | "complete" | "delivered" | "failed" | "cancelled";
@@ -1713,6 +5505,8 @@ export interface components {
             sessionId: string;
             batchId: string;
             harness: string;
+            /** @enum {string} */
+            triggerSource: "manual" | "auto";
             pullRequestUrl: string;
             targetSha: string;
             status: components["schemas"]["AOReviewRunStatus"];
@@ -1724,6 +5518,13 @@ export interface components {
             /** Format: date-time */
             deliveredAt?: string;
             autoInjectReview: boolean;
+            /** @description The reviewer terminal of a review that runs in a terminal. */
+            reviewerTerminalId?: string;
+            /**
+             * @description chat for a review that runs as a Chat conversation; absent for one in a reviewer terminal.
+             * @enum {string}
+             */
+            interfaceMode?: "chat";
         };
         AOPullRequestReviewState: {
             pullRequestUrl: string;
@@ -1740,8 +5541,193 @@ export interface components {
             sessionId: string;
             reviewerHandleId?: string;
             reviewerHarness?: string;
+            availableReviewerHarnesses: components["schemas"]["CloudReviewerHarness"][];
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
+            reviewerSurface?: components["schemas"]["ReviewerSurface"];
+        };
+        /** @description The reviewer conversation the session shows, its newest review that runs in Chat. */
+        ReviewerSurface: {
+            /** @enum {string} */
+            mode: "chat";
+            /** @description The review run whose conversation this is. */
+            reviewId: string;
+            harness: string;
+        };
+        /** @description One event of a review conversation. Payloads carry reviewRunId and
+         *     reviewTurnId (never turnId), plus what the session's own chat event of
+         *     the same name carries: text and authorUserId for a message, text and
+         *     itemId for assistant text, activity for an activity, error for an
+         *     aborted turn.
+         *      */
+        ReviewChatEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @enum {string} */
+            type: "review.user_message" | "review.turn_started" | "review.assistant_delta" | "review.activity" | "review.turn_completed" | "review.turn_interrupted" | "review.turn_aborted";
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ReviewChatEventPage: {
+            events: components["schemas"]["ReviewChatEvent"][];
+            hasMore: boolean;
+            /** Format: int64 */
+            nextAfter: number;
+        };
+        PromptSuggestionInput: {
+            /** @description The settled turn the suggestion follows; echoed back. */
+            turnId: string;
+            /** @description The conversation's most recent text messages, oldest first. */
+            messages: {
+                /** @enum {string} */
+                role: "user" | "assistant";
+                text: string;
+            }[];
+        };
+        PromptSuggestion: {
+            turnId: string;
+            prompt: string;
+        };
+        SessionViewer: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
+            /**
+             * @description member is an organization member; editor and viewer are share-grant roles.
+             * @enum {string}
+             */
+            role: "member" | "editor" | "viewer";
+        };
+        /** @description Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log. */
+        SessionLiveState: {
+            /** @constant */
+            type: "session.live";
+            chatSettings: components["schemas"]["SessionChatSettings"];
+            /** @description Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings). */
+            canConfigure: boolean;
+            /** @description Changes whenever a merge request in the session's project is asked for or decided, so a client re-reads them at once. Absent while the project has none. */
+            mergeRequestsVersion?: string;
+            /**
+             * Format: uuid
+             * @description The user this stream is authenticated as. Clients compare against it rather than an identity they remember.
+             */
+            you: string;
+            /** @description Whether the person reading this stream may take the composer lease from its holder (composerTakeOver). */
+            canTakeOver: boolean;
+            /** @description Everyone with the session open right now, once each, in the order they joined. */
+            viewers: components["schemas"]["SessionViewer"][];
+            composer: components["schemas"]["ComposerLeaseState"];
+        };
+        /** @description A guest's request that a shared project's owner merge a pull request. */
+        MergeRequest: {
+            /** Format: uuid */
+            id: string;
+            projectId: string;
+            sessionId: string;
+            sessionName: string;
+            pullRequest: {
+                id: string;
+                number: number;
+                url: string;
+                title: string;
+                repository: string;
+            };
+            requestedBy: components["schemas"]["MergeRequestPerson"];
+            /** @enum {string} */
+            status: "pending" | "merged" | "rejected";
+            decidedBy?: components["schemas"]["MergeRequestPerson"];
+            /** Format: date-time */
+            decidedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        MergeRequestPerson: {
+            userId: string;
+            name: string;
+        };
+        SharedSessionParticipants: {
+            /** Format: uuid */
+            sessionId: string;
+            /** @description The session's creator first, then each person a share link let in, in the order they joined, then any other organization member who has it open. */
+            participants: components["schemas"]["SessionParticipant"][];
+        };
+        SessionParticipant: {
+            userId: string;
+            /** @description Display name, never an email address. */
+            name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
+            /** @enum {string} */
+            role: "owner" | "member" | "editor" | "viewer";
+            /** @description Whether they have the session open now. */
+            present: boolean;
+            /**
+             * @description working while they hold the composer, waiting while in line for it, otherwise idle.
+             * @enum {string}
+             */
+            state: "working" | "waiting" | "idle";
+        };
+        /** @description The settings a session's turns run with, set by its owner (its creator, or an organization owner or admin). Everyone else's messages run with them whatever they ask for. Empty fields mean the defaults. */
+        SessionChatSettings: {
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+        };
+        ComposerParticipant: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+        };
+        /** @description The session's composer lease, its hard lock on talking to the agent. Only the holder may send or steer. */
+        ComposerLeaseState: {
+            /** @description Who holds the lease, or null while it is free. */
+            holder: components["schemas"]["ComposerParticipant"] | null;
+            /**
+             * Format: int64
+             * @description Increases with every grant. A holder presents it to send, steer, renew, or release.
+             */
+            epoch: number;
+            /** @description Everyone waiting for the lease, first in line first. */
+            waitlist: components["schemas"]["ComposerParticipant"][];
+            /** @description What the holder is typing, shown live and read-only to everyone else; null while they have typed nothing. It clears when their turn ends. */
+            draft?: components["schemas"]["ComposerDraft"] | null;
+        };
+        ComposerDraft: {
+            text: string;
+            /** @description The caret's offset into text, in UTF-16 code units as the writing client counts them. */
+            cursor: number;
+        };
+        ComposerLeaseAnswer: {
+            composer: components["schemas"]["ComposerLeaseState"] & {
+                /**
+                 * Format: int64
+                 * @description How long the caller's grant has left; 0 unless granted.
+                 */
+                expiresInMs: number;
+            };
+            /** @description Whether the caller holds the lease after the request. */
+            granted: boolean;
+        };
+        ComposerGrantInput: {
+            /** Format: int64 */
+            epoch: number;
+            /** @description renew only. True when the holder typed since the last renewal. */
+            typing?: boolean;
+            /** @description draft only. The holder's draft. */
+            text?: string;
+            /** @description draft only. The caret's offset into text. */
+            cursor?: number;
         };
         UserMessageEvent: {
             sessionId: string;
@@ -1751,6 +5737,36 @@ export interface components {
             type: "chat.user_message";
             payload: {
                 text: string;
+                /** Format: uuid */
+                turnId?: string;
+                /**
+                 * Format: uuid
+                 * @description The user who sent the message. Absent when an orchestrator, automation, or the agent's own terminal sent it.
+                 */
+                authorUserId?: string;
+                /** @description The sender's display name when the message was sent. Never an email address, so a share guest can see it. */
+                authorName?: string;
+                /** @description The files the message carries. */
+                attachments?: components["schemas"]["MessageAttachment"][];
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description A queued message was edited (editQueuedMessage). Its chat.user_message event (payload.messageSequence) now reads as edited; a client holding that event shows payload.text and payload.attachments in its place. */
+        UserMessageEditedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.user_message_edited";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                /** Format: int64 */
+                messageSequence: number;
+                text: string;
+                /** @description The files the edited message carries; absent when none. */
+                attachments?: components["schemas"]["MessageAttachment"][];
             };
             /** Format: date-time */
             createdAt: string;
@@ -1804,11 +5820,18 @@ export interface components {
             payload: {
                 /** Format: uuid */
                 turnId: string;
+                /** @description 0 for a turn stopped while still queued, before the agent started on it. */
                 attempt: number;
+                /**
+                 * @description Why a turn ended before it started. deleted: the person took the queued message back (cancelTurn), so a client drops it from the transcript. interface_switch: a stop-now switch to the terminal ended the queued message, which a client keeps, shown interrupted. steered: the message was steered into the running turn instead (chat.turn_steered with this turn as its queuedTurnId), so a client shows it there, as the steer, and drops it from the queue. Absent for a stopped running turn and for events written before reasons existed; a client reads a missing or unknown reason as a plain interruption and keeps the message.
+                 * @enum {string}
+                 */
+                reason?: "deleted" | "interface_switch" | "steered";
             };
             /** Format: date-time */
             createdAt: string;
         };
+        /** @description A turn ended in failure, with payload.error saying why. Also a queued message the control plane did not run because, when the agent came to it, its author could no longer write to the session (cut to watching, share revoked, gone from the organization or the team); that one carries payload.reason author_cannot_write. */
         TurnAbortedEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -1820,6 +5843,11 @@ export interface components {
                 turnId: string;
                 attempt: number;
                 error: string;
+                /**
+                 * @description Set when the control plane did not run the message at all. author_cannot_write: its author could no longer write to the session when the agent came to it, so a client shows the message as not run (error says why). Absent for a turn that failed while it ran and for events written before reasons existed; a client reads a missing or unknown reason as a normal failure.
+                 * @enum {string}
+                 */
+                reason?: "author_cannot_write";
             };
             /** Format: date-time */
             createdAt: string;
@@ -1837,7 +5865,129 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"];
+        TurnSteeredEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steered";
+            /** @description The agent took the guidance. With queuedTurnId, the queued turn then ends with chat.turn_interrupted of reason steered. */
+            payload: {
+                /**
+                 * Format: uuid
+                 * @description The running turn the guidance is for.
+                 */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+                /**
+                 * Format: uuid
+                 * @description Set when the steer carries a queued message (steerQueuedMessage, or a message the project's orchestrator sent while the session was busy): the queued turn whose message it is.
+                 */
+                queuedTurnId?: string;
+                /** @description With queuedTurnId: the person deleted the message while the agent was taking its steer (deleteQueuedMessage). On chat.turn_steered the agent took it anyway, so it was delivered; on chat.turn_steer_failed it was deleted. */
+                deleteRequested?: boolean;
+                /** @description With queuedTurnId: automation for a message the project's orchestrator sent (senderLabel names it), absent for a person's. */
+                origin?: string;
+                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator). */
+                senderLabel?: string;
+                /** @description With queuedTurnId, the person whose message it is. */
+                authorUserId?: string;
+                /** @description With authorUserId, their name when they sent it. */
+                authorName?: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description Guidance was asked of the agent (steerTurn, steerQueuedMessage, or a message the project's orchestrator sent while the session was busy). Its outcome follows as chat.turn_steered or chat.turn_steer_failed with the same clientMessageId; until then a client shows it as steering. */
+        TurnSteerRequestedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steer_requested";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+                /**
+                 * Format: uuid
+                 * @description Set when the steer carries a queued message, which stays queued until the outcome.
+                 */
+                queuedTurnId?: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description The agent did not take the guidance: it refused, the running turn ended first, or the worker did not answer in time. payload.error says why. With queuedTurnId the message stays queued, in its place, and runs as its own turn; a client shows it back in the queue with the reason. */
+        TurnSteerFailedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steer_failed";
+            payload: {
+                /**
+                 * Format: uuid
+                 * @description The running turn the guidance is for.
+                 */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+                /**
+                 * Format: uuid
+                 * @description Set when the steer carries a queued message (steerQueuedMessage, or a message the project's orchestrator sent while the session was busy): the queued turn whose message it is.
+                 */
+                queuedTurnId?: string;
+                /** @description With queuedTurnId: the person deleted the message while the agent was taking its steer (deleteQueuedMessage). On chat.turn_steered the agent took it anyway, so it was delivered; on chat.turn_steer_failed it was deleted. */
+                deleteRequested?: boolean;
+                /** @description With queuedTurnId: automation for a message the project's orchestrator sent (senderLabel names it), absent for a person's. */
+                origin?: string;
+                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator). */
+                senderLabel?: string;
+                /** @description With queuedTurnId, the person whose message it is. */
+                authorUserId?: string;
+                /** @description With authorUserId, their name when they sent it. */
+                authorName?: string;
+                error?: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. A step's live updates (status running) are deleted once its final event is stored, so a replay shows only the final event and sequences may skip. */
+        ScriptStepEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description The session's coding agent changed (an agent switch committed). Turns after it are answered by targetHarness. */
+        AgentSwitchedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.agent_switched";
+            payload: {
+                /** Format: uuid */
+                transitionId: string;
+                sourceHarness: components["schemas"]["CloudAgentHarness"];
+                targetHarness: components["schemas"]["CloudAgentHarness"];
+                sourceModel?: string;
+                targetModel?: string;
+                targetReasoningEffort?: string;
+                /** @description The new agent resumed its own earlier conversation in this session instead of starting a new one. */
+                resumed?: boolean;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["TurnSteerRequestedEvent"] | components["schemas"]["TurnSteerFailedEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AgentSwitchedEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -1846,6 +5996,13 @@ export interface components {
              * @description Highest sequence returned, or the supplied after cursor when the page is empty.
              */
             nextAfter: number;
+            /** @description Only on a page read with before: events older than the page remain above the after cursor. Absent, the control plane read forward and ignored before. */
+            hasOlder?: boolean;
+            /**
+             * Format: int64
+             * @description Only on a page read with before: the before cursor for the next older page, the lowest sequence returned or the supplied before cursor when the page is empty.
+             */
+            nextBefore?: number;
         };
         /** @enum {string} */
         TerminalKind: "agent" | "workspace";
@@ -1923,18 +6080,30 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ProviderName: "daytona" | "claude-code" | "codex" | "cursor";
+        ProviderName: "daytona" | "claude-code" | "codex" | "cursor" | "opencode" | "github" | "coder" | "nodeops";
         ProviderPublicConfig: {
             /** Format: uri */
             apiUrl?: string;
             /** @enum {string} */
             target?: "us" | "eu";
             /** @enum {string} */
-            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json" | "personal_access_token" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** Format: uri */
+            baseUrl?: string;
+            owner?: string;
+            /** Format: uuid */
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
         };
         PutAgentProviderConnectionInput: {
             /** @enum {string} */
-            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
             secret: string;
         };
         WorkerCredentialResponse: {
@@ -1958,6 +6127,59 @@ export interface components {
             readonly token: string;
             /** Format: date-time */
             expiresAt: string;
+        };
+        CloudAgentAccount: {
+            /** Format: uuid */
+            id: string;
+            agent: components["schemas"]["CloudAgentHarness"];
+            /** @description The name the user gave the account; empty when they gave none. */
+            name: string;
+            /** @enum {string} */
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** @description New sessions of the agent run on it. */
+            isDefault: boolean;
+            /** @enum {string} */
+            validationState: "pending" | "valid" | "invalid";
+            /** @description Why the account stopped working, when validationState is invalid. */
+            invalidReason?: string;
+            /** @description The login's email, when the login names one. */
+            email?: string;
+            /** @description The login's plan (such as plus or pro), when it names one. */
+            plan?: string;
+            /** Format: date-time */
+            validatedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AddAgentAccountInput: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            name?: string;
+            /** @enum {string} */
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            secret: string;
+        };
+        RenameAgentAccountInput: {
+            name: string;
+        };
+        SessionAgentAccount: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            /**
+             * Format: uuid
+             * @description The account the session's agent runs on; absent when the account was removed.
+             */
+            accountId?: string;
+            /**
+             * Format: date-time
+             * @description When the session started running on it.
+             */
+            boundAt?: string;
+        };
+        SwitchSessionAgentAccountInput: {
+            /** Format: uuid */
+            accountId: string;
+            policy?: components["schemas"]["SessionInterfaceTransitionPolicy"];
         };
         RedactedProviderConnection: {
             id: string;
@@ -2033,9 +6255,20 @@ export interface components {
         };
     };
     parameters: {
+        AgentAccountId: string;
+        CueId: string;
+        ReviewRunId: string;
+        /** @description The machine's stable identity, `h_` followed by a UUID. */
+        RemoteHostId: string;
+        /** @description The app install's stable identifier. */
+        PushInstallId: string;
+        /** @description A harness whose version AO Cloud manages. */
+        CloudHarnessAgent: "claude-code" | "codex" | "cursor";
         OrgId: string;
         ProjectId: string;
         SessionId: string;
+        /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+        WorkspaceRepository: string;
         TurnId: string;
         WorkerRequestId: string;
         TerminalId: string;
@@ -2050,6 +6283,8 @@ export interface components {
         EventLimit: number;
         /** @description Return events with a sequence strictly greater than this value. */
         After: number;
+        /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+        EventTypes: string[];
         /** @description Reusing a key with the same command returns the original result.
          *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
          *      */
@@ -2077,6 +6312,635 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserProviderConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted provider connections owned by the authenticated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnections: components["schemas"]["RedactedProviderConnection"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The validated personal coding-agent credential was encrypted and stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnection: components["schemas"]["RedactedProviderConnection"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAgentAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's coding-agent accounts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccounts: components["schemas"]["CloudAgentAccount"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The account was saved. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    renameAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The account was renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    makeAgentAccountDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account is its agent's default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    replaceAgentAccountCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The account's credential was replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listArtifactShares: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's share links. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link was revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setArtifactShareAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareAccessInput"];
+            };
+        };
+        responses: {
+            /** @description The link with its new access. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listArtifactShareGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Who the link is shared with. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareGrantList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addArtifactShareGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareGrantsInput"];
+            };
+        };
+        responses: {
+            /** @description Everyone the link is shared with now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareGrantList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeArtifactShareGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The email, team or workspace no longer has access. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadInput"];
+            };
+        };
+        responses: {
+            /** @description The upload, ready for its parts. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    presignArtifactShareParts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadPartsInput"];
+            };
+        };
+        responses: {
+            /** @description The presigned parts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePresignedParts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    abortArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadRef"];
+            };
+        };
+        responses: {
+            /** @description The upload was cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShareFileUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFileUploadInput"];
+            };
+        };
+        responses: {
+            /** @description The file's upload, ready for its parts. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeArtifactShareFileUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFileCompleteInput"];
+            };
+        };
+        responses: {
+            /** @description The finished file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareFileUploaded"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finalizeArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFinalizeInput"];
+            };
+        };
+        responses: {
+            /** @description The document's existing link, now serving the uploaded file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            /** @description The new share link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getPublicArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link's public details. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    viewArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link's details, with a contentUrl that opens it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSharedArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The links shared with the signed-in person. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        artifacts: components["schemas"]["SharedArtifact"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserAgentModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The model catalog for the next task. It lists at least one model. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
+                };
+            };
+            /** @description MODEL_CATALOG_UNAVAILABLE. This agent has no Cloud model catalog. Clients keep the agent's own model discovery where it has one, or offer the native default and manual model entry. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2197,6 +7061,8 @@ export interface operations {
             query?: {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
+                /** @description exclude lists the projects without the caller's standalone agents; only lists those agents alone. Omitted lists both. */
+                standaloneAgents?: "exclude" | "only";
             };
             header?: never;
             path: {
@@ -2252,6 +7118,30 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project and normalized settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     deleteProject: {
         parameters: {
             query?: never;
@@ -2301,6 +7191,353 @@ export interface operations {
                     "application/json": {
                         project: components["schemas"]["Project"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Validated settings persisted atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProjectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's environment variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEnvironment"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putProjectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutProjectEnvironmentInput"];
+            };
+        };
+        responses: {
+            /** @description The saved environment variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEnvironment"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProjectIntakeStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's issue intake status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectIntakeStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectCues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's cues, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CueDefinitionInput"];
+            };
+        };
+        responses: {
+            /** @description The created cue. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectShareLinks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's share links. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareLinkList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createProjectShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description The created share link, with its secrets. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedShareLinkEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeProjectShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description The link was revoked and the grants it gave were removed (removeJoined true). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokeShareLinkResult"];
+                };
+            };
+            /** @description The link was revoked; grants it gave are kept. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    redeemShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description Where the link leads, and the caller's grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedProjectEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cue was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CueDefinitionInput"];
+            };
+        };
+        responses: {
+            /** @description The updated cue. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    invokeProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvokeCueInput"];
+            };
+        };
+        responses: {
+            /** @description What the cue did. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvokeCueResult"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2432,6 +7669,42 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    createGitHubRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateGitHubRepositoryInput"];
+            };
+        };
+        responses: {
+            /** @description An existing empty repository was connected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
+                };
+            };
+            /** @description The repository was created and granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     createProjectFromGitHub: {
         parameters: {
             query?: never;
@@ -2498,6 +7771,99 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    createStandaloneProject: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStandaloneProjectInput"];
+            };
+        };
+        responses: {
+            /** @description Standalone project created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createStandaloneAgent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStandaloneAgentInput"];
+            };
+        };
+        responses: {
+            /** @description Standalone agent started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        project: components["schemas"]["Project"];
+                        session: components["schemas"]["Session"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    searchChats: {
+        parameters: {
+            query: {
+                q: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matching messages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSearchResults"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
@@ -2559,6 +7925,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    wakePausedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The resume requests were accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        woken: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSession: {
         parameters: {
             query?: never;
@@ -2587,7 +7979,10 @@ export interface operations {
     };
     deleteSession: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete the session's artifact files. A restored session comes back without them. */
+                deleteArtifacts?: boolean;
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -2604,6 +7999,267 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionInput"];
+            };
+        };
+        responses: {
+            /** @description The renamed session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pinSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's pin. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPinResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    unpinSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session is no longer pinned for the caller. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPinResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account the session's agent runs on. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionAgentAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    switchSessionAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchSessionAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The move was accepted; the transition reports its progress. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        transition: components["schemas"]["SessionInterfaceTransition"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch readiness and the active transition, if any. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInterfaceTransitionStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartSessionInterfaceTransitionInput"];
+            };
+        };
+        responses: {
+            /** @description Interface switch accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        transition: components["schemas"]["SessionInterfaceTransition"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface switch cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    acknowledgeSessionInterfaceTransitionNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch failure or recovery notice acknowledged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    retrySessionStartup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The retry was accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
                 };
             };
             default: components["responses"]["Error"];
@@ -2631,6 +8287,254 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionChildrenPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's artifact files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteSessionArtifact: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSessionArtifactAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file access prefix. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactAccess"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    saveSessionArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveSessionArtifactInput"];
+            };
+        };
+        responses: {
+            /** @description The saved artifact file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionArtifactVersions: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's kept versions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactVersionList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionArtifactVersion: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The version and its text. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactVersion"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreSessionArtifactVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    path: string;
+                    /** Format: int64 */
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The restored artifact file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restartSessionAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether a start was requested. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requested: boolean;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    shareSessionArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionArtifactShareInput"];
+            };
+        };
+        responses: {
+            /** @description The file's existing link, now serving the file's current version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            /** @description The new share link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2684,6 +8588,290 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    triggerSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current commit was already reviewed or is ineligible. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            /** @description A reviewer terminal was started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review state after cancellation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendSessionReviewToWorker: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored review was accepted and durably queued for the worker agent. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["UserMessageEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listReviewChatEvents: {
+        parameters: {
+            query?: {
+                /** @description Return events with a sequence strictly greater than this value. */
+                after?: components["parameters"]["After"];
+                limit?: components["parameters"]["EventLimit"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The review conversation's events after the supplied sequence. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewChatEventPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendReviewChatMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    text: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The message was queued for the reviewer. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["ReviewChatEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    interruptReviewChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The reviewer's running turn was asked to stop and its queued messages were dropped. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    suggestChatPrompt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromptSuggestionInput"];
+            };
+        };
+        responses: {
+            /** @description The suggestion, or an empty prompt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptSuggestion"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSessionPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionPreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description The updated cloud session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    inspectSessionReviewerHarnesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Supported reviewer CLI availability inside the live sandbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessInspectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installSessionReviewerHarness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The installed and verified reviewer CLI. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     sendMessage: {
         parameters: {
             query?: never;
@@ -2701,9 +8889,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    text: string;
-                };
+                "application/json": components["schemas"]["ChatMessageInput"];
             };
         };
         responses: {
@@ -2716,6 +8902,30 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listChatModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available Chat models. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2739,7 +8949,566 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Cancellation was durably requested for the turn. */
+            /** @description Cancellation was durably requested for the turn, or the queued turn was stopped. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerAcquire: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRenew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRequestTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerLeaveQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerTakeOver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerPublishDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sessionSetChatSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionChatSettings"];
+            };
+        };
+        responses: {
+            /** @description The session's chat settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        chatSettings: components["schemas"]["SessionChatSettings"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    requestPullRequestMerge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    prUrl: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The pending merge request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectMergeRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The merge requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequests: components["schemas"]["MergeRequest"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    approveMergeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expectedHeadSha: string;
+                };
+            };
+        };
+        responses: {
+            /** @description GitHub accepted the merge; the request is recorded as merged. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rejectMergeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declined request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionParticipants: {
+        parameters: {
+            query?: {
+                /** @description A session to describe; repeat for each, at most 100. */
+                sessionId?: string[];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shared sessions among those asked for, in the order asked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        sessions: components["schemas"]["SharedSessionParticipants"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    steerTurn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageInput"];
+            };
+        };
+        responses: {
+            /** @description Guidance for the active turn accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["TurnSteeredEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    editQueuedMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditQueuedMessageInput"];
+            };
+        };
+        responses: {
+            /** @description The message was edited. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["UserMessageEditedEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteQueuedMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The queued message was deleted, now or before. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        ok: true;
+                        /** @description The worker is taking the message as a steer; its outcome decides whether it is deleted or was delivered. */
+                        pending?: boolean;
+                    };
+                };
+            };
+            /** @description forbidden. The caller may not stop this turn, or only watches the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description TURN_NOT_QUEUED: the agent started on the message, or it was stopped or ended otherwise, so it can no longer be deleted (the turn is left as it is). SESSION_TERMINATED: the session ended. ALREADY_STEERED: the agent already took the message as a steer into its running turn, so it was delivered and cannot be deleted. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    steerQueuedMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int64
+                     * @description The composer lease grant the caller holds; 0 or absent for none.
+                     */
+                    composerEpoch?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The steer was asked of the agent; its outcome follows as an event. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["TurnSteerRequestedEvent"];
+                    };
+                };
+            };
+            /** @description forbidden. The caller may not direct this turn, or only watches the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description TURN_NOT_QUEUED: the agent started on the message, or it ended. TURN_NOT_STEERABLE: no running turn can take guidance (nothing is running, or its agent cannot steer); the message stays queued. STEER_CONTENT_UNSUPPORTED: the message has files or no text, which a steer cannot carry; it stays queued. STEER_IN_PROGRESS: a steer of this message is already in flight. COMPOSER_LOCKED, COMPOSER_LEASE_LOST: someone else holds the composer. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    decideChatApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatApprovalDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Approval decision accepted. */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -2757,6 +9526,24 @@ export interface operations {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
                 limit?: components["parameters"]["EventLimit"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
+                /** @description Read back from this sequence instead of forward from after: the
+                 *     newest events with after < sequence < before (at most limit), oldest
+                 *     first. Must be greater than after, or it is refused with 400.
+                 *     9007199254740991 reads the newest page. The page then extends back,
+                 *     once, to the prompt of every turn and the first step of every Setup
+                 *     or Cleanup run among those events, by at most 1000 events and never
+                 *     to after or below. What that brings in can begin partway through an
+                 *     earlier turn or run (a prompt queued while another turn ran sits
+                 *     inside that turn); the next older page holds the rest. Such a page
+                 *     carries hasOlder and nextBefore; a control plane that predates this
+                 *     parameter ignores it and answers with a page after `after` without
+                 *     them.
+                 *      */
+                before?: number;
+                /** @description With before only: read only events created at or after this time (still at most limit, and still extended back to where their turns start). Without before it is refused with 400. */
+                since?: string;
             };
             header?: never;
             path: {
@@ -2767,7 +9554,9 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Client-visible events after the supplied sequence. */
+            /** @description Client-visible events after the supplied sequence or, with before,
+             *     the newest events below it.
+             *      */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2784,6 +9573,14 @@ export interface operations {
             query?: {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
+                /** @description 1 opts this stream in to the session's live state. The caller is
+                 *     listed as a viewer while the stream stays open, and the stream also
+                 *     carries session.live frames (see SessionLiveState) whenever that
+                 *     state changes. Omitted, the stream carries only ClientEvents.
+                 *      */
+                live?: "1";
             };
             header?: never;
             path: {
@@ -2795,7 +9592,10 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Replay followed by live client-visible events. Each SSE data field
-             *     contains a ClientEvent; the SSE id is its sequence.
+             *     contains a ClientEvent; the SSE id is its sequence. With live=1 the
+             *     stream also carries `event: session.live` frames whose data is a
+             *     SessionLiveState. Those frames have no SSE id and never move the
+             *     replay cursor; each one replaces the previous state.
              *      */
             200: {
                 headers: {
@@ -2861,9 +9661,54 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getSessionArtifactFile: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-None-Match"?: string;
+            };
+            path: {
+                token: string;
+                /** @description The file's path in the artifact directory; may contain slashes. */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file bytes, with Content-Type from the file extension. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": string;
+                };
+            };
+            /** @description The file has not changed since the given ETag. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The access token is invalid or expired (artifact_access_invalid). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listWorkspaceFiles: {
         parameters: {
             query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path?: string;
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
@@ -2892,6 +9737,8 @@ export interface operations {
     readWorkspaceFile: {
         parameters: {
             query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path: string;
             };
             header?: never;
@@ -2917,7 +9764,10 @@ export interface operations {
     };
     writeWorkspaceFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -2946,6 +9796,8 @@ export interface operations {
     readWorkspaceDiffFile: {
         parameters: {
             query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path: string;
             };
             header?: never;
@@ -2972,7 +9824,10 @@ export interface operations {
     };
     getWorkspaceDiff: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -2992,6 +9847,30 @@ export interface operations {
                 };
             };
             501: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkspaceRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's repository checkouts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRepositoryList"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -3026,7 +9905,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -3056,7 +9935,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -3068,6 +9947,281 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgSandboxProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgSandboxProviderInput"];
+            };
+        };
+        responses: {
+            /** @description The organization's offering with its new default provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Offering"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listOrgHarnessVersions: {
+        parameters: {
+            query?: {
+                /** @description Look up the newest releases again instead of reading the control plane's cache. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every harness whose version AO Cloud manages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersions"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installOrgHarnessVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudHarnessInstallInput"];
+            };
+        };
+        responses: {
+            /** @description The harness as new sessions now run it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersion"];
+                };
+            };
+            /** @description ORG_ADMIN_REQUIRED. Only organization owners and admins change the version. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description INVALID_HARNESS_VERSION (not a stable release of the harness), HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release), UNKNOWN_HARNESS_VERSION (the publisher has no such release), or UNVERIFIABLE_HARNESS_VERSION (the release installs something AO Cloud cannot check against its publisher's listing). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RELEASE_LOOKUP_UNAVAILABLE. The publisher could not be reached; nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resetOrgHarnessVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The harness as new sessions now run it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersion"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection, or configured=false when there is none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgCoderConfigInput"];
+            };
+        };
+        responses: {
+            /** @description The validated connection was stored; the token is never returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description connection_in_use: sessions not yet fully deleted still run on the connection, so it is kept. Remove their projects or sessions first. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template's parameters in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    evaluateCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Draft parameter values by name, encoded as in project config coder.parameters. */
+                    values: {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description The template's parameters for these values, in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -3291,7 +10445,10 @@ export interface operations {
     };
     getWorkerCredential: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Select the snapshotted reviewer credential for a running review owned by this session. */
+                reviewRunId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3339,6 +10496,131 @@ export interface operations {
             404: components["responses"]["WorkerRoutesDisabled"];
             502: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    compareWorkerArtifactManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactManifestInput"];
+            };
+        };
+        responses: {
+            /** @description The changed paths. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactManifestResponse"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putWorkerArtifactBlob: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-AO-Artifact-SHA256": string;
+            };
+            path: {
+                /** @description The file's path in the artifact directory; may contain slashes. */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The stored version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactBlobResponse"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            411: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            /** @description The body does not match its SHA-256 (checksum_mismatch). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    commitWorkerArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactCommitInput"];
+            };
+        };
+        responses: {
+            /** @description The changes are committed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    registerWorkerArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactRegistrationInput"];
+            };
+        };
+        responses: {
+            /** @description The committed files at the paths are registered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactRegistrationResult"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            default: components["responses"]["Error"];
         };
     };
     listWorkerChildren: {
@@ -3595,6 +10877,37 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    fallBackWorkerChatStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerChatStartFallbackInput"];
+            };
+        };
+        responses: {
+            /** @description Whether the session moved to tui. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerChatStartFallbackResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            404: components["responses"]["WorkerRoutesDisabled"];
+            /** @description The code is not one the control plane knows. */
+            422: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
     ensureWorkerAgentTerminal: {
         parameters: {
             query?: never;
@@ -3678,6 +10991,373 @@ export interface operations {
             401: components["responses"]["WorkerUnauthorized"];
             403: components["responses"]["WorkerScopeRequired"];
             409: components["responses"]["Error"];
+        };
+    };
+    publishWorkerNotificationEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentNotificationEvent"];
+            };
+        };
+        responses: {
+            /** @description The exact event was already durably accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            /** @description The event was durably accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            409: components["responses"]["Error"];
+        };
+    };
+    getOrgBilling: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's billing summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listCloudNotifications: {
+        parameters: {
+            query?: {
+                status?: "all" | "unread" | "read";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recipient-scoped cloud notification inbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCloudNotificationEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered durable cloud notification events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationEventPage"];
+                    "text/event-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markCloudNotificationRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                notificationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    status: "read";
+                };
+            };
+        };
+        responses: {
+            /** @description The notification was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markAllCloudNotificationsRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every unread notification for the current recipient was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listRemoteHosts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's machines. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostRegistration"];
+            };
+        };
+        responses: {
+            /** @description Listed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds. */
+            409: components["responses"]["Error"];
+            /** @description `validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses. */
+            422: components["responses"]["ValidationError"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working. */
+            502: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putPushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutPushDeviceInput"];
+            };
+        };
+        responses: {
+            /** @description Registered. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `validation_error`: the token is not an Expo push token, the platform is unknown, or the device name is too long. */
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deletePushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, or was not registered. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    publishRemoteHostAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostAddress"];
+            };
+        };
+        responses: {
+            /** @description Published. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
+            401: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    ensureRemoteHostTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostTunnelRequest"];
+            };
+        };
+        responses: {
+            /** @description The machine's fixed tunnel. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostTunnel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
+            401: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. A deployment that predates this route answers 404 without an error envelope. */
+            404: components["responses"]["Error"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
+            409: components["responses"]["Error"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place. */
+            502: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable` from an older deployment that gives no fixed addresses; current ones answer 404, so a machine that keeps asking does not count as a server error. */
+            503: components["responses"]["Error"];
+            default: components["responses"]["Error"];
         };
     };
 }

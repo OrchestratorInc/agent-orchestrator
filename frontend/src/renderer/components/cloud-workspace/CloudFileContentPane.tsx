@@ -1,16 +1,17 @@
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import { EditProvider } from "@pierre/diffs/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
+import { LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "@/components/app-icons";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewFileQueryOptions, cloudWorkspaceReviewQueryKey, cloudWorkspaceReviewRevisionQueryOptions } from "../../hooks/useCloudWorkspaceReview";
 import type { WorkspaceFileDetail } from "../../hooks/useSessionWorkspaceFiles";
 import type { CloudCpClient, CloudCpWorkspaceReviewFileResponse, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
-import { FileAnnotationComposer, PanelMessage, RetryButton } from "../WorkspaceDiffView";
+import { cancelFileAnnotations, FileAnnotationComposer, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { ReadOnlyFileView } from "../ReadOnlyFileView";
 import { MarkdownFileView } from "../markdown/MarkdownFileView";
+import { MarkdownEditor } from "../MarkdownEditor";
 import { Button } from "../ui/button";
 import { CloudDiffFile } from "./CloudDiffFile";
 
@@ -22,14 +23,17 @@ function localDetail(detail: CloudCpWorkspaceReviewFileResponse): WorkspaceFileD
 }
 
 export function CloudFileContentPane({
-	annotation, baseUrl, client, commitSha, initialEditing = false, initialMode = "diff", initialRequestKey = 0,
+	active = true, annotation, baseUrl, client, commitSha, initialEditing = false, initialLine, initialMode = "diff", initialRequestKey = 0,
 	onDirtyChange, orgId, path, scope = "combined", sessionId, split,
 }: {
+	/** False while the view is kept mounted behind another tab: its save shortcut stays off. */
+	active?: boolean;
 	annotation: FileAnnotationModel;
 	baseUrl: string;
 	client: CloudCpClient;
 	commitSha?: string;
 	initialEditing?: boolean;
+	initialLine?: number;
 	initialMode?: CloudFileViewMode;
 	initialRequestKey?: number;
 	onDirtyChange?: (dirty: boolean) => void;
@@ -65,29 +69,30 @@ export function CloudFileContentPane({
 		finally { setSaving(false); }
 	}, [baseUrl, client, commitSha, detail, draft, orgId, path, queryClient, saving, scope, sessionId, t]);
 	useEffect(() => {
-		if (!editing) return;
+		if (!active || !editing) return;
 		const shortcut = (event: KeyboardEvent) => { if (event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) { event.preventDefault(); if (hasUnsavedChanges) void save(); } };
 		window.addEventListener("keydown", shortcut, true); return () => window.removeEventListener("keydown", shortcut, true);
-	}, [editing, hasUnsavedChanges, save]);
+	}, [active, editing, hasUnsavedChanges, save]);
 
 	if (!path) return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
 	if (query.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (query.error || !detail) return <PanelMessage action={<RetryButton onClick={() => void query.refetch()} />}>{query.error?.message ?? t("files.error.loadFile")}</PanelMessage>;
 	const renderedAvailable = !detail.deleted && !detail.binary && !detail.contentTruncated && /\.(md|markdown)$/i.test(path);
 	const effectiveMode = detail.status === "unmodified" && mode === "diff" ? "file" : mode === "rendered" && !renderedAvailable ? "file" : mode;
+	const wholeFileAnnotationTarget = annotation.targets.find((target) => target.surface !== "review" && target.path === path && target.side === "file" && target.line == null);
 	const tabs = <div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-surface px-2 py-1">
 		<div aria-label={t("files.fileDisplayMode")} className="flex items-center" role="tablist">
-			{detail.status !== "unmodified" ? <Button aria-selected={effectiveMode === "diff"} disabled={editing} onClick={() => setMode("diff")} role="tab" size="sm" variant={effectiveMode === "diff" ? "secondary" : "ghost"}>{t("files.diff")}</Button> : null}
-			<Button aria-selected={effectiveMode === "file"} disabled={editing} onClick={() => setMode("file")} role="tab" size="sm" variant={effectiveMode === "file" ? "secondary" : "ghost"}>{t("files.fileView")}</Button>
-			{renderedAvailable ? <Button aria-selected={effectiveMode === "rendered"} disabled={editing} onClick={() => setMode("rendered")} role="tab" size="sm" variant={effectiveMode === "rendered" ? "secondary" : "ghost"}>{t("files.rendered")}</Button> : null}
+			{detail.status !== "unmodified" ? <Button aria-selected={effectiveMode === "diff"} data-active={effectiveMode === "diff"} role="tab" disabled={editing} onClick={() => setMode("diff")} size="sm" variant="ghost">{t("files.diff")}</Button> : null}
+			<Button aria-selected={effectiveMode === "file"} data-active={effectiveMode === "file"} role="tab" disabled={editing} onClick={() => setMode("file")} size="sm" variant="ghost">{t("files.fileView")}</Button>
+			{renderedAvailable ? <Button aria-selected={effectiveMode === "rendered"} data-active={effectiveMode === "rendered"} role="tab" disabled={editing} onClick={() => setMode("rendered")} size="sm" variant="ghost">{t("files.rendered")}</Button> : null}
 		</div>
-		{editing ? <div className="ml-auto flex gap-1"><Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={() => { setEditing(false); setDraft(""); setSaveError(""); }} size="sm" variant="ghost"><X />{t("files.cancelEditing")}</Button><Button aria-label={t("files.saveFile")} disabled={saving || !hasUnsavedChanges} onClick={() => void save()} size="sm" variant="primary">{saving ? <LoaderCircle className="animate-spin" /> : <Save />}{t("files.saveFile")}</Button></div> : <><Button aria-label={t("files.editFile")} className="ml-auto" disabled={!detail.editable || !detail.fileFingerprint || Boolean(commitSha)} onClick={() => { annotation.cancel(); setMode("file"); setDraft(detail.content); setEditing(true); }} size="icon-sm" variant="ghost"><Pencil /></Button><Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button></>}
-		{annotation.target?.surface !== "review" && annotation.target?.path === path && annotation.target.side === "file" && annotation.target.line == null ? <div className="absolute right-2 top-full z-50 w-[min(32rem,calc(100%-1rem))]"><FileAnnotationComposer annotation={annotation} /></div> : null}
+		{editing ? <div className="ml-auto flex gap-1"><Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={() => { setEditing(false); setDraft(""); setSaveError(""); }} size="sm" variant="ghost"><X />{t("files.cancelEditing")}</Button><Button aria-label={t("files.saveFile")} disabled={saving || !hasUnsavedChanges} onClick={() => void save()} size="sm" variant="primary">{saving ? <LoaderCircle className="animate-spin" /> : <Save />}{t("files.saveFile")}</Button></div> : <><Button aria-label={t("files.editFile")} className="ml-auto" disabled={!detail.editable || !detail.fileFingerprint || Boolean(commitSha)} onClick={() => { cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === path); setMode("file"); setDraft(detail.content); setEditing(true); }} size="icon-sm" variant="ghost"><Pencil /></Button><Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button></>}
+		{wholeFileAnnotationTarget ? <div className="absolute right-2 top-full z-50 w-[min(32rem,calc(100%-1rem))]"><FileAnnotationComposer annotation={annotation} target={wholeFileAnnotationTarget} /></div> : null}
 	</div>;
-	return <div className="relative min-w-0">{tabs}<EditProvider createEditor={createEditor}>{effectiveMode === "diff" ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} client={client} commitSha={commitSha} file={detail} onActiveSelectionChange={() => undefined} orgId={orgId} patch={detail.diff} scope={scope} sessionId={sessionId} split={split && (detail.status === "modified" || detail.status === "renamed")} workspaceVersion={detail.workspaceVersion} fallback={<PanelMessage>{t("files.diffUnavailable")}</PanelMessage>} /> : effectiveMode === "rendered" ? <MarkdownFileView content={detail.content} filePath={path} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} /> : <CompleteCloudFileView annotation={annotation} baseUrl={baseUrl} client={client} commitSha={commitSha} detail={detail} editing={editing} onEditChange={setDraft} orgId={orgId} scope={scope} sessionId={sessionId} />}</EditProvider>{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}</div>;
+	return <div className="relative min-w-0">{tabs}<EditProvider createEditor={createEditor}>{effectiveMode === "diff" ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} client={client} commitSha={commitSha} file={detail} onActiveSelectionChange={() => undefined} orgId={orgId} patch={detail.diff} scope={scope} sessionId={sessionId} split={split && (detail.status === "modified" || detail.status === "renamed")} workspaceVersion={detail.workspaceVersion} fallback={<PanelMessage>{t("files.diffUnavailable")}</PanelMessage>} /> : effectiveMode === "rendered" ? <MarkdownFileView content={detail.content} filePath={path} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} /> : <CompleteCloudFileView annotation={annotation} baseUrl={baseUrl} client={client} commitSha={commitSha} detail={detail} editing={editing} onEditChange={setDraft} orgId={orgId} revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined} scope={scope} sessionId={sessionId} />}</EditProvider>{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" /></div>;
 }
 
-function CompleteCloudFileView({ annotation, baseUrl, client, commitSha, detail, editing, onEditChange, orgId, scope, sessionId }: { annotation: FileAnnotationModel; baseUrl: string; client: CloudCpClient; commitSha?: string; detail: CloudCpWorkspaceReviewFileResponse; editing: boolean; onEditChange: (content: string) => void; orgId: string; scope: CloudCpWorkspaceReviewScope; sessionId: string }) {
+function CompleteCloudFileView({ annotation, baseUrl, client, commitSha, detail, editing, onEditChange, orgId, revealLine, scope, sessionId }: { annotation: FileAnnotationModel; baseUrl: string; client: CloudCpClient; commitSha?: string; detail: CloudCpWorkspaceReviewFileResponse; editing: boolean; onEditChange: (content: string) => void; orgId: string; revealLine?: { line: number; requestKey: number }; scope: CloudCpWorkspaceReviewScope; sessionId: string }) {
 	const { t } = useTranslation();
 	const needsRevision = detail.deleted || detail.contentTruncated;
 	const side = detail.deleted ? "before" : "after";
@@ -95,5 +100,9 @@ function CompleteCloudFileView({ annotation, baseUrl, client, commitSha, detail,
 	if (needsRevision && revision.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
 	const resolved = revision.data ? { ...detail, deleted: false, binary: revision.data.binary, content: revision.data.content, contentTruncated: revision.data.truncated, size: revision.data.size } : detail;
-	return <ReadOnlyFileView annotation={annotation} detail={localDetail(resolved)} editing={editing} onEditChange={onEditChange} scope={scope === "untracked" ? "combined" : scope} sessionId={sessionId} side={side} />;
+	const local = localDetail(resolved);
+	if (editing && !local.deleted && !local.binary && !local.contentTruncated && /\.(md|markdown)$/i.test(local.path)) {
+		return <MarkdownEditor filePath={local.path} onChange={onEditChange} value={local.content} />;
+	}
+	return <ReadOnlyFileView annotation={annotation} detail={local} editing={editing} onEditChange={onEditChange} revealLine={revealLine} scope={scope === "untracked" ? "combined" : scope} sessionId={sessionId} side={side} />;
 }

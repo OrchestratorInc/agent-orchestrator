@@ -1,117 +1,263 @@
-import { Bot, GitBranch, Inbox, MonitorCog, TriangleAlert, X, type LucideIcon } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import type { AppIcon } from "./icons";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, Share2, TriangleAlert, Wrench } from "@/components/app-icons";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { aoBridge } from "../lib/bridge";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
-import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
-import { writeCodexAccounts } from "../hooks/codex-accounts-state";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useMyTeams } from "../hooks/useTeams";
+import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
+import { SHARE_FEATURE } from "../lib/cloud-offering";
+import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
+import { useSectionHistory } from "../hooks/useSectionHistory";
+import { SwipeNavigation, type SwipeNavigationActions } from "./SwipeNavigation";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
-import {
-	ProjectSettingsForm,
-	type ProjectSettingsSaveState,
-	type ProjectSettingsSection,
-} from "./ProjectSettingsForm";
-import {
-	DialogHeader,
-	settingsDialogBodyClass,
-	settingsDialogContentClass,
-	settingsDialogHeaderClass,
-} from "./ui/dialog";
-import { type GlobalSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
+import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
+import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
+import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
+import { CloudProjectSharingSettings } from "./CloudProjectSharingSettings";
+import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { isCloudWorkspaceProject } from "../lib/cloud-project-repos";
+import { CloudProjectEnvironmentSettings, ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
+import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { CuesSettings } from "./CuesDialog";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { useAppShortcut } from "../hooks/useAppShortcut";
+import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
+import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { Button } from "./ui/button";
-import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { CloseButton } from "./ui/close-button";
+import { Pressable } from "./ui/pressable";
+import { labelForHost } from "../lib/host-clients";
+import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { globalSettingsItem, teamsPageFor, type TeamsPage, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
+import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../lib/mobile-pairing-code";
+import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
+import { useEdgeFade } from "../hooks/useEdgeFade";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
 }
 
-export function SettingsDialog() {
-	const settingsModal = useUiStore((state) => state.settingsModal);
-	const projectSettings = settingsModal?.scope === "project" ? settingsModal : settingsModal?.returnTo;
-	return (
-		<>
-			{projectSettings && <SettingsDialogLayer key={projectSettings.projectId} settingsModal={projectSettings} />}
-			{settingsModal?.scope === "global" && <SettingsDialogLayer key="global" settingsModal={settingsModal} />}
-		</>
-	);
+/**
+ * What Settings › Teams offers: managing the workspace's teams where it can
+ * share (as the Share button), only the teams the person is in elsewhere
+ * where it can't, and nothing against a control plane from before teams.
+ * Hidden until the person's teams are known, so the rail never shows an
+ * item that then goes away.
+ */
+function useTeamsPage(enabled: boolean, share: boolean, orgId: string | undefined): TeamsPage {
+	const mine = useMyTeams(enabled);
+	return enabled ? teamsPageFor({ share, orgId, mine }) : "none";
 }
 
-function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }) {
+function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
+	// Diagnostics (memory and CPU) is listed only with its toggle on in Developer mode.
+	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
+	// The org's offering decides the cloud pages: the bring-your-own-Coder page
+	// only when it includes coder, Upgrade only for self-serve billing.
+	const offering = useCloudOffering();
+	const { customCoder, selfServeBilling } = offering;
+	// A build without Teams has no Teams page and never asks for the person's teams.
+	const teamsEnabled = useTeamsEnabled();
+	const teams = useTeamsPage(teamsEnabled && cloudEnabled && settingsModal?.scope === "global", offering.features?.includes(SHARE_FEATURE) === true, offering.org?.id);
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
 	// frame after the lightweight dialog chrome so the opening interaction can
 	// paint first.
-	const [bodySettings, setBodySettings] = useState<SettingsModal | null>(null);
+	const deferSettingsBody = settingsModal?.scope === "global";
+	const [bodySettings, setBodySettings] = useState<SettingsModal | null>(() =>
+		deferSettingsBody ? null : settingsModal,
+	);
 	useEffect(() => {
-		if (settingsModal === null) return;
+		if (settingsModal === null) {
+			setBodySettings(null);
+			return;
+		}
+		if (!deferSettingsBody) {
+			setBodySettings(settingsModal);
+			return;
+		}
 		const frame = requestAnimationFrame(() => setBodySettings(settingsModal));
 		return () => cancelAnimationFrame(frame);
-	}, [settingsModal]);
+	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, diagnostics, customCoder, selfServeBilling, teams });
+	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
+	// A cloud project lives only in the control plane; the local daemon has no
+	// record of it. Resolve it here so its settings load from the control plane.
+	const explicitCloudOrgId = displaySettings?.scope === "project" ? displaySettings.cloudOrgId : undefined;
+	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId && explicitCloudOrgId === undefined;
+	// Only a project the local daemon may hold needs the org's list to tell
+	// whether it is a Cloud project; one opened as a Cloud project is read on
+	// its own below.
+	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
+	const cloudProject = localProjectScope
+		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
+		: undefined;
+	// Only fall back to the local daemon's form for a project the local daemon
+	// actually lists: a failed cloud lookup must not masquerade as a local
+	// project (the daemon would answer "Unknown project" for a cloud id).
+	const projectId = displaySettings?.scope === "project" ? displaySettings.projectId : "";
+	const knownLocal = useQuery({
+		...workspaceQueryOptions,
+		enabled: localProjectScope,
+		select: (workspaces) => workspaces.some((workspace) => workspace.id === projectId),
+	}).data === true;
+	const cloudProjectsPending = localProjectScope && !knownLocal && cloudProjects.isLoading;
+	const cloudLookupFailed = localProjectScope && !cloudProject && !knownLocal && cloudProjects.isError;
 
-	const projectSections: Array<{ id: ProjectSettingsSection; label: string; icon: LucideIcon }> = [
-		{ id: "general", label: t("settings.project.identity"), icon: MonitorCog },
+	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
+	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
+	// The Cloud project itself, by the query its settings pages load it with,
+	// so they share one read: whichever org it is in, wherever it sits in the
+	// org's list.
+	const cloudCp = useCloudCp(isCloudProjectSettings);
+	const cloudProjectRecord = useQuery({
+		queryKey: cloudProjectSettingsQueryKey(cloudCp.baseUrl, cloudOrgId ?? "", projectId),
+		enabled: isCloudProjectSettings && cloudCp.ready,
+		retry: false,
+		queryFn: ({ signal }) => cloudCp.client.getProject(cloudOrgId ?? "", projectId, { signal }).then((response) => response.project),
+	});
+	const projectSections: Array<{
+		id: ProjectSettingsSection;
+		label: string;
+		icon: AppIcon;
+	}> = [
+		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
-		{ id: "workflow", label: t("settings.project.workflow"), icon: GitBranch },
-		{ id: "intake", label: t("settings.project.intake"), icon: Inbox },
 	];
+	// Scripts, environment and cues are project settings on local and Cloud
+	// projects alike (a Cloud session's worker runs and gets them); remote hosts
+	// expose none of these.
+	// A Cloud project's repositories, where its agent starts, and the
+	// instructions added to its agents' prompts live on the control plane.
+	if (isCloudProjectSettings) {
+		// A workspace's repositories are all its own, side by side in its folder.
+		const workspace = isCloudWorkspaceProject(cloudProjectRecord.data ?? cloudProject);
+		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
+	}
+	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
+	if (!remoteHostId) {
+		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
+		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
+	}
+	// Sharing the whole project, as a session's Share does: only the project's
+	// own organization shares it, and only once WorkOS enables sharing for it.
+	const canShareProject = isCloudProjectSettings && cloudOrgId === offering.org?.id && offering.features?.includes(SHARE_FEATURE) === true;
+	if (canShareProject) projectSections.push({ id: "sharing", label: t("settings.project.sharing"), icon: Share2 });
 
 	const isProjectSettings = displaySettings?.scope === "project";
-	const [activeSection, setActiveSection] = useState<GlobalSettingsSection>("general");
+	const globalHistory = useSectionHistory<GlobalSettingsSection>("general");
+	const activeSection = globalHistory.current;
+	const globalRequestRef = useRef<{ modal: SettingsModal; section: GlobalSettingsSection } | null>(null);
 	const [focusAgentId, setFocusAgentId] = useState<string>();
-	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
+	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
+	const [startLogin, setStartLogin] = useState(false);
+	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
+	const projectHistory = useSectionHistory<ProjectSettingsSection>("general");
+	const activeProjectSection = projectHistory.current;
+	const [pendingProjectSection, setPendingProjectSection] = useState<{ navigate: () => void } | null>(null);
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
+	const [cueBusy, setCueBusy] = useState(false);
+	useEffect(() => {
+		if (pendingProjectSection && projectSaveState.phase === "saved" && !projectSaveState.dirty) {
+			pendingProjectSection.navigate();
+			setPendingProjectSection(null);
+		}
+	}, [pendingProjectSection, projectSaveState]);
+	const closeWhenSavedRef = useRef(false);
 	const globalSettingsWasOpen = useRef(false);
 
-	const activeLabel = isProjectSettings
-		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.identity"))
-		: globalSettingsItem(activeSection, { cloudEnabled }).label(t);
+	const activeLabel = !settingsModal ? "" : isProjectSettings
+		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
+		: globalSettingsItem(activeSection, { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams }).label(t);
 
 	const closeSettingsDialog = () => {
-		if (isProjectSettings && (projectSaveState.phase === "pending" || projectSaveState.phase === "saving")) return;
+		if (!settingsModal) return;
+		if (cueBusy) return;
+		if (isProjectSettings) {
+			if (closeWhenSavedRef.current) return;
+			if (projectSaveState.requestPending) {
+				closeWhenSavedRef.current = true;
+				return;
+			}
+			// A draft that cannot be saved is dropped; waiting for a save would hang the close.
+			if (projectSaveState.unsaveable) {
+				closeSettings();
+				return;
+			}
+			if (projectSaveState.dirty) {
+				const form = document.getElementById("project-settings-form") as HTMLFormElement | null;
+				if (form) {
+					closeWhenSavedRef.current = true;
+					form.requestSubmit();
+					return;
+				}
+			}
+			if (projectSaveState.phase === "pending" || projectSaveState.phase === "saving") {
+				closeWhenSavedRef.current = true;
+				return;
+			}
+		}
 		closeSettings();
 	};
-	const closeButtonRef = useRef<HTMLButtonElement>(null);
-	const contentRef = useRef<HTMLDivElement>(null);
-	const returnFocusRef = useRef(document.activeElement as HTMLElement | null);
-	const returnDialogRef = useRef(returnFocusRef.current?.closest<HTMLElement>('[role="dialog"]') ?? null);
-	const hasAgentFocusTarget = settingsModal.scope === "global" && Boolean(settingsModal.focusAgentId);
 	useEffect(() => {
-		if (hasAgentFocusTarget) return;
-		// The modal contains focus immediately. Move visible focus after the
-		// first paint because focus() forces style resolution.
-		let focusTimer = 0;
-		const focusFrame = requestAnimationFrame(() => {
-			focusTimer = window.setTimeout(() => closeButtonRef.current?.focus({ preventScroll: true }), 0);
-		});
-		return () => {
-			cancelAnimationFrame(focusFrame);
-			window.clearTimeout(focusTimer);
-		};
-	}, [hasAgentFocusTarget]);
-
+		if (!closeWhenSavedRef.current) return;
+		if (projectSaveState.phase === "failed" || projectSaveState.replacementError) {
+			closeWhenSavedRef.current = false;
+		} else if (projectSaveState.unsaveable && !projectSaveState.requestPending) {
+			closeWhenSavedRef.current = false;
+			closeSettings();
+		} else if (!projectSaveState.dirty && !projectSaveState.requestPending &&
+			(projectSaveState.phase === "saved" || projectSaveState.phase === "idle")) {
+			closeWhenSavedRef.current = false;
+			closeSettings();
+		}
+	}, [closeSettings, projectSaveState]);
+	// Re-resolves the requested page as the gates settle: the org's offering
+	// loads after the dialog opens, so a deep link to Upgrade or Coder lands on
+	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled }).id);
+			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams }).id;
+			if (globalRequestRef.current?.modal !== settingsModal) globalHistory.reset(section);
+			else if (globalRequestRef.current.section !== section) globalHistory.visit(section);
+			globalRequestRef.current = { modal: settingsModal, section };
 		}
+	}, [cloudEnabled, diagnostics, customCoder, selfServeBilling, teams, settingsModal, globalHistory.reset, globalHistory.visit]);
+	// Project scope resets only when a project is opened, never when a gate
+	// settles, so a reported save state survives the offering loading.
+	useEffect(() => {
 		if (settingsModal?.scope === "project") {
-			setActiveProjectSection("general");
+			projectHistory.reset(settingsModal.section ?? "general");
+			setPendingProjectSection(null);
 			setProjectSaveState(initialProjectSaveState());
+			setCueBusy(false);
 		}
-	}, [cloudEnabled, settingsModal]);
+	}, [settingsModal, projectHistory.reset]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
+		setHarnessView(settingsModal?.scope === "global" ? settingsModal.harnessView : undefined);
+		setStartLogin(settingsModal?.scope === "global" && settingsModal.startLogin === true);
+		setShowDiagnostics(settingsModal?.scope === "global" ? settingsModal.showDiagnostics : undefined);
 	}, [settingsModal]);
 
 	useEffect(() => {
@@ -122,199 +268,428 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 		}
 		if (globalSettingsWasOpen.current) return;
 		globalSettingsWasOpen.current = true;
-		// Warm account management as soon as global Settings opens, regardless of
-		// which page is selected. By the time the user visits Accounts, external
-		// login/logout changes and saved-account observations are already current.
-		void ensureCodexAccounts([], {
-			includeUsage: true,
-			forceAuthentication: true,
-			forceDeviceReconciliation: true,
-		})
-			.then((next) => writeCodexAccounts(queryClient, next, "replace"))
-			.catch(() => undefined);
+		// Warm Mobile as soon as global Settings opens: its pairing state and Keep
+		// awake are known before the page is first drawn, so nothing pops in or
+		// flips after it opens.
+		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
+		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
+		// Fails quietly while Connect Mobile is off; the page fetches it once on.
+		void queryClient.prefetchQuery({ queryKey: mobilePairingCodeQueryKey, queryFn: fetchPairingCode, staleTime: PAIRING_CODE_REFRESH_MS });
 	}, [queryClient, settingsModal?.scope]);
 
-	return (
-		<Dialog.Root open onOpenChange={(open) => { if (!open) closeSettingsDialog(); }}>
-			<Dialog.Portal>
-			<Dialog.Overlay
-				className="dialog-overlay animate-overlay-in motion-reduce:animate-none"
-				data-testid="settings-dialog-overlay"
-				onWheel={(event) => event.preventDefault()}
-			/>
-				<Dialog.Content
-					aria-modal="true"
-					className={cn(
-						settingsDialogContentClass,
-						"fixed left-1/2 top-1/2 h-(--size-settings-dialog-height) w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
-					)}
-					onOpenAutoFocus={(event) => event.preventDefault()}
-					onEscapeKeyDown={(event) => {
-						if (contentRef.current?.contains(event.target as Node)) return;
-						const target = event.target instanceof Element ? event.target : null;
-						const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
-						const nestedPopup = [target, activeElement].some((element) =>
-							element?.closest('[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]'),
-						);
-						if (nestedPopup) event.preventDefault();
-					}}
-					onCloseAutoFocus={(event) => {
-						event.preventDefault();
-						// Successful recovery removes its CTA. The originating dialog
-						// remains mounted and can receive focus when that happens.
-						const target = returnFocusRef.current?.isConnected ? returnFocusRef.current : returnDialogRef.current;
-						if (target?.isConnected) target.focus({ preventScroll: true });
-					}}
-					ref={contentRef}
-				>
-					<div className="flex h-full min-h-0">
-						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
-						<p className="px-3 pb-1 pt-3 text-2xs font-semibold tracking-wider text-muted-foreground/60">{t("settings.title")}</p>
-						<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
-							{isProjectSettings
-								? projectSections.map(({ id, label, icon }) => (
-										<SettingsNavItem
-											active={activeProjectSection === id}
-											icon={icon}
-											key={id}
-											label={label}
-											onClick={() => setActiveProjectSection(id)}
-										/>
-									))
-								: globalSections.map(({ id, label, icon }) => (
-										<SettingsNavItem
-											active={activeSection === id}
-											icon={icon}
-											key={id}
-											label={label(t)}
-											onClick={() => {
-												setActiveSection(id);
-												setFocusAgentId(undefined);
-											}}
-										/>
-									))}
-						</nav>
-						{isProjectSettings && (
-							<div className="mt-auto flex flex-col gap-2 border-t border-(--color-border-settings-dialog-header) p-3">
-								<Button
-									type="submit"
-									form="project-settings-form"
-									variant="footer-primary"
-									className={cn(
-										"w-full rounded-md",
-										projectSaveState.phase === "failed" &&
-											"border-error bg-error/15 text-error hover:bg-error/20",
-									)}
-									disabled={projectSaveState.phase === "pending" || projectSaveState.phase === "saving"}
-									aria-live="polite"
-									title={
-										projectSaveState.error ??
-										(projectSaveState.replacementError
-											? t("settings.project.restartFailed", { error: projectSaveState.replacementError })
-											: undefined)
-									}
-								>
-									{projectSaveState.phase === "saving" ? (
-										t("settings.project.saving")
-									) : projectSaveState.phase === "saved" ? (
-										t("settings.project.saved")
-									) : projectSaveState.phase === "failed" ? (
-										<>
-											<TriangleAlert className="size-4" aria-hidden="true" />
-											{t("settings.project.saveFailed")}
-										</>
-									) : (
-										t("settings.project.saveChanges")
-									)}
-								</Button>
-								{projectSaveState.phase === "failed" && projectSaveState.error && (
-									<p className="mt-1.5 px-0.5 text-xs text-destructive leading-tight" role="alert">
-										{projectSaveState.error}
-									</p>
-								)}
-								<span className="sr-only" role="status" aria-live="polite">
-									{projectSaveState.phase === "saved" ? t("settings.project.saved") : ""}
-								</span>
-							</div>
-						)}
-					</aside>
+	const selectProjectSection = (id: ProjectSettingsSection, navigate = () => projectHistory.visit(id)) => {
+		if (projectSaveState.dirty && !projectSaveState.unsaveable && id !== activeProjectSection) {
+			setPendingProjectSection({ navigate });
+			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
+		} else {
+			navigate();
+		}
+	};
+	const selectGlobalSection = (id: GlobalSettingsSection) => {
+		globalHistory.visit(id);
+		setFocusAgentId(undefined);
+	};
+	const navItems: SettingsNavEntry[] = isProjectSettings
+		? projectSections.map(({ id, label, icon }) => ({ id, label, icon, active: activeProjectSection === id, disabled: cueBusy, onSelect: () => selectProjectSection(id) }))
+		: globalSections.map(({ id, label, icon }) => ({ id, label: label(t), icon, active: activeSection === id, onSelect: () => selectGlobalSection(id) }));
+	const navigationBlocked = isProjectSettings && (cueBusy || projectSaveState.requestPending === true || (projectSaveState.phase === "pending" && !projectSaveState.unsaveable) || projectSaveState.phase === "saving");
+	const history = isProjectSettings ? projectHistory : globalHistory;
+	const navigation: SwipeNavigationActions = {
+		canGoBack: !navigationBlocked,
+		canGoForward: !navigationBlocked && history.next !== undefined,
+		back: () => {
+			if (navigationBlocked) return;
+			if (isProjectSettings && projectHistory.previous !== undefined) selectProjectSection(projectHistory.previous, projectHistory.back);
+			else if (!isProjectSettings && globalHistory.previous !== undefined) { globalHistory.back(); setFocusAgentId(undefined); }
+			else closeSettingsDialog();
+		},
+		forward: () => {
+			if (navigationBlocked) return;
+			if (isProjectSettings && projectHistory.next !== undefined) selectProjectSection(projectHistory.next, projectHistory.forward);
+			else if (!isProjectSettings) { globalHistory.forward(); setFocusAgentId(undefined); }
+		},
+	};
+	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" && activeProjectSection !== "sharing" &&
+		(projectSaveState.phase === "failed" ||
+			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
+			projectSaveState.phase === "saving" ||
+			Boolean(remoteHostId && projectSaveState.replacementError));
 
-					{/* Main area — same bg as the app page */}
-					<div className="flex min-w-0 flex-1 flex-col bg-card">
-						<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 pb-3")}>
-							<Dialog.Title className="text-2xl font-bold text-foreground">{activeLabel}</Dialog.Title>
-							<Dialog.Description className="sr-only">
-								{isProjectSettings ? t("settings.project.dialogDescription") : t("settings.dialogDescription", { section: activeLabel.toLowerCase() })}
-							</Dialog.Description>
-							<button
-								aria-label={t("settings.close")}
-								className="settings-close-button"
-								disabled={isProjectSettings && (projectSaveState.phase === "pending" || projectSaveState.phase === "saving")}
-								onClick={closeSettingsDialog}
-								ref={closeButtonRef}
-								type="button"
-							>
-								<X aria-hidden="true" className="size-4" />
-							</button>
-						</DialogHeader>
-						<div
-							aria-busy={!isBodyReady}
-							className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}
-						>
-							{isBodyReady ? (
-								displaySettings?.scope === "project" ? (
-									<ProjectSettingsForm
-										projectId={displaySettings.projectId}
-										section={activeProjectSection}
-										onSaveState={setProjectSaveState}
-									/>
-								) : (
-									<GlobalSettingsForm
-										cloudEnabled={cloudEnabled}
-										focusAgentId={focusAgentId}
-										section={activeSection}
-									/>
-								)
-							) : (
-								<div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />
-							)}
-						</div>
+	return {
+		modal: settingsModal,
+		navigation,
+		navItems,
+		showSaveStatus,
+		projectSaveState,
+		activeProjectSection,
+		remoteHostId,
+		cueBusy,
+		close: closeSettingsDialog,
+		title: activeLabel,
+		isBodyReady,
+		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
+		body: () => {
+			if (!isBodyReady) return <div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />;
+			if (cloudProjectsPending) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
+			if (cloudLookupFailed) {
+				return (
+					<div className="space-y-2 text-sm text-error" role="alert">
+						<p>{t("settings.project.cloudLoadFailed")} {cloudProjects.error instanceof Error ? cloudProjects.error.message : ""}</p>
+						<Button className="text-settings-label" onClick={() => void cloudProjects.refetch()} type="button" variant="link">{t("settings.project.retry")}</Button>
 					</div>
-				</div>
-				</Dialog.Content>
-			</Dialog.Portal>
-		</Dialog.Root>
+				);
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues") {
+				return <CuesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onBusyChange={setCueBusy} />;
+			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
+				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && canShareProject && cloudOrgId !== undefined && activeProjectSection === "sharing") {
+				return <CloudProjectSharingSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} />;
+			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
+				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts") {
+				return isCloudProjectSettings && cloudOrgId !== undefined
+					? <CloudProjectScriptsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
+					: <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment") {
+				return isCloudProjectSettings && cloudOrgId !== undefined
+					? <CloudProjectEnvironmentSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
+					: <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project") {
+				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
+			}
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} teams={teams} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} showDiagnostics={showDiagnostics} section={activeSection} />;
+		},
+	};
+}
+
+export type SettingsNavEntry = {
+	id: string;
+	label: string;
+	icon: AppIcon;
+	active: boolean;
+	disabled?: boolean;
+	onSelect: () => void;
+};
+
+type SettingsLayer = ReturnType<typeof useSettingsLayer>;
+
+type SettingsPageValue = { active: SettingsLayer; layers: SettingsLayer[] };
+
+const SettingsPageContext = createContext<SettingsPageValue | null>(null);
+
+/** The settings layer currently on top, or null while settings is closed. */
+export function useSettingsPage() {
+	return useContext(SettingsPageContext)?.active ?? null;
+}
+
+/**
+ * Owns settings state for the shell so the sidebar (section list, Back) and the
+ * center pane (page body) stay in sync. A recovery settings page opened above a
+ * project form keeps the project layer's state alive underneath.
+ */
+export function SettingsProvider({ children }: { children: ReactNode }) {
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const projectModal = settingsModal?.scope === "project" ? settingsModal : settingsModal?.returnTo ?? null;
+	const globalModal = settingsModal?.scope === "global" ? settingsModal : null;
+	const projectLayer = useSettingsLayer(projectModal);
+	const globalLayer = useSettingsLayer(globalModal);
+	// Global settings is a page in the shell; project settings stays a modal.
+	const active = globalModal ? globalLayer : null;
+	const activeRef = useRef(active);
+	activeRef.current = active;
+	const isOpen = active !== null;
+	// Hand focus back to whatever opened settings once the page closes.
+	useEffect(() => {
+		if (!isOpen) return;
+		const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		return () => { if (opener?.isConnected) opener.focus({ preventScroll: true }); };
+	}, [isOpen]);
+	// Settings sections follow the app's navigation chords while the page is
+	// open: previous/next (⌘⇧[ ⌘⇧], ⌃Tab, ⌘⌥←/→) step through the section list and
+	// ⌘1-9 jumps to the Nth section. The shell stands down for these meanwhile.
+	const stepSection = useCallback((direction: -1 | 1) => {
+		const items = activeRef.current?.navItems.filter((item) => !item.disabled) ?? [];
+		if (items.length === 0) return;
+		const current = items.findIndex((item) => item.active);
+		const next = items[(current + direction + items.length) % items.length];
+		next?.onSelect();
+	}, []);
+	useEffect(() => {
+		if (!isOpen) return;
+		const disposers = [
+			aoBridge.app.onPreviousSessionShortcut(() => stepSection(-1)),
+			aoBridge.app.onNextSessionShortcut(() => stepSection(1)),
+			aoBridge.app.onPreviousTabShortcut(() => stepSection(-1)),
+			aoBridge.app.onNextTabShortcut(() => stepSection(1)),
+		];
+		return () => disposers.forEach((dispose) => dispose());
+	}, [isOpen, stepSection]);
+	useAppShortcut(
+		"jump-to-session",
+		({ index }) => {
+			const items = activeRef.current?.navItems.filter((item) => !item.disabled) ?? [];
+			if (index !== undefined) items[index]?.onSelect();
+		},
+		isOpen,
+	);
+	useEffect(() => {
+		if (!isOpen) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape" || event.isComposing) return;
+			const target = event.target instanceof Element ? event.target : null;
+			// In-place edits (a profile rename) and login flows (terminal, cloud login panel) take Escape themselves.
+			if (target?.closest("[data-settings-inline-edit]")) return;
+			// Open menus, listboxes, and dialogs take Escape to dismiss themselves. Only popups the
+			// event came from (or that hold focus) count, so a stray tooltip cannot swallow it.
+			if (event.isComposing) return;
+			const focused = document.activeElement instanceof Element ? document.activeElement : null;
+			const popup = '[role="menu"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper]';
+			if ([target, focused].some((element) => element?.closest(popup))) return;
+			activeRef.current?.close();
+		};
+		// Capture phase so a field that handles its own Escape cannot swallow the close.
+		document.addEventListener("keydown", onKeyDown, true);
+		return () => document.removeEventListener("keydown", onKeyDown, true);
+	}, [isOpen]);
+	return (
+		<SettingsPageContext.Provider value={active ? { active, layers: [globalLayer] } : null}>
+			{children}
+			{projectModal && <ProjectSettingsModal key={projectLayer.bodyKey} layer={projectLayer} covered={globalModal !== null} />}
+		</SettingsPageContext.Provider>
 	);
 }
 
-function SettingsNavItem({
-	active,
-	disabled,
-	icon: Icon,
-	label,
-	onClick,
-}: {
-	active: boolean;
-	disabled?: boolean;
-	icon: LucideIcon;
-	label: string;
-	onClick: () => void;
-}) {
+/**
+ * Settings page rendered inside the center panel, in place of the routed page:
+ * shared page topbar above a centered, scrolling content column.
+ */
+export function SettingsPane() {
+	const page = useContext(SettingsPageContext);
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	useSettingsRowFocus(scrollerRef, page?.active ?? null);
+	useEdgeFade(scrollerRef, "y", [page?.active]);
+	if (!page) return null;
+	const layer = page.active;
 	return (
-		<button
-			aria-current={active ? "page" : undefined}
-			className={cn(
-				"flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-sm font-medium transition-[background-color,color,transform] duration-fast ease-out active:scale-press focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
-				active
-					? "bg-interactive-active text-foreground"
-					: "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-			)}
-			disabled={disabled}
-			onClick={onClick}
-			type="button"
-		>
-			<Icon aria-hidden="true" className="size-4 shrink-0" />
-			{label}
-		</button>
+		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			<PageTopbar
+				lead={
+					<PageTopbarTitle as="h1">
+						{layer.title}
+						{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
+					</PageTopbarTitle>
+				}
+			/>
+			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
+			{page.layers.map((entry) => (
+				// `relative` makes the scroller the containing block for absolutely
+				// positioned content (sr-only labels, menu triggers). Without it they
+				// escape to the shell's overflow-x-hidden wrapper, which then scrolls
+				// the whole center panel away.
+				<div
+					aria-busy={!entry.isBodyReady}
+					className={cn("settings-thin-scrollbar edge-fade [--edge-fade-end-size:0px] relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					key={entry.bodyKey}
+					ref={entry === layer ? scrollerRef : undefined}
+				>
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-6">
+						{entry.body()}
+					</div>
+				</div>
+			))}
+		</div>
 	);
+}
+
+/** Save progress / failure for the project form, shown under the section list. */
+export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayerState }) {
+	const { t } = useTranslation();
+	const pageLayer = useSettingsPage();
+	const layer = layerProp ?? pageLayer;
+	if (!layer?.showSaveStatus) return null;
+	const { projectSaveState, remoteHostId } = layer;
+	return (
+		<div className="mt-2 border-t border-(--color-border-settings-dialog-header) px-2 py-3 text-xs" role="status" aria-live="polite">
+			{projectSaveState.phase === "failed" || (remoteHostId && projectSaveState.replacementError) ? (
+				<div className="space-y-2 text-error">
+					<p className="flex items-start gap-2" role="alert"><TriangleAlert className="size-4 shrink-0" aria-hidden="true" />{projectSaveState.error ?? projectSaveState.replacementError ?? t("settings.project.saveFailed")}</p>
+					<Button className="text-settings-label" variant="link" onClick={() => {
+						if (projectSaveState.retry) projectSaveState.retry();
+						else (document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
+					}} type="button">{t("createProject.retry")}</Button>
+				</div>
+			) : (
+				<p className="flex items-center gap-2 text-settings-muted">
+					<><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>
+				</p>
+			)}
+		</div>
+	);
+}
+
+type SettingsLayerState = ReturnType<typeof useSettingsLayer>;
+
+/** Project settings: a dialog over the shell, sharing the page's section list and body. */
+function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; covered: boolean }) {
+	const { t } = useTranslation();
+	const contentRef = useRef<HTMLDivElement>(null);
+	const restoreFocusOnClose = useRestoreFocusOnClose(!covered);
+	// The body renders into a detached host so it stays mounted (and keeps its draft)
+	// while recovery settings cover the dialog, then is re-attached when it returns.
+	const [bodyHost] = useState(() => document.createElement("div"));
+	useEffect(() => { bodyHost.className = "flex min-h-0 flex-1 flex-col"; }, [bodyHost]);
+	// That portal puts the body outside the Dialog's React tree, so Radix cannot
+	// tell that a popover, menu, or picker a page opens (portalled to <body>)
+	// belongs to the dialog: a press in one reads as outside and would dismiss
+	// the dialog, dropping the pick. React still routes events through portals
+	// along the React tree, so remember each press that starts anywhere in the
+	// body's tree (the page or anything it portals) and keep the dialog open
+	// for exactly that press. A press on the backdrop never passes through here.
+	const bodyPointerDown = useRef<Event | null>(null);
+	return (
+		<>
+		{createPortal(
+			<div className="contents" onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
+			bodyHost,
+		)}
+		<Dialog.Root open={!covered} onOpenChange={(open) => { if (!open) layer.close(); }}>
+			<Dialog.Portal>
+				<Dialog.Overlay
+					className="dialog-overlay z-[calc(var(--z-overlay)-1)] animate-overlay-in motion-reduce:animate-none"
+					data-testid="settings-dialog-overlay"
+					onWheel={(event) => event.preventDefault()}
+				/>
+				<Dialog.Content
+					aria-modal="true"
+					className={cn(
+						settingsDialogSurfaceClass,
+						"fixed left-1/2 top-1/2 z-overlay h-[min(40rem,calc(100vh-3rem))] w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
+					)}
+					onOpenAutoFocus={(event) => {
+						// Land on the current section (or the first field), not the close button.
+						const root = contentRef.current;
+						const target = root?.querySelector<HTMLElement>('nav button[aria-current="page"]:not(:disabled)')
+							?? root?.querySelector<HTMLElement>('.settings-dialog-body :is(input, textarea, select, button):not(:disabled)');
+						if (!target) return;
+						event.preventDefault();
+						target.focus({ preventScroll: true });
+					}}
+					onCloseAutoFocus={restoreFocusOnClose}
+					onPointerDownOutside={(event) => {
+						if (event.detail.originalEvent === bodyPointerDown.current) {
+							event.preventDefault();
+							return;
+						}
+						// An open picker or menu takes the first outside click to close
+						// itself, as Escape does; the dialog closes on the next one. A
+						// tooltip is not a popup that holds the click, and neither is a
+						// picker still playing its exit animation.
+						const openPopup = Array.from(document.querySelectorAll("[data-radix-popper-content-wrapper]")).some((wrapper) =>
+							!contentRef.current?.contains(wrapper)
+							&& wrapper.firstElementChild?.getAttribute("data-state") !== "closed"
+							&& wrapper.querySelector('[role="dialog"], [role="menu"], [role="listbox"]'));
+						if (openPopup) event.preventDefault();
+					}}
+					onEscapeKeyDown={(event) => {
+						const target = event.target instanceof Element ? event.target : null;
+						// In-place edits and login flows take Escape themselves.
+						if (target?.closest("[data-settings-inline-edit]")) {
+							event.preventDefault();
+							return;
+						}
+						if (contentRef.current?.contains(event.target as Node)) return;
+						const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
+						const nestedPopup = [target, activeElement].some((element) => element?.closest('[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]'));
+						if (nestedPopup) event.preventDefault();
+					}}
+					ref={contentRef}
+				>
+					<SwipeNavigation containerRef={contentRef} navigation={layer.navigation} />
+					<div className="flex h-full min-h-0">
+						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
+							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("shell.projectSettings")}</p>
+							<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
+								{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
+									<Pressable
+										aria-current={active ? "page" : undefined}
+										className={cn(
+											NAV_ROW_HIGHLIGHT_HOST_CLASS,
+											"flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+										)}
+										data-active={active}
+										disabled={disabled}
+										key={id}
+										onClick={onSelect}
+									>
+										<NavRowHighlight active={active} disabled={disabled} />
+										<Icon aria-hidden="true" className="relative z-[1] size-icon-md shrink-0" />
+										<span className="relative z-[1] min-w-0 flex-1 truncate">{label}</span>
+									</Pressable>
+								))}
+							</nav>
+							<div className="mt-auto"><SettingsSaveStatus layer={layer} /></div>
+						</aside>
+						<div className="flex min-w-0 flex-1 flex-col bg-card">
+							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 py-3 pl-(--size-modal-padding) pr-3")}>
+								<Dialog.Title className="settings-dialog-title">{layer.title}{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}</Dialog.Title>
+								<Dialog.Description className="sr-only">{t("settings.project.dialogDescription")}</Dialog.Description>
+								<CloseButton aria-label={t("settings.close")} disabled={layer.cueBusy} onClick={layer.close} />
+							</DialogHeader>
+							<div aria-busy={!layer.isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
+								<div className="flex min-h-0 flex-1 flex-col" ref={(node) => { if (node && bodyHost.parentElement !== node) node.appendChild(bodyHost); }} />
+							</div>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Portal>
+		</Dialog.Root>
+		</>
+	);
+}
+
+// A page's rows can arrive after it opens (accounts, devices, profiles load),
+// so the lookup retries for a few seconds before giving up quietly.
+const SETTINGS_FOCUS_RETRY_MS = 100;
+const SETTINGS_FOCUS_ATTEMPTS = 40;
+
+/**
+ * Scrolls to and briefly highlights the setting a global settings request names
+ * (`focusSetting`, its visible label), once the requested page is showing.
+ */
+function useSettingsRowFocus(scrollerRef: RefObject<HTMLDivElement | null>, layer: SettingsLayer | null) {
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const request = settingsModal?.scope === "global" && settingsModal.focusSetting ? settingsModal : null;
+	const layerRef = useRef(layer);
+	layerRef.current = layer;
+	useEffect(() => {
+		const label = request?.focusSetting;
+		if (!label) return;
+		let attempts = 0;
+		let timer: number | undefined;
+		let clearHighlight: (() => void) | undefined;
+		const tryFocus = () => {
+			const current = layerRef.current;
+			const activeSection = current?.navItems.find((item) => item.active)?.id;
+			const onRequestedPage = current?.isBodyReady && (!request.section || activeSection === request.section);
+			const target = onRequestedPage && scrollerRef.current ? findSettingsTarget(scrollerRef.current, label) : null;
+			if (target) {
+				clearHighlight = highlightSettingsTarget(target);
+				timer = window.setTimeout(() => clearHighlight?.(), SETTINGS_FOCUS_HIGHLIGHT_MS);
+				return;
+			}
+			if (++attempts < SETTINGS_FOCUS_ATTEMPTS) timer = window.setTimeout(tryFocus, SETTINGS_FOCUS_RETRY_MS);
+		};
+		timer = window.setTimeout(tryFocus, 0);
+		return () => {
+			window.clearTimeout(timer);
+			clearHighlight?.();
+		};
+	}, [request, scrollerRef]);
 }

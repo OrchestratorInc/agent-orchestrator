@@ -2,7 +2,11 @@ import Link from "next/link";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { Children, cloneElement, isValidElement, type ComponentPropsWithoutRef, type ReactElement, type ReactNode } from "react";
 import type { MDXComponents } from "mdx/types";
+import type { CodeBlockProps } from "fumadocs-ui/components/codeblock";
+import { LocalizedCodeBlock } from "./code-block";
+import { STATUS_LABEL, type PlatformStatus } from "@/lib/platform-status";
 import { Tab, Tabs } from "./docs-tabs";
+import { DESKTOP_DOWNLOADS, downloadUrl } from "@/lib/downloads";
 
 function textOf(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -186,13 +190,7 @@ export function PluginCard({
   );
 }
 
-type Status = "full" | "partial" | "none";
-
-const STATUS_LABEL: Record<Status, string> = {
-  full: "Supported",
-  partial: "Limited",
-  none: "Not supported",
-};
+type Status = PlatformStatus;
 
 const STATUS_DOT: Record<Status, string> = {
   full: "bg-green-400",
@@ -242,12 +240,41 @@ export function PlatformSupport({
 }
 
 export function InstallDownloads() {
-  return null;
+  const downloads = DESKTOP_DOWNLOADS;
+
+  return (
+    <div style={{ marginBlock: "1.25rem", overflowX: "auto" }}>
+      <table>
+        <caption>Download the latest Orchestrator desktop release</caption>
+        <thead>
+          <tr><th scope="col">Platform</th><th scope="col">Download</th></tr>
+        </thead>
+        <tbody>
+          {downloads.map(({ platform, assets }) => (
+            <tr key={platform}>
+              <th scope="row">{platform}</th>
+              <td>
+                <div style={{ display: "flex", flexWrap: "wrap", columnGap: "0.4rem", rowGap: "0.25rem" }}>
+                  {assets.map(([label, asset], index) => (
+                    <span key={asset}>
+                      {index > 0 && <span aria-hidden="true"> · </span>}
+                      <a href={downloadUrl(asset)}>{label}</a>
+                    </span>
+                  ))}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export function getMDXComponents(components?: MDXComponents) {
   return {
     ...defaultMdxComponents,
+    pre: (props) => <LocalizedCodeBlock {...(props as CodeBlockProps)} />,
     h2: (props) => <Heading level={2} {...props} />,
     h3: (props) => <Heading level={3} {...props} />,
     h4: (props) => <Heading level={4} {...props} />,

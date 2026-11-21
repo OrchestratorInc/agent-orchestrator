@@ -1,5 +1,5 @@
 import { Linking } from "react-native";
-import { githubAppUrl } from "./githubLink";
+import { GITHUB_APP_SCHEME, githubAppLink } from "./githubLink";
 import { haptics } from "./haptics";
 
 /**
@@ -38,18 +38,32 @@ function inAppBrowser(): Promise<WebBrowserModule | null> {
 // `NoMatchingActivityException`) the system browser is the last hop, as it was
 // before the in-app one existed. Every caller is a tap, so when nothing at all
 // could open the link the tap says so with the error haptic rather than reading
-// as a dead button. On iOS `canOpenURL` also needs "github" listed in
+// as a dead button.
+//
+// The app gets the https URL, opened with `Linking.openURL` so iOS treats it as
+// a universal link and lands on the PR or issue (see githubLink.ts for why not
+// `github://`). The in-app browser never hands a universal link to an app,
+// which is why this has to go through Linking. `github://` is only probed, to
+// learn whether the app is installed; on iOS that needs "github" listed in
 // LSApplicationQueriesSchemes (see app.json) or it always answers false.
 //
 // A URL that is not a web page can only be opened by the system: the iOS bug
 // report arrives as `x-safari-https://` (see bugReportOpenUrl), which the
 // in-app browser rejects.
-export async function openGitHub(url: string): Promise<void> {
-	const appUrl = githubAppUrl(url);
-	if (appUrl) {
+//
+// `fromSheet` skips the in-app browser. SFSafariViewController is presented on
+// whatever is frontmost, and on top of a native formSheet that goes wrong both
+// ways: dismissed later, it leaves the sheet full-height with no grabber; opened
+// while the sheet is still dismissing, iOS drops the presentation silently and
+// expo-web-browser answers every later call with "locked" until the app
+// restarts. Leaving the app keeps the sheet untouched, exactly as it already is
+// on a device with the GitHub app installed.
+export async function openGitHub(url: string, options: { fromSheet?: boolean } = {}): Promise<void> {
+	const appLink = githubAppLink(url);
+	if (appLink) {
 		try {
-			if (await Linking.canOpenURL(appUrl)) {
-				await Linking.openURL(appUrl);
+			if (await Linking.canOpenURL(GITHUB_APP_SCHEME)) {
+				await Linking.openURL(appLink);
 				return;
 			}
 		} catch {
@@ -57,6 +71,10 @@ export async function openGitHub(url: string): Promise<void> {
 		}
 	}
 	if (!/^https?:\/\//i.test(url)) {
+		await Linking.openURL(url).catch(() => haptics.error());
+		return;
+	}
+	if (options.fromSheet) {
 		await Linking.openURL(url).catch(() => haptics.error());
 		return;
 	}

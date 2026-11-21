@@ -39,6 +39,7 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 	"status.no_signal": "No signal",
 	"status.ci_failed": "CI failed",
 	"status.changes_requested": "Changes requested",
+	"status.commented": "Commented",
 	"status.review_pending": "Review pending",
 	"status.draft": "Draft PR",
 	"status.pr_open": "PR open",
@@ -68,23 +69,28 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 	"timeline.no_signal": "No Signal",
 	"timeline.ci_failed": "CI Failed",
 	"timeline.changes_requested": "Changes Requested",
+	"timeline.commented": "Commented",
 	"displayStatus.working": "Working",
 	"displayStatus.blocked": "Blocked",
+	"displayStatus.needsInput": "Needs input",
 	"displayStatus.exited": "Exited",
 	"displayStatus.noSignal": "No signal",
-	"displayStatus.awaitingPr": "Awaiting PR",
+	"displayStatus.interrupted": "Interrupted",
+	"displayStatus.idle": "Idle",
 	"displayStatus.fixingCiFailures": "Fixing CI failures",
 	"displayStatus.addressingComments": "Addressing comments",
-	"displayStatus.needsReview": "Needs review",
 	"displayStatus.reviewScheduled": "Review scheduled",
 	"displayStatus.reviewing": "Reviewing",
-	"displayStatus.reviewFailed": "Review failed",
-	"displayStatus.reviewPending": "Review pending",
+	"displayStatus.retryingReview": "Retrying review",
 	"displayStatus.draft": "Draft",
+	"displayStatus.awaitingReview": "Awaiting review",
+	"displayStatus.reviewFailed": "Review failed",
+	"displayStatus.reviewCancelled": "Review cancelled",
 	"displayStatus.ciFailing": "CI failing",
+	"displayStatus.mergeConflicts": "Merge conflicts",
 	"displayStatus.commented": "Commented",
 	"displayStatus.changesRequested": "Changes requested",
-	"displayStatus.needsHumanReview": "Needs human review",
+	"displayStatus.waitingOnBasePR": "Waiting on base PR",
 	"displayStatus.mergeable": "Mergeable",
 	"displayStatus.approved": "Approved",
 	"displayStatus.merged": "Merged",
@@ -100,21 +106,25 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 export const displayStatusLabelKeys: Record<DisplayStatus, `displayStatus.${string}`> = {
 	Working: "displayStatus.working",
 	Blocked: "displayStatus.blocked",
+	"Needs input": "displayStatus.needsInput",
 	Exited: "displayStatus.exited",
 	"No signal": "displayStatus.noSignal",
-	"Awaiting PR": "displayStatus.awaitingPr",
+	Interrupted: "displayStatus.interrupted",
+	Idle: "displayStatus.idle",
 	"Fixing CI failures": "displayStatus.fixingCiFailures",
 	"Addressing comments": "displayStatus.addressingComments",
-	"Needs review": "displayStatus.needsReview",
 	"Review scheduled": "displayStatus.reviewScheduled",
 	Reviewing: "displayStatus.reviewing",
-	"Review failed": "displayStatus.reviewFailed",
-	"Review pending": "displayStatus.reviewPending",
+	"Retrying review": "displayStatus.retryingReview",
 	Draft: "displayStatus.draft",
+	"Awaiting review": "displayStatus.awaitingReview",
+	"Review failed": "displayStatus.reviewFailed",
+	"Review cancelled": "displayStatus.reviewCancelled",
 	"CI failing": "displayStatus.ciFailing",
+	"Merge conflicts": "displayStatus.mergeConflicts",
 	Commented: "displayStatus.commented",
 	"Changes requested": "displayStatus.changesRequested",
-	"Needs human review": "displayStatus.needsHumanReview",
+	"Waiting on base PR": "displayStatus.waitingOnBasePR",
 	Mergeable: "displayStatus.mergeable",
 	Approved: "displayStatus.approved",
 	Merged: "displayStatus.merged",
@@ -231,6 +241,7 @@ const sessionStatusStyles: Record<SessionStatus, Omit<SessionStatusView, "label"
 	no_signal: { className: "text-status-unknown", dotClassName: "bg-status-unknown" },
 	ci_failed: { className: "text-status-exited", dotClassName: "bg-status-exited" },
 	changes_requested: { className: "text-status-needs-you", dotClassName: "bg-status-needs-you" },
+	commented: { className: "text-status-in-review", dotClassName: "bg-status-in-review" },
 	review_pending: { className: "text-status-in-review", dotClassName: "bg-status-in-review" },
 	draft: { className: "text-status-in-review", dotClassName: "bg-status-in-review" },
 	pr_open: { className: "text-status-in-review", dotClassName: "bg-status-in-review" },
@@ -448,6 +459,7 @@ export function attentionZone(input: SessionStatus | SessionStatusModel): Attent
 		case "no_signal":
 		case "ci_failed":
 		case "changes_requested":
+		case "commented":
 		case "unknown":
 			return "action";
 		case "review_pending":
@@ -477,7 +489,7 @@ export function getAttentionZoneViewForZone(
 
 export type SessionTimelinePillStatus = Extract<
 	SessionStatus,
-	"no_signal" | "ci_failed" | "changes_requested"
+	"no_signal" | "ci_failed" | "changes_requested" | "commented"
 >;
 
 export type SessionTimelinePillView = {
@@ -503,6 +515,11 @@ const sessionTimelinePillBases: Record<
 	changes_requested: {
 		labelKey: "timeline.changes_requested",
 		tone: "var(--color-status-needs-you)",
+		breathe: false,
+	},
+	commented: {
+		labelKey: "timeline.commented",
+		tone: "var(--color-status-in-review)",
 		breathe: false,
 	},
 };

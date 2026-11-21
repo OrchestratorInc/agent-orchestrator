@@ -1,12 +1,14 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { ApiError, ATTACHMENT_REQUEST_TIMEOUT_MS, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
+import { resolveDefaultChoices } from "./turnSettingsModel";
 import type {
 	ActivityDetail,
 	ActivityKind,
 	ActivityStatus,
 	ApprovalMode,
 	ChatConfigOption,
+	ChatExcerpt,
 	ChatImage,
 	ChatModel,
 	ChatResource,
@@ -20,6 +22,7 @@ import type {
 	DecisionOption,
 	TurnSettings,
 } from "./types";
+import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
 import { parseSseFrame, readSseFrameSeq, takeSseFrames, type ConversationEvent } from "./sse";
 import { mergeConversationPages, type ConversationPage } from "./snapshot";
 
@@ -38,6 +41,9 @@ export type SessionInterfaceTransition = {
 	sourceMode: "chat" | "tui";
 	targetMode: "chat" | "tui";
 	policy: "drain" | "interrupt";
+	/** Set when the transition moves the session to another subscription account. */
+	sourceAccountId?: string;
+	targetAccountId?: string;
 	phase:
 		| "requested"
 		| "preflighting"
@@ -111,13 +117,17 @@ export async function acknowledgeSessionInterfaceTransitionNotice(
 	return body.transition;
 }
 
-type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller"> & {
+/** The daemon sends a turn's artifacts wrapped as `{ files }`. */
+type WireTurn = Omit<ConversationTurn, "artifacts"> & { artifacts?: { files?: TurnArtifactChange[] } };
+
+type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller" | "turns"> & {
 	controller: ControllerState;
+	turns?: WireTurn[];
 	messages?: ConversationMessage[];
 	activities?: Array<Omit<ConversationActivity, "detail" | "decisions"> & { detail?: Record<string, unknown> }>;
 };
 
-export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[] };
+export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[]; excerpts?: ChatExcerpt[] };
 export type SendMessageResult = { turnId?: string; providerTurnId?: string; state?: string; duplicate: boolean };
 
 export async function getConversationPage(
@@ -135,17 +145,100 @@ export async function getConversationPage(
 	return toSnapshot((await res.json()) as WireSnapshot);
 }
 
+export async function getReviewerConversationPage(
+	cfg: ServerConfig,
+	reviewId: string,
+	beforeSequence?: number,
+): Promise<ConversationPage> {
+	const limit = beforeSequence === undefined ? CHAT_INITIAL_PAGE_SIZE : CHAT_HISTORY_PAGE_SIZE;
+	const query = new URLSearchParams({ limit: String(limit) });
+	if (beforeSequence !== undefined) query.set("beforeSequence", String(beforeSequence));
+	const res = await apiRequest(cfg, `${reviewConversationPath(reviewId)}?${query.toString()}`);
+	const snapshot = toSnapshot((await res.json()) as WireSnapshot);
+	return {
+		...snapshot,
+		capabilities: snapshot.capabilities?.filter((capability) =>
+			capability !== "steer" && capability !== "rollback" && capability !== "config_options"),
+	};
+}
+
+/** Probe before any quoted-send side effect, including attachment staging. */
+export async function requireConversationExcerptSupport(cfg: ServerConfig, sessionId: string): Promise<void> {
+	// Older daemons accept messages but silently ignore the excerpts field.
+	const snapshot = await getConversationPage(cfg, sessionId);
+	if (!snapshot.supportsExcerpts) {
+		throw new Error("Update Orchestrator on this machine to send quoted responses. Your draft is saved.");
+	}
+}
+
 export async function sendConversationMessage(
 	cfg: ServerConfig,
 	sessionId: string,
 	input: SendMessageInput,
 ): Promise<SendMessageResult> {
+	if (input.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/messages"), {
 		method: "POST",
 		headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 		body: JSON.stringify(input),
 	}, input.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	return (await res.json()) as SendMessageResult;
+}
+
+/** Which agent the next message switches to, and on which model. */
+export type ProviderSwitchInput = { targetHarness: string; model?: string };
+
+/**
+ * Switch the chat's agent and send the message to the new one, in one request
+ * (desktop's send with a pending switch). The send's own id is the switch's
+ * idempotency key, so a retried send cannot switch twice.
+ */
+export async function switchProviderAndSend(
+	cfg: ServerConfig,
+	sessionId: string,
+	providerSwitch: ProviderSwitchInput,
+	message: SendMessageInput,
+): Promise<SendMessageResult> {
+	if (message.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/provider-switch`, {
+		method: "POST",
+		headers: message.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
+		body: JSON.stringify({
+			targetHarness: providerSwitch.targetHarness,
+			...(providerSwitch.model ? { model: providerSwitch.model } : {}),
+			idempotencyKey: message.clientMessageId,
+			message,
+		}),
+	}, message.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
+	const data = (await res.json()) as { message?: SendMessageResult };
+	return data.message ?? { duplicate: true };
+}
+
+/** Starts the agent's first-run chat check early, so a switch's send does not wait on it. */
+export async function prewarmChatAgent(cfg: ServerConfig, agent: string): Promise<void> {
+	await apiRequest(cfg, `${API}/agents/${encodeURIComponent(agent)}/chat/prewarm`, { method: "POST" });
+}
+
+export async function sendReviewerConversationMessage(
+	cfg: ServerConfig,
+	reviewId: string,
+	input: SendMessageInput,
+): Promise<SendMessageResult> {
+	const res = await apiRequest(cfg, reviewConversationPath(reviewId, "/messages"), {
+		method: "POST",
+		body: JSON.stringify(input),
+	});
+	return (await res.json()) as SendMessageResult;
+}
+
+/** Check an uncertain attachment send without re-sending a partial payload. */
+export async function recoverSentConversationMessage(cfg: ServerConfig, sessionId: string, clientMessageId: string): Promise<void> {
+	const res = await apiRequest(cfg, conversationPath(sessionId, "/steer-or-send"), {
+		method: "POST",
+		body: JSON.stringify({ clientMessageId, recoverOnly: true }),
+	});
+	const result = (await res.json()) as { outcome: "sent" | "steered" };
+	if (result.outcome !== "sent") throw new Error("Could not confirm this message was delivered. Check history, then discard and reattach the files before sending again.");
 }
 
 export async function steerConversation(cfg: ServerConfig, sessionId: string, text: string, clientMessageId: string) {
@@ -160,12 +253,29 @@ export async function interruptConversation(cfg: ServerConfig, sessionId: string
 	await apiRequest(cfg, conversationPath(sessionId, "/interrupt"), { method: "POST" });
 }
 
+export async function interruptReviewerConversation(cfg: ServerConfig, reviewId: string): Promise<void> {
+	await apiRequest(cfg, reviewConversationPath(reviewId, "/interrupt"), { method: "POST" });
+}
+
 export async function cancelQueuedConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/cancel`), { method: "POST" });
 }
 
 export async function promoteQueuedConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/steer`), { method: "POST" });
+}
+
+/** Sends a failed turn's prompt again, as a new turn. */
+export async function retryConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/retry`), { method: "POST" });
+}
+
+/** Asks the daemon to send a usage-limited prompt again at the reset, or stops it. */
+export async function setConversationTurnAutoResume(cfg: ServerConfig, sessionId: string, turnId: string, enabled: boolean): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/auto-resume`), {
+		method: "PATCH",
+		body: JSON.stringify({ enabled }),
+	});
 }
 
 export async function compactConversation(cfg: ServerConfig, sessionId: string): Promise<void> {
@@ -184,6 +294,18 @@ export async function resolveApproval(
 	});
 }
 
+export async function resolveReviewerApproval(
+	cfg: ServerConfig,
+	reviewId: string,
+	requestId: string,
+	decisionId: string,
+): Promise<void> {
+	await apiRequest(cfg, reviewConversationPath(reviewId, `/approvals/${encodeURIComponent(requestId)}/resolve`), {
+		method: "POST",
+		body: JSON.stringify({ decisionId }),
+	});
+}
+
 export async function resolveInput(
 	cfg: ServerConfig,
 	sessionId: string,
@@ -197,12 +319,39 @@ export async function resolveInput(
 	});
 }
 
+export async function resolveReviewerInput(
+	cfg: ServerConfig,
+	reviewId: string,
+	requestId: string,
+	action: "accept" | "decline" | "cancel",
+	content?: Record<string, unknown>,
+): Promise<void> {
+	await apiRequest(cfg, reviewConversationPath(reviewId, `/inputs/${encodeURIComponent(requestId)}/resolve`), {
+		method: "POST",
+		body: JSON.stringify({ action, content }),
+	});
+}
+
 export async function rollbackConversation(cfg: ServerConfig, sessionId: string, turnId: string): Promise<number> {
 	const res = await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/rollback`), {
 		method: "POST",
 	});
 	const body = (await res.json()) as { turnsDiscarded?: number };
 	return body.turnsDiscarded ?? 0;
+}
+
+/** Branches before an earlier human prompt and resends it with new text; the daemon keeps its attachments. */
+export async function editConversationMessage(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	text: string,
+	clientMessageId: string,
+): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/edit`), {
+		method: "POST",
+		body: JSON.stringify({ text, clientMessageId }),
+	});
 }
 
 export async function setConversationTitle(cfg: ServerConfig, sessionId: string, title: string): Promise<void> {
@@ -222,7 +371,7 @@ export async function setConversationSettings(cfg: ServerConfig, sessionId: stri
 export async function getConversationConfigOptions(cfg: ServerConfig, sessionId: string): Promise<ChatConfigOption[]> {
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/config-options"));
 	const body = (await res.json()) as { options?: ChatConfigOption[] };
-	return body.options ?? [];
+	return resolveDefaultChoices(body.options ?? []);
 }
 
 export async function setConversationConfigOption(
@@ -236,7 +385,7 @@ export async function setConversationConfigOption(
 		body: JSON.stringify(value),
 	});
 	const body = (await res.json()) as { options?: ChatConfigOption[] };
-	return body.options ?? [];
+	return resolveDefaultChoices(body.options ?? []);
 }
 
 export async function getConversationSkills(cfg: ServerConfig, sessionId: string): Promise<ChatSkill[]> {
@@ -260,6 +409,20 @@ export async function stageConversationAttachments(
 	}, ATTACHMENT_REQUEST_TIMEOUT_MS);
 	const body = (await res.json()) as { paths?: string[] };
 	return body.paths ?? [];
+}
+
+/** Where the daemon places a path: in the worktree, among the session's artifacts, or outside both. */
+export type WorkspacePathResolution = { kind: "workspace" | "artifact" | "outside"; path?: string };
+
+/**
+ * Place a path an agent wrote, absolute or `~/`, relative to the session. The
+ * daemon follows symlinks, so a link that leaves the worktree is "outside".
+ */
+export async function resolveWorkspacePath(cfg: ServerConfig, sessionId: string, path: string): Promise<WorkspacePathResolution> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/workspace/resolve?${new URLSearchParams({ path })}`);
+	const body = (await res.json()) as { kind?: string; path?: string };
+	const kind = body.kind === "workspace" || body.kind === "artifact" ? body.kind : "outside";
+	return { kind, path: body.path?.trim() || undefined };
 }
 
 export async function getWorkspacePaths(cfg: ServerConfig, sessionId: string): Promise<{ paths: string[]; truncated: boolean }> {
@@ -342,7 +505,7 @@ export async function streamGlobalConversationEvents(
 		signal,
 	});
 	if (!res.ok) throw await streamError(res);
-	if (!res.body) throw new Error("The mobile network stack did not provide an event stream");
+	if (!res.body) throw new Error("Couldn't open live updates from your machine.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");
 	const advertisedAfter = advertisedAfterHeader === null ? Number.NaN : Number(advertisedAfterHeader);
 	const effectiveAfter = Number.isSafeInteger(advertisedAfter) && advertisedAfter >= 0
@@ -402,6 +565,10 @@ function conversationPath(sessionId: string, suffix = ""): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/conversation${suffix}`;
 }
 
+function reviewConversationPath(reviewId: string, suffix = ""): string {
+	return `${API}/reviews/${encodeURIComponent(reviewId)}/conversation${suffix}`;
+}
+
 function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	const messages = (wire.messages ?? []).map((message) => ({ ...message, kind: "message" as const }));
 	const activities = (wire.activities ?? []).map((activity): ConversationActivity => {
@@ -425,16 +592,22 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
 		},
-		turns: wire.turns ?? [],
+		turns: (wire.turns ?? []).map(toTurn),
 		items: [...messages, ...activities].sort((a, b) => a.sequence - b.sequence),
 	};
+}
+
+function toTurn({ artifacts, ...turn }: WireTurn): ConversationTurn {
+	const files = artifacts?.files?.filter((file) => file && typeof file.path === "string" && (file.status === "added" || file.status === "modified"));
+	return files?.length ? { ...turn, artifacts: files.map(({ path, status }) => ({ path, status })) } : turn;
 }
 
 function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 	if (!Array.isArray(detail.decisions)) return undefined;
 	const decisions = detail.decisions.flatMap((option): DecisionOption[] => {
 		if (!option || typeof option !== "object" || typeof option.id !== "string" || !option.id) return [];
-		return [{ id: option.id, label: typeof option.label === "string" && option.label ? option.label : option.id }];
+		const label = typeof option.label === "string" && option.label ? option.label : option.id;
+		return [typeof option.kind === "string" && option.kind ? { id: option.id, label, kind: option.kind } : { id: option.id, label }];
 	});
 	return decisions.length > 0 ? decisions : undefined;
 }
@@ -442,13 +615,51 @@ function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 async function streamError(res: Response): Promise<ApiError> {
 	let message = `${res.status} ${res.statusText}`;
 	let code: string | undefined;
+	let detail: string | undefined;
+	let requestId: string | undefined;
 	try {
-		const body = (await res.json()) as { message?: string; error?: string; code?: string };
-		const detail = body.message ?? body.error;
+		const body = (await res.json()) as { message?: string; error?: string; code?: string; requestId?: string };
+		detail = body.message ?? body.error;
 		if (detail) message += ` - ${detail}`;
 		code = body.code;
+		requestId = typeof body.requestId === "string" ? body.requestId : undefined;
 	} catch {
 		// A proxy may answer HTML; the status remains enough to classify it.
 	}
-	return new ApiError(res.status, message, code);
+	return new ApiError(res.status, message, code, requestId, detail || undefined);
+}
+
+/** What the daemon reports about forking a session. */
+export type ForkOptions = {
+	allowed: boolean;
+	anyTurn?: boolean;
+	refusal?: { code: string; message: string };
+};
+
+/**
+ * Whether a session can be forked. Null when the daemon has session forks off
+ * (it answers 404), so the app shows no Fork action at all.
+ */
+export async function getForkOptions(cfg: ServerConfig, sessionId: string): Promise<ForkOptions | null> {
+	try {
+		const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork-options`);
+		return (await res.json()) as ForkOptions;
+	} catch (cause) {
+		if ((cause as { status?: number })?.status === 404) return null;
+		throw cause;
+	}
+}
+
+/** Forks a session as it was at turnId into a new session, and returns it. */
+export async function forkSession(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	clientRequestId: string,
+): Promise<{ sessionId: string; displayName: string }> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork`, {
+		method: "POST",
+		body: JSON.stringify({ clientRequestId, turnId }),
+	});
+	return (await res.json()) as { sessionId: string; displayName: string };
 }

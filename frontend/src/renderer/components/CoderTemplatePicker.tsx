@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,6 +6,7 @@ import type { CloudCpSessionRepo } from "../lib/cloud-cp/types";
 import { type CoderSize, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { SearchablePicker } from "./SearchablePicker";
@@ -30,15 +31,18 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	// Parameter controls appear only when the selected template declares them.
 	const supportsSize = supportedParams.includes("size");
 	const supportsStartup = supportedParams.includes("startup_script");
-	const templateOptions = [
-		{ id: "", name: t("coder.template.default", { defaultValue: "Default" }), description: t("coder.template.defaultHint", { defaultValue: "The workspace configured for your org." }), parameters: [] as string[] },
-		...templates.map((tpl) => ({
-			id: tpl.id,
-			name: tpl.displayName || tpl.name,
-			description: tpl.description,
-			parameters: tpl.parameters ?? [],
-		})),
-	];
+	// Every project must choose a concrete template: there is no implicit
+	// "organization default" option, because a bring-your-own-Coder org may have
+	// no deployment-default template, in which case an empty choice fails only
+	// later at session start (HTTP 422 coder_template_required). The picker lists
+	// every template the deployment or org connection exposes, as-is; curation
+	// (e.g. hiding an internal template) is done by removing it in Coder, not here.
+	const templateOptions = templates.map((tpl) => ({
+		id: tpl.id,
+		name: tpl.displayName || tpl.name,
+		description: tpl.description,
+		parameters: tpl.parameters ?? [],
+	}));
 
 	return (
 		<div className="flex flex-col gap-4 text-sm">
@@ -48,7 +52,7 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 						<span className="font-medium text-foreground">{t("coder.template.label", { defaultValue: "Template" })}</span>
 						<SearchablePicker
 							ariaLabel={t("coder.template.label", { defaultValue: "Template" })}
-							placeholder={t("coder.template.default", { defaultValue: "Default" })}
+							placeholder={t("coder.template.select", { defaultValue: "Select a template" })}
 							searchPlaceholder={t("coder.template.search", { defaultValue: "Search templates" })}
 							value={templateId}
 							onChange={(id) => {
@@ -93,15 +97,14 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 
 			{supportsStartup ? (
 				<div className="flex flex-col gap-2">
-					<button
-						type="button"
+					<Pressable
 						className="w-fit text-xs font-medium text-muted-foreground hover:text-foreground"
 						onClick={() => setAdvancedOpen(!advancedOpen)}
 					>
 						{advancedOpen
 							? t("coder.startup.hide", { defaultValue: "Hide startup script" })
 							: t("coder.startup.show", { defaultValue: "Add startup script" })}
-					</button>
+					</Pressable>
 					{advancedOpen ? (
 						<textarea
 							value={startupScript}
@@ -119,6 +122,8 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 }
 
 // These cards are placed directly below the project's primary repository.
+// Not shown in the cloud project form for now; kept so it can
+// be re-enabled without rebuilding it.
 export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: string; url: string; private?: boolean }[] }) {
 	const { t } = useTranslation();
 	const extraRepos = useCoderSessionOptionsStore((s) => s.extraRepos);
@@ -174,16 +179,10 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 												aria-label={t("coder.repos.url", { defaultValue: "Repository" })}
 											/>
 										)}
-										<Input
-											value={repo.branch ?? ""}
-											onChange={(e) => updateRepo(index, { branch: e.target.value })}
-											placeholder={t("coder.repos.branch", { defaultValue: "branch" })}
-											className="w-32 shrink-0"
-											aria-label={t("coder.repos.branch", { defaultValue: "branch" })}
-										/>
 										<Button
 											type="button"
-											variant="ghost"
+											variant="destructive-ghost"
+											size="icon"
 											aria-label={t("coder.repos.remove", { defaultValue: "Remove repository" })}
 											onClick={() => setExtraRepos(extraRepos.filter((_, i) => i !== index))}
 										>
@@ -205,8 +204,8 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 								>
 									<div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
 										<span aria-live="polite">{activeRepoIndex + 1} / {extraRepos.length}</span>
-										<Button type="button" variant="ghost" aria-label={t("coder.repo.previous", { defaultValue: "Previous repository" })} disabled={activeRepoIndex === 0} onClick={() => setActiveRepoIndex((index) => index - 1)}><ChevronLeft className="size-4" aria-hidden="true" /></Button>
-										<Button type="button" variant="ghost" aria-label={t("coder.repo.next", { defaultValue: "Next repository" })} disabled={activeRepoIndex === extraRepos.length - 1} onClick={() => setActiveRepoIndex((index) => index + 1)}><ChevronRight className="size-4" aria-hidden="true" /></Button>
+										<Button type="button" variant="quiet" size="icon" aria-label={t("coder.repo.previous", { defaultValue: "Previous repository" })} disabled={activeRepoIndex === 0} onClick={() => setActiveRepoIndex((index) => index - 1)}><ChevronLeft className="size-4" aria-hidden="true" /></Button>
+										<Button type="button" variant="quiet" size="icon" aria-label={t("coder.repo.next", { defaultValue: "Next repository" })} disabled={activeRepoIndex === extraRepos.length - 1} onClick={() => setActiveRepoIndex((index) => index + 1)}><ChevronRight className="size-4" aria-hidden="true" /></Button>
 									</div>
 								</motion.div>
 							) : null}

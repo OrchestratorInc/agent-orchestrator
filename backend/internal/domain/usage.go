@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -12,11 +13,46 @@ type UsageSourceKind string
 
 // UsageSourceKind values identify certified native usage artifact shapes.
 const (
-	UsageSourceClaudeMain     UsageSourceKind = "claude_main"
-	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
-	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
-	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	UsageSourceClaudeMain        UsageSourceKind = "claude_main"
+	UsageSourceClaudeSubagent    UsageSourceKind = "claude_subagent"
+	UsageSourceCodexRollout      UsageSourceKind = "codex_rollout"
+	UsageSourceKimiWire          UsageSourceKind = "kimi_wire"
+	UsageSourcePiSession         UsageSourceKind = "pi_session"
+	UsageSourceQwenMonthly       UsageSourceKind = "qwen_monthly"
+	UsageSourceOMPSession        UsageSourceKind = "omp_session"
+	UsageSourceKimchiSession     UsageSourceKind = "kimchi_session"
+	UsageSourcePrimeAgentSession UsageSourceKind = "prime_agent_session"
+	UsageSourceGooseLedger       UsageSourceKind = "goose_ledger"
+	UsageSourceOpenCodeDB        UsageSourceKind = "opencode_db"
+	UsageSourceKiloDB            UsageSourceKind = "kilo_db"
+	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
+	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
+	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
 )
+
+// AllUsageSourceKinds lists every certified usage artifact shape.
+var AllUsageSourceKinds = []UsageSourceKind{
+	UsageSourceClaudeMain,
+	UsageSourceClaudeSubagent,
+	UsageSourceCodexRollout,
+	UsageSourceKimiWire,
+	UsageSourcePiSession,
+	UsageSourceQwenMonthly,
+	UsageSourceOMPSession,
+	UsageSourceKimchiSession,
+	UsageSourcePrimeAgentSession,
+	UsageSourceGooseLedger,
+	UsageSourceOpenCodeDB,
+	UsageSourceKiloDB,
+	UsageSourceGrokUsage,
+	UsageSourceDeepSeekSession,
+	UsageSourceAgyConversation,
+}
+
+// IsKnown reports whether k is a certified usage source kind.
+func (k UsageSourceKind) IsKnown() bool {
+	return slices.Contains(AllUsageSourceKinds, k)
+}
 
 // UsageBindingState tracks the root native-session binding lifecycle.
 type UsageBindingState string
@@ -208,25 +244,34 @@ type ModelUsageEvent struct {
 	MeasurementKind       UsageMeasurementKind
 	Tokens                UsageTokenMetrics
 	ProviderUsageJSON     string
+	ServiceTier           string
+	ProviderMessageID     string
 	Costs                 UsageEventCosts
 	CreatedAt             time.Time
 	SourceEventKey        string
 }
 
-// UsageCostCandidate is one still-total-null event selected for an exact
-// provider catalog attempt. Source facts remain immutable and are carried back
-// to storage as compare-and-swap guards.
+// UsagePriceOverride is the user's own price for one stored model ID: either their own rates in USD per million tokens, or the rates of a catalog model to price as.
+type UsagePriceOverride struct {
+	ModelID                              string
+	Input, Output, CacheRead, CacheWrite string
+	PriceAs                              string
+}
+
+// UsageCostCandidate is one event selected for a catalog or override pricing attempt.
 type UsageCostCandidate struct {
-	ID                int64
-	BindingID         int64
-	ProviderID        UsageProviderID
-	BillingProviderID string
-	ModelID           string
-	MeasurementKind   UsageMeasurementKind
-	Tokens            UsageTokenMetrics
-	ProviderUsageJSON string
-	PricingVersion    string
-	SourceEventKey    string
+	ID                 int64
+	BindingID          int64
+	ProviderID         UsageProviderID
+	BillingProviderID  string
+	ModelID            string
+	MeasurementKind    UsageMeasurementKind
+	Tokens             UsageTokenMetrics
+	ProviderUsageJSON  string
+	ServiceTier        string
+	PricingVersion     string
+	SourceEventKey     string
+	EstimatedCostNanos *int64
 }
 
 // UsageCostUpdate carries one candidate's immutable compare-and-swap facts and
@@ -266,6 +311,7 @@ type LegacyUsageRepair struct {
 	BillingProviderID       string
 	BillingProviderSource   UsageBillingProviderSource
 	ProviderUsageJSON       string
+	ServiceTier             string
 	Costs                   UsageEventCosts
 }
 
@@ -354,40 +400,6 @@ type CompactSessionUsage struct {
 	EstimatedCost   *EstimatedCost
 }
 
-// UsageMetricTotals is the aggregate metric block used by session, harness,
-// and model summaries.
-type UsageMetricTotals struct {
-	InputTokens         *int64
-	CachedInputTokens   *int64
-	UncachedInputTokens *int64
-	OutputTokens        *int64
-	ProcessedTokens     *int64
-	EstimatedCost       *EstimatedCost
-}
-
-// ModelUsageSummary is a per-model aggregate. The billing provider stays a
-// pricing input: every event was costed against its own provider's rates before
-// it reached this sum, so the total is exact without splitting the model apart.
-type ModelUsageSummary struct {
-	ModelID string
-	Totals  UsageMetricTotals
-}
-
-// HarnessUsageSummary groups model summaries by AO harness.
-type HarnessUsageSummary struct {
-	Harness AgentHarness
-	Totals  UsageMetricTotals
-	Models  []ModelUsageSummary
-}
-
-// SessionUsageSummary is the read model returned by the session usage service.
-type SessionUsageSummary struct {
-	SessionID  SessionID
-	Incomplete bool
-	Totals     UsageMetricTotals
-	Harnesses  []HarnessUsageSummary
-}
-
 // SourceCursorState is the durable source state to commit after parsing a
 // chunk. ApplyUsageChunk writes it atomically with the emitted events.
 type SourceCursorState struct {
@@ -399,4 +411,97 @@ type SourceCursorState struct {
 	NextRetryAt     *time.Time
 	LastErrorCode   string
 	UpdatedAt       time.Time
+}
+
+// SessionMemoryProcess is one process inside a session's runtime tree.
+type SessionMemoryProcess struct {
+	PID        int
+	PPID       int
+	RSSBytes   uint64
+	CPUPercent float64
+	Command    string
+}
+
+// SessionMemory is the resident memory of one live session's process tree,
+// sampled on request. It is transient by design: memory is a live reading,
+// not a durable session fact, so it is never persisted.
+type SessionMemory struct {
+	SessionID    SessionID
+	RSSBytes     uint64
+	ProcessCount int
+	// CPUPercent is the tree's share of one core since the previous sample;
+	// zero on the first sample, when there is nothing to compare against.
+	CPUPercent float64
+	SampledAt  time.Time
+	Processes  []SessionMemoryProcess
+}
+
+// SystemMemory is the host's headroom at sample time: RAM, swap, swapping
+// rate and CPU load. It is what the pressure light reads; AO's own share is
+// deliberately not part of it. Zero TotalBytes means the reading is
+// unsupported on this platform.
+type SystemMemory struct {
+	TotalBytes     uint64
+	AvailableBytes uint64
+	SwapTotalBytes uint64
+	SwapUsedBytes  uint64
+	// SwapBytesPerSec is how fast pages moved to or from swap since the
+	// previous sample. Sustained non-zero is the frozen-cursor signal.
+	SwapBytesPerSec float64
+	CPUCount        int
+	// Load1 is the one-minute load average; divided by CPUCount, above one
+	// means work is queueing. -1 on a platform with no such concept
+	// (Windows); never otherwise negative.
+	Load1 float64
+	// CPUPercent is the share of all cores the whole host used since the
+	// previous sample, 0..100; zero on the first sample.
+	CPUPercent float64
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against, so CPUPercent's zero means "unknown", not "idle".
+	CPUMeasured bool
+	// PressureRaw is the kernel's memory-pressure figure (PSI some avg10, or
+	// 100 minus available percent where PSI is missing); PressureSource
+	// names which. Clients turn it into fine / tight-soon / tight.
+	PressureRaw    float64
+	PressureSource string
+}
+
+// AppMemory is the resident memory of everything AO runs: the daemon, the
+// desktop shell when the daemon is app-owned, and every live session tree.
+// Own is the daemon and shell alone, so the panel can pin AO's own cost as a
+// row with no action of its own.
+type AppMemory struct {
+	RSSBytes     uint64
+	ProcessCount int
+	CPUPercent   float64
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against, so CPUPercent's zero means "unknown", not "idle".
+	CPUMeasured bool
+	Own         SessionMemory
+	// Reviewers is memory held by live reviewer panes that outlive (or never
+	// had) a session row of their own — ownership lives on the review record
+	// instead. Kept separate from Own and from ListMemory's per-session rows
+	// so a "why is AO using memory" report can name a reviewer specifically,
+	// even one whose worker has already terminated.
+	Reviewers []ReviewerMemory
+}
+
+// ReviewerMemory is one live reviewer pane's process-tree reading, attributed
+// back to the review that owns it.
+type ReviewerMemory struct {
+	ReviewID  string
+	SessionID SessionID
+	Harness   ReviewerHarness
+	Memory    SessionMemory
+}
+
+// SessionStep is one tool call the agent made, as reported by its hooks: which
+// tool and when. Transient like SessionMemory; never persisted.
+type SessionStep struct {
+	ToolUseID string
+	Tool      string
+	StartedAt time.Time
+	// EndedAt is zero while the tool is still running.
+	EndedAt time.Time
+	Failed  bool
 }

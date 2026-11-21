@@ -4,12 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build --webpack",
-    "start": "next start"
+    "dev": "npm run i18n:compile && next dev",
+    "build": "npm run i18n:compile && next build --webpack && node scripts/move-markdown.mjs",
+    "start": "next start",
+    "i18n:extract": "lingui extract --clean --overwrite",
+    "i18n:compile": "lingui compile --strict --typescript",
+    "check:i18n": "npm run i18n:extract && npm run i18n:compile && npm run check:translations",
+    "check:translations": "node scripts/check-translations.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@fumadocs/satteri": "^0.3.1",
+    "@lingui/core": "6.8.0",
+    "@lingui/react": "6.8.0",
     "@types/mdast": "^4.0.4",
     "fumadocs-core": "^16.13.0",
     "fumadocs-mdx": "^15.2.0",
@@ -17,7 +24,7 @@
     "geist": "^1.7.0",
     "lucide-react": "^0.563.0",
     "mdast-util-directive": "^3.1.0",
-    "next": "^16.2.11",
+    "next": "16.2.11",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "remark-gfm": "^4.0.1",
@@ -25,12 +32,19 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@lingui/cli": "6.8.0",
+    "@lingui/format-po": "6.8.0",
+    "@lingui/swc-plugin": "6.6.0",
     "@tailwindcss/postcss": "^4.2.2",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@types/mdx": "^2.0.13",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.2.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.12"
   }
 }

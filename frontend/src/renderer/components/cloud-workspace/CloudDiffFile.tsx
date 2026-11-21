@@ -6,7 +6,7 @@ import type { CloudCpClient, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspace
 import { parseUnifiedDiff } from "../../lib/diff-parser";
 import { useUiStore } from "../../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, type FileAnnotationModel } from "../WorkspaceDiffView";
-import { AO_PIERRE_SURFACE_CSS } from "../diffs/pierreTheme";
+import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "../diffs/pierreTheme";
 
 function metadataForPath(patch: string, path: string): FileDiffMetadata | null {
 	if (!patch) return null;
@@ -41,9 +41,9 @@ export function CloudDiffFile({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const metadata = useMemo(() => metadataForPath(patch, file.path), [file.path, patch]);
 	const rows = useMemo(() => parseUnifiedDiff(patch), [patch]);
-	const activeTarget = annotation.target?.surface !== "focused" && annotation.target?.path === file.path && annotation.target.side !== "file" ? annotation.target : null;
-	const annotations: DiffLineAnnotation<"feedback">[] | undefined = activeTarget?.line != null
-		? [{ lineNumber: activeTarget.line, side: activeTarget.side === "old" ? "deletions" : "additions", metadata: "feedback" }]
+	const activeTargets = annotation.targets.filter((target) => target.surface !== "focused" && target.path === file.path && target.side !== "file" && target.line != null);
+	const annotations: DiffLineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
+		? activeTargets.map((target) => ({ lineNumber: target.line as number, side: target.side === "old" ? "deletions" : "additions", metadata: "feedback" }))
 		: undefined;
 	useEffect(() => {
 		const onSelectionChange = () => {
@@ -85,10 +85,14 @@ export function CloudDiffFile({
 				collapsedContextThreshold: 8, diffIndicators: "classic", diffStyle: split ? "split" : "unified",
 				enableGutterUtility: true, expansionLineCount: 20, hunkSeparators: "line-info", lineDiffType: "word-alt",
 				lineHoverHighlight: "line", loadDiffFiles, maxLineDiffLength: 400, overflow: "wrap",
+				preferredHighlighter: PIERRE_HIGHLIGHTER,
 				theme: { dark: "github-dark", light: "github-light" }, themeType: resolvedTheme,
 				tokenizeMaxLength: 200_000, tokenizeMaxLineLength: 2_000, unsafeCSS: AO_PIERRE_SURFACE_CSS,
 			}}
-			renderAnnotation={() => <FileAnnotationComposer annotation={annotation} />}
+			renderAnnotation={(line) => {
+				const target = activeTargets.find((open) => open.line === line.lineNumber && (open.side === "old" ? "deletions" : "additions") === line.side);
+				return target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null;
+			}}
 			renderGutterUtility={(getHoveredLine) => <LineFeedbackButtonControl gutter label={t("files.addFeedback")} onClick={() => {
 				const line = getHoveredLine();
 				if (line) beginLineAnnotation(line.side, line.lineNumber);

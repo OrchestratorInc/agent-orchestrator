@@ -194,7 +194,7 @@ func TestGetRestoreCommand(t *testing.T) {
 		t.Fatal("ok=false, want true")
 	}
 
-	want := []string{"auggie", "--print", "--rules", "/tmp/system.md", "--resume", "sess-abc123"}
+	want := []string{"auggie", "--rules", "/tmp/system.md", "--resume", "sess-abc123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -215,7 +215,7 @@ func TestGetRestoreCommandAppendsConfiguredModel(t *testing.T) {
 		t.Fatal("ok=false, want true")
 	}
 
-	want := []string{"auggie", "--print", "--model", "claude-sonnet-4", "--resume", "sess-abc123"}
+	want := []string{"auggie", "--model", "claude-sonnet-4", "--resume", "sess-abc123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}

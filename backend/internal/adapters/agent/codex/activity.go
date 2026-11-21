@@ -14,11 +14,12 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	case "user-prompt-submit":
 		return domain.ActivityActive, true
 	case "permission-request":
-		// waiting_input, not blocked: codex installs no pre/post-tool-use
-		// hooks, so no hook can clear this before the turn ends. Terminal
-		// reconciliation clears it once the pane shows the turn running again
-		// (see ContinuouslyDetectTerminalActivityWhileWaiting). waiting_input
-		// still suppresses automated nudges.
+		// waiting_input, not blocked: Codex's only PostToolUse hook tracks
+		// successful subagent spawns, not approval resolution, so no hook can
+		// clear this before the turn ends. Terminal reconciliation clears it
+		// once the pane shows the turn running again (see
+		// ContinuouslyDetectTerminalActivityWhileWaiting). waiting_input still
+		// suppresses automated nudges.
 		return domain.ActivityWaitingInput, true
 	case "stop":
 		return domain.ActivityIdle, true

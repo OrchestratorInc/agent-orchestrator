@@ -7,9 +7,10 @@ package processalive
 import (
 	"bytes"
 	"errors"
-	"os/exec"
 	"strconv"
 	"syscall"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // Alive reports whether pid maps to a running process. EPERM counts as alive:
@@ -28,9 +29,20 @@ func Alive(pid int) bool {
 }
 
 func isZombie(pid int) bool {
-	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	out, err := aoprocess.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return false
 	}
 	return bytes.HasPrefix(bytes.TrimSpace(out), []byte("Z"))
+}
+
+// Exited reports that pid is proven gone: signal 0 fails with ESRCH, as for
+// Node's process.kill(pid, 0). Unlike Alive, a zombie or a process owned by
+// another user still exists, so protocols that only take over a lock from an
+// exited holder match tools that use that check.
+func Exited(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
 }

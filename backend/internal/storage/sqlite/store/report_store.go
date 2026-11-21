@@ -74,6 +74,15 @@ func (s *Store) ListReportsBySession(ctx context.Context, id domain.SessionID) (
 	return s.reportsWithOutputs(ctx, rows)
 }
 
+// ListReportedPRURLs returns only a worker's structured created-PR outputs.
+func (s *Store) ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error) {
+	urls, err := s.qr.ListReportedPRURLs(ctx, string(id))
+	if err != nil {
+		return nil, fmt.Errorf("list reported PR URLs for %s: %w", id, err)
+	}
+	return urls, nil
+}
+
 // ListReportsByProject is the read-only persisted report projection. Consumers
 // such as Project Summary do not participate in the delivery claim lifecycle.
 func (s *Store) ListReportsByProject(ctx context.Context, id domain.ProjectID) ([]domain.ReportRecord, error) {
@@ -92,6 +101,22 @@ func (s *Store) ListPendingReportSchedule(ctx context.Context, limit int64) ([]d
 		return nil, fmt.Errorf("list report schedule: %w", err)
 	}
 	return s.reportsWithOutputs(ctx, rows)
+}
+
+// ListPendingReportsOfDoneProjects returns every pending report of each project
+// that has a pending done report, regardless of its settlement deadline, in
+// claim order per project. The coordinator uses it to flush a done batch early
+// once the project's other workers have stopped.
+func (s *Store) ListPendingReportsOfDoneProjects(ctx context.Context) ([]domain.ReportRecord, error) {
+	rows, err := s.qr.ListPendingReportsOfDoneProjects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pending reports of done projects: %w", err)
+	}
+	out := make([]domain.ReportRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, reportFromGen(row))
+	}
+	return out, nil
 }
 
 // ClaimPendingReportBatch atomically claims every pending report for a project.
@@ -180,6 +205,64 @@ func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID
 		return 0, fmt.Errorf("defer project report batch: %w", err)
 	}
 	return len(rows), nil
+}
+
+// FailReportBatch marks the matching project batch permanently failed after reaching the attempt limit.
+func (s *Store) FailReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	if projectID == "" || token == "" || at.IsZero() {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.FailReportBatch(ctx, gen.FailReportBatchParams{
+		ProjectID: string(projectID), ClaimToken: token, LastError: lastError,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fail project report batch: %w", err)
+	}
+	return len(rows), nil
+}
+
+// RetryUnacknowledgedReportBatch atomically records a submitted-but-unobserved
+// attempt and either defers the batch or fails it at the durable attempt limit.
+// The returned count includes only reports transitioned to failed.
+func (s *Store) RetryUnacknowledgedReportBatch(ctx context.Context, projectID domain.ProjectID, token string, retryAt time.Time, limit int, lastError string) (int, error) {
+	if projectID == "" || token == "" || retryAt.IsZero() || limit <= 0 {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	failed := 0
+	err := s.inTx(ctx, "retry unacknowledged report batch", func(q *gen.Queries) error {
+		attempts, err := q.IncrementUnacknowledgedReportBatch(ctx, gen.IncrementUnacknowledgedReportBatchParams{
+			ProjectID: string(projectID), ClaimToken: token,
+		})
+		if err != nil || len(attempts) == 0 {
+			return err
+		}
+		for _, count := range attempts {
+			if count >= int64(limit) {
+				rows, err := q.FailReportBatch(ctx, gen.FailReportBatchParams{
+					ProjectID: string(projectID), ClaimToken: token, LastError: lastError,
+				})
+				failed = len(rows)
+				return err
+			}
+		}
+		_, err = q.DeferReportBatch(ctx, gen.DeferReportBatchParams{
+			ProjectID: string(projectID), ClaimToken: token, AvailableAt: retryAt, LastError: lastError,
+		})
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("retry unacknowledged report batch: %w", err)
+	}
+	return failed, nil
+}
+
+// AbandonReportBatch aliases FailReportBatch for callers referencing abandonment.
+func (s *Store) AbandonReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	return s.FailReportBatch(ctx, projectID, token, at, lastError)
 }
 
 // AcquireReportInterrupt durably enforces the per-worker interruption window.

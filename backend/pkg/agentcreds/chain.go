@@ -3,6 +3,8 @@ package agentcreds
 import (
 	"context"
 	"os/exec"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // commandRunner is the narrow keychain helper seam.
@@ -13,5 +15,5 @@ func execCommand(ctx context.Context, name string, args ...string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	return exec.CommandContext(ctx, path, args...).CombinedOutput()
+	return aoprocess.CommandContext(ctx, path, args...).CombinedOutput()
 }

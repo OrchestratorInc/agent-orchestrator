@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
@@ -95,5 +99,30 @@ func TestImportCommand_RefusesWhenDaemonRunning(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "import", "--from", root, "--yes")
 	if err == nil || !strings.Contains(err.Error(), "daemon is running") {
 		t.Fatalf("err = %v, want refusal because daemon is running", err)
+	}
+}
+
+// A daemon with its own run-file (or one still starting, before it writes the
+// run-file) passes the PID check above, but it holds the data-dir lock, so
+// import must refuse before opening or migrating ao.db.
+func TestImportCommand_RefusesWhenDataDirLocked(t *testing.T) {
+	cfg := setConfigEnv(t)
+	root := writeLegacyProject(t)
+	held, err := datadirlock.Acquire(context.Background(), cfg.dataDir, 0)
+	if err != nil {
+		t.Fatalf("hold data dir lock: %v", err)
+	}
+	t.Cleanup(func() { _ = held.Release() })
+
+	_, _, err = executeCLI(t, Deps{}, "import", "--from", root, "--yes")
+	if !errors.Is(err, datadirlock.ErrLocked) || ExitCode(err) != 2 {
+		t.Fatalf("err = %v (exit %d), want a data-dir-locked usage error", err, ExitCode(err))
+	}
+	// `ao stop` only reaches the daemon in this AO_RUN_FILE; point at the holder's PID instead.
+	if msg := err.Error(); !strings.Contains(msg, "pid "+strconv.Itoa(os.Getpid())) || strings.Contains(msg, "ao stop") {
+		t.Fatalf("refusal should name the holder pid %d and not suggest ao stop: %v", os.Getpid(), err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cfg.dataDir, "ao.db")); !os.IsNotExist(statErr) {
+		t.Fatalf("import touched ao.db under a locked data dir: %v", statErr)
 	}
 }

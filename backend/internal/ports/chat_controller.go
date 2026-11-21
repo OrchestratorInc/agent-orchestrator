@@ -13,13 +13,18 @@ type ChatHistoryMode uint8
 const (
 	ChatHistoryImport ChatHistoryMode = iota
 	ChatHistoryRequired
-	// ChatHistoryDeferred is used when agent switching owns later projection.
+	// ChatHistoryDeferred is used when later projection is intentionally deferred.
 	ChatHistoryDeferred
 )
 
 // ChatControllerStart is the resolved launch contract shared by the coordinator and Chat service.
 type ChatControllerStart struct {
-	SessionID domain.SessionID
+	// ReconnectOnly restricts startup recovery to an existing provider process.
+	ReconnectOnly bool
+	// AwakeReconnectTarget additionally requires current, unconsumed evidence
+	// of an interrupted persistent transport under the controller gate.
+	AwakeReconnectTarget *domain.AwakeAgentTarget
+	SessionID            domain.SessionID
 	// Owner distinguishes worker and review conversations that share a worker
 	// session. Empty preserves the existing worker-session owner.
 	Owner         domain.ConversationOwner
@@ -34,7 +39,15 @@ type ChatControllerStart struct {
 	Permissions   PermissionMode
 	// ReadOnly forces the provider's native sandbox to reject workspace writes.
 	// Reviewer-owned conversations set this independently of approval behavior.
-	ReadOnly              bool
+	ReadOnly bool
+	// ForkHandoffNote is a text-handoff fork's copy of its original's
+	// conversation. The first start stores it with the conversation, so every
+	// later start of this agent gets it too.
+	ForkHandoffNote string
+	// ForkFirstStart marks a fork's first start, resuming the provider
+	// conversation just copied for it into a conversation with no saved
+	// settings: it starts with, and saves, Model, Effort, and Permissions.
+	ForkFirstStart        bool
 	SystemPrompt          string
 	AdditionalDirectories []string
 	MCPServers            []ChatMCPServerConfig
@@ -46,11 +59,19 @@ type ChatControllerStart struct {
 	PrepareControllerEnv func(context.Context, domain.SessionControllerOwner) (map[string]string, error)
 	// ProviderConversationID resumes an existing provider conversation when set.
 	ProviderConversationID string
+	// FreshIfProviderConversationMissing is set only when AO has durable proof
+	// that the conversation never started. A driver that must reload the stored
+	// provider conversation and is told it does not exist may then start a fresh
+	// one instead; a live provider that still holds it is always reattached.
+	FreshIfProviderConversationMissing bool
 	// ProviderScopeID reserves the opaque-id namespace for a provider boundary
 	// that ControllerReady will commit. Empty derives the namespace from the
 	// active branch, which is the ordinary initial-start and resume path.
 	ProviderScopeID string
 	ProviderHandoff *domain.ChatProviderHandoff
+	// ProviderSwitch proves an idle Chat-to-Chat handoff. It reuses the AO
+	// conversation but always starts a fresh target-provider thread.
+	ProviderSwitch *domain.ChatProviderSwitch
 	// ControllerGeneration is supplied by a durable replacement saga that must
 	// fence the target before starting it. Ordinary starts leave it empty.
 	ControllerGeneration string

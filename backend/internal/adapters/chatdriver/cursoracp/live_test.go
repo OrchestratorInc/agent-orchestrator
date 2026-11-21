@@ -3,6 +3,7 @@ package cursoracp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,9 +11,29 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestMain(m *testing.M) {
+	if len(os.Args) >= 9 && os.Args[1] == "chat-host" {
+		if os.Args[5] != string(persistenthost.ProtocolACP) || os.Args[7] != "--" {
+			os.Exit(2)
+		}
+		err := persistenthost.Run(context.Background(), persistenthost.Config{
+			SessionID: os.Args[2], DataDir: os.Args[3], Workdir: os.Args[4],
+			Protocol: persistenthost.ProtocolACP, OwnershipFingerprint: os.Args[6],
+			Env: os.Environ(), Argv: os.Args[8:],
+		})
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 // Run explicitly with AO_LIVE_CURSOR_ACP=1. It uses the user's existing Cursor
 // executable, account, and AO-managed Cursor profile; CI never depends on them.

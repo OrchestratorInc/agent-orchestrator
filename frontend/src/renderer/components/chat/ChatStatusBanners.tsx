@@ -7,93 +7,117 @@
  * later turn failing for a reason that looks generic. A thread the provider has put
  * into `system_error` looks, from AO's side, like an agent that has gone quiet.
  *
- * They live above the scroller rather than in it because they are current state:
- * scrolling away from them must not scroll away from the reason the session is
- * stuck.
+ * The persistent ones live above the scroller rather than in it because they are
+ * current state: scrolling away from them must not scroll away from the reason the
+ * session is stuck. The MCP note is a one-time heads-up, so it docks by the composer
+ * without displacing the conversation.
  */
 
-import { memo } from "react";
-import { KeyRound, Plug, RefreshCw, TriangleAlert } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { memo, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
+import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
+import { useSettings } from "../../hooks/useSettings";
+import { versionLabel } from "../../hooks/useHarnessUpdates";
+import { agentLabel } from "../../lib/agent-options";
+import type { AgentBlock } from "../../lib/session-import";
+import { labelForHost } from "../../lib/host-clients";
+import { cn, truncateMiddle } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
+import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
+export function ImportedAgentBlocked({ agent, block }: { agent: string; block: AgentBlock }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const signedOut = block === "signed_out";
+	const Icon = signedOut ? KeyRound : Download;
+	return (
+		<div role="status" className="flex items-center gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5">
+			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-sm text-foreground">
+				{t(signedOut ? "sessionImport.blockedSignedOut" : "sessionImport.blockedMissing", { agent: agentLabel(agent) })}
+			</p>
+			<Button
+				type="button"
+				size="sm"
+				variant="primary"
+				className="shrink-0"
+				onClick={() => openGlobalSettings("harness", { focusAgentId: agent, startLogin: signedOut, preserveProject: true })}
+			>
+				{t(signedOut ? "sessionImport.signIn" : "sessionImport.install")}
+			</Button>
+		</div>
+	);
+}
+
 /**
- * The provider will not do any more work until someone signs in.
+ * The provider refused this session's login.
  *
- * The loudest thing on the surface, on purpose: nothing else the user does will
- * help, and every turn they send until they fix it will fail. It names the command
- * because "re-authenticate" is not an action anyone can take — the credentials live
- * with the agent's own CLI, not with AO, which is exactly why the daemon could not
- * fix this itself.
+ * An expired login is routine, so the notice says so plainly and offers one way
+ * out: the Harness page, which signs in on the computer that runs the session,
+ * a remote host or the cloud connection included. The failed turn stays for the
+ * user to retry.
  */
 export const ReauthBanner = memo(function ReauthBanner({
 	account,
 	harness,
-	reasonInTimeline = false,
+	sessionId,
+	hostId,
+	cloud = false,
+	onLogIn,
 }: {
 	account: ConversationAccount;
 	harness: string;
-	reasonInTimeline?: boolean;
+	sessionId?: string;
+	/** The remote host that runs the session; omitted for this computer's. */
+	hostId?: string;
+	/** The session runs in the cloud, so its login is the cloud connection's. */
+	cloud?: boolean;
+	/** Starts the login so that it brings the user back to this chat once it takes. */
+	onLogIn?: () => void;
 }) {
-	if (!account.reauthRequiredAt) return null;
-	const command = signInCommand(harness);
-
+	const { t } = useTranslation();
+	const required = account.authenticationState === "required" ||
+		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
+	if (!required) return null;
+	const agent = agentLabel(harness);
+	const host = hostId ? labelForHost(hostId) ?? hostId : undefined;
 	return (
-		<div
-			role="alert"
-			className="flex shrink-0 items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-4 py-3"
-		>
-			<KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
-			<div className="flex min-w-0 flex-col gap-1">
-				<strong className="text-xs font-semibold text-destructive">
-					Sign in again to keep going
-				</strong>
-				{!reasonInTimeline ? (
-					<p className="text-[11px] leading-relaxed text-foreground">
-						{account.reauthReason ??
-							"The provider rejected this session's credentials."}{" "}
-						Nothing will run until it is fixed, and the worktree is untouched.
-					</p>
-				) : null}
-				<p className="text-[11px] leading-relaxed text-muted-foreground">
-					{command ? (
-						<>
-							Run{" "}
-							<code className="rounded bg-background px-1 py-0.5 font-mono text-[10.5px] text-foreground">
-								{command}
-							</code>{" "}
-							in a terminal, then send your message again. AO holds no credentials of its own.
-						</>
-					) : (
-						<>
-							Sign in with the agent&rsquo;s own CLI, then send your message again. AO holds no
-							credentials of its own.
-						</>
-					)}
-				</p>
-			</div>
+		<div role="status" className="flex shrink-0 items-center gap-2.5 border-b border-border bg-surface px-4 py-2">
+			<KeyRound aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
+				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
+			</p>
+			{/* A chat signs in the session's own account itself, so it needs no lookup here. */}
+			{onLogIn ? (
+				<Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={onLogIn}>
+					{t("chat.reauth.logInAgain")}
+				</Button>
+			) : <ReauthLogInButton harness={harness} sessionId={sessionId} hostId={hostId} cloud={cloud} />}
 		</div>
 	);
 });
 
-/**
- * The sign-in command for a harness, or nothing.
- *
- * Named per harness rather than described generically, because a user staring at a
- * blocked session wants the line to type. Unknown harnesses get the generic wording
- * instead of a guessed command that would fail.
- */
-function signInCommand(harness: string): string | undefined {
-	switch (harness) {
-		case "codex":
-			return "codex login";
-		case "claude-code":
-		case "claude":
-			return "claude auth login";
-		default:
-			return undefined;
-	}
+function ReauthLogInButton({ harness, sessionId, hostId, cloud }: { harness: string; sessionId?: string; hostId?: string; cloud: boolean }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const provider = !hostId && !cloud && sessionId ? agentAccountProviderFor(harness) : null;
+	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
+	const sessionAccountId = provider ? sessionAccounts.data?.[provider] : undefined;
+	return (
+		<Button type="button" size="sm" variant="secondary" className="shrink-0" disabled={provider !== null && sessionAccounts.isPending}
+			onClick={() => openGlobalSettings("harness", {
+				focusAgentId: harness,
+				...(hostId ? { hostId } : {}),
+				harnessView: cloud ? "cloud" : "local",
+				...(sessionAccountId ? { loginAccountId: sessionAccountId } : { startLogin: true }),
+				preserveProject: true,
+			})}>
+			{t("chat.reauth.logInAgain")}
+		</Button>
+	);
 }
 
 /**
@@ -121,11 +145,11 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 		status === "system_error"
 			? {
 					title: "The agent's thread hit an internal error",
-					body: "The provider reported a fault in this thread, not in AO's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
+					body: "The provider reported a fault in this thread, not in Orchestrator's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
 				}
 			: {
 					title: "The agent closed this thread",
-					body: "The provider dropped the conversation on its side. AO kept the history, but the agent no longer holds it.",
+					body: "The provider dropped the conversation on its side. Orchestrator kept the history, but the agent no longer holds it.",
 				};
 
 	return (
@@ -137,9 +161,9 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 			<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
 			<div className="flex min-w-0 flex-col gap-0.5">
 				<strong className="text-xs font-medium text-warning">{copy.title}</strong>
-				<span className="text-[11px] leading-snug text-muted-foreground">{copy.body}</span>
+				<span className="text-xs leading-snug text-muted-foreground">{copy.body}</span>
 				{threadState.waitingOn?.length ? (
-					<span className="text-[11px] leading-snug text-muted-foreground">
+					<span className="text-xs leading-snug text-muted-foreground">
 						Waiting on: {threadState.waitingOn.join(", ")}
 					</span>
 				) : null}
@@ -148,92 +172,142 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 	);
 });
 
+const MCP_NOTICE_MS = 3_000;
+const MCP_NOTICE_FADE_MS = 200;
+const MCP_NOTICE_STORAGE_PREFIX = "ao:mcp-notice-shown:";
+// The set covers pane remounts; storage keeps the note from replaying after a reload.
+const mcpNoticeShownSessions = new Set<string>();
+
+function mcpNoticeWasShown(sessionId: string): boolean {
+	if (mcpNoticeShownSessions.has(sessionId)) return true;
+	try {
+		return window.localStorage.getItem(`${MCP_NOTICE_STORAGE_PREFIX}${sessionId}`) === "1";
+	} catch {
+		return false;
+	}
+}
+
+function rememberMcpNotice(sessionId: string): void {
+	mcpNoticeShownSessions.add(sessionId);
+	try {
+		window.localStorage.setItem(`${MCP_NOTICE_STORAGE_PREFIX}${sessionId}`, "1");
+	} catch {
+		// Best-effort: the in-memory set still covers this renderer's lifetime.
+	}
+}
+
 /**
- * Tool servers that did not start.
+ * A brief, once-per-session note that some tool servers did not start.
  *
- * Only failures are shown. A healthy server is not news, and listing every one would
- * put a permanent status bar above a conversation to say that nothing is wrong. A
- * failed one is worth interrupting for because its absence is invisible: the agent
- * will not mention the tools it does not have, so the user sees a worse answer with
- * no cause.
+ * The agent never mentions tools it does not have, so without this a user sees a
+ * worse answer with no cause. There is nothing to do from here, so say it once,
+ * quietly, and get out of the way; a restarted session gets its own note.
  */
 export const McpServerBanner = memo(function McpServerBanner({
+	sessionId,
+	incarnation,
 	servers,
-	onReload,
-	reloading,
-	turnInFlight,
-	error,
+	placement = "above",
+	active = true,
 }: {
+	sessionId: string;
+	/** Which run of the session; a restart starts its tool servers again. */
+	incarnation?: string;
 	/** Only the broken ones. The caller filters, so an empty list means nothing to say. */
 	servers: McpServer[];
-	/** Absent when the harness cannot reload, in which case no control is drawn. */
-	onReload?: () => void;
-	reloading?: boolean;
-	/** The daemon refuses a reload mid-turn, so the control explains itself instead. */
-	turnInFlight?: boolean;
-	error?: string;
+	/** Relative to the composer, which the parent wraps in a positioned box. */
+	placement?: "above" | "below";
+	/** A hidden chat panel must not use up the session's one note. */
+	active?: boolean;
 }) {
-	if (servers.length === 0) return null;
+	const { t } = useTranslation();
+	const [phase, setPhase] = useState<"waiting" | "shown" | "fading" | "done">("waiting");
+	const hasFailures = servers.length > 0;
+	const noticeKey = incarnation ? `${sessionId}:${incarnation}` : sessionId;
+
+	useEffect(() => {
+		if (phase !== "waiting" || !active || !hasFailures || mcpNoticeWasShown(noticeKey)) return;
+		rememberMcpNotice(noticeKey);
+		setPhase("shown");
+	}, [active, hasFailures, noticeKey, phase]);
+
+	useEffect(() => {
+		if (phase !== "shown" && phase !== "fading") return;
+		const timer = window.setTimeout(
+			() => setPhase(phase === "shown" ? "fading" : "done"),
+			phase === "shown" ? MCP_NOTICE_MS : MCP_NOTICE_FADE_MS,
+		);
+		return () => window.clearTimeout(timer);
+	}, [phase]);
+
+	if (!hasFailures || (phase !== "shown" && phase !== "fading")) return null;
+	const names = servers
+		.map((server) => server.name.charAt(0).toUpperCase() + server.name.slice(1))
+		.join(", ");
 
 	return (
 		<div
-			role="status"
-			aria-atomic="true"
-			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
+			role={phase === "shown" ? "status" : undefined}
+			className={cn(
+				"pointer-events-none absolute left-1/2 z-10 flex w-max max-w-full -translate-x-1/2 items-center gap-1.5 rounded-md bg-background px-2 py-0.5 text-xs text-muted-foreground transition-opacity duration-200 ease-out motion-reduce:transition-none",
+				placement === "below" ? "top-full mt-1.5" : "bottom-full mb-1.5",
+				phase === "fading" && "opacity-0",
+			)}
 		>
-			<Plug aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
-			<div className="flex min-w-0 flex-1 flex-col gap-1">
-				<strong className="text-xs font-medium text-warning">
-					{servers.length === 1
-						? "A tool server did not start"
-						: `${servers.length} tool servers did not start`}
-				</strong>
-				<span className="text-[11px] leading-snug text-muted-foreground">
-					The agent has none of their tools and will not say so — it works around them
-					silently.
-				</span>
-				<ul className="flex flex-col gap-0.5">
-					{servers.map((server) => (
-						<li key={server.name} className="text-[11px] leading-snug">
-							<span className="font-mono text-foreground">{server.name}</span>
-							<span className="text-muted-foreground">
-								{" · "}
-								{server.status}
-								{/* The classification first, then the raw text: one is actionable,
-								    the other is the provider's own words and often long. */}
-								{server.failureReason ? ` · ${server.failureReason}` : ""}
-							</span>
-							{server.error ? (
-								<span className="block truncate text-[10.5px] text-muted-foreground/70" title={server.error}>
-									{server.error}
-								</span>
-							) : null}
-						</li>
-					))}
-				</ul>
-				{error ? <span className="text-[11px] text-destructive">{error}</span> : null}
-			</div>
-			{onReload ? (
-				<Button
-					type="button"
-					size="sm"
-					variant="outline"
-					onClick={onReload}
-					disabled={reloading || turnInFlight}
-					title={
-						turnInFlight
-							? "Finish or stop the current turn before reloading tool servers"
-							: "Start the tool servers again"
-					}
-					className="shrink-0 gap-1.5"
-				>
-					<RefreshCw
-						aria-hidden="true"
-						className={cn("size-3", reloading && "animate-spin")}
-					/>
-					{reloading ? "Reloading…" : "Reload"}
-				</Button>
-			) : null}
+			<Plug aria-hidden="true" className="size-3 shrink-0" />
+			<span className="truncate">
+				{t("chat.mcpNotice.unavailable", { names, count: servers.length })}
+			</span>
 		</div>
 	);
 });
+
+/**
+ * A harness update replaced the release this session's agent runs. With
+ * "move open sessions to new versions" on, the daemon restarts the agent on
+ * the new release once it is idle, or before the next message; a failed
+ * restart keeps the queued messages for a manual resume. A stopped agent is
+ * never moved on its own: resuming it starts the new release.
+ */
+export const VersionSwitchBanner = memo(function VersionSwitchBanner({
+	staleBinary,
+	hostId,
+	agentStopped,
+}: {
+	staleBinary?: SessionStaleBinary;
+	hostId?: string;
+	/** The agent controller stopped and waits for the user to resume it. */
+	agentStopped?: boolean;
+}) {
+	// Most sessions are current; only a marked one reads the setting.
+	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} agentStopped={agentStopped} /> : null;
+});
+
+function VersionSwitchNotice({ staleBinary, hostId, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; agentStopped?: boolean }) {
+	const { t } = useTranslation();
+	const { settings } = useSettings(hostId);
+	const version = truncateMiddle(versionLabel(staleBinary.version));
+	if (staleBinary.switchFailedAt) {
+		return (
+			<div role="alert" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
+				<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
+				<div className="flex min-w-0 flex-col gap-0.5">
+					<strong className="text-xs font-medium text-warning">{t("chat.versionSwitch.failedTitle", { version })}</strong>
+					<span className="text-xs leading-snug text-muted-foreground">{t("chat.versionSwitch.failedBody")}</span>
+				</div>
+			</div>
+		);
+	}
+	if (!settings?.versionRefresh) return null;
+	return (
+		<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5">
+			<span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-caption text-muted-foreground">
+				<CircleArrowUp aria-hidden="true" className="size-3 shrink-0 text-settings-accent" />
+				{t(agentStopped ? "chat.versionSwitch.installed" : "chat.versionSwitch.pending", { version })}
+			</span>
+			<span className="min-w-0 truncate text-caption text-muted-foreground">
+				{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingHint")}
+			</span>
+		</div>
+	);
+}

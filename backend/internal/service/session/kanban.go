@@ -11,23 +11,30 @@ func deriveKanbanPresentation(
 	rec domain.SessionRecord,
 	prs []domain.PRFacts,
 	runs []domain.CurrentHeadReviewRun,
+	interrupted bool,
 	now time.Time,
 	signalCapable bool,
 ) contract.KanbanPresentation {
 	return contract.DeriveKanbanPresentation(
-		toContractKanbanSessionFacts(rec, signalCapable),
+		toContractKanbanSessionFacts(rec, interrupted, signalCapable),
 		toContractKanbanPRFacts(prs, runs),
 		now,
 		noSignalGrace,
 	)
 }
 
-func toContractKanbanSessionFacts(rec domain.SessionRecord, signalCapable bool) contract.KanbanSessionFacts {
+// toContractKanbanSessionFacts reads rec.OutputType, the persisted column
+// lifecycle.Manager.ReconcileSessionOutputType maintains, as the source of
+// truth for artifact-output placement rather than re-scanning the artifact
+// directory on every Kanban derivation.
+func toContractKanbanSessionFacts(rec domain.SessionRecord, interrupted, signalCapable bool) contract.KanbanSessionFacts {
 	return contract.KanbanSessionFacts{
-		SessionFacts:     toContractSessionFacts(rec, signalCapable),
-		AutoReview:       rec.AutoReviewEnabled,
-		AutoInjectReview: rec.AutoInjectReview,
-		AutoInjectCI:     rec.AutoInjectCI,
+		SessionFacts:      toContractSessionFacts(rec, signalCapable),
+		Interrupted:       interrupted,
+		HasArtifactOutput: rec.OutputType.HasArtifact(),
+		AutoReview:        rec.AutoReviewEnabled,
+		AutoInjectReview:  rec.AutoInjectReview,
+		AutoInjectCI:      rec.AutoInjectCI,
 	}
 }
 
@@ -36,11 +43,13 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 	for _, run := range runs {
 		facts := byPR[run.PRURL]
 		facts.Present = true
-		facts.Running = facts.Running || run.Status == domain.ReviewRunRunning
+		facts.Running = facts.Running || run.Status.IsActive()
 		facts.ChangesRequested = facts.ChangesRequested || run.Verdict == domain.VerdictChangesRequested
 		facts.Outcome = facts.Outcome || run.Verdict.Valid()
 		facts.Failed = facts.Failed || run.Status == domain.ReviewRunFailed
 		facts.Cancelled = facts.Cancelled || run.Status == domain.ReviewRunCancelled
+		facts.RetryExhausted = facts.RetryExhausted ||
+			(run.Status == domain.ReviewRunFailed && (run.AutoRetryBlocked || run.FailedAutoRuns >= domain.AutoReviewFailedRetryLimit))
 		byPR[run.PRURL] = facts
 	}
 
@@ -48,6 +57,9 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 	for i, pr := range prs {
 		out[i] = contract.KanbanPRFacts{
 			URL:          pr.URL,
+			Host:         pr.Host,
+			Repo:         pr.Repo,
+			Number:       pr.Number,
 			Draft:        pr.Draft,
 			Merged:       pr.Merged,
 			Closed:       pr.Closed,
@@ -61,6 +73,7 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 				ChangesRequested: pr.ExternalChangesRequested,
 				Comments:         pr.ExternalComments,
 			},
+			StackParent: pr.StackParent,
 		}
 	}
 	return out

@@ -27,12 +27,12 @@ func TestManifestIDMatchesHarness(t *testing.T) {
 }
 
 func TestAugmentRuntimeEnvDisablesAutomaticBrowserLogin(t *testing.T) {
-	env := map[string]string{autohandNoBrowserEnv: "0", "PRESERVED": "value"}
+	env := map[string]string{NoBrowserEnv: "0", "PRESERVED": "value"}
 
 	(&Plugin{}).AugmentRuntimeEnv(env, t.TempDir())
 
-	if got := env[autohandNoBrowserEnv]; got != "1" {
-		t.Fatalf("%s = %q, want 1", autohandNoBrowserEnv, got)
+	if got := env[NoBrowserEnv]; got != "1" {
+		t.Fatalf("%s = %q, want 1", NoBrowserEnv, got)
 	}
 	if got := env["PRESERVED"]; got != "value" {
 		t.Fatalf("PRESERVED = %q, want value", got)
@@ -58,7 +58,6 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 		"--path", "/work/space",
 		"--unrestricted",
 		"--sys-prompt", "inline wins",
-		"--", "-fix this",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
@@ -138,14 +137,20 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 	}
 }
 
-func TestGetPromptDeliveryStrategyIsInCommand(t *testing.T) {
+func TestGetPromptDeliveryStrategyIsAfterStart(t *testing.T) {
+	// A prompt on the command line runs in command mode and exits; the
+	// interactive session takes it once its footer shows.
 	plugin := &Plugin{}
 
 	got, err := plugin.GetPromptDeliveryStrategy(context.Background(), ports.LaunchConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != ports.PromptDeliveryInCommand {
+	hints, hintErr := plugin.PromptReadinessHints(context.Background(), ports.LaunchConfig{})
+	if hintErr != nil || len(hints.Patterns) == 0 {
+		t.Fatalf("readiness hints = %+v, %v", hints, hintErr)
+	}
+	if got != ports.PromptDeliveryAfterStart {
 		t.Fatalf("unexpected strategy: %q", got)
 	}
 }

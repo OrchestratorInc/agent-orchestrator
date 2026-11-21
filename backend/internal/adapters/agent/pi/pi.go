@@ -16,7 +16,7 @@
 // confirmation flows are built via TypeScript extensions), so AO emits no
 // permission flag and defers to Pi's own behavior.
 //
-// Restore: Pi persists sessions to ~/.pi/agent/sessions/ and resumes
+// Restore: AO pins Pi sessions under its configured data directory and resumes
 // interactively by id with `--session <id>` (partial UUIDs accepted). The native
 // session id is emitted on the first line of `--mode json` output as
 // {"type":"session","id":"<uuid>",...} and is captured into session metadata
@@ -94,7 +94,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 
 // GetLaunchCommand builds the argv to start a new interactive Pi session:
 //
-//	pi [--append-system-prompt <system prompt>] [--model <model>] [<prompt>]
+//	pi --session-dir <ao data>/pi/sessions [--append-system-prompt <system prompt>] [--model <model>] [<prompt>]
 //
 // The prompt is delivered in-command as a trailing positional message. Pi does
 // not honor a `--` options terminator, so the prompt must not begin with "-".
@@ -106,6 +106,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 
 	cmd = []string{binary}
+	appendPiSessionDirFlag(&cmd, cfg.DataDir)
 	appendPiExtensionFlag(&cmd, cfg.WorkspacePath)
 	if cfg.SystemPrompt != "" {
 		cmd = append(cmd, "--append-system-prompt", cfg.SystemPrompt)
@@ -141,6 +142,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd = []string{binary}
+	if piTranscriptInManagedDir(cfg.Session.Metadata[ports.MetadataKeyNativeTranscriptPath], cfg.DataDir) {
+		appendPiSessionDirFlag(&cmd, cfg.DataDir)
+	}
 	appendPiExtensionFlag(&cmd, cfg.Session.WorkspacePath)
 	if cfg.SystemPrompt != "" {
 		cmd = append(cmd, "--append-system-prompt", cfg.SystemPrompt)
@@ -169,6 +173,9 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
+	}
+	if effort := strings.TrimSpace(cfg.Effort); effort != "" {
+		*cmd = append(*cmd, "--thinking", effort)
 	}
 }
 
@@ -206,3 +213,18 @@ func (p *Plugin) piBinary(ctx context.Context) (string, error) {
 	p.resolvedBinary = binary
 	return binary, nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

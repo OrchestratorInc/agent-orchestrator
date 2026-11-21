@@ -52,9 +52,64 @@ func TestClaudeCatalogPrefersProviderModels(t *testing.T) {
 	}
 }
 
-// Discovery must never empty the picker. Every way of failing to reach the
-// provider falls back to the aliases that shipped before.
-func TestClaudeCatalogReturnsStaticFallbackWithProviderError(t *testing.T) {
+// A settings.json alias default (e.g. "sonnet") does not match the concrete
+// snapshot IDs provider discovery returns, so it is carried as its own entry.
+// It must surface with the human label the CLI uses, not the raw alias, and
+// with the version the provider's own list resolves it to, so the picker reads
+// "Sonnet 4.5" instead of "sonnet" or "Model not reported".
+func TestClaudeConfiguredAliasDefaultCarriesHumanLabel(t *testing.T) {
+	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{
+			{ID: "claude-sonnet-4-5-20250929", Label: "Claude Sonnet 4.5"},
+			{ID: "claude-opus-4-5-20251101", Label: "Claude Opus 4.5"},
+		}, nil
+	}
+	request := claudeRequest(t)
+	request.Env = map[string]string{"ANTHROPIC_MODEL": "sonnet"}
+	catalog, err := discoverClaudeCatalog(context.Background(), request, list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var defaults []ports.AgentModelInfo
+	for _, model := range catalog.Models {
+		if model.IsDefault {
+			defaults = append(defaults, model)
+		}
+	}
+	if len(defaults) != 1 {
+		t.Fatalf("default models = %+v, want exactly one", defaults)
+	}
+	if defaults[0].ID != "sonnet" || defaults[0].Label != "Sonnet 4.5" {
+		t.Fatalf("default = %+v, want {ID: sonnet, Label: Sonnet 4.5}", defaults[0])
+	}
+}
+
+// A configured custom alias or pinned snapshot AO does not know keeps its raw
+// id as the label — we never invent a name for it.
+func TestClaudeConfiguredUnknownDefaultKeepsRawLabel(t *testing.T) {
+	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{{ID: "claude-sonnet-4-5-20250929", Label: "Claude Sonnet 4.5"}}, nil
+	}
+	request := claudeRequest(t)
+	request.Env = map[string]string{"ANTHROPIC_MODEL": "my-custom-pin"}
+	catalog, err := discoverClaudeCatalog(context.Background(), request, list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range catalog.Models {
+		if model.ID == "my-custom-pin" {
+			if model.Label != "my-custom-pin" || !model.IsDefault {
+				t.Fatalf("custom pin = %+v, want raw label and default", model)
+			}
+			return
+		}
+	}
+	t.Fatal("configured custom pin was not carried into the catalog")
+}
+
+// Failed discovery leaves cache selection to the shared service. It must not
+// replace a cached provider list with invented aliases.
+func TestClaudeCatalogReturnsNoInventedModelsWithProviderError(t *testing.T) {
 	tests := []struct {
 		name string
 		list ClaudeModelListFunc
@@ -94,27 +149,20 @@ func TestClaudeCatalogReturnsStaticFallbackWithProviderError(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			catalog, err := discoverClaudeCatalog(context.Background(), claudeRequest(t), tc.list)
-			if len(catalog.Models) == 0 {
-				t.Fatal("the picker must never be emptied by a discovery failure")
+			if len(catalog.Models) != 0 {
+				t.Fatalf("failed discovery invented models: %+v", catalog.Models)
 			}
-			if catalog.Source != "catalog" {
-				t.Fatalf("source = %q, want the static catalog", catalog.Source)
+			if !catalog.AllowCustom {
+				t.Fatal("manual model entry must remain available without a cache")
 			}
-			ids := map[string]bool{}
-			for _, model := range catalog.Models {
-				ids[model.ID] = true
-			}
-			if !ids["sonnet"] || !ids["opus"] {
-				t.Fatalf("fallback lost the static aliases: %+v", catalog.Models)
-			}
-			if tc.list != nil && err == nil {
+			if err == nil {
 				t.Fatal("provider discovery failure was suppressed")
 			}
 		})
 	}
 }
 
-func TestClaudeGatewayCatalogFailureReturnsConfiguredModelsWithoutDiscoverySuccess(t *testing.T) {
+func TestClaudeGatewayCatalogFailureLeavesFallbackToCache(t *testing.T) {
 	request := claudeRequest(t)
 	request.Env = map[string]string{
 		"ANTHROPIC_BASE_URL":             "https://gateway.example",
@@ -143,24 +191,8 @@ func TestClaudeGatewayCatalogFailureReturnsConfiguredModelsWithoutDiscoverySucce
 	if catalog.CustomModelEntry != ports.CustomModelEntryDirect || !catalog.AllowCustom {
 		t.Fatalf("custom entry = (%q, %v), want direct enabled", catalog.CustomModelEntry, catalog.AllowCustom)
 	}
-	wantPrefix := []string{"gateway-primary", "gateway-opus", "gateway-shared", "gateway-fast"}
-	if len(catalog.Models) < len(wantPrefix) {
-		t.Fatalf("models = %#v, want configured gateway models first", catalog.Models)
-	}
-	for i, want := range wantPrefix {
-		if got := catalog.Models[i].ID; got != want {
-			t.Fatalf("models[%d] = %q, want %q; catalog = %#v", i, got, want, catalog.Models)
-		}
-	}
-	counts := make(map[string]int, len(catalog.Models))
-	for _, item := range catalog.Models {
-		counts[item.ID]++
-	}
-	if counts["gateway-shared"] != 1 {
-		t.Fatalf("gateway-shared count = %d, want one deduplicated target", counts["gateway-shared"])
-	}
-	if counts["sonnet"] != 1 || counts["opus"] != 1 || counts["haiku"] != 1 {
-		t.Fatalf("models = %#v, want static aliases after configured gateway targets", catalog.Models)
+	if len(catalog.Models) != 0 {
+		t.Fatalf("models = %#v, want no replacement list on discovery failure", catalog.Models)
 	}
 }
 

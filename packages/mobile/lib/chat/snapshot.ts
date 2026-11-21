@@ -95,6 +95,27 @@ export function discardHistoricalPages(pages: ConversationPage[]): ConversationP
 	return pages.length ? pages.slice(0, 1) : pages;
 }
 
+/**
+ * Puts a freshly fetched live page in front of the loaded history. History is
+ * kept only while it describes the same conversation and active branch: an edit
+ * (even one whose delivery came back uncertain) or a branch switch keeps the
+ * conversation id, so a changed branch is what says the older pages now hold
+ * rows the replacement conversation does not contain.
+ */
+export function withLivePage(pages: ConversationPage[], live: ConversationPage): ConversationPage[] {
+	const current = pages[0];
+	if (!current) return [live];
+	if (current.conversationId && current.conversationId !== live.conversationId) return [live];
+	if (current.activeBranchId && live.activeBranchId && current.activeBranchId !== live.activeBranchId) return [live];
+	return [live, ...pages.slice(1)];
+}
+
+/** Whether an older page still belongs behind the live one; a branch switch while it loaded makes it stale. */
+export function olderPageFits(pages: ConversationPage[], older: ConversationPage): boolean {
+	const live = pages[0];
+	return Boolean(live) && (!live.activeBranchId || !older.activeBranchId || live.activeBranchId === older.activeBranchId);
+}
+
 /** Merge historical pages behind the current live page without duplicating revisions. */
 export function mergeConversationPages(pages: ConversationPage[]): ConversationSnapshot | undefined {
 	const live = pages[0];

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
 const testAppRunID = "app-run-current"
@@ -28,39 +30,69 @@ func testLogger() *slog.Logger {
 // fakeShellRuntime records every runtime call so tests can assert on what was
 // spawned and what was torn down.
 type fakeShellRuntime struct {
-	created   []ports.RuntimeConfig
-	destroyed []string
-	sentCh    chan sentInput
+	created     []ports.RuntimeConfig
+	destroyed   []string
+	interrupted []string
+	sentCh      chan sentInput
 
-	createErr   error
-	destroyErr  error
-	sendErr     error
-	output      string
-	outputMu    sync.RWMutex
-	outputErr   error
-	outputReady <-chan struct{}
+	createErr    error
+	onCreate     func(ports.RuntimeConfig)
+	createCtxErr bool
+	destroyErr   error
+	sendErr      error
+	output       string
+	outputMu     sync.RWMutex
+	outputErr    error
+	outputReady  <-chan struct{}
+	onGetOutput  func(context.Context) (string, error)
+	styledOutput string
+	styledErr    error
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
-	aliveByHandle map[string]bool
-	aliveErr      error
-	handlePrefix  string
-	childExited   bool
-	childProbeErr error
+	aliveByHandle   map[string]bool
+	aliveErr        error
+	handlePrefix    string
+	childExited     bool
+	childProbeErr   error
+	childProbeCh    chan struct{}
+	cueReady        bool
+	cueReadyGate    <-chan struct{}
+	cueDoNotConsume bool
+	onSendMessage   func()
+
+	childProbeWaitForCancellation bool
 }
 
 type sentInput struct {
-	handleID string
-	input    string
+	handleID    string
+	input       string
+	payload     string
+	payloadFile string
 }
 
 func newFakeShellRuntime() *fakeShellRuntime {
 	return &fakeShellRuntime{aliveByHandle: map[string]bool{}, sentCh: make(chan sentInput, 1)}
 }
 
-func (f *fakeShellRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+func (f *fakeShellRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+	if f.onCreate != nil {
+		f.onCreate(cfg)
+	}
+	if f.createCtxErr && ctx.Err() != nil {
+		return ports.RuntimeHandle{}, ctx.Err()
+	}
 	if f.createErr != nil {
 		return ports.RuntimeHandle{}, f.createErr
 	}
 	f.created = append(f.created, cfg)
+	if f.cueReady && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+	}
+	if f.cueReadyGate != nil && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		go func() {
+			<-f.cueReadyGate
+			_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+		}()
+	}
 	handleID := f.handlePrefix + string(cfg.SessionID)
 	f.aliveByHandle[handleID] = true
 	return ports.RuntimeHandle{ID: handleID}, nil
@@ -78,6 +110,12 @@ func (f *fakeShellRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle
 	return f.destroyErr
 }
 
+func (f *fakeShellRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) error {
+	f.interrupted = append(f.interrupted, handle.ID)
+	f.childExited = true
+	return nil
+}
+
 func (f *fakeShellRuntime) SendInput(_ context.Context, handle ports.RuntimeHandle, input string) error {
 	sent := sentInput{handleID: handle.ID, input: input}
 	f.sentCh <- sent
@@ -85,10 +123,32 @@ func (f *fakeShellRuntime) SendInput(_ context.Context, handle ports.RuntimeHand
 }
 
 func (f *fakeShellRuntime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, input string) error {
+	if f.onSendMessage != nil {
+		f.onSendMessage()
+	}
+	if strings.Contains(input, "/command") || strings.Contains(input, `\command`) {
+		cfg := f.created[len(f.created)-1]
+		root := filepath.Dir(filepath.Dir(cfg.Env["AO_CUE_READY_FILE"]))
+		files, _ := filepath.Glob(filepath.Join(root, "cue-commands", "*", "command"))
+		if len(files) == 1 {
+			data, err := os.ReadFile(files[0])
+			if err != nil {
+				return err
+			}
+			if !f.cueDoNotConsume && f.sendErr == nil {
+				_ = os.Remove(files[0])
+			}
+			f.sentCh <- sentInput{handleID: handle.ID, input: input, payload: string(data), payloadFile: files[0]}
+			return f.sendErr
+		}
+	}
 	return f.SendInput(ctx, handle, input)
 }
 
-func (f *fakeShellRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+func (f *fakeShellRuntime) GetOutput(ctx context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	if f.onGetOutput != nil {
+		return f.onGetOutput(ctx)
+	}
 	if f.outputReady != nil {
 		select {
 		case <-f.outputReady:
@@ -99,6 +159,10 @@ func (f *fakeShellRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _
 	f.outputMu.RLock()
 	defer f.outputMu.RUnlock()
 	return f.output, f.outputErr
+}
+
+func (f *fakeShellRuntime) GetStyledOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	return f.styledOutput, f.styledErr
 }
 
 func (f *fakeShellRuntime) setOutput(output string) {
@@ -115,6 +179,16 @@ func (f *fakeShellRuntime) IsAlive(_ context.Context, handle ports.RuntimeHandle
 }
 
 func (f *fakeShellRuntime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	if f.childProbeCh != nil {
+		select {
+		case f.childProbeCh <- struct{}{}:
+		default:
+		}
+	}
+	if f.childProbeWaitForCancellation {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
 	if f.childProbeErr != nil {
 		return false, f.childProbeErr
 	}
@@ -129,6 +203,9 @@ type fakeShellTerminalStore struct {
 	records           []ShellTerminalRecord
 	insertErr         error
 	deleteErrByHandle map[string]error
+	markEndedErr      error
+	adoptErr          error
+	staleRestorable   []ShellTerminalRecord
 }
 
 func (f *fakeShellTerminalStore) InsertShellTerminal(_ context.Context, rec ShellTerminalRecord) error {
@@ -217,6 +294,7 @@ func (f *fakeShellTerminalStore) DeleteShellTerminalsFromPreviousAppRuns(_ conte
 
 type fakeProjectRootLocator struct {
 	roots map[domain.ProjectID]string
+	envs  map[domain.ProjectID]map[string]string
 	err   error
 }
 
@@ -227,12 +305,21 @@ func (f *fakeProjectRootLocator) ProjectRoot(_ context.Context, id domain.Projec
 	return f.roots[id], nil
 }
 
+func (f *fakeProjectRootLocator) ProjectEnv(_ context.Context, id domain.ProjectID) (map[string]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.envs[id], nil
+}
+
 // fakeSessionWorkspace is one entry in fakeSessionWorkspaceLocator: a session's
 // workspace path (possibly empty, standing in for a session with no worktree
 // of its own yet) and the project it belongs to.
 type fakeSessionWorkspace struct {
 	workspacePath string
 	projectID     domain.ProjectID
+	activity      domain.ActivityState
+	terminated    bool
 }
 
 type fakeSessionWorkspaceLocator struct {
@@ -249,6 +336,17 @@ func (f *fakeSessionWorkspaceLocator) SessionWorkspace(_ context.Context, id dom
 		return "", "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return ws.workspacePath, ws.projectID, nil
+}
+
+func (f *fakeSessionWorkspaceLocator) CueCommandSessionTarget(_ context.Context, id domain.SessionID) (CueCommandSessionTarget, error) {
+	if f.err != nil {
+		return CueCommandSessionTarget{}, f.err
+	}
+	ws, ok := f.sessions[id]
+	if !ok {
+		return CueCommandSessionTarget{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return CueCommandSessionTarget{ProjectID: ws.projectID, WorkspacePath: ws.workspacePath, Activity: ws.activity, IsTerminated: ws.terminated}, nil
 }
 
 // newTestService wires a service with deterministic ids so assertions can name
@@ -268,6 +366,33 @@ func newTestServiceWithSessions(rt *fakeShellRuntime, st *fakeShellTerminalStore
 	}
 	svc.now = func() time.Time { return time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC) }
 	return svc
+}
+
+// Only agent terminals are probed for their rendered screen; shell and command
+// terminals let the runtime skip rendering every byte until something asks.
+func TestShellAndCommandTerminalsAskForLazyStyledOutput(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "pi v0.80.2"
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"}); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv: []string{"pi"}, Title: "Log in to Pi", InitialInput: "/login", InitialInputReadyStates: readyStates("pi v"),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+	if len(rt.created) != 2 {
+		t.Fatalf("runtime creates = %d, want 2", len(rt.created))
+	}
+	for i, cfg := range rt.created {
+		if !cfg.LazyStyledOutput {
+			t.Errorf("create %d did not ask for lazy styled output", i)
+		}
+	}
 }
 
 func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *testing.T) {
@@ -294,6 +419,10 @@ func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *test
 	if len(rt.created) != 1 {
 		t.Fatalf("runtime creates = %d, want 1", len(rt.created))
 	}
+	// A scripted command must run whether or not anyone attaches to view it.
+	if rt.created[0].StartOnAttach {
+		t.Error("command terminal deferred its start until a viewer attaches")
+	}
 	authWorkspaceRoot := filepath.Join(dataDir, authWorkspaceDirectoryName)
 	authWorkspace := filepath.Join(authWorkspaceRoot, "shellterm-test1")
 	if got := rt.created[0].WorkspacePath; got != authWorkspace {
@@ -310,12 +439,13 @@ func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *test
 		t.Errorf("argv = %#v, want []string{\"pi\"}", got)
 	}
 	wantRecord := ShellTerminalRecord{
-		HandleID:   "shellterm-test1",
-		WorkingDir: authWorkspace,
-		Title:      "Log in to Pi",
-		AppRunID:   testAppRunID,
-		Transient:  true,
-		CreatedAt:  time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		HandleID:      "shellterm-test1",
+		WorkingDir:    authWorkspace,
+		Title:         "Log in to Pi",
+		TitleExplicit: true,
+		AppRunID:      testAppRunID,
+		Transient:     true,
+		CreatedAt:     time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
 	}
 	if !reflect.DeepEqual(st.records, []ShellTerminalRecord{wantRecord}) {
 		t.Errorf("records = %#v, want %#v", st.records, []ShellTerminalRecord{wantRecord})
@@ -369,6 +499,109 @@ func TestOpenCommandTerminalWaitsForReadinessMarkerBeforeSendingInitialInput(t *
 	}
 }
 
+func TestOpenCommandTerminalSendsInitialInputOnReadyTimeoutWhenOptedIn(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "pi prompt without any reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Errorf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial input was not sent after the ready wait expired")
+	}
+}
+
+func TestOpenCommandTerminalSkipsInitialInputOnReadyTimeoutByDefault(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"kimi"},
+		Title:                   "Log in to Kimi",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("Run /login or /provider to get started."),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent without a ready marker or opt-in: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalSkipsReadyTimeoutFallbackForExitedTerminal(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	rt.aliveErr = errors.New("runtime gone")
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent to an exited terminal: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalFindsReadinessMarkerInRenderedTerminalSurface(t *testing.T) {
+	rt := newFakeShellRuntime()
+	// Full-screen TUIs can keep their current footer out of the raw line ring,
+	// and rendered styling may split a visible marker with SGR sequences.
+	rt.output = "startup bytes without the current footer"
+	rt.styledOutput = "Interactive · Manual Approval · \x1b[1m/\x1b[m commands · ? help"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"copilot"},
+		Title:                   "Log in to GitHub Copilot",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("/ commands"),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Fatalf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("automatic login input was not sent after the rendered terminal became ready")
+	}
+}
+
 func TestOpenCommandTerminalEntersQwenVimInsertModeBeforeAuth(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.output = "-- NORMAL --"
@@ -399,6 +632,135 @@ func TestOpenCommandTerminalEntersQwenVimInsertModeBeforeAuth(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatalf("automatic Qwen input %q was not sent", want.input)
 		}
+	}
+}
+
+func TestOpenCommandTerminalWaitsForCompletionBeforeSubmittingPrefix(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Type your message or @path/to/file"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:  []string{"gemini"},
+		Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []InitialInputReadyState{{
+			Text:            "Type your message or @path/to/file",
+			RawPrefix:       "/auth",
+			SubmitReadyText: "Manage authentication",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/auth"}); got != want {
+			t.Fatalf("prefix = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth prefix was not entered")
+	}
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("auth command submitted before completion appeared: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+
+	rt.setOutput("auth   Manage authentication")
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: ""}); got != want {
+			t.Fatalf("submission = %#v, want Enter-only %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth command was not submitted after completion appeared")
+	}
+}
+
+func TestOpenCommandTerminalGivesCompletionItsOwnTimeout(t *testing.T) {
+	rt := newFakeShellRuntime()
+	var readyDeadline time.Time
+	completionDeadline := make(chan time.Time, 1)
+	rt.onGetOutput = func(ctx context.Context) (string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return "", errors.New("initial input wait has no deadline")
+		}
+		if readyDeadline.IsZero() {
+			readyDeadline = deadline
+			// Consume part of the startup budget before the editor renders.
+			select {
+			case <-time.After(2 * initialInputPollInterval):
+				return "Type your message or @path/to/file", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		completionDeadline <- deadline
+		return "auth   Manage authentication", nil
+	}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = time.Second
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv: []string{"gemini"}, Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []InitialInputReadyState{{
+			Text: "Type your message or @path/to/file", RawPrefix: "/auth", SubmitReadyText: "Manage authentication",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case deadline := <-completionDeadline:
+		if deadline.Sub(readyDeadline) < initialInputPollInterval {
+			t.Fatalf("completion deadline %v reused startup deadline %v", deadline, readyDeadline)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("completion wait did not start")
+	}
+	for _, want := range []string{"/auth", ""} {
+		select {
+		case got := <-rt.sentCh:
+			if got.input != want {
+				t.Fatalf("input = %q, want %q", got.input, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing input %q", want)
+		}
+	}
+}
+
+func TestOpenCommandTerminalLeavesPrefixUnsubmittedWithoutCompletion(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Type your message or @path/to/file"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv: []string{"gemini"}, Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []InitialInputReadyState{{
+			Text: "Type your message or @path/to/file", RawPrefix: "/auth", SubmitReadyText: "Manage authentication",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/auth"}); got != want {
+			t.Fatalf("prefix = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth prefix was not entered")
+	}
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("auth command submitted without completion: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
 	}
 }
 
@@ -605,7 +967,7 @@ func TestOpenCommandTerminalRejectsInvalidInput(t *testing.T) {
 func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
-	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}, envs: map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "shell-value"}}}
 	svc := newTestService(rt, st, projects)
 
 	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"})
@@ -622,6 +984,13 @@ func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.
 	if len(rt.created[0].Argv) == 0 {
 		t.Error("argv is empty; a shell terminal must launch a resolved shell")
 	}
+	if got := rt.created[0].Env["PROJECT_TOKEN"]; got != "shell-value" {
+		t.Fatalf("project shell env = %q, want shell-value", got)
+	}
+	// Without a sized client asking for it, the shell starts immediately.
+	if rt.created[0].StartOnAttach {
+		t.Error("shell deferred its start without a client that will report a grid")
+	}
 	if term.WorkingDir != "/repos/portfolio" {
 		t.Errorf("working dir = %q, want the project root", term.WorkingDir)
 	}
@@ -630,6 +999,125 @@ func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.
 	}
 	if len(st.records) != 1 || st.records[0].AppRunID != testAppRunID {
 		t.Fatalf("record not persisted against the current app run: %+v", st.records)
+	}
+}
+
+func TestOpenShellTerminalRedactsProjectEnvFromRuntimeError(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.createErr = errors.New("could not start with shell-secret")
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}, envs: map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "shell-secret"}}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	_, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"})
+	if err == nil || strings.Contains(err.Error(), "shell-secret") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("OpenShellTerminal error = %v, want redacted project env", err)
+	}
+}
+
+func TestOpenShellTerminalDoesNotTrustProjectAOMarkers(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}, envs: map[domain.ProjectID]map[string]string{
+		"portfolio": {"AO_SESSION_ID": "spoof", "AO_WORKTREE_PATH": "spoof", "PROJECT_TOKEN": "safe"},
+	}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"}); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	got := rt.created[0].Env
+	if got["AO_SESSION_ID"] == "spoof" || got["AO_WORKTREE_PATH"] == "spoof" {
+		t.Fatalf("shell received spoofed AO markers: %#v", got)
+	}
+	if got["PROJECT_TOKEN"] != "safe" {
+		t.Fatalf("project variable = %q, want safe", got["PROJECT_TOKEN"])
+	}
+}
+
+// A client that already shows the tab names it, so the tab keeps that name
+// when the shell arrives even if the daemon still has shells the client has
+// already closed.
+func TestOpenShellTerminalKeepsTheTitleTheClientShows(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
+		{HandleID: "ptyhost-v1:shellterm-closing", ProjectID: "portfolio", Title: "Terminal 1", AppRunID: testAppRunID},
+	}}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, st, projects)
+
+	shell, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio", Title: "  Terminal 1 "})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if shell.Title != "Terminal 1" {
+		t.Fatalf("title = %q, want the client's Terminal 1", shell.Title)
+	}
+
+	_, err = svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio", Title: strings.Repeat("x", maxShellTerminalTitleLen+1)})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SHELL_TERMINAL_TITLE_TOO_LONG" {
+		t.Fatalf("too-long title error = %v, want SHELL_TERMINAL_TITLE_TOO_LONG", err)
+	}
+	if len(rt.created) != 1 {
+		t.Fatalf("runtime creates = %d, want only the valid open", len(rt.created))
+	}
+}
+
+func TestOpenShellTerminalOrdersByWhenItWasOpenedNotWhenItsRuntimeSpawned(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+	opened := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	clock := opened
+	svc.now = func() time.Time { return clock }
+	rt.onCreate = func(ports.RuntimeConfig) { clock = clock.Add(30 * time.Millisecond) }
+
+	shell, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if !shell.CreatedAt.Equal(opened) {
+		t.Fatalf("CreatedAt = %v, want the open time %v, not when the runtime finished spawning", shell.CreatedAt, opened)
+	}
+}
+
+func TestOpenShellTerminalDefersStartWhenTheClientWillSizeIt(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio", StartOnAttach: true}); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if len(rt.created) != 1 || !rt.created[0].StartOnAttach {
+		t.Fatalf("runtime creates = %+v, want one deferred until the client attaches", rt.created)
+	}
+}
+
+func TestOpenShellTerminalStartsAtTheClientGridWhenGiven(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	in := OpenShellTerminalInput{ProjectID: "portfolio", StartOnAttach: true, Cols: 146, Rows: 37}
+	if _, err := svc.OpenShellTerminal(context.Background(), in); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if len(rt.created) != 1 || rt.created[0].InitialCols != 146 || rt.created[0].InitialRows != 37 {
+		t.Fatalf("runtime creates = %+v, want the client's 146x37 grid", rt.created)
+	}
+}
+
+func TestOpenShellTerminalIgnoresAnOutOfRangeGrid(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	in := OpenShellTerminalInput{ProjectID: "portfolio", StartOnAttach: true, Cols: 1, Rows: 5000}
+	if _, err := svc.OpenShellTerminal(context.Background(), in); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if len(rt.created) != 1 || rt.created[0].InitialCols != 0 || rt.created[0].InitialRows != 0 || !rt.created[0].StartOnAttach {
+		t.Fatalf("runtime creates = %+v, want no grid and start-on-attach kept", rt.created)
 	}
 }
 
@@ -677,12 +1165,21 @@ func TestOpenShellTerminalPinsPATHToDaemonBinary(t *testing.T) {
 			rt := newFakeShellRuntime()
 			svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
 			svc.executable = tc.executable
+			svc.dataDir = t.TempDir()
 
 			if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{}); err != nil {
 				t.Fatalf("OpenShellTerminal: %v", err)
 			}
 			if got := rt.created[0].Env["PATH"]; got != tc.want {
 				t.Fatalf("PATH = %q, want %q", got, tc.want)
+			}
+			// A terminal is a login shell: its startup files run after the pin,
+			// so it re-pins afterwards, and only when there is a pin.
+			pinned := tc.want != "" && runtime.GOOS != "windows"
+			if env := rt.created[0].Env; (env["AO_PATH_PIN"] == filepath.Dir(daemonExe) &&
+				env["ZDOTDIR"] == filepath.Join(svc.dataDir, "runtime", "login-shell") &&
+				strings.Contains(env["PROMPT_COMMAND"], "_AO_PATH_REPINNED")) != pinned {
+				t.Fatalf("terminal env = %v, want the login-shell re-pin %v", env, pinned)
 			}
 		})
 	}
@@ -701,6 +1198,9 @@ func TestOpenShellTerminalFallsBackToDataDirWhenNoProjectGiven(t *testing.T) {
 	}
 	if term.ProjectID != "" {
 		t.Errorf("project id = %q, want empty", term.ProjectID)
+	}
+	if rt.created[0].Env["AO_PREVIEW_CAPABILITY"] != "" {
+		t.Fatal("standalone shell received a session preview capability")
 	}
 }
 
@@ -777,6 +1277,7 @@ func TestOpenShellTerminalReturnsNotFoundForUnknownProject(t *testing.T) {
 }
 
 func TestOpenShellTerminalScopesToSession(t *testing.T) {
+	t.Setenv("AO_BROWSER_CAPABILITY", "ambient-worker-token")
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
 	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
@@ -794,6 +1295,113 @@ func TestOpenShellTerminalScopesToSession(t *testing.T) {
 	}
 	if len(st.records) != 1 || st.records[0].SessionID != "portfolio-3" {
 		t.Fatalf("session id not persisted on the record: %+v", st.records)
+	}
+	if got := rt.created[0].Env["AO_SESSION_ID"]; got != "portfolio-3" {
+		t.Errorf("shell AO_SESSION_ID = %q, want portfolio-3", got)
+	}
+	token := rt.created[0].Env["AO_PREVIEW_CAPABILITY"]
+	if !browser.NewAuthority().Valid("portfolio-3", token, st.records[0].PreviewCapabilityVerifier) {
+		t.Fatal("shell preview bearer does not match its durable verifier")
+	}
+	if got := rt.created[0].Env["AO_BROWSER_CAPABILITY"]; got != "" {
+		t.Fatalf("shell inherited worker browser capability %q", got)
+	}
+}
+
+func TestShellPreviewCapabilityIsScopedDurableAndRevoked(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"portfolio-3": {projectID: "portfolio"},
+		"portfolio-4": {projectID: "portfolio"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, projects, sessions)
+	var token string
+	rt.onCreate = func(cfg ports.RuntimeConfig) {
+		token = cfg.Env["AO_PREVIEW_CAPABILITY"]
+		valid, err := svc.ValidPreviewCapability(ctx, "portfolio-3", token)
+		if err != nil || !valid {
+			t.Errorf("capability before shell row insert = %v, %v", valid, err)
+		}
+	}
+	term, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id     domain.SessionID
+		bearer string
+		want   bool
+	}{
+		{"portfolio-3", token, true},
+		{"portfolio-4", token, false},
+		{"portfolio-3", "wrong-token", false},
+	} {
+		valid, err := svc.ValidPreviewCapability(ctx, tc.id, tc.bearer)
+		if err != nil || valid != tc.want {
+			t.Fatalf("validate %s = %v, %v; want %v", tc.id, valid, err, tc.want)
+		}
+	}
+	restarted := NewService(rt, st, projects, sessions, "/data/dir", "next-run", testLogger())
+	valid, err := restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || !valid {
+		t.Fatalf("capability after daemon replacement = %v, %v", valid, err)
+	}
+	rt.childExited = true // Detached host retains its row and scrollback.
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("exited shell still authorized preview: %v, %v", valid, err)
+	}
+	rt.childExited = false
+	rt.childProbeErr = errors.New("probe unavailable")
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err == nil || valid {
+		t.Fatalf("unknown shell liveness authorized preview: %v, %v", valid, err)
+	}
+	rt.childProbeErr = nil
+	if err := svc.CloseShellTerminal(ctx, term.HandleID); err != nil {
+		t.Fatal(err)
+	}
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("capability after shell close = %v, %v", valid, err)
+	}
+	rt.onCreate = nil
+	if _, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"}); err != nil {
+		t.Fatal(err)
+	}
+	token = rt.created[len(rt.created)-1].Env["AO_PREVIEW_CAPABILITY"]
+	release, err := svc.BeginSessionTeardown(ctx, "portfolio-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("capability after session teardown = %v, %v", valid, err)
+	}
+}
+
+func TestFailedShellLaunchRevokesPendingPreviewCapability(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	rt.createErr = errors.New("PTY unavailable")
+	st := &fakeShellTerminalStore{}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"portfolio-3": {projectID: "portfolio"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, projects, sessions)
+	var token string
+	rt.onCreate = func(cfg ports.RuntimeConfig) { token = cfg.Env["AO_PREVIEW_CAPABILITY"] }
+	if _, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"}); err == nil {
+		t.Fatal("shell launch unexpectedly succeeded")
+	}
+	valid, err := svc.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("failed launch left a valid pending capability: %v, %v", valid, err)
 	}
 }
 
@@ -1352,6 +1960,88 @@ func TestCloseShellTerminalDestroysRuntimeAndDeletesRecord(t *testing.T) {
 	}
 }
 
+func TestGuidedAuthTerminalStaysOutOfNormalTerminalList(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	hidden, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Terminal fallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("listed=%+v, hidden=%s", listed, hidden.HandleID)
+	}
+	delete(rt.aliveByHandle, hidden.HandleID) // Native login command exited.
+	listed, err = svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil || len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("list after native exit=%+v err=%v", listed, err)
+	}
+	if observed, err := svc.ObserveAuthTerminal(t.Context(), hidden.HandleID); err != nil || observed.Alive {
+		t.Fatalf("guided login lost exit observation: %+v, %v", observed, err)
+	}
+	if err := svc.CloseShellTerminal(t.Context(), hidden.HandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.hiddenAuthTerminals[hidden.HandleID]; ok {
+		t.Fatal("hidden handle retained after close")
+	}
+}
+
+func TestGuidedAuthTerminalObservationAndInputArePrivate(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "private terminal frame"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	term, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.ObserveAuthTerminal(t.Context(), term.HandleID)
+	if err != nil || got.Output != rt.output || !got.Alive {
+		t.Fatalf("observation=%+v err=%v", got, err)
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "\x1b[B" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no menu key sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "3"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "3" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no digit sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "arbitrary"); err == nil {
+		t.Fatal("accepted arbitrary PTY input")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "0"); err == nil {
+		t.Fatal("accepted a digit outside the fixed action set")
+	}
+	if _, err := svc.ObserveAuthTerminal(t.Context(), "missing"); err == nil {
+		t.Fatal("observed unrelated PTY")
+	}
+}
+
 func TestCloseShellTerminalReturnsNotFoundForUnknownHandle(t *testing.T) {
 	svc := newTestService(newFakeShellRuntime(), &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
 
@@ -1391,6 +2081,142 @@ func TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 	}
 	if len(st.records) != 1 || st.records[0].HandleID != term.HandleID {
 		t.Fatalf("records = %+v, want the still-alive shell's row kept", st.records)
+	}
+}
+
+// fakeTerminalInputForgetter records which terminals the service told the
+// terminal mux to forget.
+type fakeTerminalInputForgetter struct {
+	forgotten []string
+	err       error
+}
+
+func (f *fakeTerminalInputForgetter) ForgetTerminalInput(_ context.Context, terminalID string) error {
+	f.forgotten = append(f.forgotten, terminalID)
+	return f.err
+}
+
+// TestCloseShellTerminalForgetsInputTimestampOnceDestroyed pins #5691 for
+// shell tabs: shellterm destroys its own runtimes, so Session Manager's
+// forgetter never runs for them, and every tab gets a fresh random id. Without
+// a forget here each closed tab leaves one terminal-mux input entry forever.
+func TestCloseShellTerminalForgetsInputTimestampOnceDestroyed(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
+// A destroy that errors but leaves the runtime confirmed dead is still a
+// confirmed destroy, so the entry goes.
+func TestCloseShellTerminalForgetsInputTimestampWhenDestroyErrorsButRuntimeIsGone(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	rt.destroyErr = errors.New("tmux: no such session")
+	delete(rt.aliveByHandle, term.HandleID)
+
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
+// A forget that gives up (its context ended on the write fence) only leaves a
+// stale timestamp behind: the shell is confirmed dead, so its row still goes.
+func TestCloseShellTerminalDeletesRowWhenForgettingInputFails(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{err: context.DeadlineExceeded}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+	if len(st.records) != 0 {
+		t.Fatalf("records = %v, want the row deleted", st.records)
+	}
+}
+
+// A shell that survives Destroy keeps its row, and so keeps its input
+// timestamp: the runtime (and any draft typed into it) is still live.
+func TestCloseShellTerminalKeepsInputTimestampWhenRuntimeStaysAlive(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	rt.destroyErr = errors.New("tmux: kill-session refused")
+
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err == nil {
+		t.Fatal("CloseShellTerminal succeeded, want a conflict for a live runtime")
+	}
+	if len(forgetter.forgotten) != 0 {
+		t.Fatalf("forgotten = %v, want nothing while the runtime is alive", forgetter.forgotten)
+	}
+}
+
+// Session teardown drains scoped shells through the same confirmed-destroy
+// path, so their entries go too.
+func TestBeginSessionTeardownForgetsDestroyedShellInputTimestamps(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"portfolio-3": {projectID: "portfolio"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, projects, sessions)
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	release, err := svc.BeginSessionTeardown(ctx, "portfolio-3")
+	if err != nil {
+		t.Fatalf("BeginSessionTeardown: %v", err)
+	}
+	release()
+
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
 	}
 }
 
@@ -1692,28 +2518,41 @@ func TestDesktopRelaunchPreservesUserShells(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []ShellTerminal{side, standalone}
+			// A daemon restart within the same launch keeps every shell. A new
+			// launch reaps the session-less one: clients show shells only in a
+			// session's tab strip, so nothing could show or close it.
+			newLaunch := tc.nextRun != testAppRunID
+			want, wantReaped, wantNext := []ShellTerminal{side, standalone}, int64(0), "Terminal 3"
+			if newLaunch {
+				want, wantReaped, wantNext = []ShellTerminal{side}, 1, "Terminal 1"
+			}
 
 			// Recreate the service just as boot does. The runtime and durable rows
 			// belong to the shells, not to this service or desktop launch.
 			svc = NewService(rt, st, projects, sessions, "/data/dir", tc.nextRun, testLogger())
 			rt.aliveErr = tc.probeErr // The fake returns false alongside probe errors.
-			if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
-				t.Fatalf("reap = %d, %v", n, err)
+			if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != wantReaped {
+				t.Fatalf("reap = %d, %v; want %d", n, err, wantReaped)
 			}
 			got, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("restored = %+v, %v; want %+v", got, err, want)
 			}
-			if len(rt.destroyed) != 0 {
+			if newLaunch {
+				if !reflect.DeepEqual(rt.destroyed, []string{standalone.HandleID}) {
+					t.Fatalf("destroyed = %v, want only the session-less shell %s", rt.destroyed, standalone.HandleID)
+				}
+			} else if len(rt.destroyed) != 0 {
 				t.Fatalf("destroyed user shells: %v", rt.destroyed)
 			}
 			next, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "session-1"})
-			if err != nil || next.Title != "Terminal 3" {
-				t.Fatalf("next terminal = %+v, %v; want Terminal 3", next, err)
+			if err != nil || next.Title != wantNext {
+				t.Fatalf("next terminal = %+v, %v; want %s", next, err, wantNext)
 			}
-			if err := svc.CloseShellTerminal(ctx, standalone.HandleID); err != nil {
-				t.Fatal(err)
+			if !newLaunch {
+				if err := svc.CloseShellTerminal(ctx, standalone.HandleID); err != nil {
+					t.Fatal(err)
+				}
 			}
 			release, err := svc.BeginSessionTeardown(ctx, "session-1")
 			if err != nil {
@@ -1728,6 +2567,9 @@ func TestDesktopRelaunchPreservesUserShells(t *testing.T) {
 }
 
 func (f *fakeShellTerminalStore) SelectRestorableShellTerminals(_ context.Context, appRunID string) ([]ShellTerminalRecord, error) {
+	if f.staleRestorable != nil {
+		return f.staleRestorable, nil
+	}
 	var out []ShellTerminalRecord
 	for _, rec := range f.records {
 		if !rec.Transient || rec.AppRunID == appRunID {
@@ -1820,7 +2662,7 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 			rt.destroyErr, rt.aliveErr = tc.destroyErr, tc.hostProbeErr
 			handleID := "ptyhost-v1:shell-exited"
 			rt.aliveByHandle[handleID] = true
-			st := &fakeShellTerminalStore{records: []ShellTerminalRecord{{HandleID: handleID, AppRunID: "previous"}}}
+			st := &fakeShellTerminalStore{records: []ShellTerminalRecord{{HandleID: handleID, SessionID: "session-1", AppRunID: "previous"}}}
 			svc := newTestService(rt, st, &fakeProjectRootLocator{})
 			if count, err := svc.ReapShellTerminalsFromPreviousAppRuns(context.Background()); err != nil || count != 0 {
 				t.Fatalf("reap = %d, %v; want preserved runtime", count, err)
@@ -1832,13 +2674,87 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 			if tc.childProbeErr != nil && len(rt.destroyed) != 0 {
 				t.Fatalf("inconclusive child probe destroyed runtime: %v", rt.destroyed)
 			}
+			if listed[0].EndedAt != nil || st.records[0].EndedAt != nil {
+				t.Fatalf("uncertain shell marked ended: %+v", st.records)
+			}
 			// A later conclusive retry must finish cleanup without losing the
 			// handle needed to stop the host retained by the failed attempt.
+			// The shell is a previous launch's whose recovery had not finished,
+			// so it is kept as an ended tab to restore, not pruned.
 			rt.childProbeErr, rt.destroyErr, rt.aliveErr = nil, nil, nil
 			listed, err = svc.ListShellTerminalsForCurrentAppRun(context.Background())
-			if err != nil || len(listed) != 0 || len(st.records) != 0 || rt.aliveByHandle[handleID] {
+			if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || len(st.records) != 1 || rt.aliveByHandle[handleID] {
 				t.Fatalf("retry list = %v, %v; rows = %v", listed, err, st.records)
 			}
 		})
+	}
+}
+
+func TestOpenCommandTerminalSkipsInitialInputWhenReadyStateAlreadyShowsAction(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Select authentication method: / for commands"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:         []string{"kimchi"},
+		Title:        "Log in to Kimchi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []InitialInputReadyState{
+			{Text: "Select authentication method:", SkipInput: true},
+			{Text: "/ for commands"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent while authentication picker is already open: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "/ for commands"
+	rt.styledOutput = "Select authentication method:"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:         []string{"kimchi"},
+		Title:        "Log in to Kimchi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []InitialInputReadyState{
+			{Text: "Select authentication method:", SkipInput: true},
+			{Text: "/ for commands"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent while rendered authentication picker is open: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+}
+
+// A restarted daemon in the same app launch must still see the trusted command
+// terminals its predecessor opened, so agent auth can keep excluding logins.
+func TestListCommandTerminalsForCurrentAppRunReturnsOnlyThisLaunchesTrustedTerminals(t *testing.T) {
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
+		{HandleID: "user-shell", AppRunID: testAppRunID, Title: "Shell 1"},
+		{HandleID: "auth-current", AppRunID: testAppRunID, Title: "Log in to Codex", Transient: true},
+		{HandleID: "auth-previous", AppRunID: "previous", Title: "Log in to Codex", Transient: true},
+	}}
+	svc := newTestService(newFakeShellRuntime(), st, nil)
+	got, err := svc.ListCommandTerminalsForCurrentAppRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].HandleID != "auth-current" || got[0].Title != "Log in to Codex" {
+		t.Fatalf("command terminals = %+v, want only this launch's trusted terminal", got)
 	}
 }

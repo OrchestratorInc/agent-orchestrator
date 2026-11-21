@@ -14,11 +14,11 @@ describe("resolveDaemonLaunch", () => {
 		});
 	});
 
-	it("runs the backend daemon from source in non-Windows dev without an explicit command", () => {
+	it("uses the prebuilt daemon binary in non-Windows dev", () => {
 		expect(resolveDaemonLaunch({}, false, "/resources", "/repo/frontend", "/home/user", "darwin")).toEqual({
-			command: "go",
-			args: ["run", "./cmd/ao", "daemon"],
-			cwd: "/repo/frontend/../backend",
+			command: "/repo/frontend/daemon/ao",
+			args: ["daemon"],
+			cwd: "/repo/frontend",
 			shell: false,
 			source: "dev",
 		});
@@ -110,14 +110,14 @@ describe("bundledDaemonIdentityError", () => {
 		const other = "/home/user/Apps/agent-orchestrator-nightly.AppImage";
 		const probe = { executablePath: "/tmp/.mount_agent-1Qs4N6/resources/daemon/ao", appImagePath: other };
 		expect(bundledDaemonIdentityError(probe, launchCommand, appImage, samePath)).toBe(
-			`Another AO daemon is already running from ${other}; expected ${appImage}. Stop the other daemon before using this app.`,
+			`Another Orchestrator daemon is already running from ${other}; expected ${appImage}. Stop the other daemon before using this app.`,
 		);
 	});
 
 	it("fails closed under AppImage when the daemon does not report its install identity", () => {
 		const probe = { executablePath: "/tmp/.mount_agent-1Qs4N6/resources/daemon/ao" };
 		expect(bundledDaemonIdentityError(probe, launchCommand, appImage, samePath)).toBe(
-			"An older AO daemon is already running, but it does not report its install identity. Stop it and restart this app.",
+			"An older Orchestrator daemon is already running, but it does not report its install identity. Stop it and restart this app.",
 		);
 	});
 
@@ -125,13 +125,13 @@ describe("bundledDaemonIdentityError", () => {
 		const command = "/opt/Agent Orchestrator/resources/daemon/ao";
 		expect(bundledDaemonIdentityError({ executablePath: command }, command, undefined, samePath)).toBeNull();
 		expect(bundledDaemonIdentityError({ executablePath: "/other/ao" }, command, undefined, samePath)).toBe(
-			`Another AO daemon is already running from /other/ao; expected ${command}. Stop the other daemon before using this app.`,
+			`Another Orchestrator daemon is already running from /other/ao; expected ${command}. Stop the other daemon before using this app.`,
 		);
 	});
 
 	it("fails closed outside AppImage when the daemon does not report its binary path", () => {
 		expect(bundledDaemonIdentityError({}, "/opt/ao/resources/daemon/ao", undefined, samePath)).toBe(
-			"An older AO daemon is already running, but it does not report its binary path. Stop it and restart this app.",
+			"An older Orchestrator daemon is already running, but it does not report its binary path. Stop it and restart this app.",
 		);
 	});
 });

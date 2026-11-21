@@ -54,13 +54,18 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 		domain.SessionID(chi.URLParam(r, "sessionId")),
 		ports.ChatUserMessage{
 			Text: req.Text, Content: content, ClientMessageID: req.ClientMessageID,
-			Origin: domain.MessageOriginHuman,
+			SenderSessionID: req.SenderSessionID, Origin: domain.MessageOriginHuman,
 		},
 		req.RecoverOnly,
 	)
 	if err != nil {
 		writeSteerError(w, r, err)
 		return
+	}
+	// A send that fell back to a new turn is a Chat message, counted where it is
+	// inserted; only a steer needs counting here.
+	if !req.RecoverOnly && !result.Duplicate && result.Steered {
+		recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
 	}
 	response := SteerOrSendConversationResponse{Duplicate: result.Duplicate}
 	if result.Steered {
@@ -121,11 +126,16 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 			Text:            req.Text,
 			Content:         content,
 			ClientMessageID: req.ClientMessageID,
+			SenderSessionID: req.SenderSessionID,
 			Origin:          domain.MessageOriginHuman,
 		})
 	if err != nil {
 		writeSteerError(w, r, err)
 		return
+	}
+	// A replay of an accepted client message id is the same steer, not a new one.
+	if !result.Replayed {
+		recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, SteerConversationResponse{
 		ProviderTurnID: result.ProviderTurnID,

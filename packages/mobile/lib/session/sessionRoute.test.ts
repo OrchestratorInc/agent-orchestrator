@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 
-import { getSessions, type DashboardSession, type OrchestratorLink } from "../api";
+import { getSessions, type DashboardSession, type OrchestratorLink, resetArchivePagingProbes } from "../api";
 import type { ServerConfig } from "../config";
 import { lookUpSession } from "./sessionLookup";
 import {
 	currentSessionLookup,
+	isRuntimeGone,
 	sessionLookupDue,
 	sessionLookupKey,
 	sessionLookupSettled,
@@ -15,6 +16,8 @@ import {
 	type SessionLookup,
 } from "./sessionRoute";
 
+// A daemon that pages its archive answers the live-only poll with its size.
+const NO_ARCHIVE = { total: 0, byProject: {} };
 const worker = (over: Partial<DashboardSession> = {}): DashboardSession =>
 	({ id: "proj-1", projectId: "proj", mode: "chat", isTerminated: false, ...over }) as DashboardSession;
 
@@ -32,21 +35,38 @@ const pending: SessionLookup = { state: "pending" };
 
 type ViewArgs = Parameters<typeof sessionRouteView>[0];
 const view = (over: Partial<ViewArgs> = {}) =>
-	sessionRouteView({ listed: undefined, configured: true, connection: "open", loading: false, lookup: pending, ...over });
+	sessionRouteView({ listed: undefined, paired: true, unreachable: false, connection: "open", error: null, errorStatus: null, loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
 
 type DueArgs = Parameters<typeof sessionLookupDue>[0];
 const due = (over: Partial<DueArgs> = {}) =>
-	sessionLookupDue({ listed: false, configured: true, connection: "open", appActive: true, machineChanged: false, lookup: pending, ...over });
+	sessionLookupDue({ listed: false, paired: true, connection: "open", appActive: true, machineChanged: false, lookup: pending, ...over });
 
 describe("sessionRouteView", () => {
+	it("never opens another machine's same-ID session from a stale route", () => {
+		const listed = worker({ id: "same-id" });
+		expect(view({ listed, routeHostId: "host-a", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
+		expect(view({ listed, routeHostId: undefined })).toEqual({ kind: "wrongHost" });
+	});
 	it("waits for the saved config before judging anything", () => {
-		expect(view({ configured: null, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+		expect(view({ paired: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+	});
+	it("shows an unreachable paired host as offline instead of another-machine or a permanent loader", () => {
+		expect(view({ paired: null, connection: "closed", unreachable: true })).toEqual({ kind: "offline" });
+		expect(view({ paired: null, connection: "closed", unreachable: true, currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
+	});
+
+	// Before the first resolution a closed connection is not an outage either.
+	it("waits for a host that has not resolved yet unless it is unreachable", () => {
+		for (const connection of ["closed", "connecting"] as const) {
+			expect(view({ paired: null, connection })).toEqual({ kind: "loading" });
+		}
+		expect(view({ paired: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
 	});
 
 	// The store keeps the last machine's lists after Settings → forget, so a
 	// cached id must not open a session screen with nothing paired.
 	it("shows the unpaired state before consulting the lists", () => {
-		expect(view({ configured: false, listed: orchestrator() })).toEqual({ kind: "unpaired" });
+		expect(view({ paired: false, listed: orchestrator() })).toEqual({ kind: "unpaired" });
 	});
 
 	it("opens a listed session whatever the lookup or the link says", () => {
@@ -58,13 +78,29 @@ describe("sessionRouteView", () => {
 		}
 	});
 
-	it("reports an unlisted session that has ended as ended, not as not found", () => {
-		expect(view({ lookup: found(worker({ isTerminated: true })) })).toEqual({ kind: "ended" });
+	it("reports an unlisted orchestrator that has ended as ended, not as not found", () => {
+		expect(view({ lookup: found(worker({ isTerminated: true, kind: "orchestrator" })) })).toEqual({ kind: "ended" });
+	});
+
+	// A machine that pages its archive leaves archived workers out of the poll.
+	// Opening one (from a notification, say) shows its screen, which offers
+	// Restore, rather than a dead end.
+	it("opens an unlisted worker that has ended", () => {
+		const archived = worker({ isTerminated: true, kind: "worker" });
+		expect(view({ lookup: found(archived) })).toEqual({ kind: "screen", session: archived });
+		const kindless = worker({ isTerminated: true });
+		expect(view({ lookup: found(kindless) })).toEqual({ kind: "screen", session: kindless });
 	});
 
 	it("opens an unlisted session that is still live", () => {
 		const live = worker({ id: "proj-9" });
 		expect(view({ lookup: found(live) })).toEqual({ kind: "screen", session: live });
+	});
+
+	it("opens a standalone worker without a project id", () => {
+		const standalone = worker({ id: "standalone-1", projectId: "" });
+		expect(view({ listed: standalone })).toEqual({ kind: "screen", session: standalone });
+		expect(view({ lookup: found(standalone) })).toEqual({ kind: "screen", session: standalone });
 	});
 
 	it.each([404, 410])("reports not found only on a %s", (status) => {
@@ -73,18 +109,34 @@ describe("sessionRouteView", () => {
 
 	// An answer the daemon gave is not withdrawn because the link dropped after.
 	it("keeps a settled answer while the board is disconnected", () => {
-		expect(view({ connection: "closed", lookup: found(worker({ isTerminated: true })) })).toEqual({ kind: "ended" });
+		expect(view({ connection: "closed", lookup: found(worker({ isTerminated: true, kind: "orchestrator" })) })).toEqual({ kind: "ended" });
 		expect(view({ connection: "closed", lookup: failed(404) })).toEqual({ kind: "missing" });
 	});
 
 	// The bug this replaces: "Session not found" was the fallback for anything the
 	// cache did not hold, including a request that never reached the daemon.
-	it.each([undefined, 401, 403, 429, 500])("leaves a %s failure to the board while it is disconnected", (status) => {
+	it.each([undefined, 500])("waits out a %s failure while the board reconnects, and asks again once it is open", (status) => {
+		expect(view({ connection: "closed", lookup: failed(status) })).toEqual({ kind: "loading" });
+		expect(view({ connection: "closed", lookup: failed(status), unreachable: true })).toEqual({ kind: "offline" });
+	});
+
+	// A rejection is the daemon's answer: the board's poll stops on it too, so
+	// waiting would spin for good.
+	it.each([401, 403, 429])("leaves a %s failure to the board while it is disconnected", (status) => {
 		expect(view({ connection: "closed", lookup: failed(status) })).toEqual({ kind: "offline" });
 	});
 
-	it("reports the board disconnected before anything was asked", () => {
-		expect(view({ connection: "closed" })).toEqual({ kind: "offline" });
+	// The app closes its connection on purpose every time it goes to the
+	// background, so a session opened from a notification (not in the lists)
+	// flashed "This machine is offline" during every reconnect.
+	it("waits through the closed connection an app switch leaves behind", () => {
+		expect(view({ connection: "closed" })).toEqual({ kind: "loading" });
+		expect(view({ connection: "closed", lookup: failed(undefined) })).toEqual({ kind: "loading" });
+	});
+
+	it("reports the machine offline by the shared rule: unreachable after the link tracker gave up", () => {
+		expect(view({ connection: "closed", unreachable: true })).toEqual({ kind: "offline" });
+		expect(view({ connection: "closed", unreachable: true, lookup: failed(undefined) })).toEqual({ kind: "offline" });
 	});
 
 	it("waits while the board is still reaching the machine", () => {
@@ -109,6 +161,29 @@ describe("sessionRouteView", () => {
 	// them because `classifyConnectionFailure` groups it as "auth".
 	it.each([401, 403, 429])("hands a %s lookup to the board instead of offering a retry", (status) => {
 		expect(view({ lookup: failed(status) })).toEqual({ kind: "offline" });
+	});
+
+	// The board's own poll was refused (a password change, a removed device): it
+	// has stopped, and nothing asks again, so the route used to spin for good.
+	it.each([401, 403, 429])("says the machine refused this phone when the board's poll got a %s", (status) => {
+		const refused = { connection: "closed" as const, error: "Your machine rejected this phone's password.", errorStatus: status };
+		for (const lookup of [pending, failed(undefined), failed(status)]) {
+			expect(view({ ...refused, lookup })).toEqual({ kind: "rejected" });
+		}
+		expect(view({ ...refused, paired: null })).toEqual({ kind: "rejected" });
+		// The lists and settled answers still win.
+		const listed = orchestrator();
+		expect(view({ ...refused, listed })).toEqual({ kind: "screen", session: listed });
+		expect(view({ ...refused, lookup: failed(404) })).toEqual({ kind: "missing" });
+		// Asking again after the app came back is waited for, not a refusal.
+		expect(view({ ...refused, connection: "connecting" })).toEqual({ kind: "loading" });
+	});
+
+	it("keeps waiting through an app switch and saying offline for an outage, apart from a refusal", () => {
+		expect(view({ connection: "closed" })).toEqual({ kind: "loading" });
+		expect(view({ connection: "closed", unreachable: true, error: "Couldn't reach your machine." })).toEqual({ kind: "offline" });
+		// A 5xx answered, and the poll keeps going: waited for, as before.
+		expect(view({ connection: "closed", error: "Something went wrong on your machine.", errorStatus: 500 })).toEqual({ kind: "loading" });
 	});
 });
 
@@ -144,8 +219,8 @@ describe("sessionLookupDue", () => {
 
 	it("never asks for a listed id, or without a paired machine", () => {
 		expect(due({ listed: true })).toBe(false);
-		expect(due({ configured: false })).toBe(false);
-		expect(due({ configured: null })).toBe(false);
+		expect(due({ paired: false })).toBe(false);
+		expect(due({ paired: null })).toBe(false);
 	});
 
 	it("never asks again once the daemon has answered", () => {
@@ -219,12 +294,15 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("lookUpSession, the request the route sends", () => {
-	beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+	beforeEach(() => {
+		resetArchivePagingProbes();
+		vi.stubGlobal("fetch", vi.fn());
+	});
 	afterEach(() => vi.unstubAllGlobals());
 
 	it("finds the orchestrator the board's lists dropped, and reports it ended", async () => {
 		vi.mocked(fetch)
-			.mockResolvedValueOnce(response({ sessions: [scratch1, scratch2] }))
+			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [scratch1, scratch2] }))
 			.mockResolvedValueOnce(response({ sessions: [scratch1, scratch2] }))
 			.mockResolvedValueOnce(response({ projects: [{ id: "scratch", name: "Scratch", kind: "scratch", sessionPrefix: "scratch" }] }))
 			.mockResolvedValueOnce(response({ session: scratch1 }));
@@ -253,5 +331,24 @@ describe("lookUpSession, the request the route sends", () => {
 		const lookup = await lookUpSession(cfg, "scratch-1");
 		expect(lookup).toEqual(failed(undefined));
 		expect(view({ lookup })).toEqual({ kind: "failed" });
+	});
+});
+
+describe("isRuntimeGone", () => {
+	it("keeps the terminal for a merged or errored worker whose runtime is still live", () => {
+		expect(isRuntimeGone(worker({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "errored" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "working" }))).toBe(false);
+	});
+
+	it("treats a terminated worker as gone", () => {
+		expect(isRuntimeGone(worker({ isTerminated: true, status: "merged" }))).toBe(true);
+		expect(isRuntimeGone(worker({ status: "terminated" }))).toBe(true);
+	});
+
+	it("reads an orchestrator's runtime flags, never a missing field", () => {
+		expect(isRuntimeGone(orchestrator({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(orchestrator({ isTerminal: true }))).toBe(true);
+		expect(isRuntimeGone(orchestrator({ hasRuntime: false }))).toBe(true);
 	});
 });

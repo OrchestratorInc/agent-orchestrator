@@ -21,6 +21,24 @@ import (
 // client actually receives, because the daemon's snapshot is where this work ends:
 // a field that is correct in the store and absent from the body is not shipped.
 
+func TestSnapshotExposesTypedFailureBesideTechnicalError(t *testing.T) {
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		SessionID: domain.SessionID("p1-1"), Mode: domain.SessionModeChat,
+		Turns: []domain.ConversationTurn{{
+			ID: "turn-1", State: domain.TurnStateFailed, RequestedAt: time.Now().UTC(),
+			ErrorMessage: "ACP internal detail", FailureCode: domain.ConversationFailureProviderKeyMissing,
+		}},
+	})
+	turns, ok := body["turns"].([]any)
+	if !ok || len(turns) != 1 {
+		t.Fatalf("turns = %#v", body["turns"])
+	}
+	turn := turns[0].(map[string]any)
+	if turn["failureCode"] != "provider_key_missing" || turn["errorMessage"] != "ACP internal detail" {
+		t.Fatalf("turn = %#v", turn)
+	}
+}
+
 func TestSnapshotExposesTurnPlanAsStructuredSteps(t *testing.T) {
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
 		SessionID: domain.SessionID("p1-1"),
@@ -153,6 +171,26 @@ func TestSnapshotExposesAccountAndReauthDemand(t *testing.T) {
 	}
 	if account["reauthReason"] != "unauthorized" {
 		t.Errorf("reauthReason = %#v", account["reauthReason"])
+	}
+	if account["authenticationState"] != "required" {
+		t.Fatalf("legacy demand state = %#v", account)
+	}
+}
+
+func TestSnapshotSeparatesVerifiedAuthenticationFromFailureHistory(t *testing.T) {
+	failed := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	verified := failed.Add(time.Minute)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{Conversation: domain.ConversationRecord{
+		Account: &domain.ConversationAccount{AuthenticationState: "authenticated", AuthVerifiedAt: &verified,
+			LastAuthFailureAt: &failed, LastAuthFailureReason: "expired", AuthFailureID: "failure-1"},
+	}})
+	account := body["account"].(map[string]any)
+	if account["authenticationState"] != "authenticated" || account["authVerifiedAt"] != "2026-08-02T12:01:00Z" ||
+		account["lastAuthFailureAt"] != "2026-08-02T12:00:00Z" || account["lastAuthFailureReason"] != "expired" || account["authFailureId"] != "failure-1" {
+		t.Fatalf("recovered auth facts = %#v", account)
+	}
+	if _, ok := account["reauthRequiredAt"]; ok {
+		t.Fatalf("recovered account still demands credentials: %#v", account)
 	}
 }
 

@@ -1,13 +1,15 @@
 import { useQueries } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus } from "@/components/app-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewDiffsQueryOptions } from "../../hooks/useCloudWorkspaceReview";
 import type { CloudCpClient, CloudCpWorkspaceReviewCommit, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import { cn } from "../../lib/utils";
+import { useUiStore, type CloudReviewUiState } from "../../stores/ui-store";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
-import { PanelMessage, RetryButton } from "../WorkspaceDiffView";
+import { cancelFileAnnotations, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { Checkbox } from "../ui/checkbox";
 import { CloudDiffFile } from "./CloudDiffFile";
 import type { CloudFileOpenOptions } from "./CloudWorkspaceExplorer";
@@ -20,7 +22,7 @@ const statusLabel: Record<CloudCpWorkspaceReviewFileSummary["status"], string> =
 };
 const statusTone: Record<CloudCpWorkspaceReviewFileSummary["status"], string> = {
 	unmodified: "text-passive", modified: "text-warning", added: "text-success", deleted: "text-error",
-	renamed: "text-accent", copied: "text-accent", untracked: "text-success",
+	renamed: "text-logo-accent", copied: "text-logo-accent", untracked: "text-success",
 };
 
 function chunk<T>(items: readonly T[]): T[][] {
@@ -51,8 +53,18 @@ function deferredByDefault(file: CloudCpWorkspaceReviewFileSummary) {
 	return file.binary || file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
 
+type ViewedRecords = Record<string, string>;
+
+function readViewedRecords(storageKey: string): ViewedRecords {
+	try { return JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as ViewedRecords; } catch { return {}; }
+}
+
+function isViewedRecord(file: CloudCpWorkspaceReviewFileSummary, records: ViewedRecords) {
+	return records[file.path] === file.fileFingerprint;
+}
+
 export function CloudWorkspaceReviewPane({
-	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, sessionId, split,
+	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, repository, sessionId, split,
 }: {
 	annotation: FileAnnotationModel;
 	baseUrl: string;
@@ -62,40 +74,66 @@ export function CloudWorkspaceReviewPane({
 	onBrowseAll: () => void;
 	onOpenFile?: (path: string, options?: CloudFileOpenOptions) => void;
 	orgId: string;
+	/** The sibling repository under review in a multi-repository session; undefined for the main one. */
+	repository?: string;
 	sessionId: string;
 	split: boolean;
 }) {
 	const { t } = useTranslation();
 	const first = useMemo(() => initialSelection(data), [data]);
-	const [scope, setScope] = useState<CloudCpWorkspaceReviewScope>(first.scope);
-	const [commitSha, setCommitSha] = useState<string | undefined>(first.commitSha);
-	const [commitBrowserOpen, setCommitBrowserOpen] = useState(false);
-	const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-	const [loadedDeferred, setLoadedDeferred] = useState<Set<string>>(() => new Set());
-	const selectedCommit = data.commits.find((commit) => commit.sha === commitSha);
-	const allFiles = scope === "committed" && selectedCommit ? selectedCommit.files : filesForScope(data, scope);
+	const storedSelection = useUiStore((state) => state.inspectorSessions[sessionId]?.cloudReviewSelection?.[repository ?? ""]);
+	const setStoredSelection = useUiStore((state) => state.setCloudReviewSelection);
+	const scope = storedSelection?.scope ?? first.scope;
+	const commitSha = storedSelection ? storedSelection.commitSha : first.commitSha;
+	const reviewUi = useUiStore((state) => state.inspectorSessions[sessionId]?.cloudReviewUi?.[repository ?? ""]);
+	const setReviewUi = useUiStore((state) => state.setCloudReviewUi);
+	const commitBrowserOpen = reviewUi?.commitBrowserOpen ?? false;
+	const setCommitBrowserOpen = (open: boolean) => setReviewUi(sessionId, repository, { commitBrowserOpen: open });
+	useEffect(() => {
+		if (data.commits.length === 0 && commitBrowserOpen) setReviewUi(sessionId, repository, { commitBrowserOpen: false });
+	}, [data.commits.length, commitBrowserOpen, sessionId, repository, setReviewUi]);
+	const selectedCommit = useMemo(() => data.commits.find((commit) => commit.sha === commitSha), [commitSha, data.commits]);
+	const allFiles = useMemo(
+		() => scope === "committed" && selectedCommit ? selectedCommit.files : filesForScope(data, scope),
+		[data, scope, selectedCommit],
+	);
 	const normalizedFilter = filter.trim().toLowerCase();
-	const files = normalizedFilter ? allFiles.filter((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(normalizedFilter)) : allFiles;
+	const files = useMemo(
+		() => normalizedFilter ? allFiles.filter((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(normalizedFilter)) : allFiles,
+		[allFiles, normalizedFilter],
+	);
 	const selectionKey = selectedCommit ? `commit:${selectedCommit.sha}` : scope;
-	const storageKey = `ao.cloud.files.viewed.${sessionId}.${selectionKey}`;
-	const [viewedRecords, setViewedRecords] = useState<Record<string, string>>(() => {
-		try { return JSON.parse(window.localStorage.getItem(storageKey) ?? "{}"); } catch { return {}; }
-	});
+	const storageKey = `ao.cloud.files.viewed.${sessionId}.${repository ? `${repository}.` : ""}${selectionKey}`;
+	const [viewedRecords, setViewedRecords] = useState<ViewedRecords>(() => readViewedRecords(storageKey));
 	useEffect(() => {
-		try { setViewedRecords(JSON.parse(window.localStorage.getItem(storageKey) ?? "{}")); } catch { setViewedRecords({}); }
+		setViewedRecords(readViewedRecords(storageKey));
 	}, [storageKey]);
+	const fileStates = useMemo<NonNullable<CloudReviewUiState["pane"]>["files"]>(() => {
+		const savedViewed = readViewedRecords(storageKey);
+		return Object.fromEntries(allFiles.map((file) => {
+			const saved = reviewUi?.pane?.selectionKey === selectionKey ? reviewUi.pane.files[file.path] : undefined;
+			return [file.path, saved?.fingerprint === file.fileFingerprint ? saved : {
+				fingerprint: file.fileFingerprint,
+				collapsed: deferredByDefault(file) || isViewedRecord(file, savedViewed),
+				loadedDeferred: false,
+			}];
+		}));
+	}, [allFiles, reviewUi?.pane, selectionKey, storageKey]);
+	const setFileStates = useCallback((next: NonNullable<CloudReviewUiState["pane"]>["files"]) => {
+		setReviewUi(sessionId, repository, { pane: { selectionKey, files: next } });
+	}, [repository, selectionKey, sessionId, setReviewUi]);
 	useEffect(() => {
-		setCollapsed(new Set(files.filter(deferredByDefault).map((file) => file.path)));
-		setLoadedDeferred(new Set());
-	}, [data.workspaceVersion, selectionKey]);
-	useEffect(() => {
+		if (!storedSelection) {
+			setStoredSelection(sessionId, repository, first);
+			return;
+		}
 		if (scope === "committed" && selectedCommit) return;
 		if (scope === "combined") return;
 		if (scope !== "committed" && data.sections[scope].length > 0) return;
-		setScope(first.scope); setCommitSha(first.commitSha);
-	}, [data.sections, first, scope, selectedCommit]);
+		setStoredSelection(sessionId, repository, first);
+	}, [data.sections, first, scope, selectedCommit, sessionId, repository, setStoredSelection, storedSelection]);
 
-	const requested = files.filter((file) => !deferredByDefault(file) || loadedDeferred.has(file.path));
+	const requested = files.filter((file) => !deferredByDefault(file) || fileStates[file.path]?.loadedDeferred);
 	const batches = chunk(requested.map((file) => file.path));
 	const diffQueries = useQueries({ queries: batches.map((paths) => ({
 		...cloudWorkspaceReviewDiffsQueryOptions({ client, baseUrl, orgId, sessionId, paths, scope, commitSha: selectedCommit?.sha, workspaceVersion: data.workspaceVersion, ignoreWhitespace: false }),
@@ -114,31 +152,38 @@ export function CloudWorkspaceReviewPane({
 	const retryAll = () => diffQueries.forEach((query) => void query.refetch());
 	const firstError = diffQueries.find((query) => query.error)?.error;
 	const groupError = diffQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors)[0];
-	const isViewed = (file: CloudCpWorkspaceReviewFileSummary) => viewedRecords[file.path] === file.fileFingerprint;
+	const isViewed = (file: CloudCpWorkspaceReviewFileSummary) => isViewedRecord(file, viewedRecords);
 	const toggleViewed = (file: CloudCpWorkspaceReviewFileSummary) => setViewedRecords((current) => {
 		const next = { ...current };
 		if (next[file.path] === file.fileFingerprint) delete next[file.path]; else next[file.path] = file.fileFingerprint;
 		window.localStorage.setItem(storageKey, JSON.stringify(next));
 		return next;
 	});
-	const selectScope = (next: CloudCpWorkspaceReviewScope) => { annotation.cancel(); setScope(next); setCommitSha(undefined); setCommitBrowserOpen(false); };
-	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { annotation.cancel(); setScope("committed"); setCommitSha(commit.sha); setCommitBrowserOpen(false); };
-	const toggleCollapsed = useCallback((path: string) => setCollapsed((current) => {
-		const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next;
-	}), []);
-	const allCollapsed = files.length > 0 && files.every((file) => collapsed.has(file.path));
+	const selectScope = (next: CloudCpWorkspaceReviewScope) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, repository, { scope: next }); setCommitBrowserOpen(false); };
+	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, repository, { scope: "committed", commitSha: commit.sha }); setCommitBrowserOpen(false); };
+	const collapseFile = useCallback((path: string) => {
+		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
+		if (fileStates[path]?.collapsed) return;
+		setFileStates({ ...fileStates, [path]: { ...fileStates[path], collapsed: true } });
+	}, [annotation, fileStates, setFileStates]);
+	const toggleCollapsed = (path: string) => setFileStates({ ...fileStates, [path]: { ...fileStates[path], collapsed: !fileStates[path]?.collapsed } });
+	const markViewed = useCallback((file: CloudCpWorkspaceReviewFileSummary, checked: boolean) => {
+		toggleViewed(file);
+		if (checked) collapseFile(file.path);
+	}, [collapseFile, toggleViewed]);
+	const allCollapsed = files.length > 0 && files.every((file) => fileStates[file.path]?.collapsed);
 	const viewedCount = allFiles.filter(isViewed).length;
 	const visibleScopes = scopeOrder.filter((entry) => data.sections[entry].length > 0);
 	const combinedFiles = filesForScope(data, "combined");
 
 	return <div className="flex h-full min-h-0 flex-col">
 		<div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-2 py-1.5">
-			{combinedFiles.length > 0 ? <Button aria-pressed={scope === "combined"} onClick={() => selectScope("combined")} size="sm" variant={scope === "combined" ? "secondary" : "ghost"}>{t("files.reviewChanges")}<span className="text-caption text-passive">{combinedFiles.length}</span></Button> : null}
-			{visibleScopes.map((entry) => <Button aria-pressed={scope === entry} key={entry} onClick={() => selectScope(entry)} size="sm" variant={scope === entry ? "secondary" : "ghost"}>{t(`files.section.${entry}`)}<span className="text-caption text-passive">{data.sections[entry].length}</span></Button>)}
-			<Button aria-expanded={commitBrowserOpen} aria-pressed={scope === "committed"} disabled={data.commits.length === 0} onClick={() => setCommitBrowserOpen((open) => !open)} size="sm" variant={scope === "committed" ? "secondary" : "ghost"}><GitCommitHorizontal className="size-icon-sm" />{t("files.commits")}{selectedCommit ? <span className="text-caption text-passive">{selectedCommit.sha.slice(0, 7)}</span> : null}</Button>
+			{combinedFiles.length > 0 ? <Button aria-pressed={scope === "combined"} onClick={() => selectScope("combined")} size="sm" variant="ghost">{t("files.reviewChanges")}<span className="text-caption text-passive">{combinedFiles.length}</span></Button> : null}
+			{visibleScopes.map((entry) => <Button aria-pressed={scope === entry} key={entry} onClick={() => selectScope(entry)} size="sm" variant="ghost">{t(`files.section.${entry}`)}<span className="text-caption text-passive">{data.sections[entry].length}</span></Button>)}
+			<Button aria-expanded={commitBrowserOpen} aria-pressed={scope === "committed"} disabled={data.commits.length === 0} onClick={() => setCommitBrowserOpen(!commitBrowserOpen)} size="sm" variant="ghost"><GitCommitHorizontal className="size-icon-sm" />{t("files.commits")}{selectedCommit ? <span className="text-caption text-passive">{selectedCommit.sha.slice(0, 7)}</span> : null}</Button>
 			{!commitBrowserOpen ? <div className="ml-auto flex items-center gap-1 text-caption text-muted-foreground">
 				<span>{t("files.reviewProgress", { total: allFiles.length, viewed: viewedCount })}</span>
-				<Button aria-label={t(allCollapsed ? "files.expandAll" : "files.collapseAll")} onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(files.map((file) => file.path)))} size="icon-sm" variant="ghost">{allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}</Button>
+				<Button aria-label={t(allCollapsed ? "files.expandAll" : "files.collapseAll")} onClick={() => setFileStates({ ...fileStates, ...Object.fromEntries(files.map((file) => [file.path, { ...fileStates[file.path], collapsed: !allCollapsed }])) })} size="icon-sm" variant="ghost">{allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}</Button>
 			</div> : null}
 		</div>
 		{commitBrowserOpen ? <CommitBrowser commits={data.commits} filter={filter} onSelect={selectCommit} selectedSha={selectedCommit?.sha} /> : <div className="board-scrollbar min-h-0 flex-1 overflow-y-auto" data-files-scroll-root>
@@ -148,24 +193,25 @@ export function CloudWorkspaceReviewPane({
 			{files.length === 0 ? <PanelMessage action={allFiles.length === 0 ? <Button onClick={onBrowseAll}>{t("files.browseAll")}</Button> : undefined} compact>{allFiles.length === 0 ? t("files.noneChanged") : t("files.noFilterMatches")}</PanelMessage> : null}
 			{files.map((file) => {
 				const patch = patchByPath.get(file.path);
-				const deferred = deferredByDefault(file) && !loadedDeferred.has(file.path);
+				const deferred = deferredByDefault(file) && !fileStates[file.path]?.loadedDeferred;
 				const reason = deferredReasonByPath.get(file.path);
-				const closed = collapsed.has(file.path);
+				const closed = fileStates[file.path]?.collapsed;
 				return <section className="border-b border-border" key={`${selectionKey}:${file.path}`}>
 					<header className="flex h-10 min-w-0 items-center gap-2 bg-surface px-2">
 						<Button aria-label={closed ? t("files.expandFile", { file: file.path }) : t("files.collapseFile", { file: file.path })} onClick={() => toggleCollapsed(file.path)} size="icon-sm" variant="ghost">{closed ? <ChevronRight /> : <ChevronDown />}</Button>
 						<span className={cn("font-mono text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
-						<button className="min-w-0 flex-1 truncate text-left font-mono text-xs hover:underline" onClick={() => toggleCollapsed(file.path)} type="button">{file.path}</button>
+						<Pressable className="min-w-0 flex-1 truncate font-mono text-xs hover:underline" onClick={() => toggleCollapsed(file.path)}>{file.path}</Pressable>
 						<span className="text-caption text-success">+{file.additions}</span><span className="text-caption text-error">−{file.deletions}</span>
 						<Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion: data.workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button>
 						<Button aria-label={t("files.openFullFileGeneric")} onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="icon-sm" variant="ghost"><FileCode2 /></Button>
-						<Checkbox aria-label={isViewed(file) ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })} checked={isViewed(file)} onCheckedChange={() => toggleViewed(file)} />
+						<Checkbox aria-label={isViewed(file) ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })} checked={isViewed(file)} onCheckedChange={(checked) => markViewed(file, checked === true)} />
 					</header>
 					{!closed && patch ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} client={client} commitSha={selectedCommit?.sha} file={file} onActiveSelectionChange={() => undefined} orgId={orgId} patch={patch} scope={scope} sessionId={sessionId} split={split} workspaceVersion={data.workspaceVersion} /> : null}
-					{!closed && !patch ? <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><span className="min-w-0 flex-1">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : reason ? t("files.diffUnavailableReason", { reason }) : t("files.loadingDiff")}</span>{deferred ? <Button onClick={() => setLoadedDeferred((current) => new Set(current).add(file.path))} size="sm" variant="outline">{t("files.loadDiff")}</Button> : null}<Button onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="sm" variant="outline">{t("files.fileView")}</Button></div> : null}
+					{!closed && !patch ? <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><span className="min-w-0 flex-1">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : reason ? t("files.diffUnavailableReason", { reason }) : t("files.loadingDiff")}</span>{deferred ? <Button onClick={() => setFileStates({ ...fileStates, [file.path]: { ...fileStates[file.path], loadedDeferred: true } })} size="sm" variant="secondary">{t("files.loadDiff")}</Button> : null}<Button onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="sm" variant="secondary">{t("files.fileView")}</Button></div> : null}
 				</section>;
 			})}
 		</div>}
+		<FileAnnotationSendBar annotation={annotation} surface="review" />
 	</div>;
 }
 
@@ -173,5 +219,5 @@ function CommitBrowser({ commits, filter, onSelect, selectedSha }: { commits: re
 	const { t } = useTranslation();
 	const normalized = filter.trim().toLowerCase();
 	const visible = normalized ? commits.filter((commit) => `${commit.subject} ${commit.author} ${commit.sha} ${commit.files.map((file) => file.path).join(" ")}`.toLowerCase().includes(normalized)) : commits;
-	return <ul aria-label={t("files.commitHistory")} className="board-scrollbar min-h-0 flex-1 overflow-y-auto">{visible.map((commit) => <li key={commit.sha}><button aria-current={selectedSha === commit.sha ? "true" : undefined} className="block w-full border-b border-border px-3 py-3 text-left hover:bg-interactive-hover" onClick={() => onSelect(commit)} type="button"><div className="flex items-center gap-2"><GitCommitHorizontal className="size-icon-sm text-passive" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{commit.subject}</span><span className="font-mono text-caption text-passive">{commit.sha.slice(0, 7)}</span></div><div className="mt-1 pl-6 text-caption text-muted-foreground">{commit.author} · {t("files.count", { count: commit.files.length })}</div></button></li>)}</ul>;
+	return <ul aria-label={t("files.commitHistory")} className="board-scrollbar min-h-0 flex-1 overflow-y-auto">{visible.map((commit) => <li key={commit.sha}><Pressable aria-current={selectedSha === commit.sha ? "true" : undefined} className="block w-full border-b border-border px-3 py-3 hover:bg-interactive-hover" onClick={() => onSelect(commit)}><div className="flex items-center gap-2"><GitCommitHorizontal className="size-icon-sm text-passive" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{commit.subject}</span><span className="font-mono text-caption text-passive">{commit.sha.slice(0, 7)}</span></div><div className="mt-1 pl-6 text-caption text-muted-foreground">{commit.author} · {t("files.count", { count: commit.files.length })}</div></Pressable></li>)}</ul>;
 }

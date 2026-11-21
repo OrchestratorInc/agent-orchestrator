@@ -17,7 +17,7 @@ import (
 func newLaunchCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:    "launch",
-		Short:  "Launch an AO-managed agent process (internal)",
+		Short:  "Launch an Orchestrator-managed agent process (internal)",
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -51,7 +51,7 @@ func (c *commandContext) runLaunchCommand(ctx context.Context, dir string, argv,
 	if len(argv) == 0 {
 		return errors.New("launch: command argv is required")
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:forbidigo // foreground launch must inherit the caller's console.
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = c.deps.In

@@ -1,0 +1,313 @@
+import * as Linking from "expo-linking";
+import { useRouter } from "expo-router";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useIsFocused } from "expo-router/react-navigation";
+import { WebView } from "react-native-webview";
+import { AppSymbol } from "../AppSymbol";
+import { authHeaders, httpBase } from "../config";
+import { haptics } from "../haptics";
+import { usePressFeedback } from "../pressFeedback";
+import { useApp } from "../store";
+import type { Theme } from "../theme";
+import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
+import { iconSize, radius, space, touchTarget, type } from "../tokens";
+import {
+	ARTIFACT_FRAME_HEIGHT,
+	RENDER_BRIDGE_SCRIPT,
+	RENDER_ZOOM_SCRIPT,
+	REPORT_SETTLE_LIMIT_MS,
+	clampRenderHeight,
+	initialRenderHeight,
+	isRenderPageLoad,
+	readRenderBridgeMessage,
+	rememberRenderHeight,
+	rememberedRenderHeight,
+	renderFrameLive,
+	renderTheme,
+	renderThemeFragment,
+	renderThemeScript,
+	renderViewerStyleScript,
+	subscribeRenderViewport,
+	withRenderTheme,
+	type RenderDisplayMode,
+	type RenderRef,
+	type RenderTheme,
+} from "./renderFrameModel";
+import { RenderSkeleton } from "./RenderSkeleton";
+import { startRenderHeightStore } from "./renderHeightStore";
+import { FRAME_PAGE_LIMITS } from "../artifactPageInliner";
+import { useInlinedArtifactPage } from "../useInlinedArtifactPage";
+import { daemonArtifactsBackend } from "../artifactsBackend";
+
+startRenderHeightStore();
+
+// A link opens only from a touch the viewer just received, so a page cannot
+// open one on its own by posting to the bridge.
+const LINK_TAP_WINDOW_MS = 1000;
+// A page whose process the OS keeps killing stops reloading after this many.
+const MAX_PROCESS_RESTARTS = 2;
+// A page this device has already loaded usually comes back within this; only
+// a slower load shows the skeleton, so a cached page does not flash one.
+export const SKELETON_DELAY_MS = 250;
+// A frame that measures out of range lets its page go only after this. Content
+// added above (earlier history) lays the list out once before the scroll anchor
+// restores the position, and a measure in between would unload and reload pages
+// that never left the screen.
+const LEAVE_RANGE_DELAY_MS = 400;
+const VIEWER_STYLE_SCRIPT = renderViewerStyleScript(space.xl);
+
+/** The app's theme as a page's variables; the artifact viewer posts it into inlined pages too. */
+export function useRenderTheme(): RenderTheme {
+	const t = useTheme();
+	const { scheme } = useThemeState();
+	return useMemo(() => renderTheme(t, scheme === "light" ? "light" : "dark"), [t, scheme]);
+}
+
+/**
+ * The page in a WebView. The daemon serves it with its images inlined, so the
+ * one authenticated request is all it needs; its CSP sandbox keeps it on an
+ * opaque origin. Theme rides in the fragment for first paint and is posted
+ * after, so the page never reloads.
+ */
+export function RenderDocument({ path, html, displayMode, onHeight, onReady, onGone, onFailed }: {
+	path: string;
+	/** The page itself, loaded from memory instead of `path` (an inlined artifact). */
+	html?: string;
+	displayMode: RenderDisplayMode;
+	onHeight?: (height: number) => void;
+	onReady: () => void;
+	/** The page's process died; the WebView is blank until it is mounted again. */
+	onGone: () => void;
+	onFailed: () => void;
+}) {
+	const styles = useThemedStyles(makeStyles);
+	const { config } = useApp();
+	const web = useRef<WebView>(null);
+	const lastTouch = useRef(0);
+	const loaded = useRef(false);
+	const theme = useRenderTheme();
+	const themeRef = useRef(theme);
+	themeRef.current = theme;
+	const pageUrl = config ? `${httpBase(config)}${path}` : undefined;
+	// The fragment only seeds first paint; a theme change is posted instead.
+	const uri = useMemo(() => pageUrl && `${pageUrl}${renderThemeFragment(themeRef.current, displayMode)}`, [pageUrl, displayMode]);
+	const fullscreen = displayMode === "fullscreen";
+	// A stable source: a new object each render would make the WebView re-check it.
+	// A page from memory has no fragment, so the theme is written into it for first paint.
+	const source = useMemo(() => html ? { html: withRenderTheme(html, themeRef.current) } : uri && config ? { uri, headers: authHeaders(config) } : undefined, [html, uri, config]);
+
+	useEffect(() => {
+		if (loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
+	}, [theme]);
+
+	if (!source || (!html && !uri)) return null;
+	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
+		<WebView
+			ref={web}
+			source={source}
+			injectedJavaScriptBeforeContentLoaded={fullscreen ? VIEWER_STYLE_SCRIPT : undefined}
+			injectedJavaScript={fullscreen ? `${RENDER_ZOOM_SCRIPT}\n${RENDER_BRIDGE_SCRIPT}` : RENDER_BRIDGE_SCRIPT}
+			onMessage={(event) => {
+				const message = readRenderBridgeMessage(event.nativeEvent.data);
+				if (message?.type === "height") onHeight?.(message.height);
+				else if (message?.type === "link" && fullscreen && Date.now() - lastTouch.current < LINK_TAP_WINDOW_MS) void Linking.openURL(message.url);
+			}}
+			// Only the page itself loads in the frame; a frame inside the page may load its own.
+			onShouldStartLoadWithRequest={(request) => request.isTopFrame === false || (html ? /^(about:|data:)/.test(request.url) : Boolean(uri) && isRenderPageLoad(request.url, uri!))}
+			onLoadEnd={() => {
+				loaded.current = true;
+				web.current?.injectJavaScript(renderThemeScript(themeRef.current));
+				onReady();
+			}}
+			onHttpError={onFailed}
+			onError={onFailed}
+			onContentProcessDidTerminate={onGone}
+			onRenderProcessGone={onGone}
+			setSupportMultipleWindows={false}
+			javaScriptCanOpenWindowsAutomatically={false}
+			allowsLinkPreview={false}
+			// Inline, the page sits still in the thread; expanded, it scrolls and pinch-zooms.
+			scrollEnabled={fullscreen}
+			bounces={fullscreen}
+			setBuiltInZoomControls={fullscreen}
+			setDisplayZoomControls={false}
+			overScrollMode={fullscreen ? "always" : "never"}
+			showsVerticalScrollIndicator={false}
+			showsHorizontalScrollIndicator={false}
+			style={styles.web}
+		/>
+	</View>;
+}
+
+/**
+ * One mounted page's lifecycle: loading until its document finishes, then
+ * ready. A page whose process dies is mounted afresh, up to a limit.
+ */
+export function useRenderPage() {
+	const [mount, setMount] = useState(0);
+	const [loading, setLoading] = useState(true);
+	const restarts = useRef(0);
+	const ready = useCallback(() => setLoading(false), []);
+	const unload = useCallback(() => setLoading(true), []);
+	const reset = useCallback(() => {
+		restarts.current = 0;
+		setLoading(true);
+		setMount((value) => value + 1);
+	}, []);
+	const gone = useCallback((giveUp: () => void) => {
+		restarts.current += 1;
+		if (restarts.current > MAX_PROCESS_RESTARTS) return giveUp();
+		setLoading(true);
+		setMount((value) => value + 1);
+	}, []);
+	return useMemo(() => ({ mount, loading, ready, unload, reset, gone }), [mount, loading, ready, unload, reset, gone]);
+}
+
+/**
+ * An agent's HTML page inline in its turn, as desktop shows it; a tap expands
+ * it. Only a frame in or near view holds a WebView: a page can run to megabytes
+ * of inlined images, and a thread can carry many. Out of range, a placeholder
+ * keeps the page's last height so the thread does not jump when it returns.
+ */
+export const RenderFrame = memo(function RenderFrame({ render, artifact }: {
+	render: RenderRef;
+	/**
+	 * Set for an HTML artifact the agent reported: the frame keeps
+	 * ARTIFACT_FRAME_HEIGHT rather than the page's measured height, and a tap
+	 * opens the artifact viewer (with its menu, history and comments) rather
+	 * than the page on its own.
+	 */
+	artifact?: { sessionId: string; path: string };
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const router = useRouter();
+	const retryFeedback = usePressFeedback("button");
+	// The whole frame is the button: Android ripples across it, over the page;
+	// iOS highlights the chip that marks it.
+	const expandFeedback = usePressFeedback("row", { foreground: true });
+	const { config, currentHostId, sessions } = useApp();
+	const frame = useRef<View>(null);
+	const { height: viewportHeight } = useWindowDimensions();
+	const [width, setWidth] = useState<number>();
+	const [contentHeight, setContentHeight] = useState<number>();
+	const [live, setLive] = useState(false);
+	const [failed, setFailed] = useState(false);
+	const page = useRenderPage();
+	// An artifact page is read with the files it links inlined, and only
+	// while its frame is in range; the file's version re-reads a rewrite.
+	const version = artifact ? sessions?.find((session) => session.id === artifact.sessionId)?.artifacts?.find((file) => file.path === artifact.path)?.updatedAt : undefined;
+	const artifactsBackend = useMemo(() => config ? daemonArtifactsBackend(config) : null, [config]);
+	const inlined = useInlinedArtifactPage({ enabled: Boolean(artifact) && live, backend: artifactsBackend, sessionId: artifact?.sessionId ?? "", path: artifact?.path ?? "", version, limits: FRAME_PAGE_LIMITS });
+	// The skeleton covers the frame until the inlined page is ready; if inlining
+	// fails the page loads from its URL instead.
+	const awaitingInline = Boolean(artifact) && !inlined.html && !inlined.failed;
+	// Sized on this device already: by a report this mount, or one saved earlier.
+	const measured = contentHeight !== undefined || rememberedRenderHeight(render.path, width) !== undefined;
+	const liveRef = useRef(live);
+	liveRef.current = live;
+	// A screen pushed over the session leaves these frames laid out "in view";
+	// they let their pages go anyway and load them again on the way back.
+	const focused = useIsFocused();
+	const focusedRef = useRef(focused);
+	focusedRef.current = focused;
+	const leaveRange = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(leaveRange.current), []);
+	const measure = useCallback(() => {
+		frame.current?.measureInWindow((_x, y, _width, height) => {
+			// A cell the list has clipped measures as zero; leave it as it was.
+			if (height <= 0) return;
+			if (focusedRef.current && renderFrameLive(y, height, viewportHeight, liveRef.current, measured)) {
+				clearTimeout(leaveRange.current);
+				leaveRange.current = undefined;
+				if (!liveRef.current) setLive(true);
+				return;
+			}
+			if (!liveRef.current || leaveRange.current) return;
+			leaveRange.current = setTimeout(() => {
+				leaveRange.current = undefined;
+				setLive(false);
+			}, LEAVE_RANGE_DELAY_MS);
+		});
+	}, [viewportHeight, measured]);
+	useEffect(() => subscribeRenderViewport(measure), [measure]);
+	useEffect(() => { measure(); }, [focused, measure]);
+	// A page that leaves range reloads when it returns, so it is loading again.
+	const { unload } = page;
+	useEffect(() => { if (!live) unload(); }, [live, unload]);
+	// The skeleton stays until the page has a settled height, so the page appears
+	// at its size instead of resizing in view. A page that never reports one is
+	// shown anyway once it has had time to.
+	const { ready } = page;
+	const readyFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	// The fallback belongs to the page that armed it. When that page goes (out of
+	// range, or remounted after its process died), so does the timer; otherwise it
+	// would mark the next page ready before its height, which then resizes in view.
+	useEffect(() => () => clearTimeout(readyFallback.current), [page.mount]);
+	useEffect(() => { if (!live) clearTimeout(readyFallback.current); }, [live]);
+	const onLoaded = useCallback(() => {
+		clearTimeout(readyFallback.current);
+		readyFallback.current = setTimeout(ready, REPORT_SETTLE_LIMIT_MS + 500);
+	}, [ready]);
+	const onHeight = useCallback((height: number) => {
+		if (width) rememberRenderHeight(render.path, width, height);
+		setContentHeight(height);
+		clearTimeout(readyFallback.current);
+		ready();
+	}, [render.path, width, ready]);
+
+	if (!config || failed) {
+		return <Pressable
+			disabled={!config}
+			accessibilityRole={config ? "button" : undefined}
+			accessibilityLabel={config ? `Retry loading ${render.title}` : undefined}
+			android_ripple={config ? retryFeedback.android_ripple : undefined}
+			onPress={() => { haptics.tap(); setFailed(false); page.reset(); }}
+			style={({ pressed }) => [styles.fallback, pressed && retryFeedback.pressed]}
+		>
+			<AppSymbol name={config ? "refresh" : "fileText"} size={iconSize.sm} color={t.textTertiary} />
+			<Text numberOfLines={1} style={styles.fallbackTitle}>{render.title}</Text>
+			{config ? <Text style={styles.fallbackAction}>Couldn't load · Tap to retry</Text> : null}
+		</Pressable>;
+	}
+
+	const height = artifact ? ARTIFACT_FRAME_HEIGHT : clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
+	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
+		{width && live && !awaitingInline ? <RenderDocument key={page.mount} path={render.path} html={inlined.html} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
+		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
+		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} delayMs={measured ? SKELETON_DELAY_MS : 0} /> : null}
+		{/* Inline, a tap means "show me this larger"; links and zoom live in the viewer. */}
+		<Pressable
+			accessibilityRole="button"
+			accessibilityLabel={artifact ? `Open ${render.title}` : `Expand ${render.title}`}
+			android_ripple={expandFeedback.android_ripple}
+			onPress={() => artifact
+				? router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: artifact.sessionId, path: artifact.path, hostId: currentHostId ?? undefined } })
+				: router.push({ pathname: "/render", params: { path: render.path, title: render.title, hostId: currentHostId ?? undefined } })}
+			style={StyleSheet.absoluteFill}
+		>
+			{({ pressed }) => (
+				<View style={[styles.expandChip, pressed && expandFeedback.pressed]}>
+					<AppSymbol name="expandPage" size={iconSize.sm} color={t.textSecondary} />
+				</View>
+			)}
+		</Pressable>
+	</View>;
+}, (previous, next) => sameRender(previous.render, next.render) && previous.artifact?.sessionId === next.artifact?.sessionId && previous.artifact?.path === next.artifact?.path);
+
+/** The timeline re-reads each row on every update; the same page must not re-render. */
+function sameRender(a: RenderRef, b: RenderRef): boolean {
+	return a.id === b.id && a.path === b.path && a.title === b.title && a.height === b.height && JSON.stringify(a.heights) === JSON.stringify(b.heights);
+}
+
+const makeStyles = (t: Theme) => StyleSheet.create({
+	frame: { marginVertical: space.xs, overflow: "hidden", backgroundColor: t.bgBase },
+	document: { flex: 1 },
+	web: { flex: 1, backgroundColor: t.bgBase },
+	// A sign that the frame opens larger; the whole frame is the button.
+	expandChip: { position: "absolute", top: space.xs, right: space.xs, width: iconSize.xxl, height: iconSize.xxl, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderSubtle },
+	fallback: { alignSelf: "flex-start", minHeight: touchTarget, marginVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.md, overflow: "hidden" },
+	fallbackTitle: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	fallbackAction: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+});

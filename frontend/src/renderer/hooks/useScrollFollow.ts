@@ -1,0 +1,246 @@
+import { useReducedMotion } from "motion/react";
+import { useCallback, useEffect, useRef } from "react";
+import { pageHidden } from "../lib/page-hidden";
+
+/** Writes this close to the current position are skipped. */
+const SETTLE_PX = 0.5;
+/** A scroll event within this distance of our last written position is ours. */
+const OWN_SCROLL_PX = 2;
+/**
+ * Streamed growth up to this size is followed with an instant write. Streamed text
+ * already grows smoothly, so keeping the end in place reads as smooth; restarting a
+ * native smooth scroll every chunk would replay its ease-in and trail behind.
+ */
+const FOLLOW_INSTANT_PX = 48;
+/** A smooth scroll in flight is re-aimed only when its target moves this much. */
+const REAIM_PX = 48;
+/** A native smooth scroll is long over by now even if its end event was missed. */
+const FLIGHT_MAX_MS = 1500;
+
+/**
+ * Tests snap, as under reduced motion, because they assert scroll positions
+ * synchronously and jsdom has no layout to animate. The test-mode branch is
+ * compiled out of production builds. Read on each render, so a test of the
+ * animated paths can stub the mode.
+ */
+const cannotAnimate = () => import.meta.env.MODE === "test";
+
+/** `deliberate`: the reader asked for it (glideToEnd: a send, Jump to latest), not automatic follow. */
+type Flight = { from: number; to: number; aimedAt: number; deliberate: boolean };
+
+/**
+ * Moves a scroll viewport toward its end without snapping and without stutter.
+ *
+ * Large moves (a send, Jump to latest, a big append) use the browser's native
+ * smooth scroll, which Chromium animates on the compositor, so it keeps moving
+ * while the main thread is busy committing. Small streamed growth is followed with
+ * instant writes. No glide covers more than a screen: an automatic follow that far
+ * lands at once, and a deliberate one cuts to a screen short of its target first.
+ * Every position along a smooth scroll in flight counts as ours;
+ * reader input stops it in place (`cancel` / `hold`). Reduced motion snaps, and
+ * so does a hidden window: it draws no frames, so a smooth scroll started then
+ * would sit still and only play once the reader is back, gliding them down
+ * through content that arrived while they were away.
+ */
+export function useScrollFollow(getNode: () => HTMLElement | null) {
+	const reducedMotion = useReducedMotion();
+	const snap = useRef(false);
+	snap.current = cannotAnimate() || Boolean(reducedMotion);
+	// Where our last write left (or will leave) the viewport. Scroll events are
+	// classified by position rather than by time: an event that lands here is ours
+	// however late it arrives, and anything else is the reader's.
+	const lastWritten = useRef<number | null>(null);
+	const flight = useRef<Flight | null>(null);
+	// When we last aimed a smooth scroll; it may still be animating after `flight`
+	// is cleared, so cancel keys off this too.
+	const lastAimAt = useRef(0);
+	const holdUntil = useRef(0);
+
+	const instant = () => snap.current || pageHidden();
+	const endOf = (node: HTMLElement) => Math.max(0, node.scrollHeight - node.clientHeight);
+	const write = (node: HTMLElement, top: number) => {
+		if (Math.abs(node.scrollTop - top) <= SETTLE_PX) return;
+		node.scrollTop = top;
+		lastWritten.current = node.scrollTop;
+	};
+	// Re-aiming keeps the flight's origin; only glideToEnd starts a deliberate one.
+	const smoothTo = (node: HTMLElement, top: number, deliberate = flight.current?.deliberate ?? false) => {
+		// No long rides. Content that moved the end more than a screen away lands at
+		// once: the reader following it is kept at the end, not animated through it.
+		// A reader who asked to go there (a send from far up, Jump to latest) cuts to
+		// a screen short of it and glides the rest, one short move down to it.
+		const longest = Math.max(node.clientHeight, FOLLOW_INSTANT_PX);
+		const distance = top - node.scrollTop;
+		if (Math.abs(distance) > longest) {
+			if (!deliberate) {
+				flight.current = null;
+				write(node, top);
+				return;
+			}
+			write(node, top - Math.sign(distance) * longest);
+		}
+		const now = performance.now();
+		flight.current = { from: flight.current?.from ?? node.scrollTop, to: top, aimedAt: now, deliberate };
+		lastAimAt.current = now;
+		lastWritten.current = top;
+		node.scrollTo({ top, behavior: "smooth" });
+	};
+	const flying = () => {
+		const current = flight.current;
+		if (current && performance.now() - current.aimedAt > FLIGHT_MAX_MS) flight.current = null;
+		return flight.current != null;
+	};
+
+	const cancel = useCallback(() => {
+		flight.current = null;
+		if (performance.now() - lastAimAt.current > FLIGHT_MAX_MS) return;
+		lastAimAt.current = 0;
+		// Stop a native smooth scroll in place. Two writes, because Chromium may skip
+		// a write to the offset it already reports instead of cancelling the animation.
+		const node = getNode();
+		if (!node) return;
+		const top = node.scrollTop;
+		node.scrollTop = top + 1;
+		node.scrollTop = top;
+		lastWritten.current = node.scrollTop;
+	}, [getNode]);
+
+	/**
+	 * Stop following and stay still for `ms`, without deciding yet whether the reader
+	 * left the end. Used for wheel and key intent: the scroll it causes (if any) then
+	 * decides, so a gesture consumed by a nested scroller never unpins the log.
+	 */
+	const hold = useCallback((ms: number) => {
+		cancel();
+		holdUntil.current = performance.now() + ms;
+	}, [cancel]);
+
+	/** Record a write made outside this hook (e.g. virtualizer anchoring) as ours. */
+	const markWritten = useCallback((top: number) => {
+		lastWritten.current = top;
+	}, []);
+
+	/** True while a smooth scroll we started is still in flight. */
+	const isFlying = useCallback(() => flying(), []);
+
+	/** True while a glide the reader asked for (send, Jump to latest) is in flight. */
+	const isGliding = useCallback(() => flying() && flight.current!.deliberate, []);
+
+	/** True when a scroll event at `top` was caused by one of our writes or animations. */
+	const isOwnScroll = useCallback((top: number) => {
+		const current = flying() ? flight.current : null;
+		if (current) {
+			const low = Math.min(current.from, current.to) - OWN_SCROLL_PX;
+			const high = Math.max(current.from, current.to) + OWN_SCROLL_PX;
+			if (top >= low && top <= high) return true;
+		}
+		return lastWritten.current != null && Math.abs(top - lastWritten.current) < OWN_SCROLL_PX;
+	}, []);
+
+	const followEnd = useCallback(() => {
+		const node = getNode();
+		if (!node || performance.now() < holdUntil.current) return;
+		if (instant()) {
+			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
+			flight.current = null;
+			write(node, node.scrollHeight);
+			return;
+		}
+		const end = endOf(node);
+		if (node.scrollTop > end) {
+			// Content shrank below the current position; land exactly, never animate back.
+			flight.current = null;
+			write(node, end);
+			return;
+		}
+		if (flying()) {
+			// Let the scroll in flight land; re-aim only when its target moved a lot.
+			if (Math.abs(flight.current!.to - end) > REAIM_PX) smoothTo(node, end);
+			return;
+		}
+		const gap = end - node.scrollTop;
+		if (gap <= SETTLE_PX) return;
+		if (gap <= FOLLOW_INSTANT_PX) write(node, end);
+		else smoothTo(node, end);
+	}, [getNode]);
+	const followEndRef = useRef(followEnd);
+	followEndRef.current = followEnd;
+
+	const glideToEnd = useCallback(() => {
+		const node = getNode();
+		if (!node) return;
+		// A deliberate jump (send, Jump to latest) overrides any pending wheel hold.
+		holdUntil.current = 0;
+		if (instant()) {
+			flight.current = null;
+			write(node, node.scrollHeight);
+			return;
+		}
+		smoothTo(node, endOf(node), true);
+	}, [getNode]);
+
+	/**
+	 * Re-issue the smooth scroll in flight at the current end. Call after an instant
+	 * write elsewhere would have cancelled it (the browser aborts a smooth scroll on
+	 * any instant programmatic scroll). Small moves of the end are left to the
+	 * landing: restarting replays the ease-in, so a send laying out its new turn
+	 * would crawl instead of gliding.
+	 */
+	const reaim = useCallback(() => {
+		const node = getNode();
+		if (!node || !flying()) return;
+		if (instant()) {
+			flight.current = null;
+			write(node, node.scrollHeight);
+			return;
+		}
+		if (Math.abs(flight.current!.to - endOf(node)) > REAIM_PX) smoothTo(node, endOf(node));
+	}, [getNode]);
+
+	/**
+	 * Rows above the view were added, dropped or resized, moving everything on screen
+	 * by `delta`. Move the view the same amount, so nothing the reader sees moves, and
+	 * carry a glide in flight with it: the instant write stops a native smooth scroll,
+	 * so it is aimed again at the end from the new spot. Left alone, the view would
+	 * show some earlier (or later) part of the chat and then ride back from there.
+	 */
+	const shift = useCallback((delta: number) => {
+		const node = getNode();
+		if (!node || Math.abs(delta) <= SETTLE_PX) return;
+		const current = flying() ? flight.current : null;
+		node.scrollTop += delta;
+		lastWritten.current = node.scrollTop;
+		if (!current) return;
+		const end = endOf(node);
+		// The shift put the view where the glide was going: it has landed. A smooth
+		// scroll aimed at where the view already is fires no scrollend, so re-issuing
+		// one would leave the flight open and every later shift would renew it.
+		if (Math.abs(end - node.scrollTop) <= OWN_SCROLL_PX) {
+			flight.current = null;
+			return;
+		}
+		flight.current = { ...current, from: current.from + delta, to: current.to + delta };
+		smoothTo(node, end);
+	}, [getNode]);
+
+	/**
+	 * The browser finished a scroll (wire to the scroller's onScrollEnd). Only a
+	 * landing on our target ends the flight: a `scrollend` queued by an earlier
+	 * instant write must not clear a fresh one. After landing, catch up with any
+	 * growth that arrived meanwhile.
+	 */
+	const endFlight = useCallback(() => {
+		const node = getNode();
+		const current = flight.current;
+		if (!node || !current) return;
+		if (Math.abs(node.scrollTop - current.to) > OWN_SCROLL_PX && node.scrollTop < endOf(node) - OWN_SCROLL_PX) return;
+		flight.current = null;
+		followEndRef.current();
+	}, [getNode]);
+
+	useEffect(() => () => {
+		flight.current = null;
+	}, []);
+
+	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, isGliding, reaim, shift, endFlight };
+}

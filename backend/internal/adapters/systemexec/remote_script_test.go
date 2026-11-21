@@ -4,20 +4,137 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestRunInstallScriptDownloadRetries(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		status       int
+		failures     int
+		wantAttempts int
+		wantError    bool
+	}{
+		{"recover from server failure", 503, 1, 2, false},
+		{"exhaust retries", 502, 3, 3, true},
+		{"rate limit", 429, 1, 2, false},
+		{"request timeout", 408, 1, 2, false},
+		{"internal server error", 500, 1, 2, false},
+		{"gateway timeout", 504, 1, 2, false},
+		{"permanent failure", 404, 3, 1, true},
+		{"unauthorized", 401, 3, 1, true},
+		{"forbidden", 403, 3, 1, true},
+		{"not implemented", 501, 3, 1, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			attempts := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts++
+				if attempts <= test.failures {
+					w.WriteHeader(test.status)
+					return
+				}
+				_, _ = io.WriteString(w, "printf script-ran")
+			}))
+			t.Cleanup(server.Close)
+			var output, diagnostics bytes.Buffer
+			_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
+				URL: server.URL, Interpreter: []string{"sh"},
+			}, &output, &diagnostics)
+			if (err != nil) != test.wantError || attempts != test.wantAttempts {
+				t.Fatalf("attempts = %d, error = %v", attempts, err)
+			}
+			if test.wantError {
+				if !strings.Contains(err.Error(), "installer was not run") || strings.Contains(output.String(), "script-ran") {
+					t.Fatalf("error = %v, output = %q", err, output.String())
+				}
+			} else if strings.Count(output.String(), "script-ran") != 1 {
+				t.Fatalf("output = %q", output.String())
+			}
+			if !strings.Contains(diagnostics.String(), "attempt 1/3") || !strings.Contains(diagnostics.String(), "elapsed=") || !strings.Contains(diagnostics.String(), strconv.Itoa(test.status)) {
+				t.Fatalf("missing diagnostics: %q", diagnostics.String())
+			}
+			if test.wantAttempts > 1 && !strings.Contains(output.String(), "Retrying download in 1s (attempt 2/3)") {
+				t.Fatalf("missing retry progress: %q", output.String())
+			}
+			if test.wantAttempts == 3 && !strings.Contains(output.String(), "Retrying download in 2s (attempt 3/3)") {
+				t.Fatalf("missing backoff progress: %q", output.String())
+			}
+		})
+	}
+}
+
+type cancelOnRetryWriter struct {
+	match  string
+	cancel context.CancelFunc
+}
+
+func (w cancelOnRetryWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.match) {
+		w.cancel()
+	}
+	return len(p), nil
+}
+
+func TestRunInstallScriptCancelsBackoff(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(ctx, ports.InstallScriptCommand{
+		URL: server.URL, Interpreter: []string{"sh"},
+	}, cancelOnRetryWriter{cancel: cancel, match: "Retrying download"}, io.Discard)
+	if !errors.Is(err, context.Canceled) || attempts != 1 {
+		t.Fatalf("attempts = %d, error = %v", attempts, err)
+	}
+}
+
+func TestRunInstallScriptNeverRetriesExecution(t *testing.T) {
+	t.Parallel()
+	marker := filepath.Join(t.TempDir(), "executions")
+	attempts := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		_, _ = io.WriteString(w, "printf x >> \"$MARKER\"\nexit 7")
+	}))
+	t.Cleanup(server.Close)
+	_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
+		URL: server.URL, Interpreter: []string{"sh"}, Env: []string{"MARKER=" + marker},
+	}, io.Discard, io.Discard)
+	content, readErr := os.ReadFile(marker)
+	if err == nil || readErr != nil || string(content) != "x" || attempts != 1 {
+		t.Fatalf("executions = %q, attempts = %d, error = %v, read = %v", content, attempts, err, readErr)
+	}
+	// The vendor script's own error is returned unchanged.
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || err.Error() != "exit status 7" {
+		t.Fatalf("error = %v, want the unwrapped exit status 7", err)
+	}
+}
 
 func TestRunInstallScriptDownloadsExecutesAndCleansUp(t *testing.T) {
 	t.Parallel()
@@ -34,7 +151,7 @@ func TestRunInstallScriptDownloadsExecutesAndCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "vendor-script-ran" {
+	if !strings.HasSuffix(output.String(), "vendor-script-ran") {
 		t.Fatalf("output = %q", output.String())
 	}
 	sum := sha256.Sum256([]byte(body))
@@ -44,6 +161,81 @@ func TestRunInstallScriptDownloadsExecutesAndCleansUp(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join(dataDir, "installers", "tmp"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("temporary scripts remain: %v, %v", entries, err)
+	}
+}
+
+func TestRunInstallScriptPassesFixedArguments(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell installer")
+	}
+	server := httptest.NewTLSServer(httpHandler(`printf '%s|' "$@"`))
+	t.Cleanup(server.Close)
+	var output bytes.Buffer
+	_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(t.Context(), ports.InstallScriptCommand{
+		URL: server.URL, Interpreter: []string{"sh"}, Args: []string{"--commit", "abc 123", "--non-interactive"},
+	}, &output, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(output.String(), "--commit|abc 123|--non-interactive|") {
+		t.Fatalf("installer arguments = %q", output.String())
+	}
+}
+
+func TestPowerShellArgsKeepNamesAndQuoteValues(t *testing.T) {
+	t.Parallel()
+	got := powerShellArgs([]string{"-Commit", "818c13be", "-NonInteractive", "it's $(evil)", "-not a name"})
+	if want := " -Commit '818c13be' -NonInteractive 'it''s $(evil)' '-not a name'"; got != want {
+		t.Fatalf("powerShellArgs = %q, want %q", got, want)
+	}
+}
+
+func TestRunInstallScriptPowerShellLoadsHashModule(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell installer")
+	}
+	shell, err := exec.LookPath("powershell.exe")
+	if err != nil {
+		t.Fatal("Windows PowerShell unavailable: ", err)
+	}
+	for _, tc := range []struct {
+		name     string
+		tail     string
+		wantExit int
+	}{
+		{name: "success"},
+		{name: "explicit unsuccessful exit", tail: "\nexit 7", wantExit: 7},
+		{name: "terminating error", tail: "\nthrow 'synthetic installer failure'", wantExit: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "$PSModuleAutoLoadingPreference = 'None'\n(Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash" + tc.tail
+			server := httptest.NewTLSServer(httpHandler(body))
+			t.Cleanup(server.Close)
+			dataDir := t.TempDir()
+			var output bytes.Buffer
+			result, err := newAdapter(dataDir, server.Client()).RunInstallScript(t.Context(), ports.InstallScriptCommand{
+				URL: server.URL, Interpreter: []string{shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"},
+			}, &output, &output)
+			if tc.wantExit == 0 {
+				if err != nil {
+					t.Fatalf("PowerShell installer failed: %v; output: %s", err, output.String())
+				}
+			} else {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) || exitErr.ExitCode() != tc.wantExit {
+					t.Fatalf("PowerShell error = %v, want exit %d; output: %s", err, tc.wantExit, output.String())
+				}
+			}
+			sum := sha256.Sum256([]byte(body))
+			if result.SHA256 != hex.EncodeToString(sum[:]) || !strings.Contains(strings.ToLower(output.String()), result.SHA256) {
+				t.Fatalf("installer hash = %q, output = %q, want %x", result.SHA256, output.String(), sum)
+			}
+			entries, readErr := os.ReadDir(filepath.Join(dataDir, "installers", "tmp"))
+			if readErr != nil || len(entries) != 0 {
+				t.Fatalf("temporary scripts remain: %v, %v", entries, readErr)
+			}
+		})
 	}
 }
 
@@ -67,15 +259,15 @@ func TestRunInstallScriptCleansUpAfterExecutionFailure(t *testing.T) {
 
 func TestRunInstallScriptCancellationCleansUp(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewTLSServer(httpHandler("#!/bin/sh\nsleep 5"))
+	server := httptest.NewTLSServer(httpHandler("#!/bin/sh\nprintf started; sleep 5"))
 	t.Cleanup(server.Close)
 	dataDir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_, err := newAdapter(dataDir, server.Client()).RunInstallScript(ctx, ports.InstallScriptCommand{
 		URL: server.URL, Interpreter: []string{"sh"},
-	}, io.Discard, io.Discard)
+	}, cancelOnRetryWriter{cancel: cancel, match: "started"}, io.Discard)
 	if err == nil {
 		t.Fatal("expected cancellation")
 	}
@@ -104,7 +296,7 @@ func TestRunInstallScriptAllowsFiveHTTPSRedirects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "redirected" {
+	if !strings.HasSuffix(output.String(), "redirected") {
 		t.Fatalf("output = %q", output.String())
 	}
 }
@@ -120,7 +312,7 @@ func TestRunInstallScriptRejectsTooManyOrInsecureRedirects(t *testing.T) {
 		_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
 			URL: server.URL + "/?step=0", Interpreter: []string{"sh"},
 		}, io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "redirect limit") {
+		if err == nil || !strings.Contains(errors.Unwrap(err).Error(), "redirect limit") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -135,7 +327,7 @@ func TestRunInstallScriptRejectsTooManyOrInsecureRedirects(t *testing.T) {
 		_, err := newAdapter(t.TempDir(), secure.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
 			URL: secure.URL, Interpreter: []string{"sh"},
 		}, io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "redirect must remain HTTPS") {
+		if err == nil || !strings.Contains(errors.Unwrap(err).Error(), "redirect must remain HTTPS") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -160,7 +352,7 @@ func TestRunInstallScriptRejectsUnsafeDownloads(t *testing.T) {
 		_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
 			URL: server.URL, Interpreter: []string{"sh"},
 		}, io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "download limit") {
+		if err == nil || !strings.Contains(errors.Unwrap(err).Error(), "download limit") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -173,7 +365,7 @@ func TestRunInstallScriptRejectsUnsafeDownloads(t *testing.T) {
 		_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
 			URL: server.URL, Interpreter: []string{"sh"},
 		}, io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "502 Bad Gateway") {
+		if err == nil || !strings.Contains(errors.Unwrap(err).Error(), "502 Bad Gateway") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -197,4 +389,236 @@ type staticHTTPHandler struct {
 
 func (h *staticHTTPHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, h.body)
+}
+
+// A transport double makes connection failures deterministic without external networking.
+type installerRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f installerRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRunInstallScriptTransportFailures(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		err          error
+		wantAttempts int
+	}{
+		{"TLS timeout", &net.DNSError{Err: "TLS handshake timeout", IsTimeout: true}, 3},
+		{"temporary DNS failure", &net.DNSError{Err: "server misbehaving", IsTemporary: true}, 3},
+		{"truncated download", io.ErrUnexpectedEOF, 3},
+		{"invalid certificate", x509.UnknownAuthorityError{}, 1},
+		{"canceled", context.Canceled, 1},
+		{"unknown host", &net.DNSError{Err: "no such host", IsNotFound: true}, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			attempts := 0
+			client := &http.Client{Transport: installerRoundTripper(func(*http.Request) (*http.Response, error) {
+				attempts++
+				return nil, test.err
+			})}
+			var diagnostics bytes.Buffer
+			_, err := newAdapter(t.TempDir(), client).RunInstallScript(context.Background(), ports.InstallScriptCommand{
+				URL: "https://installer.invalid/install.sh", Interpreter: []string{"sh"},
+			}, io.Discard, &diagnostics)
+			if err == nil || attempts != test.wantAttempts || !errors.Is(err, test.err) {
+				t.Fatalf("attempts = %d, error = %v", attempts, err)
+			}
+			if !strings.Contains(diagnostics.String(), test.err.Error()) {
+				t.Fatalf("missing cause: %q", diagnostics.String())
+			}
+		})
+	}
+}
+
+type installerFailedReader struct{}
+
+func (installerFailedReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestRunInstallScriptDiscardsPartialDownloadBeforeRetry(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	client := &http.Client{Transport: installerRoundTripper(func(*http.Request) (*http.Response, error) {
+		attempts++
+		var body io.Reader = strings.NewReader("printf complete-script")
+		if attempts == 1 {
+			body = io.MultiReader(strings.NewReader("printf partial-script"), installerFailedReader{})
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body)}, nil
+	})}
+	var output bytes.Buffer
+	_, err := newAdapter(t.TempDir(), client).RunInstallScript(context.Background(), ports.InstallScriptCommand{
+		URL: "https://installer.invalid/install.sh", Interpreter: []string{"sh"},
+	}, &output, io.Discard)
+	if err != nil || attempts != 2 || !strings.HasSuffix(output.String(), "complete-script") || strings.Contains(output.String(), "partial-script") {
+		t.Fatalf("attempts = %d, output = %q, error = %v", attempts, output.String(), err)
+	}
+}
+
+func TestInstallerDownloadBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := time.Now()
+		var attempts []time.Duration
+		client := &http.Client{Transport: installerRoundTripper(func(*http.Request) (*http.Response, error) {
+			attempts = append(attempts, time.Since(started))
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503 Service Unavailable", Body: io.NopCloser(strings.NewReader(""))}, nil
+		})}
+		_, err := newAdapter(t.TempDir(), client).downloadInstallScript(context.Background(), "https://installer.invalid/install.sh", io.Discard, io.Discard)
+		if err == nil || len(attempts) != 3 || attempts[0] != 0 || attempts[1] != time.Second || attempts[2] != 3*time.Second {
+			t.Fatalf("attempt times = %v, error = %v", attempts, err)
+		}
+	})
+}
+
+func TestRunInstallScriptPrefixesEveryRunnerLine(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, "exit 0") // a quiet installer
+	}))
+	t.Cleanup(server.Close)
+	// Agent installs pass one progress writer as both stdout and stderr.
+	var shared bytes.Buffer
+	if _, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
+		URL: server.URL, Interpreter: []string{"sh"},
+	}, &shared, &shared); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(shared.String(), "download attempt 1/3") {
+		t.Fatalf("output = %q, want the failed attempt kept as a diagnostic", shared.String())
+	}
+	for line := range strings.Lines(shared.String()) {
+		if !strings.HasPrefix(line, "[installer] ") {
+			t.Fatalf("runner line %q lacks the [installer] prefix; output = %q", line, shared.String())
+		}
+	}
+}
+
+type downloadReports struct {
+	io.Writer
+	reports []ports.InstallScriptDownload
+}
+
+func (r *downloadReports) ReportInstallScriptDownload(download ports.InstallScriptDownload) {
+	r.reports = append(r.reports, download)
+}
+
+func TestInstallerDownloadReportsAttemptsAsData(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		attempts := 0
+		client := &http.Client{Transport: installerRoundTripper(func(*http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503 Service Unavailable", Body: io.NopCloser(strings.NewReader(""))}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("printf ok"))}, nil
+		})}
+		stdout := &downloadReports{Writer: io.Discard}
+		if _, err := newAdapter(t.TempDir(), client).downloadInstallScript(context.Background(), "https://installer.invalid/install.sh", stdout, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		want := []ports.InstallScriptDownload{
+			{Attempt: 1, MaxAttempts: 3},
+			{Attempt: 2, MaxAttempts: 3, RetryIn: time.Second},
+			{Attempt: 2, MaxAttempts: 3},
+			{},
+		}
+		if !slices.Equal(stdout.reports, want) {
+			t.Fatalf("reports = %+v, want %+v", stdout.reports, want)
+		}
+	})
+}
+
+func TestInstallerDownloadHonoursRetryAfter(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		status       int
+		retryAfter   string
+		wantAttempts []time.Duration
+		wantErrHas   string
+	}{
+		{"429 waits for a short Retry-After", http.StatusTooManyRequests, "5", []time.Duration{0, 5 * time.Second, 10 * time.Second}, ""},
+		{"503 keeps the longer backoff", http.StatusServiceUnavailable, "0", []time.Duration{0, time.Second, 3 * time.Second}, ""},
+		{"429 stops when asked to wait past the cap", http.StatusTooManyRequests, "120", []time.Duration{0}, "retry after 2m0s"},
+		{"429 without Retry-After uses backoff", http.StatusTooManyRequests, "", []time.Duration{0, time.Second, 3 * time.Second}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := time.Now()
+				var attempts []time.Duration
+				client := &http.Client{Transport: installerRoundTripper(func(*http.Request) (*http.Response, error) {
+					attempts = append(attempts, time.Since(started))
+					header := http.Header{}
+					if test.retryAfter != "" {
+						header.Set("Retry-After", test.retryAfter)
+					}
+					return &http.Response{StatusCode: test.status, Status: http.StatusText(test.status), Header: header, Body: io.NopCloser(strings.NewReader(""))}, nil
+				})}
+				_, err := newAdapter(t.TempDir(), client).downloadInstallScript(context.Background(), "https://installer.invalid/install.sh", io.Discard, io.Discard)
+				if err == nil || !slices.Equal(attempts, test.wantAttempts) {
+					t.Fatalf("attempt times = %v, want %v, error = %v", attempts, test.wantAttempts, err)
+				}
+				if test.wantErrHas != "" && !strings.Contains(errors.Unwrap(err).Error(), test.wantErrHas) {
+					t.Fatalf("error cause = %v, want %q", errors.Unwrap(err), test.wantErrHas)
+				}
+			})
+		})
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		value  string
+		want   time.Duration
+		wantOK bool
+	}{
+		{"7", 7 * time.Second, true},
+		{" 0 ", 0, true},
+		{now.Add(4 * time.Second).Format(http.TimeFormat), 4 * time.Second, true},
+		{now.Add(-time.Minute).Format(http.TimeFormat), 0, true},
+		{"999999999999", time.Hour, true},
+		{"-1", 0, false},
+		{"soon", 0, false},
+		{"", 0, false},
+	} {
+		got, ok := parseRetryAfter(test.value, now)
+		if got != test.want || ok != test.wantOK {
+			t.Errorf("parseRetryAfter(%q) = %v, %v; want %v, %v", test.value, got, ok, test.want, test.wantOK)
+		}
+	}
+}
+
+func TestInstallerDownloadTimeoutBounds(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		parentTimeout time.Duration
+		wantAttempts  int
+		wantElapsed   time.Duration
+	}{
+		{"per-attempt deadlines", 2 * time.Minute, 3, 93 * time.Second},
+		{"parent deadline stops retries", 5 * time.Second, 1, 5 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), test.parentTimeout)
+				defer cancel()
+				started := time.Now()
+				attempts := 0
+				client := &http.Client{Transport: installerRoundTripper(func(req *http.Request) (*http.Response, error) {
+					attempts++
+					<-req.Context().Done()
+					return nil, req.Context().Err()
+				})}
+				_, err := newAdapter(t.TempDir(), client).downloadInstallScript(ctx, "https://installer.invalid/install.sh", io.Discard, io.Discard)
+				if !errors.Is(err, context.DeadlineExceeded) || attempts != test.wantAttempts || time.Since(started) != test.wantElapsed {
+					t.Fatalf("attempts = %d, elapsed = %s, error = %v", attempts, time.Since(started), err)
+				}
+			})
+		})
+	}
 }

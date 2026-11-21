@@ -1,18 +1,30 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { haptics } from "../../lib/haptics";
+import { hostRouteMatches } from "../../lib/hostRoute";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
-import { ProjectPageHeader } from "../../lib/project-card";
-import { StaleBanner } from "../../lib/StaleBanner";
-import { useApp } from "../../lib/store";
+import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
+import { Spinner } from "../../lib/Spinner";
+import { FreshnessLine } from "../../lib/FreshnessLine";
+import { useMachineFreshness } from "../../lib/useMachineFreshness";
+import { rememberLastProject } from "../../lib/lastProject";
+import { HostScope, useApp } from "../../lib/store";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useBoardTabBeneath } from "../../lib/useBoardTabBeneath";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
-import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
+import { useRefreshActions } from "../../lib/useRefreshActions";
+import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
-import { backOr } from "../../lib/backNavigation";
+import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
+import { hostedRowKey } from "../../lib/hostedRows";
+import { useFabExpanded } from "../../lib/useFabExpanded";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
+import { AddFab, addFabClearance } from "../../lib/AddFab";
+import { space } from "../../lib/tokens";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -22,79 +34,173 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
  * archive included — so nothing here has to be relearned.
  */
 export default function ProjectScreen() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { watch: watchCloud } = useCloud();
+	// A cloud project's workers refresh at the live rate while its page is open.
+	useFocusEffect(useCallback(() => (isCloudHost(hostId) ? watchCloud() : undefined), [hostId, watchCloud]));
+	return hostId ? <HostScope key={hostId} hostId={hostId}><ProjectScreenContent /></HostScope> : <ProjectScreenContent />;
+}
+
+function ProjectScreenContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
-	const { id } = useLocalSearchParams<{ id: string }>();
-	const { loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const glassInset = useGlassBarInset();
+	const fab = useFabExpanded();
+	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
+	const { config, currentHostId, hostStates: machineStates, cloud, connection, loading, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
-	const [refreshing, setRefreshing] = useState(false);
 
 	const row = useMemo(
-		() =>
-			orchestratorProjectSections(projects, sessions, orchestrators)
+		() => hostMatches
+			? orchestratorProjectSections(projects, sessions, orchestrators)
 				.flatMap((section) => section.data)
-				.find((candidate) => candidate.project.id === id),
-		[projects, sessions, orchestrators, id],
+				.find((candidate) => candidate.project.id === id)
+			: undefined,
+		[projects, sessions, orchestrators, id, hostMatches],
 	);
-	const projectSessions = useMemo(() => projectDetailSessions(id ?? "", sessions), [id, sessions]);
-	const stats = useMemo(() => projectPageStats(projectSessions, row?.link), [projectSessions, row?.link]);
+	const listedProjectId = row?.project.id;
+	// On focus, not mount: coming back here from a task started elsewhere makes this the last project again.
+	useFocusEffect(useCallback(() => { if (hostMatches) rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, hostMatches, listedProjectId]));
+	const title = row?.project.name ?? "Project";
+	// The native header's title, and this page's name in the back-history menu
+	// of a page opened from here.
+	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
+	// Back always lands on Projects, the list this page is opened from, even when
+	// a cold link opened it over the board's Workers tab.
+	useBoardTabBeneath("(projects)");
+	const projectSessions = useMemo(() => hostMatches ? projectDetailSessions(id ?? "", sessions) : [], [hostMatches, id, sessions]);
+	// The archive is counted, not listed, by a machine that pages it.
+	const pagedArchived = hostMatches && id ? archive?.byProject[id] ?? 0 : 0;
+	const stats = useMemo(() => projectPageStats(projectSessions, row?.link, pagedArchived), [projectSessions, row?.link, pagedArchived]);
+	const archiveSources = useMemo<ArchiveSource[]>(
+		() => hostMatches && id && archive && currentHostId ? [{ hostId: currentHostId, projectId: id, summary: archive }] : [],
+		[hostMatches, id, archive, currentHostId],
+	);
 
-	const onRefresh = useCallback(async () => {
-		haptics.tap();
-		setRefreshing(true);
-		try {
-			await refresh();
-		} finally {
-			setRefreshing(false);
-		}
-	}, [refresh]);
+	// No haptic of its own: each platform's refresh control gives the feedback
+	// it gives everywhere, and the Retry banner that runs it too buzzes once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retry } = useRefreshActions(refresh);
 
-	const startTask = () => {
-		haptics.tap();
-		router.push({ pathname: "/spawn", params: { projectId: id } });
-	};
+	const startTask = useCallback(() => {
+		if (!hostMatches) return;
+		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
+	}, [hostMatches, id, routeHostId, router]);
+	const canStartTask = hostMatches && !!row;
+	// One way to start a task at a time: while "No workers yet" offers Start
+	// task, the floating New task (Android) and the bottom compose (iOS) stay
+	// out; they come back once the list has a worker to show. Unknown (null)
+	// until the list first says which: starting from "has workers" put the
+	// compose button up on every empty project only to take it down again.
+	const [noWorkersShown, setNoWorkersShown] = useState<boolean | null>(null);
+	const offerNewTask = canStartTask && noWorkersShown === false;
+
+	// Memoized on what the items show. hostStates is replaced on every poll, and
+	// each new toolbar element would register the header's options again.
+	// Orchestrator Cloud counts as one more machine here, named by its cloud mark.
+	const hostStates = cloud ? [...machineStates, cloud] : machineStates;
+	const machine = hostStates.find((host) => host.hostId === currentHostId);
+	// With one machine paired, every project is on it: naming it says nothing.
+	const machineName = hostStates.length > 1 ? machine?.name : undefined;
+	const machineSymbol = machine?.appearance.symbol;
+	// The header's machine label wears its dot too, so the page says which
+	// machine is behind even after the line under the title scrolls away.
+	const machineFreshness = useMachineFreshness().get(currentHostId ?? "");
+	// iOS has no floating action button. New task is the compose button at the
+	// bottom right, as the board's tab bar sets it apart and as Notes and Mail
+	// place it: a bottom toolbar's trailing item, on the system's glass. Android
+	// floats Material's FAB there instead.
+	const bottomCompose = Platform.OS === "ios" && offerNewTask ? (
+		<Stack.Toolbar placement="bottom">
+			<Stack.Toolbar.Spacer />
+			{/* The label is VoiceOver's name for it: beside an icon, a bottom
+			    toolbar shows no title and ignores accessibilityLabel, so the
+			    symbol's own "compose" was read instead. */}
+			<Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel="New task" onPress={startTask}>New task</Stack.Toolbar.Button>
+		</Stack.Toolbar>
+	) : null;
+	const headerItems = useMemo(
+		() => machineName ? (
+			<Stack.Toolbar placement="right">
+				{/* Which machine this project is on: a label, not a control, so it
+				    stays off the bar items' shared glass. */}
+				{machineName ? (
+					<Stack.Toolbar.View hidesSharedBackground>
+						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} freshness={machineFreshness} />
+					</Stack.Toolbar.View>
+				) : null}
+			</Stack.Toolbar>
+		) : null,
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- the indicator reads only the machine's name and symbol from hostStates
+		[currentHostId, machineName, machineSymbol, machineFreshness],
+	);
 
 	return (
 		<View style={styles.screen}>
-			<View style={{ height: insets.top }} />
-			<ScreenHeader
-				title={row?.project.name ?? "Project"}
-				left={
-					<HeaderIconButton
-						icon="back"
-						label="Back"
-						// A deep link can open this page as the only screen in the stack, with
-						// nothing beneath it to go back to. Land on Projects instead.
-						onPress={() => backOr(router, "/projects")}
-					/>
-				}
-			/>
-			<StaleBanner error={!!error} onRetry={onRefresh} />
+			{headerItems}
+			{bottomCompose}
 
-			{!row ? (
-				loading ? (
+			{!hostMatches ? (
+				loading && !config ? (
 					<View style={styles.center}>
-						<ActivityIndicator color={t.accent} />
+						<Spinner color={t.accent} accessibilityLabel="Loading project" />
 					</View>
 				) : (
-					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
+					<EmptyState
+						icon="server"
+						title="Project belongs to another machine"
+						message="Open it from that machine's project list."
+						// Back down to the board already beneath this page: navigating from
+						// here would stack a second board on top of it.
+						action={<Button title="Open projects" icon="folder" onPress={() => router.dismissTo("/projects")} />}
+					/>
+				)
+			) : !row ? (
+				loading ? (
+					<View style={styles.center}>
+						<Spinner color={t.accent} accessibilityLabel="Loading project" />
+					</View>
+				) : connection !== "open" ? (
+					linkHealth === "phone-offline" ? (
+						<EmptyState icon="wifi-off" title="You're offline" message="This project loads once this phone is back online." />
+					) : linkHealth === "reconnecting" ? (
+						<EmptyState icon="refresh-cw" title="Reconnecting…" message="This project loads once the app reconnects." />
+					) : (
+						<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
+					)
+				) : (
+					<EmptyState icon="folder" title="Project not found" message="It may have been removed from Orchestrator." />
 				)
 			) : (
 				<WorkerBoardList
+					onScroll={fab.onScroll}
+					contentInsetAdjustmentBehavior="automatic"
 					sessions={projectSessions}
+					archiveSources={archiveSources}
+					onEmptyChange={setNoWorkersShown}
 					showProject={false}
-					contentBottomInset={insets.bottom + 32}
+					contentBottomInset={insets.bottom + addFabClearance + space.xxl}
+					// The "N updated" pill floats below the glass header, not under the
+					// status bar, where it covered the Dynamic Island and took no taps.
+					overlayTopInset={glassInset}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
+						<>
+						{/* In the list, under the title: a line with no fill of its own
+						    can't float over rows the way the old banner did. */}
+						<FreshnessLine hostId={currentHostId} onRetry={retry} />
 						<ProjectPageHeader
 							row={row}
 							stats={stats}
-							busy={busyProjects.has(row.project.id)}
+							busy={busyProjects.has(hostedRowKey(currentHostId ?? "", row.project.id))}
 							onPress={openOrchestrator}
 						/>
+						</>
 					}
 					ListEmptyComponent={
 						<View>
@@ -109,6 +215,7 @@ export default function ProjectScreen() {
 					}
 				/>
 			)}
+			{offerNewTask ? <AddFab expanded={fab.expanded} label="New task" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
 		</View>
 	);
 }
