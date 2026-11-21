@@ -76,9 +76,10 @@ comment_awk() {
 
 # commit_args prints the arguments of the `git commit` that runs this hook,
 # one per line, or nothing when they cannot be read. On Linux they come from
-# /proc exactly; elsewhere from ps, split at spaces, so an argument holding a
-# space reads wrong and is then not found, which falls back to the cautious
-# path below.
+# /proc exactly (args_exact=1). Elsewhere they come from ps, split at spaces:
+# a flag that is absent there is certainly absent, but with a -m or -F message
+# one that is present may be a word of the message, so its value is not
+# trusted then.
 commit_args() {
 	if [ -r "/proc/$PPID/cmdline" ]; then
 		tr '\0' '\n' <"/proc/$PPID/cmdline"
@@ -88,9 +89,22 @@ commit_args() {
 }
 
 # commit_option prints the value of `git commit` option $1 (--cleanup or
-# --template, which also matches -t) and reports whether it was given. Like
-# git, the last occurrence wins.
+# --template, which also matches -t). Like git, the last occurrence wins.
+# Returns 0 with the value when it was given, 1 when it certainly was not,
+# and 2 when that cannot be told.
 commit_option() {
+	[ -n "$args" ] || return 2
+	# Free text (a -m or -F message, split by ps) can spell anything; without
+	# it every word ps shows is an option or its value.
+	if [ "$args_exact" != 1 ] &&
+		printf '%s\n' "$args" | grep -Eq -- '^(--message|--file)(=|$)|^-[A-Za-z]*[mF]'; then
+		case $1 in
+		--cleanup) pattern='^--cleanup(=|$)' ;;
+		*) pattern='^(--template(=|$)|-[A-Za-z]*t)' ;;
+		esac
+		printf '%s\n' "$args" | grep -Eq -- "$pattern" && return 2
+		return 1
+	fi
 	printf '%s\n' "$args" | awk -v opt="$1" '
 		$0 == "--" { exit }
 		want { value = $0; found = 1; want = 0; next }
@@ -103,9 +117,24 @@ commit_option() {
 }
 
 # cleanup_mode prints the commit's cleanup mode: --cleanup, else
-# commit.cleanup, else empty (git's default).
+# commit.cleanup, else empty (git's default), or "unknown" when a --cleanup
+# may have been given but cannot be read. Every check treats unknown as the
+# mode that strips the most, so an unclear case leaves the trailer off.
 cleanup_mode() {
-	commit_option --cleanup || git config --get commit.cleanup 2>/dev/null
+	value=$(commit_option --cleanup)
+	case $? in
+	0) printf '%s\n' "$value" ;;
+	1) git config --get commit.cleanup 2>/dev/null ;;
+	*) echo unknown ;;
+	esac
+}
+
+# editor_maybe reports whether this commit may open an editor on a -m or -F
+# message (-e or --edit), or whether that cannot be told. A short option
+# cluster holding an "e" counts, so a doubt never adds the trailer early.
+editor_maybe() {
+	[ -n "$args" ] || return 0
+	printf '%s\n' "$args" | grep -Eq -- '^(--edit|-[A-Za-z]*e[A-Za-z]*)$'
 }
 
 # strips_comments reports whether git drops comment lines from an edited
@@ -178,11 +207,21 @@ snapshot_template() {
 	full=$(message_text "$1")
 	# git's own baseline: the -t file, else commit.template. Used alone only
 	# when the command line was read, so a -t cannot hide behind it.
-	if tpl=$(commit_option --template); then
+	tpl=$(commit_option --template)
+	case $? in
+	0)
 		case "$tpl" in /*) ;; *) tpl=$PWD/${GIT_PREFIX-}$tpl ;; esac
-	else
+		exclusive=1
+		;;
+	1)
 		tpl=$(git config --path --get commit.template 2>/dev/null)
-	fi
+		exclusive=1
+		;;
+	*)
+		tpl=$(git config --path --get commit.template 2>/dev/null)
+		exclusive=0
+		;;
+	esac
 	i=0
 	if [ -n "$tpl" ] && [ -f "$tpl" ]; then
 		exact=$(normalize <"$tpl")
@@ -190,7 +229,7 @@ snapshot_template() {
 		"$exact"*)
 			printf '%s\n' "$exact" >"$snap.$i"
 			i=$((i + 1))
-			if [ -n "$args" ]; then
+			if [ "$exclusive" = 1 ]; then
 				: >"$snap"
 				return 0
 			fi
@@ -255,8 +294,13 @@ template_untouched() {
 	snap=$(template_snapshot) || return 1
 	[ -n "$snap" ] && [ -f "$snap" ] || return 1
 	untouched=1
+	mode=$(cleanup_mode)
+	if [ "$mode" = unknown ]; then
+		# Which cleanup git applies decides the comparison; unclear, so the
+		# message is left as it is and git decides.
+		untouched=0
 	# With commit.cleanup=verbatim git never treats a message as the template.
-	if [ "$(cleanup_mode)" != verbatim ]; then
+	elif [ "$mode" != verbatim ]; then
 		text=$(message_text "$1")
 		for base in "$snap".*; do
 			[ -f "$base" ] || continue
@@ -279,11 +323,12 @@ template_untouched() {
 # literal_text prints a -m or -F message in file $1 the way git cleans it:
 # as written, except that commit.cleanup=strip drops comment lines there too.
 literal_text() {
-	if [ "$(cleanup_mode)" = strip ]; then
+	case $(cleanup_mode) in
+	strip | unknown)
 		comment_awk '!comment($0) { print }' "$1"
-	else
-		cat "$1"
-	fi
+		;;
+	*) cat "$1" ;;
+	esac
 }
 
 # insert_trailer adds trailer $2 to message file $1 with none of the person's
@@ -374,6 +419,11 @@ add_trailer() {
 			# above any `commit -v` scissors line.
 			insert_trailer_above_scissors "$msg" "Co-authored-by: $coauthor"
 		fi
+	elif editor_maybe; then
+		# -e opens an editor on the -m or -F text, and git then cleans what
+		# it returns: commit-msg adds the trailer after that, so a message
+		# the editor leaves empty still aborts.
+		return 0
 	elif [ "$(cleanup_mode)" = verbatim ] && [ -s "$msg" ] ||
 		! only_signoffs "$(literal_text "$msg")"; then
 		# git commit -s -m "" holds only a sign-off, and with
@@ -386,6 +436,8 @@ add_trailer() {
 original=$(original_hook)
 case "$hook" in
 prepare-commit-msg | commit-msg)
+	args_exact=0
+	[ -r "/proc/$PPID/cmdline" ] && args_exact=1
 	args=$(commit_args)
 	if [ "$hook" = prepare-commit-msg ]; then
 		snapshot_template "$1" "$2"

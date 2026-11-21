@@ -93,6 +93,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// exactCommitArgs reports whether the hook can read git's exact arguments
+// from /proc on this system.
+func exactCommitArgs() bool {
+	_, err := os.Stat("/proc/self/cmdline")
+	return err == nil
+}
+
 func countTrailer(msg string) int { return strings.Count(msg, "Co-authored-by: "+testCoAuthor) }
 
 func TestHookAddsTrailerOnce(t *testing.T) {
@@ -317,44 +324,55 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 		args                            []string
 		want                            string // "" means abort
 		dashT                           bool   // pass the template with -t, not commit.template
+		exactArgsOnly                   bool   // credited only where the hook reads exact arguments (/proc)
 	}{
 		{"template sign-off replaced by another", "Subject\n\nSigned-off-by: Alice <a@example.com>\n", "",
-			`sed 's/^Signed-off-by: Alice.*/Signed-off-by: Bob <b@example.com>/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Signed-off-by: Bob", false},
-		{"template ends with the committer's sign-off, untouched", "Subject\n\n" + dev + "\n", "", "true", nil, "", false},
-		{"template ends with the committer's sign-off, untouched with -s", "Subject\n\n" + dev + "\n", "", "true", []string{"-s"}, "", false},
+			`sed 's/^Signed-off-by: Alice.*/Signed-off-by: Bob <b@example.com>/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Signed-off-by: Bob", false, false},
+		{"template ends with the committer's sign-off, untouched", "Subject\n\n" + dev + "\n", "", "true", nil, "", false, false},
+		{"template ends with the committer's sign-off, untouched with -s", "Subject\n\n" + dev + "\n", "", "true", []string{"-s"}, "", false, false},
 		{"template ends with the committer's sign-off, removed", "Subject\n\n" + dev + "\n", "",
-			`grep -v '^Signed-off-by: ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Subject", false},
+			`grep -v '^Signed-off-by: ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "Subject", false, false},
 		// whitespace keeps git's own status comments, so even an untouched
 		// template differs from it and git commits.
-		{"cleanup=whitespace, untouched", "# Heading\nBody text\n", "whitespace", "true", nil, "# Heading", false},
+		{"cleanup=whitespace, untouched", "# Heading\nBody text\n", "whitespace", "true", nil, "# Heading", false, false},
 		{"cleanup=whitespace, only the # heading edited", "# Heading\nBody text\n", "whitespace",
-			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading", false},
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading", false, false},
 		// scissors puts git's status below the cut line, so an untouched
 		// template still aborts and a heading edit still counts.
-		{"cleanup=scissors, untouched", "# Heading\nBody text\n", "scissors", "true", nil, "", false},
+		{"cleanup=scissors, untouched", "# Heading\nBody text\n", "scissors", "true", nil, "", false, false},
 		{"cleanup=scissors, only the # heading edited", "# Heading\nBody text\n", "scissors",
-			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading", false},
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "# New heading", false, false},
 		{"default cleanup, only the # heading edited", "# Heading\nBody text\n", "",
-			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "", false},
-		{"cleanup=verbatim, untouched", "Subject\n", "verbatim", "true", nil, "Subject", false},
+			`sed 's/^# Heading$/# New heading/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, nil, "", false, false},
+		{"cleanup=verbatim, untouched", "Subject\n", "verbatim", "true", nil, "Subject", false, false},
 		// Reported: whitespace keeps the template's own "#" line, and with
 		// --no-status git adds no help, so the message is still the template.
-		{"cleanup=whitespace --no-status, # line in the template", "Subject\n# Write a description\n", "whitespace", "true", []string{"--no-status"}, "", false},
-		{"cleanup=whitespace --no-status, # line in a -t template", "Subject\n# Write a description\n", "whitespace", "true", []string{"--no-status"}, "", true},
-		{"--cleanup=whitespace --no-status on the command line", "Subject\n# Write a description\n", "", "true", []string{"--cleanup=whitespace", "--no-status"}, "", false},
+		{"cleanup=whitespace --no-status, # line in the template", "Subject\n# Write a description\n", "whitespace", "true", []string{"--no-status"}, "", false, false},
+		{"cleanup=whitespace --no-status, # line in a -t template", "Subject\n# Write a description\n", "whitespace", "true", []string{"--no-status"}, "", true, false},
+		{"--cleanup=whitespace --no-status on the command line", "Subject\n# Write a description\n", "", "true", []string{"--cleanup=whitespace", "--no-status"}, "", false, false},
 		{"cleanup=whitespace, # line template edited", "Subject\n# Write a description\n", "whitespace",
-			`printf 'more\n' >> "$1"`, []string{"--no-status"}, "more", false},
+			`printf 'more\n' >> "$1"`, []string{"--no-status"}, "more", false, false},
 		// Reported: strip drops "#" lines from -m too, leaving nothing.
-		{"cleanup=strip, -m holding only a # line", "", "strip", "true", []string{"-m", "# Placeholder"}, "", false},
-		{"cleanup=strip, -m text and a # line", "", "strip", "true", []string{"-m", "feat: x\n# note"}, "feat: x", false},
+		{"cleanup=strip, -m holding only a # line", "", "strip", "true", []string{"-m", "# Placeholder"}, "", false, false},
+		{"cleanup=strip, -m text and a # line", "", "strip", "true", []string{"-m", "feat: x\n# note"}, "feat: x", false, false},
+		// Reported: -e opens an editor on the -m text and git strips its
+		// comments, so a "#" message is empty after editing.
+		{"-e on a -m holding only a # line", "", "", "true", []string{"-e", "-m", "# placeholder"}, "", false, false},
+		{"--edit on a -m holding only a # line", "", "", "true", []string{"--edit", "-m", "# placeholder"}, "", false, false},
+		{"-e on a -m with text", "", "", "true", []string{"-e", "-m", "feat: x"}, "feat: x", false, false},
+		// Reported: an option spelled inside the message is not an option.
+		{"--cleanup=strip, the message spells --cleanup=verbatim", "", "", "true", []string{"--cleanup=strip", "-m", "# x --cleanup=verbatim"}, "", false, false},
+		{"commit.cleanup=strip, the message spells --cleanup=verbatim", "", "strip", "true", []string{"-m", "# x --cleanup=verbatim"}, "", false, false},
 		// Like git, the last --cleanup wins.
-		{"--cleanup given twice, the last is strip", "", "", "true", []string{"--cleanup=verbatim", "--cleanup=strip", "-m", "# Placeholder"}, "", false},
-		{"--cleanup given twice, the last is verbatim", "", "", "true", []string{"--cleanup=strip", "--cleanup", "verbatim", "-m", "# Placeholder"}, "# Placeholder", false},
-		{"default cleanup keeps a -m # line", "", "", "true", []string{"-m", "# Placeholder"}, "# Placeholder", false},
-		{"cleanup=verbatim, -m holding only a sign-off", "", "verbatim", "true", []string{"-m", dev}, dev, false},
-		{"-t template untouched", "Subject\n", "", "true", nil, "", true},
-		{"-t template untouched with -s", "Subject\n", "", "true", []string{"-s"}, "", true},
-		{"-t template edited", "Subject\n", "", `printf 'more\n' >> "$1"`, nil, "more", true},
+		{"--cleanup given twice, the last is strip", "", "", "true", []string{"--cleanup=verbatim", "--cleanup=strip", "-m", "# Placeholder"}, "", false, false},
+		// Without exact arguments (ps on macOS) a --cleanup cannot be trusted,
+		// so the hook assumes strip: git commits, uncredited.
+		{"--cleanup given twice, the last is verbatim", "", "", "true", []string{"--cleanup=strip", "--cleanup", "verbatim", "-m", "# Placeholder"}, "# Placeholder", false, true},
+		{"default cleanup keeps a -m # line", "", "", "true", []string{"-m", "# Placeholder"}, "# Placeholder", false, false},
+		{"cleanup=verbatim, -m holding only a sign-off", "", "verbatim", "true", []string{"-m", dev}, dev, false, false},
+		{"-t template untouched", "Subject\n", "", "true", nil, "", true, false},
+		{"-t template untouched with -s", "Subject\n", "", "true", []string{"-s"}, "", true, false},
+		{"-t template edited", "Subject\n", "", `printf 'more\n' >> "$1"`, nil, "more", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var tpl string
@@ -400,8 +418,12 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatalf("want a commit, got %v:\n%s", err, out)
 			}
-			if msg := r.message("HEAD"); !strings.Contains(msg, tc.want) || countTrailer(msg) != 1 {
-				t.Fatalf("want %q kept and one trailer, got:\n%s", tc.want, msg)
+			wantTrailers := 1
+			if tc.exactArgsOnly && !exactCommitArgs() {
+				wantTrailers = 0
+			}
+			if msg := r.message("HEAD"); !strings.Contains(msg, tc.want) || countTrailer(msg) != wantTrailers {
+				t.Fatalf("want %q kept and %d trailer(s), got:\n%s", tc.want, wantTrailers, msg)
 			}
 		})
 	}
