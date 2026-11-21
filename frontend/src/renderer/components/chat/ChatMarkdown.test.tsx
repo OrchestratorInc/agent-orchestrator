@@ -362,6 +362,9 @@ describe("ChatMarkdown", () => {
 		fireEvent.click(screen.getByRole("link", { name: "preview" }), { metaKey: true });
 		expect(externalUrl).toHaveBeenCalledWith("box-a", "http://localhost:5173/app");
 		await waitFor(() => expect(openExternal).toHaveBeenCalledWith("http://localhost:51000/app"));
+		fireEvent(screen.getByRole("link", { name: "preview" }), new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+		expect(openExternal).not.toHaveBeenCalledWith("http://localhost:5173/app");
 		externalUrl.mockRestore();
 		openExternal.mockRestore();
 	});
@@ -426,6 +429,27 @@ describe("ChatMarkdown", () => {
 		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/new.ts", 8);
 		expect(screen.getByText("preview").closest("a")).toBeNull();
 		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("opens a shared host's Mermaid links in the Browser, or through a forward outside it", async () => {
+		vi.mocked(renderMermaidDiagram).mockResolvedValueOnce('<svg xmlns="http://www.w3.org/2000/svg"><a href="http://localhost:5173"><text>preview</text></a></svg>');
+		const onLinkOpen = vi.fn();
+		const externalUrl = vi.spyOn(aoBridge.remotes, "externalUrl").mockResolvedValue("http://localhost:51000/");
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks sessionLinkHostId="box-a">
+			<ChatMarkdown text={'```mermaid\ngraph LR\n  A-->B\n```'} />
+		</ChatLinkProvider>);
+
+		const preview = await screen.findByText("preview");
+		fireEvent.click(preview);
+		expect(onLinkOpen).toHaveBeenCalledWith("http://localhost:5173");
+		fireEvent.click(preview, { metaKey: true });
+		fireEvent(preview, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+		expect(externalUrl).toHaveBeenCalledWith("box-a", "http://localhost:5173");
+		expect(openExternal).not.toHaveBeenCalledWith("http://localhost:5173");
+		externalUrl.mockRestore();
+		openExternal.mockRestore();
 	});
 
 	it("blocks remote host-local links inside Mermaid diagrams", async () => {

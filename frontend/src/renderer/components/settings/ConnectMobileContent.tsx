@@ -679,6 +679,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.isPending ||
 		setSecure.isPending ||
 		setBrowserRemoteAccess.isPending ||
+		setLoopbackTunnel.isPending ||
 		stayAwake.busy;
 
 	const clearActionErrors = () => {
@@ -688,6 +689,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setBrowserRemoteAccess.reset();
+		setLoopbackTunnel.reset();
 		setLinkError("");
 	};
 
@@ -741,6 +743,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		(setLoopbackTunnel.error instanceof Error && setLoopbackTunnel.error.message) ||
 		(pairingCodeFailed && pairing.error instanceof Error && pairing.error.message) ||
 		stayAwake.error ||
 		linkError ||

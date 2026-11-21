@@ -75,9 +75,10 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 			onAuxClick={(event) => {
 				onAuxClick?.(event);
 				// Middle click would otherwise open a window the shell routes on its own.
-				if (!systemBrowser || event.button !== 1 || event.defaultPrevented || !href) return;
+				if ((!systemBrowser && !externalUrl) || event.button !== 1 || event.defaultPrevented || !href) return;
 				event.preventDefault();
-				if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
+				if (externalUrl) openExternally(href);
+				else if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
 			}}
 		/>
 	);

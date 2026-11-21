@@ -1297,7 +1297,7 @@ export function useBrowserView({
 			const resolved = !origin
 				? Promise.resolve(target)
 				: loopback
-					? fetchLoopbackReach(origin.hostId).then((reach) =>
+					? fetchLoopbackReach(origin.hostId).catch(() => "off" as const).then((reach) =>
 						reach === "off" ? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target) : loopback)
 					: aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target);
 			void resolved.then((url) => {

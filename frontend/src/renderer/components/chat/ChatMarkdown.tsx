@@ -533,6 +533,8 @@ function InlineLinkFavicon({ href }: { href: string }) {
 	);
 }
 
+const hostExternalUrl = (hostId: string, url: string) => aoBridge.remotes.externalUrl(hostId, url).catch(() => url);
+
 function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
@@ -563,7 +565,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 		<AppLink
 			href={href}
 			noHoverPreview={Boolean(hostLocalOn)}
-			externalUrl={hostLocalOn ? (url) => aoBridge.remotes.externalUrl(hostLocalOn, url).catch(() => url) : undefined}
+			externalUrl={hostLocalOn ? (url) => hostExternalUrl(hostLocalOn, url) : undefined}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={ownArtifact ?? (filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath)}
@@ -677,12 +679,15 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
  * must stay module-level so react-markdown's memoization survives polling.
  */
 function MermaidFence({ code }: { code: string }) {
-	const { open: onLinkOpen, remoteHost, hostLocalLinks } = useContext(OpenChatLink);
+	const { open: onLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId } = useContext(OpenChatLink);
 	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
 		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
-		if (!href || !isHostLocalWebLink(href) || hostLocalLinks) return;
+		if (!href || !isHostLocalWebLink(href)) return;
+		const external = event.type === "click" ? event.metaKey || event.ctrlKey || event.altKey : event.type === "auxclick" && event.button === 1;
+		if (hostLocalLinks && !external) return;
 		event.preventDefault();
 		event.stopPropagation();
+		if (hostLocalLinks && sessionLinkHostId) void hostExternalUrl(sessionLinkHostId, href).then(openLinkInSystemBrowser);
 	};
 	const diagram = <MermaidBlock code={code} onLinkOpen={onLinkOpen} />;
 	return remoteHost
