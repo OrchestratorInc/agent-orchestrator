@@ -664,6 +664,34 @@ type TranscriptTurnFailureDetector interface {
 	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
 }
 
+// NativeMessage is one message a harness recorded: a user prompt, or an
+// assistant reply when Assistant is set.
+type NativeMessage struct {
+	Assistant bool
+	Text      string
+	At        time.Time
+}
+
+// NativeSessionSnapshot is what a harness reports about one live top-level session.
+type NativeSessionSnapshot struct {
+	WorkspacePath  string
+	AgentSessionID string
+	TranscriptPath string
+	StartedAt      time.Time
+	// Working is the harness's own report that a turn is running.
+	Working bool
+	// Messages are the user and assistant messages from the transcript's tail,
+	// oldest first, so turns that finished between polls can all be replayed.
+	Messages []NativeMessage
+}
+
+// NativeSessionObserver is implemented by adapters whose harness can't call AO's
+// hooks but reports its live sessions itself. ok is false when the installed
+// version doesn't need it, so hook signals aren't doubled.
+type NativeSessionObserver interface {
+	ObserveNativeSessions(ctx context.Context, dataDir string) (sessions []NativeSessionSnapshot, ok bool, err error)
+}
+
 // TerminalActivityOptions lets an adapter declare how the shared observer
 // should read its terminal and which native decision states it can report.
 type TerminalActivityOptions struct {
