@@ -5,6 +5,7 @@ const NONCE = crypto.randomUUID().slice(0, 8);
 export const LINK_ISLAND = `ao-link-${NONCE}`;
 export const CODE_ISLAND = `ao-code-${NONCE}`;
 export const IMAGE_ISLAND = `ao-image-${NONCE}`;
+export const COPY_ISLAND = `ao-copy-${NONCE}`;
 
 export const EMOJI_GRAPHEME = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]️?⃣/u;
 export const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -60,6 +61,12 @@ export function codeIsland(html: string): string {
 	if (text === undefined) return html;
 	const code = unescapeHtml(text);
 	return islandHost(CODE_ISLAND, code, { text: code }, html);
+}
+
+export function codeBlockIsland(html: string): string {
+	const open = html.slice(0, html.indexOf(">"));
+	if (!open.startsWith('<div data-markdown="code-block"') || open.includes(" data-incomplete=")) return html;
+	return html.replace("<span></span></div>", `<span>${islandHost(COPY_ISLAND, "copy", {}, "")}</span></div>`);
 }
 
 function emojiSpans(text: string): string {

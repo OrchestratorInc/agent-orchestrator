@@ -52,7 +52,7 @@ import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
-import { CODE_ISLAND, EMOJI_GRAPHEME, GRAPHEME_SEGMENTER, IMAGE_ISLAND, LINK_ISLAND, codeIsland, headingIslands, imageIsland, islandHref, linkIsland, proseIslands, unescapeHtml } from "../../lib/stream-islands";
+import { CODE_ISLAND, COPY_ISLAND, EMOJI_GRAPHEME, GRAPHEME_SEGMENTER, IMAGE_ISLAND, LINK_ISLAND, codeBlockIsland, codeIsland, headingIslands, imageIsland, islandHref, linkIsland, proseIslands, unescapeHtml } from "../../lib/stream-islands";
 import { pageHidden } from "../../lib/page-hidden";
 import { createDollarDelimiters, isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
@@ -361,6 +361,13 @@ const StreamCode = memo(function StreamCode({ text }: { text: string }) {
 	return <InlineCode>{text}</InlineCode>;
 });
 
+const StreamCopy = memo(function StreamCopy() {
+	const ref = useRef<HTMLSpanElement>(null);
+	const [code, setCode] = useState("");
+	useLayoutEffect(() => setCode(ref.current?.closest('[data-markdown="code-block"]')?.querySelector("pre code")?.textContent?.replace(/\n$/, "") ?? ""), []);
+	return <span ref={ref}><CopyButton text={code} label="Copy code" /></span>;
+});
+
 const STREAM_ISLANDS: ReactiveIslands = {
 	[LINK_ISLAND]: {
 		render: ({ href, label, image }) => typeof href === "string" && typeof label === "string"
@@ -368,6 +375,7 @@ const STREAM_ISLANDS: ReactiveIslands = {
 			: null,
 	},
 	[CODE_ISLAND]: { render: ({ text }) => typeof text === "string" ? <StreamCode text={text} /> : null },
+	[COPY_ISLAND]: { render: () => <StreamCopy /> },
 	[IMAGE_ISLAND]: { render: ({ src, alt }) => typeof src === "string" && typeof alt === "string" ? <MarkdownImage src={src} alt={alt} /> : null },
 };
 
@@ -394,6 +402,7 @@ function StreamingMarkdown({ text, math }: { text: string; math: boolean }) {
 					const tex = unescapeHtml(match[2]);
 					return formula(tex, Boolean(match[1]) && tex.endsWith("\n"));
 				},
+				div: codeBlockIsland,
 				img: imageIsland,
 				a: linkIsland,
 				inlineCode: codeIsland,

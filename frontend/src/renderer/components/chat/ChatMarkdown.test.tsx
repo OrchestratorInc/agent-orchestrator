@@ -1310,6 +1310,23 @@ describe("ChatMarkdown block streaming", () => {
 		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 	});
 
+	it("offers Copy on a finished code block while the reply is still streaming", async () => {
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const code = "func main() {\n\tfmt.Println(\"<hi>\")\n}";
+		const fence = "```go\n" + code;
+		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
+		expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+		rerender(<ChatMarkdown text={fence + "\n```\n\nThen:\n\n```sh\nls"} streaming />);
+		await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith(code);
+		rerender(<ChatMarkdown text={fence + "\n```\n\nThen:\n\n```sh\nls\n```\n\nDone"} streaming />);
+		const buttons = container.querySelectorAll<HTMLElement>('[data-markdown="code-header"] button');
+		expect(buttons).toHaveLength(2);
+		await userEvent.click(buttons[1]!);
+		expect(copy).toHaveBeenLastCalledWith("ls");
+		copy.mockRestore();
+	});
+
 	it("resolves late reference definitions and keeps footnote IDs document-wide", () => {
 		const text = "First [docs][ref]\n\nSecond\n\nThird";
 		const { container, rerender } = render(<ChatMarkdown text={text} streaming />);
