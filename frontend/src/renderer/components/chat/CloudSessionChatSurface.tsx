@@ -1860,13 +1860,19 @@ export function CloudSessionChatSurface({
 	// so a record stops mattering once the chat has read that far.
 	const [acceptedThrough, setAcceptedThrough] = useState<Readonly<Record<string, number>>>({});
 	const send = useMutation({
-		// `sessionId` names the session the send went to: this surface outlives it.
-		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean; sessionId: string }) => {
-			if (!cloud) throw new Error("Cloud session context is unavailable.");
+		// `sessionId` and `orgId` name the session the send went to: this surface
+		// outlives it, and a send that first restored an archived session can run
+		// after another session was opened here.
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch, sessionId, orgId }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean; sessionId: string; orgId?: string }) => {
+			if (!cloud || !orgId) throw new Error("Cloud session context is unavailable.");
+			// The picks, mode and composer lease below are the shown session's. A
+			// message to a session no longer shown goes without them, and its worker
+			// derives them from that session.
+			const shown = sessionId === session.id && orgId === cloud.orgId;
 			// A message sent with an agent switch goes to the new agent, which
 			// starts on the model and effort the switch named: the old agent's
 			// picks are not its.
-			const selectedSettings: CloudTurnSettings = !afterSwitch && settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
+			const selectedSettings: CloudTurnSettings = shown && !afterSwitch && settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
 			// worker derives it from the session's mode. A pick the turn's model
 			// cannot run is sent as the mode the composer shows in its place.
@@ -1874,9 +1880,9 @@ export function CloudSessionChatSurface({
 				? selectedSettings.approvalMode : undefined;
 			const turnModel = listedModels.find((model) => model.id === (selectedSettings.model ?? pendingModel)) ?? listedModels.find((model) => model.default);
 			const approvalMode = picked && (effectiveApprovalMode(session.provider, picked, modelApprovalModes(sessionApprovalModes, turnModel)) ?? picked);
-			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
+			const mode = !shown ? undefined : selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
-			const composerEpoch = leaseRef.current.epoch;
+			const composerEpoch = shown ? leaseRef.current.epoch : undefined;
 			const request = {
 				text,
 				...(attachmentIds?.length ? { attachmentIds } : {}),
@@ -1887,21 +1893,21 @@ export function CloudSessionChatSurface({
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
 			};
 			const message = cloudMessageBody(text, display);
-			if (!message.content) return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
+			if (!message.content) return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
 			try {
-				return await client.sendSessionMessage(cloud.orgId, session.id, { ...request, ...message }, { idempotencyKey: clientMessageId });
+				return await client.sendSessionMessage(orgId, sessionId, { ...request, ...message }, { idempotencyKey: clientMessageId });
 			} catch (error) {
 				// A control plane from before message displays refuses the fields,
 				// and one that finds the display text missing from the text refuses
 				// it (both 400). The text already carries the quotes and captures,
 				// so it goes as text alone, with the same key.
 				if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
-				return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
+				return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
 			}
 		},
 		onSuccess: (data, { sessionId }) => {
 			// The send released the lease to whoever is next in line.
-			leaseRef.current.sent();
+			if (sessionId === session.id) leaseRef.current.sent();
 			const sequence = data?.event?.sequence;
 			if (typeof sequence === "number") {
 				setAcceptedThrough((current) => (current[sessionId] ?? 0) >= sequence ? current : { ...current, [sessionId]: sequence });
@@ -2509,6 +2515,7 @@ export function CloudSessionChatSurface({
 				const agentText = numbered ? message.text + formatNumberedAnnotations(excerpts ?? [], fileReferences) : excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
 				const sendMessage = (afterSwitch?: boolean) => send.mutateAsync({
 					sessionId: session.id,
+					orgId: cloud?.orgId,
 					// A message of only files and captures or quotes starts with them.
 					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
 					attachmentIds: message.attachmentIds,

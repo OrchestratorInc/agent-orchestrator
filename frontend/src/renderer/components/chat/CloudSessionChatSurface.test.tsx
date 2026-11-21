@@ -2257,6 +2257,31 @@ describe("CloudSessionChatSurface", () => {
 		expect(restoreSession.mock.invocationCallOrder[1]).toBeLessThan(cloudMocks.sendSessionMessage.mock.invocationCallOrder[0]!);
 	});
 
+	it("sends a message held by a restore to its own session after another one opened", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		let finishRestore: (result: { status: "success" }) => void = () => {};
+		restoreSession.mockReset().mockReturnValueOnce(new Promise((resolve) => { finishRestore = resolve; }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const archived = { ...session, cloud: { orgId: "org-1" }, isTerminated: true, runtimeConnected: false };
+		const other = { ...session, id: "cloud-other", cloud: { orgId: "org-2" } };
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={archived} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		const sent = cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "message-1");
+
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={other} /></QueryClientProvider>);
+		await act(async () => {
+			finishRestore({ status: "success" });
+			await sent;
+		});
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledOnce();
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ text: "hello" }), { idempotencyKey: "message-1" });
+	});
+
 	it("leaves restoring a session shared from another organization to its owner", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
