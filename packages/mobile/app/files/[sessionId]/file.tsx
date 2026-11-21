@@ -10,7 +10,9 @@ import { ChatMarkdown } from "../../../lib/chat/ChatMarkdown";
 import { userFacingError } from "../../../lib/connectionError";
 import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
-import { hostRouteMatches } from "../../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../../lib/hostRoute";
+import { MachineRejectedState } from "../../../lib/MachineRejectedState";
+import { retryWhenVerified, useOpenWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
 import { ImageViewer } from "../../../lib/ImageViewer";
 import { usePressFeedback } from "../../../lib/pressFeedback";
 import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
@@ -99,7 +101,8 @@ function SessionFileContent() {
 	const path = String(params.path ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { currentHostId, connection, loading: appLoading } = useApp();
+	const app = useApp();
+	const { currentHostId, loading: appLoading } = app;
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
 	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
@@ -152,12 +155,19 @@ function SessionFileContent() {
 	// whole workspace version for a file the manifest does not list.
 	// Another branch moves on its own, with nothing in the worktree's version to say so.
 	const fingerprint = listed?.fileFingerprint || (viewing ? "" : manifest?.workspaceVersion) || "";
+	// The read in flight, cancelled by the next one and when the page closes, so
+	// one still waiting for the connection is never sent for a page that has gone.
+	const reading = useRef<AbortController | null>(null);
+	useEffect(() => () => reading.current?.abort(), []);
 	const load = useCallback(async (quiet: boolean) => {
 		if (!branchBackend || !hostMatches || !path) return;
 		const ticket = ++request.current;
+		reading.current?.abort();
+		const controller = new AbortController();
+		reading.current = controller;
 		if (!quiet) setLoading(true);
 		try {
-			const next = await branchBackend.file(id, path, read);
+			const next = await branchBackend.file(id, path, read, controller.signal);
 			if (ticket !== request.current) return;
 			setDetail(next);
 			setLoadError(undefined);
@@ -427,7 +437,11 @@ function SessionFileContent() {
 	if (signedOut) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this file." /></View>;
 	if (unreachable) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
 	if (!backend && (appLoading || cloud)) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	if (!backend && connection === "closed") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const machine = !backend ? machineState(app) : "ok";
+	if (machine === "rejected") return <View style={styles.center}>{headerItems}<MachineRejectedState /></View>;
+	if (machine === "offline") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
 	// Where the file lives and how much changed, under the title that names it;
 	// then the one control over how it reads. iOS adds the file's place among the
@@ -487,7 +501,7 @@ function SessionFileContent() {
 		body = <View style={styles.center}><EmptyState icon="image" title={`No image preview for ${changesLabel(pick.changes)}`} message="Images are compared in All changes, a single commit, or another branch." /></View>;
 	} else if (detail && image && !imageSources.unavailable) {
 		body = imageSources.resolved
-			? <ImageCompare detail={detail} name={name} sources={imageSources} />
+			? <ImageCompare backend={backend} detail={detail} name={name} sources={imageSources} />
 			: <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (detail && svg && effectiveMode === "file" && lines && !detail.binary) {
 		body = <ScrollView contentContainerStyle={styles.preview}><SvgXml xml={detail.content} width="100%" height={width} /></ScrollView>;
@@ -592,20 +606,25 @@ function useImageSources(backend: FilesBackend | null, sessionId: string, path: 
 	const key = JSON.stringify([backend?.key, sessionId, path, version, wantBefore, wantAfter, read]);
 	useEffect(() => {
 		if (!backend || !detail || !image) return;
-		let current = true;
+		// Cancelled with the page or the image it was for, even while waiting for the connection.
+		const controller = new AbortController();
 		// A side that can't be read is no side: the page then says the image is
-		// unavailable rather than staying on Opening… with the read rejected.
-		const side = (which: "before" | "after") => backend.imageSource(sessionId, path, which, version, read).catch(() => undefined);
+		// unavailable rather than staying on Opening… with the read rejected. One
+		// that timed out waiting for the connection is not an answer: it is read
+		// again once the machine is verified, not kept as missing.
+		const side = (which: "before" | "after") => retryWhenVerified(backend, (signal) => backend.imageSource(sessionId, path, which, version, read, signal), controller.signal).catch(() => undefined);
 		void Promise.all([
 			wantBefore ? side("before") : undefined,
 			wantAfter ? side("after") : undefined,
-		]).then(([before, after]) => { if (current) setSources({ key, before, after }); });
-		return () => { current = false; };
+		]).then(([before, after]) => { if (!controller.signal.aborted) setSources({ key, before, after }); });
+		return () => controller.abort();
 		// `key` covers what the effect reads from `detail`.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [key, image]);
 	const resolved = sources?.key === key;
-	return { before: resolved ? sources.before : undefined, after: resolved ? sources.after : undefined, resolved, unavailable: resolved && !sources.before && !sources.after };
+	// One side again, through the connection the machine answers on now (see ImageCompare).
+	const resolveSide = useCallback((which: "before" | "after", signal?: AbortSignal) => backend ? backend.imageSource(sessionId, path, which, version, read, signal) : Promise.resolve(undefined), [backend, path, read, sessionId, version]);
+	return { before: resolved ? sources.before : undefined, after: resolved ? sources.after : undefined, resolved, unavailable: resolved && !sources.before && !sources.after, resolveSide };
 }
 
 /**
@@ -613,14 +632,51 @@ function useImageSources(backend: FilesBackend | null, sessionId: string, path: 
  * where it zooms. The daemon's images need the connection's Bearer header,
  * which React Native's Android image loader forwards only for an array source.
  */
-function ImageCompare({ detail, name, sources }: { detail: WorkspaceFileDetail; name: string; sources: { before?: ImageSide; after?: ImageSide } }) {
+function ImageCompare({ backend, detail, name, sources }: { backend: FilesBackend | null; detail: WorkspaceFileDetail; name: string; sources: { before?: ImageSide; after?: ImageSide; resolveSide(which: "before" | "after", signal?: AbortSignal): Promise<ImageSide | undefined> } }) {
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button", { foreground: true });
 	const [viewing, setViewing] = useState<{ label: string; source: ImageSide }>();
+	// The images load with the machine's credential: drawn afresh (or opened
+	// full screen) only once the machine has answered as itself, while what is
+	// already on screen stays through a reconnect (see heldBackend).
+	const verified = useVerifiedOnMount(backend);
+	// The pane being opened shows it is, while it waits for the connection too;
+	// one the connection stays away from (or can't resolve) says so, and a tap
+	// tries again.
+	const opener = useOpenWhenVerified<ImageSide>(backend);
+	// The sides drawn are read again through the connection verified for this
+	// mount, never the page's stored ones: those may be an earlier connection's
+	// (read before an app switch), whose address may now be another device's,
+	// and they carry the credential. Cloud's sides are data, read once, and are
+	// drawn as they are. Read once: the page mounts this again for another file.
+	const rereads = Boolean(backend?.whenVerified);
+	const [drawn, setDrawn] = useState<{ before?: ImageSide; after?: ImageSide }>();
+	useEffect(() => {
+		if (!verified || !rereads) return;
+		const controller = new AbortController();
+		const side = (which: "before" | "after", had: ImageSide | undefined) => had ? sources.resolveSide(which, controller.signal).catch(() => undefined) : Promise.resolve(undefined);
+		void Promise.all([side("before", sources.before), side("after", sources.after)]).then(([before, after]) => { if (!controller.signal.aborted) setDrawn({ before, after }); });
+		return () => controller.abort();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [verified]);
+	const shown = rereads ? drawn : sources;
+	if (!verified || !shown) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	const panes = [
-		sources.before ? { label: detail.deleted ? "Deleted" : "Before", source: sources.before } : null,
-		sources.after ? { label: detail.status === "added" ? "Added" : sources.before ? "After" : statusLabel[detail.status], source: sources.after } : null,
+		shown.before ? { label: detail.deleted ? "Deleted" : "Before", side: "before" as const, source: shown.before } : null,
+		shown.after ? { label: detail.status === "added" ? "Added" : shown.before ? "After" : statusLabel[detail.status], side: "after" as const, source: shown.after } : null,
 	].filter((pane): pane is NonNullable<typeof pane> => Boolean(pane));
+	if (!panes.length) return <View style={styles.center}><EmptyState icon="alert-triangle" title={`Couldn't open ${name}`} /></View>;
+	// The viewer is a new request with the credential. The pane's source may be
+	// the last connection's (an address the machine answered on before the app
+	// switch), so it is resolved again through the verified connection; the
+	// comparison already on screen stays as it is. Cloud's sources are data, read once.
+	const open = (pane: (typeof panes)[number]) => {
+		if (!backend?.whenVerified) {
+			setViewing(pane);
+			return;
+		}
+		opener.open(pane.side, (signal) => sources.resolveSide(pane.side, signal), (source) => setViewing({ label: pane.label, source }));
+	};
 	return (
 		<ScrollView contentContainerStyle={styles.images}>
 			{panes.map((pane) => (
@@ -630,12 +686,15 @@ function ImageCompare({ detail, name, sources }: { detail: WorkspaceFileDetail; 
 						accessibilityRole="imagebutton"
 						accessibilityLabel={`${pane.label} image`}
 						accessibilityHint="Opens it full screen to zoom"
-						onPress={() => setViewing(pane)}
+						accessibilityState={{ busy: opener.pending === pane.side }}
+						onPress={() => open(pane)}
 						android_ripple={feedback.android_ripple}
 						style={({ pressed }) => [styles.imageFrame, pressed && feedback.pressed]}
 					>
 						<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [pane.source] : pane.source} resizeMode="contain" style={styles.image} />
+						{opener.pending === pane.side ? <View style={styles.imageOpening}><Spinner /></View> : null}
 					</Pressable>
+					{opener.failed === pane.side ? <Text accessibilityRole="alert" style={styles.imageOpenError}>Couldn't open this image full screen. Tap it to try again.</Text> : null}
 				</View>
 			))}
 			{viewing ? <ImageViewer visible name={`${name}, ${viewing.label.toLowerCase()}`} source={viewing.source} onClose={() => setViewing(undefined)} /> : null}
@@ -662,5 +721,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	imagePane: { gap: space.xs },
 	imageLabel: { ...type.footnote, fontFamily: font.semibold, color: t.textSecondary },
 	imageFrame: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },
+	imageOpening: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center" },
+	imageOpenError: { ...type.footnote, color: t.red },
 	image: { width: "100%", aspectRatio: 1 },
 });

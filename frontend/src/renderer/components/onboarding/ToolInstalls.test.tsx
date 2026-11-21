@@ -20,6 +20,7 @@ vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
 	probeAgentAuth: auth.probe,
 }));
 
+import { setAnalyticsOptedOut } from "../../lib/analytics-opt-out";
 import { resetOnboardingTelemetryForTests, startOnboardingAction } from "../../lib/onboarding-telemetry";
 import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, closeLoginWorkflow, LOGIN_LIFETIME_MS, LOGIN_VERIFY_MS, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn } from "./ToolInstalls";
 
@@ -131,6 +132,20 @@ describe("useGhInstall", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("brew failed.");
 		expect(screen.getByTestId("ended")).toHaveTextContent("true");
 		expect(api.POST).not.toHaveBeenCalled();
+	});
+
+	it("follows an install started before the page was left with analytics off", async () => {
+		setAnalyticsOptedOut(true);
+		try {
+			const onInstalled = vi.fn();
+			startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+			api.GET.mockResolvedValue({ data: { target: "gh", status: "succeeded" } });
+			render(wrap(<GhHarness onInstalled={onInstalled} />));
+			await waitFor(() => expect(onInstalled).toHaveBeenCalledOnce());
+			expect(api.POST).not.toHaveBeenCalled();
+		} finally {
+			setAnalyticsOptedOut(false);
+		}
 	});
 
 	it("follows a running install to the end", async () => {

@@ -1391,24 +1391,22 @@ describe("SessionChatSurface continuation identity", () => {
 
 describe("side command routing", () => {
 	beforeEach(() => {
-		useUiStore.setState({ developerMode: true, sideChats: true });
+		// Developer mode stays off: side chats do not depend on it.
+		useUiStore.setState({ developerMode: false });
 		conversationState.snapshot = { ...conversationState.snapshot, capabilities: ["resume"] };
-	});
-	afterEach(() => {
-		useUiStore.setState({ developerMode: false, sideChats: false });
 	});
 
 	it.each([
-		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
-		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
-	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
-		useUiStore.setState(flags);
+		["the harness cannot resume", [], undefined],
+		["the session is on another machine", ["resume"], "h_air"],
+	] as const)("sends /btw to the main chat when %s", async (_case, capabilities, hostId) => {
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [...capabilities] };
 		sideMocks.create.mockReset();
 		const mainSend = conversationCommandState.send;
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(
 			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...session, provider }} />
+				<SessionChatSurface session={{ ...session, provider: "codex" }} hostId={hostId} />
 			</Wrapper>,
 		);
 		await act(async () => {
@@ -1549,7 +1547,6 @@ describe("SessionChatSurface startup recovery", () => {
 describe("selection side-chat operation ownership", () => {
 	const excerpt: ChatDraftExcerptReference = { id: "selection-operation", conversationId: "conv-sess-1", messageId: "message", revision: 1, text: "selected text", role: "assistant" };
 	function mount() {
-		useUiStore.setState({ developerMode:true, sideChats:true });
 		conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"] };
 		sideMocks.create.mockReset(); sideMocks.addReference.mockReset(); sideMocks.show.mockReset();
 		sideMocks.activeId = undefined; sideMocks.sides = [];

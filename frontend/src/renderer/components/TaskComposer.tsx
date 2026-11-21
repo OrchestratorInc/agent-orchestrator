@@ -1543,6 +1543,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 			},
 		} : undefined,
 		remoteLoadError,
+		// "Set one up in Settings" gets the way there. A remote host's agents are set up on that host.
+		remoteLoadErrorAction: !hostId && remoteLoadError === t("newTask.noReadyAgent") ? {
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			onClick: () => openGlobalSettings("harness", { harnessView: isCloudProject ? "cloud" : "local", preserveProject: true }),
+		} : undefined,
 		modelWarning,
 		modelWarningRetries,
 		fallbackAction,
@@ -1721,7 +1726,7 @@ export function TaskComposer({
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
 				status: task.status,
-				errorAction: task.errorAction,
+				errorAction: task.error ? task.errorAction : task.remoteLoadErrorAction,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,
 				onFallbackAction: (brief) => settle(task.launchFallback(brief)),

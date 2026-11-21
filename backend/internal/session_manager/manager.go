@@ -510,6 +510,9 @@ type Manager struct {
 	// killTeardown bounds Kill's detached teardown. Zero means
 	// killTeardownBudget; tests shrink it to prove what survives its expiry.
 	killTeardown time.Duration
+	// killResumeWait bounds Kill's wait for an in-flight resume. Zero means
+	// killResumeWaitBudget; tests shrink it to prove Kill still gives up.
+	killResumeWait time.Duration
 	// openTranscriptFile is os.Open in production. The narrow seam lets tests
 	// deterministically prove that a post-stop transcript read failure falls
 	// back without advertising the provider path.
@@ -539,11 +542,14 @@ type Manager struct {
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
 	// launchStartWait bounds the wait to see a new supervised launch alive.
-	launchStartWait           time.Duration
+	launchStartWait time.Duration
+	// nativeRestoreProofWait bounds a native restore's identity proof.
+	nativeRestoreProofWait    time.Duration
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
 	inputDrained              map[domain.SessionID]chan struct{}
+	serializedInput           map[domain.SessionID]bool
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
@@ -1044,6 +1050,7 @@ func New(d Deps) *Manager {
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
 		launchStartWait:                3 * time.Second,
+		nativeRestoreProofWait:         60 * time.Second,
 		inputLeases:                    make(map[domain.SessionID]int),
 		inputDrained:                   make(map[domain.SessionID]chan struct{}),
 		transitions:                    make(map[domain.SessionID]*interfaceTransitionRun),
@@ -2756,6 +2763,11 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
 		merged.Model = ""
 	}
+	// Mastra Code uses native interactive permissions unless a project, role, or
+	// request explicitly chooses another policy. Do not synthesize Auto.
+	if harness == domain.HarnessMastraCode && merged.Permissions == "" {
+		merged.Permissions = ports.PermissionModeDefault
+	}
 	return merged
 }
 
@@ -2927,6 +2939,7 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // fails, fall back to parking it terminated so a phantom row never looks live.
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
 	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return
@@ -2951,6 +2964,7 @@ func (m *Manager) rollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 		return false, false, fmt.Errorf("rollback %s: %w", id, err)
 	}
 	if deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return true, false, nil
@@ -3029,6 +3043,7 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 	if err := m.lcm.MarkTerminated(ctx, id); err != nil {
 		return fmt.Errorf("kill %s: %w", id, errors.Join(err, markerErr))
 	}
+	m.forgetSerializedInput(id)
 	m.cleanupSystemPromptDir(id)
 	if markerErr != nil {
 		return fmt.Errorf("kill %s: clear restore marker: %w", id, markerErr)
@@ -3074,7 +3089,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		return KillResult{}, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
 	}
 
-	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
+	if err := m.beginKillOperation(ctx, id); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrOperationInProgress
 		}
@@ -4271,6 +4286,29 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("runtime", fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}
+	verifiedNativeIdentity := false
+	if verifier, requiresProof := agent.(ports.NativeRestoreVerifier); requiresProof && mode == RestoreModeNative {
+		proofCfg := ports.RestoreConfig{DataDir: m.dataDir, Config: agentConfig, Session: ports.SessionRef{
+			ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec),
+		}}
+		if err := m.verifyNativeRestore(ctx, verifier, proofCfg, launchID, handle); err != nil {
+			// Same as the start check below: a stale TUI replacement that died
+			// during the proof is fenced from the old row, so reconcile it here
+			// or Resume and its automatic retry cannot recover the session.
+			// Probe before destroying, which would make any child read dead.
+			if requireNativeHistory && !forceFresh && rec.StaleBinary != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+				probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
+				if probe.Liveness == ports.FencedDead {
+					_, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
+					err = errors.Join(err, preserveErr)
+				}
+			}
+			m.destroySpawnRuntimeAfterFailure(ctx, handle)
+			m.cleanupSystemPromptDir(rec.ID)
+			return RestoreResult{}, relaunchFailed("native identity", fmt.Errorf("%s %s: native identity: %w", operation, rec.ID, err))
+		}
+		verifiedNativeIdentity = true
+	}
 	// A runtime accepting Restart only proves that its supervisor was created.
 	// Keep the previous launch (and stale/release references) until the exact
 	// resumed child is observable. A failed native resume remains recoverable.
@@ -4323,7 +4361,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// The interface coordinator provides the same guarantee after it freezes Chat
 	// and transfers the required native history. Fresh and fallback launches
 	// still require current-generation identity proof from their hooks.
-	bindNativeIdentity := mode == RestoreModeNative &&
+	bindNativeIdentity := verifiedNativeIdentity || mode == RestoreModeNative &&
 		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy || m.terminalVersionRefreshSupported(rec.Harness))
 	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
@@ -7635,6 +7673,9 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 }
 
 func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore workspaceRestoreContext) error {
+	if _, guarded := agent.(ports.TerminalMessageInputGuard); guarded {
+		m.enableSerializedInput(id)
+	}
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil

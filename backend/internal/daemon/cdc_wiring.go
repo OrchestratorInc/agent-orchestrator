@@ -44,3 +44,20 @@ func (p *cdcPipeline) Stop() error {
 	}
 	return nil
 }
+
+// sessionChanges signals, coalesced, each session created or updated as the
+// poller delivers it. Each call is its own subscription, for a loop that rests
+// while nothing changes and must wake as soon as a session does.
+func (p *cdcPipeline) sessionChanges() <-chan struct{} {
+	signal := make(chan struct{}, 1)
+	p.Broadcaster.Subscribe(func(e cdc.Event) {
+		if e.Type != cdc.EventSessionCreated && e.Type != cdc.EventSessionUpdated {
+			return
+		}
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+	})
+	return signal
+}

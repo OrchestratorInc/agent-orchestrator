@@ -3,7 +3,7 @@ import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "@/components/app-icons";
@@ -336,6 +336,14 @@ const ShellCenter = memo(function ShellCenter({
 // the <Outlet> content (board / session / settings / …) swaps. Lifted out of
 // the old single <App>, with selection now owned by the router (route params)
 // instead of Zustand. The daemon-status effect runs here exactly once.
+// What useMatchRoute checked: "/" and "/new" exactly, the settings pages fuzzily, ignoring case.
+function shellRouteKind(pathname: string): "home" | "new" | "settings" | "" {
+	const path = pathname.toLowerCase();
+	if (path === "/") return "home";
+	if (path === "/new") return "new";
+	return /^\/(projects\/[^/]+\/)?settings(\/|$)/.test(path) ? "settings" : "";
+}
+
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
@@ -347,7 +355,9 @@ function ShellLayout() {
 	const router = useRouter();
 	const canGoForward = useCanGoForward();
 	const settingsPage = useSettingsPage();
-	const matchRoute = useMatchRoute();
+	// One string, so a session switch (same kind of route) does not re-render the shell
+	// while the router loads; useMatchRoute would on every location and status change.
+	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
@@ -602,10 +612,10 @@ function ShellLayout() {
 	}, [queryClient, scopedProjectId]);
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
-	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
+	const isHomeRoute = routeKind === "home";
 	// The new chat page is a session that does not exist yet, so it takes the
 	// session frame and the session view replaces it without the chrome moving.
-	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	const isNewChatRoute = routeKind === "new";
 	// The new chat page keeps its host in the search, not the path.
 	const newChatHost = useRouterState({
 		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
@@ -617,9 +627,7 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isSettingsRoute =
-		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
-		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
+	const isSettingsRoute = routeKind === "settings";
 	// Welcome/settings always self-frame. Platforms that hide the shell-owned
 	// topbar (macOS) use the same full-height inset; session actions mount
 	// inside SessionView.

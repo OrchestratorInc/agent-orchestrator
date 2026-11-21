@@ -16,6 +16,9 @@ type agentAccount struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
 	Device   bool   `json:"device"`
+	Kind     string `json:"kind,omitempty"`
+	Name     string `json:"name,omitempty"`
+	KeyHint  string `json:"keyHint,omitempty"`
 	Email    string `json:"email,omitempty"`
 	Plan     string `json:"plan,omitempty"`
 	Default  bool   `json:"default"`
@@ -130,7 +133,22 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 	_, _ = fmt.Fprintln(tw, "ID\tAGENT\tACCOUNT\tORG\tPLAN\tSTATE")
 	for _, account := range accounts {
 		state := "signed in"
-		if !account.SignedIn {
+		plan := account.Plan
+		switch {
+		case account.Kind == "api_key" && account.LoggedIn:
+			state, plan = "key saved", "API key"
+		case account.Kind == "api_key":
+			state, plan = "key missing", "API key"
+		case account.Kind == "metered" && account.LoggedIn:
+			plan = "API billing"
+		case account.Kind == "metered":
+			state, plan = "signed out", "API billing"
+		case account.Kind == "setup_token" && plan == "":
+			plan = "Setup token"
+			if !account.SignedIn {
+				state = "signed out"
+			}
+		case !account.SignedIn:
 			state = "signed out"
 		}
 		if account.Default {
@@ -139,7 +157,7 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 		if account.Problem != "" {
 			state += " (" + account.Problem + ")"
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", account.ID, accountAgentLabel(account.Provider), accountLabel(account), accountOrg(account, accounts), dash(account.Plan), state)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", account.ID, accountAgentLabel(account.Provider), accountLabel(account), accountOrg(account, accounts), dash(plan), state)
 	}
 	return tw.Flush()
 }
@@ -152,7 +170,21 @@ func accountAgentLabel(provider string) string {
 }
 
 func accountLabel(account agentAccount) string {
+	if account.Kind == "api_key" {
+		label := account.Name
+		if label == "" {
+			label = "Anthropic API key"
+		}
+		if account.KeyHint != "" {
+			label += " (key ending " + account.KeyHint + ")"
+		}
+		return label
+	}
 	label := account.Email
+	if label == "" {
+		// A setup token or metered sign-in can have no email; its name stands in.
+		label = account.Name
+	}
 	if label == "" {
 		label = "(no email)"
 	}
