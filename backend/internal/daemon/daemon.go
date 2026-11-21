@@ -61,6 +61,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
@@ -83,6 +84,7 @@ import (
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellagent"
@@ -847,8 +849,18 @@ func Run(buildVersion string) (retErr error) {
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
 	}
+	// Card summaries are a Developer Mode preview: each worker report becomes
+	// the card line, rewritten by a light model, and nothing is written while
+	// the desktop has not turned them on.
+	var cardSummaryRewrite sessionsvc.CardSummaryRewriter
+	if summarizer, ok := sessMgr.(interface {
+		SummarizeCardNote(context.Context, domain.SessionID, string) (string, error)
+	}); ok {
+		cardSummaryRewrite = summarizer.SummarizeCardNote
+	}
+	cardSummaries := sessionsvc.NewCardSummarizer(ctx, store, settingsSvc.CardSummariesEnabled, cardSummaryRewrite, log)
 	var reportCoordinator *reportsvc.Coordinator
-	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, OnCreated: func(domain.ReportRecord) {
+	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, CardSummaries: cardSummaries, OnCreated: func(domain.ReportRecord) {
 		if reportCoordinator != nil {
 			reportCoordinator.Wake()
 		}
@@ -1022,6 +1034,15 @@ func Run(buildVersion string) (retErr error) {
 		usagePricing = pricingRuntime
 		if pricingErr := pricingRuntime.Start(ctx); pricingErr != nil {
 			log.Warn("usage pricing startup failed; continuing without catalog enrichment", "err", pricingErr)
+		}
+		// Card summaries rank catalog models by these prices to pick a light one.
+		if priced, ok := sessMgr.(interface {
+			SetModelRates(func(string) (pricing.TokenRates, bool))
+		}); ok {
+			manager := pricingRuntime.Manager()
+			priced.SetModelRates(func(modelID string) (pricing.TokenRates, bool) {
+				return manager.Snapshot().RatesForModel(modelID)
+			})
 		}
 		defer func() {
 			stop()

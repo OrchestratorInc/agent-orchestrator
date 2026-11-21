@@ -46,6 +46,7 @@ import { SwipeNavigation } from "../components/SwipeNavigation";
 import { WindowTitlebar } from "../components/WindowTitlebar";
 import { preloadXtermTerminal, TerminalCacheProvider } from "../components/TerminalPane";
 import { scheduleIdle } from "../lib/idle";
+import { useCardSummariesEnabled } from "../lib/card-summaries";
 import { LazyChunkBoundary, LazyChunkErrorPanel } from "../components/LazyChunkBoundary";
 import { loadedSessionView, loadSessionView } from "../lib/session-view-chunk";
 import type { SessionView as LoadedSessionView } from "../components/SessionView";
@@ -412,6 +413,7 @@ function ShellLayout() {
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
+	const cardSummaries = useCardSummariesEnabled();
 	const firstRunOnboardingOpen = useUiStore((state) => state.firstRunOnboardingOpen);
 	// While the full-window onboarding shows, the shell behind it takes no
 	// focus or clicks; Settings opened from it lifts that, as it steps aside.
@@ -1185,7 +1187,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [themeStyle]);
 
 	// The renderer owns Developer Mode; the daemon must know its value before
-	// either the view-close path or the idle sweep can hibernate a provider.
+	// either the view-close path or the idle sweep can hibernate a provider, and
+	// before it asks a new worker for card summaries.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
@@ -1194,14 +1197,18 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			// Serialize toggles so an older enable request cannot finish after disable.
 			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
 				if (cancelled) return;
-				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
-					body: { enabled: developerMode },
-				});
-				if (error) throw error;
-				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
-					body: { enabled: developerMode },
-				});
-				if (limitHistoryError) throw limitHistoryError;
+				// Independent settings: one failing must not hold the others back,
+				// and the chain moves on only once all three have settled.
+				const results = await Promise.allSettled([
+					apiClient.PATCH("/api/v1/settings/chat-hibernation", { body: { enabled: developerMode } }),
+					apiClient.PUT("/api/v1/usage/limit-history", { body: { enabled: developerMode } }),
+					// In daemon memory: a restarted daemon is off until this runs again.
+					apiClient.PATCH("/api/v1/settings/card-summaries", { body: { enabled: cardSummaries } }),
+				]);
+				for (const result of results) {
+					if (result.status === "rejected") throw result.reason;
+					if (result.value.error) throw result.value.error;
+				}
 			}).catch(() => {
 				if (!cancelled) retry = setTimeout(sync, 5_000);
 			});
@@ -1211,7 +1218,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			cancelled = true;
 			clearTimeout(retry);
 		};
-	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
+	}, [cardSummaries, daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
 
 	// A daemon port is not enough to render a trustworthy empty state: the
 	// route loader may have cached [] before Electron reported the port. Fetch

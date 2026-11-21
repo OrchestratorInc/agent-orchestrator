@@ -244,6 +244,8 @@ export type UiState = {
 	splitPanes: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
 	prView: boolean;
+	/** New workers keep a one-line summary on their card, and cards show it. Only takes effect in Developer mode. Default off. */
+	cardSummaries: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
@@ -334,6 +336,7 @@ export type UiState = {
 	setDiagnostics: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
+	setCardSummaries: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setTerminalClickMode: (mode: TerminalClickMode) => void;
@@ -428,6 +431,7 @@ const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
+const cardSummariesStorageKey = "ao.cardSummaries";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const terminalClickModeStorageKey = "ao.terminalClickMode";
 const terminalSelectHintShownStorageKey = "ao.terminalSelectHintShown";
@@ -573,6 +577,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	diagnostics: initialDiagnostics(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
+	cardSummaries: getLocalStorage()?.getItem(cardSummariesStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	terminalClickMode: initialTerminalClickMode(),
@@ -708,6 +713,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setPRView: (prView) => {
 		getLocalStorage()?.setItem(prViewStorageKey, String(prView));
 		set({ prView });
+	},
+	setCardSummaries: (cardSummaries) => {
+		getLocalStorage()?.setItem(cardSummariesStorageKey, String(cardSummaries));
+		set({ cardSummaries });
 	},
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));

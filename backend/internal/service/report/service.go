@@ -33,22 +33,30 @@ type ArtifactRecorder interface {
 	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
 }
 
-// Service validates and creates durable worker reports.
-type Service struct {
-	store     Store
-	now       func() time.Time
-	newID     func() string
-	onCreated func(domain.ReportRecord)
-	artifacts ArtifactRecorder
+// CardSummaries hears about every created report, to turn its note into the
+// worker's kanban card summary. ReportFiled must return without waiting.
+type CardSummaries interface {
+	ReportFiled(domain.ReportRecord)
 }
 
-// Deps configures a Service. Artifacts is optional.
+// Service validates and creates durable worker reports.
+type Service struct {
+	store         Store
+	now           func() time.Time
+	newID         func() string
+	onCreated     func(domain.ReportRecord)
+	artifacts     ArtifactRecorder
+	cardSummaries CardSummaries
+}
+
+// Deps configures a Service. Artifacts and CardSummaries are optional.
 type Deps struct {
-	Store     Store
-	Now       func() time.Time
-	NewID     func() string
-	OnCreated func(domain.ReportRecord)
-	Artifacts ArtifactRecorder
+	Store         Store
+	Now           func() time.Time
+	NewID         func() string
+	OnCreated     func(domain.ReportRecord)
+	Artifacts     ArtifactRecorder
+	CardSummaries CardSummaries
 }
 
 // New constructs a report Service.
@@ -59,7 +67,7 @@ func New(d Deps) *Service {
 	if d.NewID == nil {
 		d.NewID = func() string { return "rpt_" + uuid.NewString() }
 	}
-	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts}
+	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts, cardSummaries: d.CardSummaries}
 }
 
 // ListProject returns persisted report facts ordered by created_at then id,
@@ -148,6 +156,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 				s.artifacts.RecordReportedArtifact(ctx, created.SessionID, output.Reference)
 			}
 		}
+	}
+	if s.cardSummaries != nil {
+		s.cardSummaries.ReportFiled(created)
 	}
 	return created, nil
 }

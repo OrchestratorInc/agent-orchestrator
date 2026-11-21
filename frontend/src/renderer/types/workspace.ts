@@ -189,6 +189,11 @@ export type WorkspaceSession = {
 	 * {@link status} already produced.
 	 */
 	displayStatus?: string;
+	/**
+	 * One-line card summary written from the worker's latest report. Absent
+	 * until there is one.
+	 */
+	summary?: string;
 	statusReadiness?: "checking" | "ready" | "unavailable";
 	/**
 	 * How far this session's start-up got. A Chat spawn answers as soon as the

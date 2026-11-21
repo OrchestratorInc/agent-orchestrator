@@ -3055,6 +3055,8 @@
 	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。依頼したときに限り、セッション内のエージェントも分割を作成し、ターミナルでコマンドを実行できます。",
 	"settings.prView": "PR ビュー",
 	"settings.prViewHint": "プルリクエストを専用のタブで開き、説明、コメント、チェック、スタックを表示します。",
+	"settings.cardSummaries": "カードの要約",
+	"settings.cardSummariesHint": "軽量モデルがワーカーの各レポートを、カード上の1行の要約にします。",
 	"settings.chromeAgents.label": "自分の Chrome でエージェントを使う",
 	"settings.chromeAgents.hint": "サインイン状態のまま、エージェントがあなたの Chrome でブラウズできます。ブラウザ設定で設定してください。",
 	"settings.chromeAgents.goTo": "移動",

@@ -1975,6 +1975,8 @@
 	"settings.splitPanesHint": "Bir sekmeyi mevcut sekmenin yanında göstermek için orta panelin bir kenarına sürükleyin. İstediğinizde oturumlarınızdaki aracılar da panelleri bölebilir ve terminallerde komut çalıştırabilir.",
 	"settings.prView": "PR görünümü",
 	"settings.prViewHint": "Bir çekme isteğini açıklaması, yorumları, denetimleri ve PR zinciriyle kendi sekmesinde açar.",
+	"settings.cardSummaries": "Kart özetleri",
+	"settings.cardSummariesHint": "Hafif bir model, worker'ın her raporunu kartında tek satırlık bir özete dönüştürür.",
 	"settings.chromeAgents.label": "Chrome tarayıcımda aracıları kullan",
 	"settings.chromeAgents.hint": "Aracıların kendi Chrome tarayıcınızda, sizin oturumunuzla gezinmesine izin verin. Tarayıcı ayarlarından kurun.",
 	"settings.chromeAgents.goTo": "Git",

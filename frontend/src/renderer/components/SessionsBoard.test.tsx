@@ -196,7 +196,7 @@ async function expandArchive() {
 
 beforeEach(() => {
 	// The memory light and card chips are Developer mode tools behind the Diagnostics toggle.
-	useUiStore.setState({ developerMode: true, diagnostics: true, archiveModal: null });
+	useUiStore.setState({ developerMode: true, diagnostics: true, cardSummaries: true, archiveModal: null });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
@@ -663,6 +663,40 @@ describe("SessionsBoard", () => {
 		expect(terminateButton.querySelector("svg")).toHaveClass("icon-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
+	});
+
+	it("renders the summary below the branch", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({ id: "s-order", title: "order worker", status: "working", branch: "feat/login-redirect", summary: "Fixing the login redirect" }),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("order worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const branch = within(card).getByText("feat/login-redirect");
+		const summary = within(card).getByTestId("board-session-summary");
+		expect(branch.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it.each([
+		["the toggle is off", { developerMode: true, cardSummaries: false }],
+		["Developer mode is off", { developerMode: false, cardSummaries: true }],
+	])("hides the summary while %s", (_label, state) => {
+		useUiStore.setState(state);
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s-off", title: "off worker", status: "working", summary: "Fixing the login redirect" })])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("off worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card).queryByTestId("board-session-summary")).not.toBeInTheDocument();
 	});
 
 	it("styles a working card from its building lane without inferring from runtime activity", () => {

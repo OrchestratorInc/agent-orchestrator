@@ -521,6 +521,7 @@ export function GeneralSettingsSection({
 				<CliShadowSettingsRow />
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <PRViewRow />}
+				{developerMode && <CardSummariesRow />}
 				{developerMode && <ChromeAgentsRow />}
 				{/* Dev builds only: IS_DEV folds to false in production, stripping the row. */}
 				{IS_DEV && developerMode && <SimulateNewMachineRow />}
@@ -633,6 +634,18 @@ function PRViewRow() {
 	return (
 		<SettingsRow label={t("settings.prView")} description={t("settings.prViewHint")}>
 			<Switch aria-label={t("settings.prView")} checked={prView} onCheckedChange={setPRView} />
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode-only switch for agent-written summaries on cards. Off by default. */
+function CardSummariesRow() {
+	const { t } = useTranslation();
+	const cardSummaries = useUiStore((state) => state.cardSummaries);
+	const setCardSummaries = useUiStore((state) => state.setCardSummaries);
+	return (
+		<SettingsRow label={t("settings.cardSummaries")} description={t("settings.cardSummariesHint")}>
+			<Switch aria-label={t("settings.cardSummaries")} checked={cardSummaries} onCheckedChange={setCardSummaries} />
 		</SettingsRow>
 	);
 }

@@ -3119,6 +3119,8 @@
 	"settings.splitPanesHint": "Arraste uma aba para uma borda do painel central para mostrá-la ao lado da atual. Quando você pedir, agentes das suas sessões também podem dividir painéis e executar comandos em terminais.",
 	"settings.prView": "Visualização de PR",
 	"settings.prViewHint": "Abra um pull request em uma aba própria, com descrição, comentários, verificações e pilha.",
+	"settings.cardSummaries": "Resumos nos cartões",
+	"settings.cardSummariesHint": "Um modelo leve transforma cada relatório de um worker em um resumo de uma linha no cartão dele.",
 	"settings.chromeAgents.label": "Usar agentes no meu Chrome",
 	"settings.chromeAgents.hint": "Permita que os agentes naveguem no seu próprio Chrome, com seus logins. Configure nas configurações do navegador.",
 	"settings.chromeAgents.goTo": "Ir",

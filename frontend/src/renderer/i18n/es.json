@@ -3119,6 +3119,8 @@
 	"settings.splitPanesHint": "Arrastra una pestaña a un borde del panel central para mostrarla junto a la actual. Cuando se lo pides, los agentes de tus sesiones también pueden dividir paneles y ejecutar comandos en terminales.",
 	"settings.prView": "Vista de PR",
 	"settings.prViewHint": "Abre un pull request en su propia pestaña, con su descripción, comentarios, comprobaciones y pila.",
+	"settings.cardSummaries": "Resúmenes en tarjetas",
+	"settings.cardSummariesHint": "Un modelo ligero convierte cada informe de un worker en un resumen de una línea en su tarjeta.",
 	"settings.chromeAgents.label": "Usar agentes en mi Chrome",
 	"settings.chromeAgents.hint": "Permite que los agentes naveguen en tu propio Chrome, con tus sesiones iniciadas. Configúralo en los ajustes del navegador.",
 	"settings.chromeAgents.goTo": "Ir",

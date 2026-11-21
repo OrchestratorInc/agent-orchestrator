@@ -3119,6 +3119,8 @@
 	"settings.splitPanesHint": "Faites glisser un onglet sur un bord du volet central pour l’afficher à côté de l’onglet actuel. Lorsque vous le demandez, les agents de vos sessions peuvent aussi diviser les volets et exécuter des commandes dans des terminaux.",
 	"settings.prView": "Vue PR",
 	"settings.prViewHint": "Ouvrir une pull request dans son propre onglet, avec sa description, ses commentaires, ses vérifications et sa pile.",
+	"settings.cardSummaries": "Résumés sur les cartes",
+	"settings.cardSummariesHint": "Un modèle léger transforme chaque rapport d’un worker en un résumé d’une ligne sur sa carte.",
 	"settings.chromeAgents.label": "Utiliser les agents dans mon Chrome",
 	"settings.chromeAgents.hint": "Laissez les agents naviguer dans votre propre Chrome, connectés avec vos comptes. Configurez-le dans les réglages du navigateur.",
 	"settings.chromeAgents.goTo": "Ouvrir",

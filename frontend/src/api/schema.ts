@@ -4778,6 +4778,23 @@ export interface paths {
         patch: operations["updateAccountHandoff"];
         trace?: never;
     };
+    "/api/v1/settings/card-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Turn the card summaries preview on or off (in memory; the desktop app sets it from Developer Mode) */
+        patch: operations["updateCardSummaries"];
+        trace?: never;
+    };
     "/api/v1/settings/chat-hibernation": {
         parameters: {
             query?: never;
@@ -6644,6 +6661,7 @@ export interface components {
             status: "working" | "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "commented" | "approved" | "mergeable" | "merged" | "needs_input" | "exited" | "idle" | "terminated" | "no_signal";
             /** @enum {string} */
             statusReadiness: "checking" | "ready" | "unavailable";
+            summary?: string;
             terminalGeneration?: string;
             terminalHandleId?: string;
             terminalTitle?: string;
@@ -8889,6 +8907,8 @@ export interface components {
         SettingsResponse: {
             /** @description A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts). */
             accountHandoff: boolean;
+            /** @description Each worker report is rewritten by a light model into a one-line summary on the worker's kanban card. A Developer Mode preview: off on every daemon start until the desktop app turns it on. */
+            cardSummaries: boolean;
             chatHarnesses: string[];
             chatHibernationEnabled: boolean;
             client: string;
@@ -9434,6 +9454,9 @@ export interface components {
             timezone?: null | string;
             /** @enum {null|string} */
             useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown" | null;
+        };
+        UpdateCardSummariesRequest: {
+            enabled: null | boolean;
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
@@ -27717,6 +27740,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateAccountHandoffRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateCardSummaries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCardSummariesRequest"];
             };
         };
         responses: {
