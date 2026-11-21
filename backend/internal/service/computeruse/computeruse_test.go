@@ -562,6 +562,24 @@ func TestEnsureDaemonAfterCloseStartsNothing(t *testing.T) {
 	}
 }
 
+func TestGrantPermissionsAfterCloseStartsNothing(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	s := newTestService(t, driver, "darwin")
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := s.GrantPermissions(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GrantPermissions() error = %v, want context.Canceled", err)
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	for _, call := range driver.calls {
+		if len(call) > 1 && call[0] == "permissions" && call[1] == "grant" {
+			t.Fatalf("permissions grant ran after Close")
+		}
+	}
+}
+
 func TestCallReportsDaemonStartFailure(t *testing.T) {
 	driver := &fakeDriver{startErr: errors.New("no desktop session")}
 	driver.onCall = func([]string) ([]byte, []byte, error) {

@@ -286,6 +286,10 @@ func (s *Service) GrantPermissions(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	s.mu.Lock()
+	if err := s.background.Err(); err != nil {
+		s.mu.Unlock()
+		return Status{}, err
+	}
 	if !s.granting {
 		s.granting = true
 		s.grantError = ""
