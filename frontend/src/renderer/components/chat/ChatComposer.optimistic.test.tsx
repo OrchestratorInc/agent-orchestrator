@@ -105,6 +105,24 @@ describe("optimistic message delivery", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
+	it("keeps an image pasted while the previous message is still being sent, for the next message", async () => {
+		const sessionId = "optimistic-paste-during-send";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend, true);
+		const field = await startSend(pending.onSend, "first message");
+		fireEvent.paste(field, {
+			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], "next.png", { type: "image/png" })], items: [], getData: () => "", setData: () => undefined },
+		});
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.attachments).toEqual([expect.objectContaining({ name: "next.png" })]));
+
+		await act(async () => pending.resolve());
+
+		expect(await screen.findByRole("button", { name: "Remove next.png" })).toBeInTheDocument();
+		expect(readChatSessionDraft(sessionId).composer.attachments).toEqual([expect.objectContaining({ name: "next.png" })]);
+		// The message already on its way went without it.
+		expect(pending.onSend.mock.calls[0][1]).toBeUndefined();
+	});
+
 	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {
 		const sessionId = "optimistic-repeat-enter";
 		const pending = pendingSend();

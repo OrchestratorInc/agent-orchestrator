@@ -1,3 +1,4 @@
+import { inlineStagedAttachments } from "../../lib/attachment-uploads";
 import { apiErrorException } from "../../lib/api-error-exception";
 import { useSessionAccountSwitch } from "../SessionAccountSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
@@ -778,7 +779,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						const question = text.slice(btw[0].length).trim();
 						if (question || excerpts?.length || attachments?.length) {
 							// Retain the main draft if handing the request to the side fails.
-							await sideChats.send(side.id, question, attachments, excerpts, true, clientMessageId);
+							// A side chat takes images as bytes, not as this session's staged paths.
+							await sideChats.send(side.id, question, await inlineStagedAttachments(attachments, session.id, hostId), excerpts, true, clientMessageId);
 						}
 						// The main transcript keeps the reader's place: /btw is for asking aside.
 						return SENT_OUTSIDE_TRANSCRIPT;

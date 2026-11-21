@@ -196,7 +196,7 @@ import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
-import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment, type UploadingSend } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { nearQuotaWindow, QuotaSign, QuotaStatus } from "./QuotaReadout";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -1314,6 +1314,35 @@ function ChatWorkspaceContent({
 			})),
 		[backgroundWakeQueuedTurnIds, localEchos, snapshot.items, snapshot.latestSequence],
 	);
+	// A message sent while its files upload waits in the dock at once, under the id
+	// its send will use, until that send's own echo or row takes its place.
+	const [uploadingSend, setUploadingSend] = useState<UploadingSend | null>(null);
+	const uploadingQueuedMessage = useMemo((): QueuedMessage | undefined => {
+		if (!uploadingSend) return undefined;
+		const { clientMessageId } = uploadingSend;
+		if ((localEchos ?? []).some((echo) => echo.clientMessageId === clientMessageId)) return undefined;
+		if (snapshot.items.some((item) => item.kind === "message" && item.clientMessageId === clientMessageId)) return undefined;
+		const id = `local:${clientMessageId}`;
+		return {
+			turnId: id,
+			pending: true,
+			uploadingImages: uploadingSend.images,
+			message: {
+				kind: "message",
+				id,
+				turnId: id,
+				sequence: snapshot.latestSequence + 0.01,
+				revision: 0,
+				role: "user",
+				origin: "human",
+				text: uploadingSend.text,
+				streaming: false,
+				delivery: "queued",
+				clientMessageId,
+				createdAt: new Date().toISOString(),
+			},
+		};
+	}, [localEchos, snapshot.items, snapshot.latestSequence, uploadingSend]);
 	// A host that records steers keeps a message being steered in the queue (see steeringQueuedTurnIds).
 	const steerInQueue = steeringQueuedTurnIds !== undefined;
 	const visibleQueuedMessages = useMemo(
@@ -1322,8 +1351,9 @@ function ChatWorkspaceContent({
 				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && (steerInQueue || !steerStartedAt.has(message.turnId)),
 			),
 			...pendingQueuedMessages,
+			...(uploadingQueuedMessage ? [uploadingQueuedMessage] : []),
 		],
-		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerInQueue, steerStartedAt],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerInQueue, steerStartedAt, uploadingQueuedMessage],
 	);
 	const steeringTurnIds = useMemo(
 		() => (steerInQueue ? new Set([...steeringQueuedTurnIds, ...steerStartedAt.keys()]) : undefined),
@@ -1983,6 +2013,10 @@ function ChatWorkspaceContent({
 		() => (queuedSteerErrors && Object.keys(queuedSteerErrors).length > 0 ? { ...queuedSteerErrors, ...steerErrors } : steerErrors),
 		[queuedSteerErrors, steerErrors],
 	);
+	const queuedImageSource = useMemo(
+		() => ({ sessionId: snapshot.sessionId, assetBaseUrl, remoteHost: Boolean(activeRemoteHostId), hostId: activeRemoteHostId }),
+		[activeRemoteHostId, assetBaseUrl, snapshot.sessionId],
+	);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
@@ -2005,9 +2039,12 @@ function ChatWorkspaceContent({
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
 					steerErrors={queuedSteerFailures}
 					steeringTurnIds={steeringTurnIds}
+					// Its image chips read staged files from this chat's session, as the transcript's do.
+					imageSource={queuedImageSource}
 				/>
 			) : null,
 		[
+			queuedImageSource,
 			beginQueuedEdit,
 			canCancelQueuedMessage,
 			canEditQueuedMessage,
@@ -2603,6 +2640,8 @@ function ChatWorkspaceContent({
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
+										stagedImageReferences={Boolean(snapshot.supportsStagedImages)}
+										onUploadingSendChange={setUploadingSend}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
 									/>}

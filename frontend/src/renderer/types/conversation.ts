@@ -930,6 +930,8 @@ export interface McpServer {
 
 export interface ConversationSnapshot {
 	supportsFileReferences?: boolean;
+	/** The daemon takes a native image as a staged path, so its bytes cross the network once. */
+	supportsStagedImages?: boolean;
 	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
 	continueTurnId?: string;
 	conversationId: string;

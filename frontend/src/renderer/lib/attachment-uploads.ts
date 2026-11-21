@@ -11,8 +11,12 @@ import { LOCAL_HOST, type HostId } from "./hosts";
  */
 export const INLINE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
-/** One attachment on its way to the daemon: inline `data`, or a `file` still to upload (`data` is then ""). */
-export type OutgoingAttachment = { mimeType: string; data: string; name?: string; file?: Blob };
+/**
+ * One attachment on its way to the daemon: inline `data`, or a `file` still to upload (`data` is then "").
+ * A native image in a message may instead name the file this session already staged by `path`, so its
+ * bytes are not sent a second time (only where the chat reports supportsStagedImages).
+ */
+export type OutgoingAttachment = { mimeType: string; data: string; name?: string; file?: Blob; path?: string };
 
 /** What a spawn, delegate or stage request carries for one file. */
 export type WireAttachment = { mimeType: string; data?: string; uploadId?: string };
@@ -71,6 +75,26 @@ export function uploadAttachmentFile(file: Blob, hostId?: HostId, signal?: Abort
 export function toWireAttachments(attachments: readonly OutgoingAttachment[], hostId?: HostId, signal?: AbortSignal): Promise<WireAttachment[]> {
 	return Promise.all(attachments.map(async ({ mimeType, data, file }) =>
 		!data && file ? { mimeType, uploadId: await uploadAttachmentFile(file, hostId, signal) } : { mimeType, data }));
+}
+
+/**
+ * The same attachments with each staged image named by path read back as inline
+ * bytes, for a destination that has no session store to read the path from (a
+ * side chat). Attachments that carry their bytes pass through untouched.
+ */
+export async function inlineStagedAttachments(
+	attachments: OutgoingAttachment[] | undefined,
+	sessionId: string,
+	hostId?: HostId,
+): Promise<OutgoingAttachment[] | undefined> {
+	if (!attachments?.some((attachment) => attachment.path)) return attachments;
+	return Promise.all(attachments.map(async ({ path, ...attachment }) => {
+		if (!path) return attachment;
+		const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+		const response = await reportingFetch(new Request(`${uploadBase(hostId)}${route}`));
+		if (!response.ok) throw new Error("An attached image couldn’t be read back. Attach it again.");
+		return { ...attachment, data: await readBlobAsBase64(await response.blob()) };
+	}));
 }
 
 /** Read a file as base64 without its data: URL prefix, for a destination that only takes inline bytes. */

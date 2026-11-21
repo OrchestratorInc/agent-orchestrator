@@ -34,9 +34,11 @@ describe("inline image paths", () => {
 		expect(proseBesideImages(b, [])).toBe(b);
 	});
 
-	it("labels attached inline images for one-line surfaces and keeps the reference block", () => {
+	it("labels attached inline images for one-line surfaces and leaves out the reference block", () => {
 		const block = `\n\nAttached files (read these files in the workspace):\n- ${a}\n- ${b}`;
-		expect(labelInlineImages(`make ${b} like ${a}${block}`)).toBe(`make [Image 2] like [Image 1]${block}`);
+		expect(labelInlineImages(`make ${b} like ${a}${block}`)).toBe("make [Image 2] like [Image 1]");
+		expect(labelInlineImages("see the notes\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-n.pdf")).toBe("see the notes");
+		expect(labelInlineImages("no files here")).toBe("no files here");
 	});
 });
 

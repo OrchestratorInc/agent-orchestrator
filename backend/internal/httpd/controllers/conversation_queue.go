@@ -48,7 +48,13 @@ func (c *ConversationsController) editQueuedTurn(w http.ResponseWriter, r *http.
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	content, attachmentErr := conversationContent(SendConversationMessageRequest{Attachments: req.Attachments})
+	attachments, attachmentErr := c.stagedImages(r.Context(), chi.URLParam(r, "sessionId"), req.Attachments)
+	if attachmentErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			attachmentErr.code, attachmentErr.message, nil)
+		return
+	}
+	content, attachmentErr := conversationContent(SendConversationMessageRequest{Attachments: attachments})
 	if attachmentErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			attachmentErr.code, attachmentErr.message, nil)

@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,7 +95,8 @@ type ConversationsController struct {
 	// UserMessages counts accepted human steers for product telemetry. Nil
 	// counts nothing.
 	UserMessages UserMessageRecorder
-	// Renders serves agent HTML renders. Nil answers the render route 501.
+	// Renders serves agent HTML renders, and the staged images a native image
+	// names by path. Nil answers the render route 501 and refuses those paths.
 	Renders *attachmentstore.Store
 	// Search serves chat search. Nil answers the search route 501.
 	Search ConversationSearch
@@ -996,6 +998,7 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 	// Older daemons ignore this request field, so clients must negotiate support.
 	response.SupportsExcerpts = true
 	response.SupportsFileReferences = true
+	response.SupportsStagedImages = true
 	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
@@ -1041,6 +1044,11 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	var req SendConversationMessageRequest
 	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	var invalid *attachmentError
+	if req.Attachments, invalid = c.stagedImages(r.Context(), chi.URLParam(r, "sessionId"), req.Attachments); invalid != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", invalid.code, invalid.message, nil)
 		return
 	}
 	message, invalid := chatUserMessage(req, chi.URLParam(r, "sessionId"))
@@ -1112,6 +1120,65 @@ func sendConversationMessageResponse(turn domain.ConversationTurn) SendConversat
 	}
 }
 
+// stagedImages returns images with each staged path replaced by that file's
+// bytes, read from the session's own attachment store. The client sent those
+// bytes once already, to stage the file, so a message that also hands the image
+// to the agent natively need not carry them a second time. Anything other than
+// a direct file in .ao/attachments, or a file this session did not stage, is
+// refused; the size cap is checked before the file is read.
+func (c *ConversationsController) stagedImages(ctx context.Context, sessionID string, images []ConversationImageContentRequest) ([]ConversationImageContentRequest, *attachmentError) {
+	staged := false
+	for _, image := range images {
+		staged = staged || image.Path != ""
+	}
+	if !staged {
+		return images, nil
+	}
+	out := make([]ConversationImageContentRequest, len(images))
+	for i, image := range images {
+		out[i] = image
+		if image.Path == "" {
+			continue
+		}
+		if image.Data != "" {
+			return nil, &attachmentError{"INVALID_ATTACHMENT_DATA", "attachment must carry either data or a path"}
+		}
+		name, ok := attachmentstore.NameFromWorkspacePath(image.Path)
+		if !ok {
+			return nil, &attachmentError{"INVALID_ATTACHMENT_PATH", "attachment path must name a staged file in .ao/attachments"}
+		}
+		data, err := c.readStagedImage(ctx, domain.SessionID(sessionID), name)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = ConversationImageContentRequest{MIMEType: image.MIMEType, Data: base64.StdEncoding.EncodeToString(data)}
+	}
+	return out, nil
+}
+
+func (c *ConversationsController) readStagedImage(ctx context.Context, sessionID domain.SessionID, name string) ([]byte, *attachmentError) {
+	notFound := &attachmentError{"ATTACHMENT_NOT_FOUND", "staged attachment not found"}
+	if c.Renders == nil {
+		return nil, notFound
+	}
+	file, info, err := c.Renders.Open(ctx, sessionID, name)
+	if err != nil {
+		return nil, notFound
+	}
+	defer func() { _ = file.Close() }()
+	if info.Size() > maxConversationImageBytes {
+		return nil, &attachmentError{"ATTACHMENT_TOO_LARGE", "attachment is too large"}
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxConversationImageBytes+1))
+	if err != nil {
+		return nil, notFound
+	}
+	if len(data) > maxConversationImageBytes {
+		return nil, &attachmentError{"ATTACHMENT_TOO_LARGE", "attachment is too large"}
+	}
+	return data, nil
+}
+
 func conversationContent(req SendConversationMessageRequest) ([]ports.ChatContent, *attachmentError) {
 	if len(req.Excerpts)+len(req.FileReferences) > 8 {
 		return nil, &attachmentError{"CHAT_ANNOTATION_LIMIT", "At most eight annotations may be attached"}
@@ -1119,6 +1186,11 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 
 	spawnInputs := make([]AttachmentInput, 0, len(req.Attachments))
 	for _, attachment := range req.Attachments {
+		// Session routes load staged paths first (stagedImages); a path that
+		// reaches here was sent to a route with no session store to read.
+		if attachment.Path != "" {
+			return nil, &attachmentError{"ATTACHMENT_PATH_UNSUPPORTED", "this conversation does not accept staged image paths"}
+		}
 		spawnInputs = append(spawnInputs, AttachmentInput{
 			MimeType: attachment.MIMEType,
 			Data:     attachment.Data,

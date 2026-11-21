@@ -7464,7 +7464,10 @@ describe("durable queued edits", () => {
 		fireEvent.paste(composer, { clipboardData: { files: [new File(["file"], "note.txt", { type: "text/plain" })], items: [] } });
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		fireEvent.keyDown(composer, { key: "Enter" });
-		expect(screen.getByRole("button", { name: "Edit queued message" })).toBeDisabled();
+		// The message waits in the queue while its file uploads; no row can be edited meanwhile.
+		const edits = screen.getAllByRole("button", { name: "Edit queued message" });
+		expect(edits).toHaveLength(2);
+		for (const edit of edits) expect(edit).toBeDisabled();
 		await act(async () => settle([".ao/attachments/note.txt"]));
 		await waitFor(() => expect(send).toHaveBeenCalledOnce());
 		expect(send.mock.calls[0]?.[0]).toContain("ordinary prompt");

@@ -6862,8 +6862,9 @@ export interface components {
             transcriptRevision: string;
         };
         ConversationImageContentRequest: {
-            data: string;
+            data?: string;
             mimeType: string;
+            path?: string;
         };
         ConversationMCPServerPayload: {
             error?: string;
@@ -7008,6 +7009,7 @@ export interface components {
             settings: components["schemas"]["ConversationTurnSettingsPayload"];
             supportsExcerpts?: boolean;
             supportsFileReferences?: boolean;
+            supportsStagedImages?: boolean;
             threadState?: components["schemas"]["ConversationThreadStatePayload"];
             title?: string;
             turns: components["schemas"]["ConversationTurnResponse"][];

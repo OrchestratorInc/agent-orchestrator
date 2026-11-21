@@ -5,6 +5,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import { renderChat } from "../../test/render-chat";
+import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 
 const { dragEnds, dragStarts } = vi.hoisted(() => ({
 	dragEnds: new Map<string, (event: { active: { id: string }; over: { id: string } | null }) => void>(),
@@ -424,3 +425,38 @@ describe("ChatWorkspace queued excerpts", () => {
 		expect(dock).not.toHaveTextContent("Use the attached");
 	});
 });
+
+describe("QueuedMessageDock attachments", () => {
+	const shot = ".ao/attachments/attachment-1367e3e6.png";
+	const notes = ".ao/attachments/attachment-0a1b2c3d.pdf";
+	const block = (...paths: string[]) => `\n\nAttached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+
+	it("shows what the person wrote with an image chip, never AO's reference block", () => {
+		const [message] = queuedMessages([`then i got this ${shot}${block(shot)}`]);
+		render(<QueuedMessageDock messages={[message!]} />);
+		const row = screen.getByTestId("queued-message-queued-1");
+		expect(row).toHaveTextContent("then i got this");
+		expect(row).toHaveTextContent("Image 1");
+		expect(row).not.toHaveTextContent("Attached files");
+		expect(row).not.toHaveTextContent(".ao/attachments");
+	});
+
+	it("names an attached file by the name it was picked with, after the text", () => {
+		rememberAttachmentName(notes, "release-notes.pdf");
+		const [message] = queuedMessages([`summarise this${block(notes)}`]);
+		render(<QueuedMessageDock messages={[message!]} />);
+		const row = screen.getByTestId("queued-message-queued-1");
+		expect(row).toHaveTextContent("summarise thisrelease-notes.pdf");
+		expect(row).not.toHaveTextContent("attachment-0a1b2c3d");
+	});
+
+	it("says a message is still uploading and shows its picture meanwhile", () => {
+		const [message] = queuedMessages(["then i got this"]);
+		render(<QueuedMessageDock messages={[{ ...message!, pending: true, uploadingImages: ["blob:local-shot"] }]} />);
+		const row = screen.getByTestId("queued-message-queued-1");
+		expect(within(row).getByRole("status")).toHaveTextContent("Uploading…");
+		expect(row).toHaveTextContent("then i got thisImage 1");
+		expect(row.querySelector("img")).toHaveAttribute("src", "blob:local-shot");
+	});
+});
+

@@ -80,7 +80,8 @@ export type FileAttachmentOptions = {
 	maxAttachmentBytes?: number;
 };
 
-type PendingFileAttachment = Pick<FileAttachment, "id" | "name">;
+/** A file still being read or staged; an image shows its own picture meanwhile. */
+type PendingFileAttachment = Pick<FileAttachment, "id" | "name"> & { previewUrl?: string };
 
 type SharedAttachmentUpdate = {
 	pending: number;
@@ -601,7 +602,12 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (batch.length === 0) return Promise.resolve([]);
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
-		const pending = batch.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
+		// An image shows its own picture while it uploads, not a placeholder: the
+		// bytes are already here, and only their upload can take a while.
+		const pending = batch.map((file): PendingFileAttachment => {
+			const previewUrl = isSupportedImageAttachment(file.type) ? fileObjectUrl(file) : undefined;
+			return { id: crypto.randomUUID(), name: file.name, ...(previewUrl ? { previewUrl } : {}) };
+		});
 		for (const file of pending) pendingFileControllers.set(file.id, new AbortController());
 		const entries = batch.map((file, index) => ({ file, id: pending[index]!.id }));
 		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey, pending) : undefined;
@@ -621,7 +627,11 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				return [];
 			})
 			.finally(() => {
-				for (const file of pending) pendingFileControllers.delete(file.id);
+				for (const file of pending) {
+					pendingFileControllers.delete(file.id);
+					// The attached file draws from its own bytes from here on.
+					if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
+				}
 				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
 				if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
 				else {

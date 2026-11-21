@@ -41,8 +41,14 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
+	attachments, attachmentErr := c.stagedImages(r.Context(), chi.URLParam(r, "sessionId"), req.Attachments)
+	if attachmentErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			attachmentErr.code, attachmentErr.message, nil)
+		return
+	}
 	content, attachmentErr := conversationContent(SendConversationMessageRequest{
-		Attachments: req.Attachments,
+		Attachments: attachments,
 	})
 	if attachmentErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -112,8 +118,14 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
+	attachments, attachmentErr := c.stagedImages(r.Context(), chi.URLParam(r, "sessionId"), req.Attachments)
+	if attachmentErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			attachmentErr.code, attachmentErr.message, nil)
+		return
+	}
 	content, attachmentErr := conversationContent(SendConversationMessageRequest{
-		Attachments: req.Attachments,
+		Attachments: attachments,
 	})
 	if attachmentErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",

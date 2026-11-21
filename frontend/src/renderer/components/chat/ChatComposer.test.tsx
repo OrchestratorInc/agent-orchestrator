@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, type UploadingSend } from "./ChatComposer";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -2846,6 +2846,64 @@ describe("attachments", () => {
 		expect(onSend.mock.calls[0]?.[1]).toEqual([
 			{ mimeType: "image/png", data: expect.any(String) },
 		]);
+	});
+
+	it("names a staged image by its path, and stages its raw bytes, where the daemon reads staged images", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-native.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage, nativeImages: true, stagedImageReferences: true });
+
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+		// The file goes as itself, streamed to the daemon unencoded.
+		expect(stage.mock.calls[0]?.[0]).toEqual([{ mimeType: "image/png", data: "", file: expect.any(File) }]);
+		await typeInComposer(field, "inspect this");
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		// The daemon already holds the bytes, so the message only names them.
+		expect(onSend.mock.calls[0]?.[1]).toEqual([
+			{ mimeType: "image/png", data: "", path: ".ao/attachments/attachment-native.png" },
+		]);
+	});
+
+	it("takes a second image pasted while the first is still uploading", async () => {
+		const first = deferred<string[]>();
+		const second = deferred<string[]>();
+		const stage = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const { field } = renderComposer({ draftSessionId: "composer-paste-during-upload", onStageAttachments: stage });
+
+		fireEvent.paste(field, { clipboardData: clipboardData([png("first.png")]) });
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		fireEvent.paste(field, { clipboardData: clipboardData([png("second.png")]) });
+		expect(await screen.findByRole("status", { name: "Attaching second.png" })).toBeInTheDocument();
+		first.resolve([".ao/attachments/attachment-first.png"]);
+		await waitFor(() => expect(stage).toHaveBeenCalledTimes(2));
+		second.resolve([".ao/attachments/attachment-second.png"]);
+		expect(await screen.findByRole("button", { name: "Remove first.png" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove second.png" })).toBeInTheDocument();
+	});
+
+	it("lets a message go while its image uploads: it waits in the queue and the box reads as sent", async () => {
+		const staging = deferred<string[]>();
+		const stage = vi.fn(() => staging.promise);
+		const onUploadingSendChange = vi.fn();
+		const { onSend, field } = renderComposer({ draftSessionId: "composer-send-during-upload", onStageAttachments: stage, onUploadingSendChange });
+		await typeInComposer(field, "then i got this");
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await waitFor(() => expect(onUploadingSendChange).toHaveBeenCalledWith(expect.objectContaining({ text: "then i got this" })));
+		const uploading = onUploadingSendChange.mock.calls[0]![0] as UploadingSend;
+		expect(field).toHaveClass("invisible");
+		expect(onSend).not.toHaveBeenCalled();
+
+		staging.resolve([".ao/attachments/attachment-shot.png"]);
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		// The row the queue showed is the one this send replaces.
+		expect(onSend.mock.calls[0]?.[2]).toBe(uploading.clientMessageId);
+		expect(onSend.mock.calls[0]?.[0]).toContain(".ao/attachments/attachment-shot.png");
+		await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(null));
 	});
 
 	it("sends an image above the native limit by workspace path", async () => {

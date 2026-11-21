@@ -2410,6 +2410,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
 		supportsFileReferences: wire.supportsFileReferences,
+		supportsStagedImages: wire.supportsStagedImages,
 		sessionId: wire.sessionId,
 		harness: wire.harness ?? "",
 		mode: wire.mode as SessionMode,

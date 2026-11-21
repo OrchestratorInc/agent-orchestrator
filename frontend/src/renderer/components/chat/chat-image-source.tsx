@@ -11,6 +11,7 @@ import { getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { isAbsoluteMarkdownAssetSrc, resolveMarkdownImageSrc } from "../../lib/markdown-image-resolver";
 import type { SessionArtifact, WorkspaceSession } from "../../types/workspace";
 import { isInlineArtifactUrl } from "../../../shared/agent-page-url";
+import { attachmentURL } from "./messageAttachments";
 
 type ChatImageSource = { sessionId: string; version: number; baseUrl?: string; remoteHost: boolean; hostId?: string; artifacts?: SessionArtifact[]; cloud?: WorkspaceSession["cloud"] };
 
@@ -32,6 +33,16 @@ export function useChatImageSrc(src: string | undefined): string | undefined {
 	if (!source) return src;
 	if (source.remoteHost && !source.baseUrl && src && !isAbsoluteMarkdownAssetSrc(src)) return undefined;
 	return resolveMarkdownImageSrc(source.sessionId, "", src, source.version, source.baseUrl);
+}
+
+/**
+ * The daemon's copy of a file the open chat staged (.ao/attachments/…), or
+ * undefined outside a chat or while a remote host has no route to it.
+ */
+export function useChatStagedFileUrl(path: string | undefined): string | undefined {
+	const source = useContext(ChatImageSourceContext);
+	if (!source || !path || source.baseUrl === undefined) return undefined;
+	return attachmentURL(source.baseUrl, source.sessionId, path);
 }
 
 /** The session of the open chat, or undefined outside one. */

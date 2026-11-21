@@ -20027,9 +20027,10 @@ components:
           type: string
         mimeType:
           type: string
+        path:
+          type: string
       required:
       - mimeType
-      - data
       type: object
     ConversationMCPServerPayload:
       properties:
@@ -20384,6 +20385,8 @@ components:
         supportsExcerpts:
           type: boolean
         supportsFileReferences:
+          type: boolean
+        supportsStagedImages:
           type: boolean
         threadState:
           $ref: '#/components/schemas/ConversationThreadStatePayload'

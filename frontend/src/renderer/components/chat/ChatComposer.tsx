@@ -125,7 +125,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, splitInlineImagePaths, withAttachmentReferences } from "./messageAttachments";
 import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
@@ -270,6 +270,12 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined, park
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
+/**
+ * A message sent while its files were still uploading. It leaves the composer at
+ * once and shows in the queue under the id its send will use, so the real row
+ * takes its place without a jump.
+ */
+export type UploadingSend = { clientMessageId: string; text: string; images: string[] };
 export type ChatComposerHandle = {
 	focus(): void;
 	isEmpty(): boolean;
@@ -359,6 +365,8 @@ export const ChatComposer = memo(function ChatComposer({
 	assetBaseUrl,
 	remoteHost = false,
 	assetSessionId,
+	stagedImageReferences = false,
+	onUploadingSendChange,
 	acceptedClientMessageIds,
 	emptyPlaceholder,
 	promptSuggestion,
@@ -541,6 +549,13 @@ export const ChatComposer = memo(function ChatComposer({
 	remoteHost?: boolean;
 	/** Daemon wire session ID when draft storage uses a host-scoped identity. */
 	assetSessionId?: string;
+	/**
+	 * The daemon names a native image by its staged path and takes files as raw
+	 * uploads, so each file crosses the network once, unencoded.
+	 */
+	stagedImageReferences?: boolean;
+	/** A message sent while its files upload, shown in the queue until its send takes over. */
+	onUploadingSendChange?: (send: UploadingSend | null) => void;
 	/** Client ids already present in daemon-authoritative conversation history. */
 	acceptedClientMessageIds?: ReadonlySet<string>;
 	/**
@@ -645,6 +660,18 @@ export const ChatComposer = memo(function ChatComposer({
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
+	// A message sent while its files upload: it waits in the queue, and the draft
+	// is hidden until the upload settles (then the send clears it as usual).
+	const [awaitingUploads, setAwaitingUploads] = useState(false);
+	const uploadingSend = useRef<UploadingSend | null>(null);
+	const onUploadingSendChangeRef = useRef(onUploadingSendChange);
+	onUploadingSendChangeRef.current = onUploadingSendChange;
+	const publishUploadingSend = useCallback((send: UploadingSend | null) => {
+		if (!send && !uploadingSend.current) return;
+		uploadingSend.current = send;
+		onUploadingSendChangeRef.current?.(send);
+	}, []);
+	useEffect(() => () => publishUploadingSend(null), [publishUploadingSend]);
 	/**
 	 * Messages sent in quick succession go out one after another, in order.
 	 *
@@ -779,8 +806,13 @@ export const ChatComposer = memo(function ChatComposer({
 		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			// A file too large to inline goes as its handle on disk; the stager
-			// streams it to the daemon (toWireAttachments).
-			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal);
+			// streams it to the daemon (toWireAttachments). Where the daemon names
+			// staged images by path, every file goes that way: raw bytes are a
+			// quarter smaller than base64, which a slow link to a remote host feels.
+			const payloads = attachments.flatMap((attachment) => stagedImageReferences && attachment.file
+				? [{ mimeType: attachment.mimeType, data: "", file: attachment.file }]
+				: attachmentPayload(attachment));
+			const paths = await onStageAttachments(payloads, signal);
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
 			}
@@ -791,7 +823,7 @@ export const ChatComposer = memo(function ChatComposer({
 				return { ...attachment, stagedPath };
 			});
 		},
-		[onStageAttachments],
+		[onStageAttachments, stagedImageReferences],
 	);
 	useEffect(() => {
 		if (restoredSessionId.current === draftScopeKey) return;
@@ -843,7 +875,8 @@ export const ChatComposer = memo(function ChatComposer({
 		maxAttachmentBytes: cloudAttachments?.maxBytes,
 		prepareEach: Boolean(cloudAttachments),
 	});
-	const { pendingAttachments } = fileAttachments;
+	// A message waiting on its uploads already shows them in the queue.
+	const pendingAttachments = awaitingUploads ? [] : fileAttachments.pendingAttachments;
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
@@ -953,7 +986,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [sendInFlight]);
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
-	const stripConcealed = steerInFlight && sendConcealed;
+	const stripConcealed = (steerInFlight && sendConcealed) || awaitingUploads;
 	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
@@ -1195,13 +1228,11 @@ export const ChatComposer = memo(function ChatComposer({
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
-			if (result.draft.composer.attachments.length === 0) {
-				fileAttachments.clear();
-			} else {
-				for (const attachment of fileAttachments.getAttachments()) {
-					if (!result.draft.composer.attachments.some((kept) => kept.id === attachment.id)) {
-						fileAttachments.remove(attachment.id);
-					}
+			// Only the files that went drop. A file pasted while the send was on its way
+			// may still be uploading for the next message: clearing would cancel it.
+			for (const attachment of fileAttachments.getAttachments()) {
+				if (!result.draft.composer.attachments.some((kept) => kept.id === attachment.id)) {
+					fileAttachments.remove(attachment.id);
 				}
 			}
 			return result.cleared && !unsavedText.current;
@@ -1834,6 +1865,8 @@ export const ChatComposer = memo(function ChatComposer({
 			await performClaimedSubmit(forceSteer, mutationToken);
 		} finally {
 			if (draftScope && mutationToken) cancelChatComposerMutation(draftScope, mutationToken);
+			setAwaitingUploads(false);
+			publishUploadingSend(null);
 		}
 	}
 
@@ -1887,7 +1920,32 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
-		await fileAttachments.toSettledPayload();
+		// Files still uploading: the message leaves the box now and waits in the
+		// queue with its pictures, instead of the box greying out until the upload
+		// ends. It keeps the id its send will use, so the real row replaces it in place.
+		let uploadingId: string | undefined;
+		if (draftScope && !recoveringDelivery && !savingQueuedEdit && !forceSteer && fileAttachments.preparing) {
+			uploadingId = crypto.randomUUID();
+			setAwaitingUploads(true);
+			publishUploadingSend({
+				clientMessageId: uploadingId,
+				// Images show as chips in the row, so their paths leave the text.
+				text: splitInlineImagePaths(currentText)
+					.flatMap((segment) => (segment.path === undefined ? [segment.text] : []))
+					.join("")
+					.replace(/[ \t]{2,}/g, " ")
+					.trim(),
+				images: [
+					...fileAttachments.attachments.flatMap((attachment) => attachment.dataUrl && isSupportedImageAttachment(attachment.mimeType) ? [attachment.dataUrl] : []),
+					...fileAttachments.pendingAttachments.flatMap((file) => file.previewUrl ? [file.previewUrl] : []),
+				],
+			});
+		}
+		try {
+			await fileAttachments.toSettledPayload();
+		} finally {
+			setAwaitingUploads(false);
+		}
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
 		const settledAttachments = fileAttachments.getAttachments();
@@ -1972,13 +2030,25 @@ export const ChatComposer = memo(function ChatComposer({
 			nativeImageBytes += attachment.bytes;
 			return true;
 		});
-		let nativePayloads = nativeImageAttachments.flatMap(({ mimeType, data }) =>
-			data ? [{ mimeType, data }] : []);
+		// The daemon already holds each staged image, so where it reads them by path
+		// the message names them instead of carrying their bytes a second time.
+		const byPath = (attachment: FileAttachment): FileAttachmentPayload[] =>
+			stagedImageReferences && attachment.stagedPath ? [{ mimeType: attachment.mimeType, data: "", path: attachment.stagedPath }] : [];
+		let nativePayloads = nativeImageAttachments.flatMap((attachment) => {
+			const named = byPath(attachment);
+			if (named.length > 0) return named;
+			return attachment.data ? [{ mimeType: attachment.mimeType, data: attachment.data }] : [];
+		});
 		const restoreNativePayloads = async (): Promise<boolean> => {
 			if (!attachmentScope || !sendNativeImages || recoveringDelivery?.kind === "steer" || recoveringDelivery?.state === "accepted") return true;
 			const restored: FileAttachmentPayload[] = [];
 			try {
 				for (const attachment of nativeImageAttachments) {
+					const named = byPath(attachment);
+					if (named.length > 0) {
+						restored.push(...named);
+						continue;
+					}
 					if (attachment.data) {
 						restored.push({ mimeType: attachment.mimeType, data: attachment.data });
 						continue;
@@ -2107,7 +2177,7 @@ export const ChatComposer = memo(function ChatComposer({
 			excerpts: capturedReferences,
 			fileReferences: capturedFiles,
 			requestText,
-			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
+			clientMessageId: recoveringDelivery?.clientMessageId ?? uploadingId ?? crypto.randomUUID(),
 		});
 		if (!prepared.ok) {
 			setTextDraftPersistenceError(
@@ -2413,19 +2483,34 @@ export const ChatComposer = memo(function ChatComposer({
 	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
+		// The spot shows the pasted picture meanwhile.
+		const firstImage = files.find((file) => isSupportedImageAttachment(file.type));
+		const reservationSrc = firstImage && typeof URL.createObjectURL === "function" ? URL.createObjectURL(firstImage) : undefined;
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
-			? editor.current?.reserveImages()
+			? editor.current?.reserveImages(reservationSrc)
 			: undefined;
+		if (!reservation && reservationSrc) URL.revokeObjectURL(reservationSrc);
 		void fileAttachments.addFiles(files).then((added) => {
 			if (!reservation) return;
 			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
 				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			if (reservationSrc) URL.revokeObjectURL(reservationSrc);
 		});
 	}
 
+	/**
+	 * Attaching waits only while a send is still gathering its files, which a new
+	 * one would join. Another file still uploading does not stop it (batches are
+	 * added one after another), and neither does a send already on its way: it
+	 * keeps the files it took, and a new one belongs to the next message.
+	 */
+	function attachBlocked() {
+		return !canAttach || ((draftMutationPending || submitInFlight.current !== null) && !optimisticSend);
+	}
+
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
+		if (attachBlocked()) return;
 		const clipboard = event.clipboardData;
 		const files = Array.from(clipboard?.files ?? []);
 		if (files.length === 0) return;
@@ -2438,7 +2523,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onDrop(event: DragEvent<HTMLFormElement>) {
 		setDragging(false);
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
+		if (attachBlocked()) return;
 		const files = Array.from(event.dataTransfer?.files ?? []);
 		if (files.length === 0) return;
 		event.preventDefault();
@@ -2661,11 +2746,20 @@ export const ChatComposer = memo(function ChatComposer({
 										aria-label={`Attaching ${file.name}`}
 										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
-										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
-										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
-											<span className="invisible">{file.name}</span>
-											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
-										</span>
+										{/* An image shows its own picture while it uploads; the pulse says it is still on its way. */}
+										{file.previewUrl ? (
+											<img src={file.previewUrl} alt="" aria-hidden="true" className="size-6 shrink-0 rounded-sm object-cover motion-safe:animate-pulse" />
+										) : (
+											<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
+										)}
+										{file.previewUrl ? (
+											<span aria-hidden="true" className="max-w-[120px] truncate text-xs text-muted-foreground">{file.name}</span>
+										) : (
+											<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
+												<span className="invisible">{file.name}</span>
+												<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
+											</span>
+										)}
 										{/* Removing a file while it attaches cancels it. */}
 										<Button
 											type="button"
@@ -2726,7 +2820,7 @@ export const ChatComposer = memo(function ChatComposer({
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					readOnly={typingLocked}
 					enterSends={enterSends}
-					concealed={sendConcealed && !optimisticSend}
+					concealed={(sendConcealed || awaitingUploads) && !optimisticSend}
 					label="Message the agent"
 					placeholder={
 						disabledPlaceholder ?? (disabled
@@ -2789,7 +2883,7 @@ export const ChatComposer = memo(function ChatComposer({
 									hidden
 									disabled={controlsDisabled}
 									onChange={(event) => {
-										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
+										if (!disabled && !attachBlocked()) {
 											attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
@@ -2830,7 +2924,7 @@ export const ChatComposer = memo(function ChatComposer({
 												icon={Paperclip}
 												title="Files"
 												description="Attach files to this message"
-												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+												disabled={queuedEditRecovery || draftMutationPending}
 												onSelect={() => filePicker.current?.click()}
 											/>
 											{addMenuItems}
@@ -2843,7 +2937,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="quiet"
 										size="icon-sm"
 										shape="pill"
-										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
 										onClick={() => filePicker.current?.click()}
 										aria-label="Attach a file"
 										className="shrink-0"

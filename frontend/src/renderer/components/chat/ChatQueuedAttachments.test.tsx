@@ -515,3 +515,29 @@ describe("queued message attachments", () => {
 	});
 
 });
+
+describe("send during upload", () => {
+	it("shows the message in the queue at once while its image uploads, then sends it", async () => {
+		const { send, stage, field } = setup();
+		let finishStaging!: (paths: string[]) => void;
+		stage.mockImplementation(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
+		await typeInLexicalEditor(field, "then i got this");
+		fireEvent.paste(field, {
+			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" })], items: [] },
+		});
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		const dock = await screen.findByTestId("queued-message-dock");
+		expect(within(dock).getByText("Uploading…")).toBeInTheDocument();
+		expect(dock).toHaveTextContent("then i got this");
+		// The queued message already there keeps its own row, without AO's file list.
+		expect(dock).toHaveTextContent("inspect this");
+		expect(dock).not.toHaveTextContent("Attached files");
+		expect(send).not.toHaveBeenCalled();
+
+		await act(async () => finishStaging([path]));
+		await waitFor(() => expect(send).toHaveBeenCalledOnce());
+		expect(send.mock.calls[0]?.[0]).toContain(`then i got this ${path}`);
+	});
+});

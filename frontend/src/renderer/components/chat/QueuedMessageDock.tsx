@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import {
 	DndContext,
@@ -13,15 +13,18 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "@/components/app-icons";
+import { ChevronDown, Circle, CornerDownLeft, File as FileIcon, GripVertical, Image as ImageIcon, Pencil, Trash2 } from "@/components/app-icons";
 import { apiErrorMessage } from "../../lib/api-client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import type { ConversationContentSummary, ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
-import { labelInlineImages } from "./messageAttachments";
+import { attachmentName, IMAGE_ATTACHMENT_PATH, labelInlineImages, splitInlineImagePaths, stagedAttachmentParts } from "./messageAttachments";
 import { withoutAnnotationPlaceholder } from "./ChatTimelineItems";
+import { ChatImageSourceProvider, useChatStagedFileUrl } from "./chat-image-source";
+import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
+import { readAttachmentNames } from "../../lib/chat-attachment-names";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 import { formatFileChatReference } from "../../../shared/file-annotations";
 
@@ -30,7 +33,66 @@ export type QueuedMessage = {
 	message: ConversationMessage;
 	/** Sent but not yet confirmed by the daemon: shown at once, with no actions until it has a turn id. */
 	pending?: boolean;
+	/** Sent while its files upload: the local pictures of its images, shown until the upload settles. */
+	uploadingImages?: string[];
 };
+
+const CHIP_CLASS = "mx-0.5 inline-flex max-w-32 items-center gap-1 rounded-md border border-border-strong bg-interactive-hover py-px pl-px pr-1 align-middle leading-none text-foreground";
+
+/** An attached image as the composer shows it: its picture and its number. */
+function QueuedImageChip({ path, src, label }: { path?: string; src?: string; label: string }) {
+	const local = useSentAttachmentPreview(src ? undefined : path);
+	const staged = useChatStagedFileUrl(src ? undefined : path);
+	const url = src ?? local.url ?? staged;
+	return (
+		<span className={CHIP_CLASS}>
+			{url ? (
+				<img src={url} alt="" onError={local.onError} className="size-3.5 shrink-0 rounded-[3px] object-cover" />
+			) : (
+				<ImageIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+			)}
+			<span className="truncate">{label}</span>
+		</span>
+	);
+}
+
+/** An attached file that is not an image: its name as the person picked it. */
+function QueuedFileChip({ path }: { path: string }) {
+	return (
+		<span className={cn(CHIP_CLASS, "pl-1")}>
+			<FileIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+			<span className="truncate">{readAttachmentNames()[path] ?? attachmentName(path)}</span>
+		</span>
+	);
+}
+
+/**
+ * What the person wrote, with each attached image as a chip where they put it
+ * and the rest after the text. AO's reference block, the agent's instruction to
+ * open the files, is not part of the message and is not shown.
+ */
+function QueuedMessageText({ text, uploadingImages, label }: { text: string; uploadingImages?: string[]; label: (index: number) => string }) {
+	const { body, attachments } = stagedAttachmentParts(text);
+	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	const files = attachments.filter((path) => !IMAGE_ATTACHMENT_PATH.test(path));
+	const segments = splitInlineImagePaths(body, (path) => images.includes(path));
+	const inline = new Set(segments.flatMap((segment) => (segment.path === undefined ? [] : [segment.path])));
+	return (
+		<>
+			{segments.map((segment, index) => segment.path === undefined ? (
+				<Fragment key={index}>{segment.text}</Fragment>
+			) : (
+				<QueuedImageChip key={index} path={segment.path} label={label(images.indexOf(segment.path) + 1)} />
+			))}
+			{images.filter((path) => !inline.has(path)).map((path) => (
+				<QueuedImageChip key={path} path={path} label={label(images.indexOf(path) + 1)} />
+			))}
+			{files.map((path) => <QueuedFileChip key={path} path={path} />)}
+			{uploadingImages?.map((src, index) => <QueuedImageChip key={`uploading-${index}`} src={src} label={label(index + 1)} />)}
+		</>
+	);
+}
+
 
 const QUEUE_DOCK_VISIBLE_ROWS = 5;
 const REORDER_ACTIVATION_DISTANCE = 4;
@@ -98,6 +160,7 @@ function sortableRowStyle({
 
 function QueuedMessageRowContent({
 	message,
+	uploadingImages,
 	showPersistentSteer,
 	enterSteers = false,
 	showHoverSteer = false,
@@ -118,6 +181,7 @@ function QueuedMessageRowContent({
 	dragHandleProps,
 }: {
 	message: ConversationMessage;
+	uploadingImages?: string[];
 	showPersistentSteer?: boolean;
 	/** Cmd/Ctrl+Enter in the empty composer steers this row; the button shows the key. */
 	enterSteers?: boolean;
@@ -146,6 +210,7 @@ function QueuedMessageRowContent({
 	// batches from the same page indistinguishable.
 	const annotationLabel = (item: ParsedBrowserAnnotationItem) =>
 		item.comment || (item.changes.length > 0 ? t("chat.automation.visualChanges", { count: item.changes.length }) : item.target);
+	const imageLabel = (index: number) => t("chat.image.numbered", { index });
 	// A message of only chat excerpts or file references carries a stand-in
 	// text for the agent; the row shows what was selected, and the comment on
 	// it, instead.
@@ -157,10 +222,8 @@ function QueuedMessageRowContent({
 			: t("chat.excerpt.flowchartAttached");
 		return item.comment?.trim() ? `${oneLine(item.comment, max)} · ${quote}` : quote;
 	};
-	const typed = labelInlineImages(
-		withoutAnnotationPlaceholder(message.text, references.length),
-		(index) => t("chat.image.numbered", { index }),
-	);
+	const typedText = withoutAnnotationPlaceholder(message.text, references.length);
+	const typed = labelInlineImages(typedText, imageLabel);
 	const showReferences = !typed.trim() && references.length > 0;
 	// Several excerpts show the first, with a count kept clear of its truncation.
 	const referenceCount = showReferences && references.length > 1
@@ -198,12 +261,18 @@ function QueuedMessageRowContent({
 					className="queue-dock-row-text min-w-0 truncate text-xs leading-relaxed text-foreground"
 					title={tooltip}
 				>
-					{text}
+					{annotations || showReferences ? text : <QueuedMessageText text={typedText} uploadingImages={uploadingImages} label={imageLabel} />}
 				</p>
 				{referenceCount ? (
 					<span className="shrink-0 text-xs leading-relaxed text-muted-foreground">{referenceCount}</span>
 				) : null}
 			</div>
+			{/* In the row, not under it: the dock is sized to whole rows. The actions keep their place. */}
+			{uploadingImages ? (
+				<span role="status" className="shrink-0 text-xs text-muted-foreground motion-safe:animate-pulse">
+					Uploading…
+				</span>
+			) : null}
 			<div className="queue-dock-actions flex shrink-0 items-center gap-0.5 whitespace-nowrap">
 				{showHoverSteerButton ? (
 					<Button
@@ -304,6 +373,7 @@ function QueuedMessageRowContent({
 function SortableQueuedMessageRow({
 	turnId,
 	message,
+	uploadingImages,
 	hiddenFromView,
 	showPersistentSteer,
 	enterSteers,
@@ -327,6 +397,7 @@ function SortableQueuedMessageRow({
 }: {
 	turnId: string;
 	message: ConversationMessage;
+	uploadingImages?: string[];
 	hiddenFromView?: boolean;
 	showPersistentSteer?: boolean;
 	enterSteers?: boolean;
@@ -389,6 +460,7 @@ function SortableQueuedMessageRow({
 				dragHandleRef={setActivatorNodeRef}
 				enterSteers={enterSteers}
 				message={message}
+				uploadingImages={uploadingImages}
 				onBeginQueuedEdit={onBeginQueuedEdit}
 				canEditMessage={canEditMessage}
 				onCancelQueuedTurn={onCancelQueuedTurn}
@@ -434,6 +506,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	cancelPendingTurnId,
 	steeringTurnIds,
 	steerErrors,
+	imageSource,
 }: {
 	messages: QueuedMessage[];
 	disabled?: boolean;
@@ -459,6 +532,12 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	 */
 	steeringTurnIds?: ReadonlySet<string>;
 	steerErrors?: Readonly<Record<string, string>>;
+	/**
+	 * The chat whose staged files the image chips show. Given as a prop, not by
+	 * wrapping the dock, because the composer clones the dock element to pass its
+	 * sending state.
+	 */
+	imageSource?: { sessionId: string; assetBaseUrl?: string; remoteHost?: boolean; hostId?: string };
 }) {
 	const [expanded, setExpanded] = useState(true);
 	const [errors, setErrors] = useState<Record<string, string>>({});
@@ -666,7 +745,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		suppressHoverSteer: hoverSteerSuppressed || isReordering,
 	};
 
-	return (
+	const dock = (
 		<div
 			className="queue-dock overflow-hidden rounded-[var(--radius-chat-composer)] border border-border bg-surface"
 			data-testid="queued-message-dock"
@@ -737,7 +816,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 									isOpen && count >= QUEUE_DOCK_VISIBLE_ROWS && "queue-dock-scroll-active",
 								)}
 							>
-								{displayMessages.map(({ turnId, message, pending }, index) => {
+								{displayMessages.map(({ turnId, message, pending, uploadingImages }, index) => {
 									const steering = steeringTurnIds?.has(turnId) ?? false;
 									const deleting = cancelPendingTurnId === turnId;
 									// A steering row keeps its Delete: deleting it withdraws the steer.
@@ -752,6 +831,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											key={message.clientMessageId ?? turnId}
 											turnId={turnId}
 											message={message}
+											uploadingImages={uploadingImages}
 											// Folded, the dock keeps the next message to send in view.
 											hiddenFromView={!isOpen && index !== 0}
 											// Every row's Steer, and the next row's key hint, stay put while a
@@ -787,4 +867,5 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			) : null}
 		</div>
 	);
+	return imageSource ? <ChatImageSourceProvider {...imageSource}>{dock}</ChatImageSourceProvider> : dock;
 });
