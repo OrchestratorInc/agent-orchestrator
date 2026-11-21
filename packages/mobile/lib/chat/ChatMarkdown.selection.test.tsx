@@ -143,7 +143,8 @@ it("keeps inline links operable in the continuously selectable response", () => 
 	act(() => renderer.unmount());
 });
 
-it("fades new Markdown text in place through the final append", () => {
+it("fades new Markdown text in place through the final append on Android", () => {
+	platform.OS = "android";
 	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
 	vi.stubGlobal("requestAnimationFrame", (callback: () => void) => setTimeout(callback, 16));
 	vi.stubGlobal("cancelAnimationFrame", clearTimeout);
@@ -190,6 +191,25 @@ it("fades new Markdown text in place through the final append", () => {
 		act(() => renderer?.unmount());
 		vi.unstubAllGlobals();
 		vi.useRealTimers();
+		platform.OS = "ios";
+	}
+});
+
+it("lets the iOS text view animate the reply without replacing its inline content", () => {
+	const intro = "# Guide\n\nRead [the docs](https://example.com/docs)";
+	let renderer!: ReactTestRenderer;
+	try {
+		act(() => { renderer = create(<ChatMarkdown continuousSelection fadeStreamingText streaming text={intro} />); });
+		const selectable = () => renderer.root.find((node) => node.props.selectable === true);
+		expect(selectable().props.appendedTextFade).toBe("streaming");
+		expect(textOf(selectable())).toBe("Guide\n\nRead the docs");
+		act(() => { renderer.update(<ChatMarkdown continuousSelection fadeStreamingText text={intro + " for details."} />); });
+		expect(selectable().props.appendedTextFade).toBe("settled");
+		expect(textOf(selectable())).toBe("Guide\n\nRead the docs for details.");
+		act(() => { renderer.update(<ChatMarkdown continuousSelection streaming text={intro} />); });
+		expect(selectable().props.appendedTextFade).toBeUndefined();
+	} finally {
+		act(() => renderer?.unmount());
 	}
 });
 

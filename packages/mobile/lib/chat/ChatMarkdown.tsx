@@ -127,7 +127,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		const images = imagesInPlace ? [] : blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
 			{splitRuns(blocks, imagesInPlace, diagrams && !streaming).map((run, index) => Array.isArray(run)
-				? <SelectableResponseText key={index} blocks={run} streaming={streaming} fadeStreamingText={fadeStreamingText && text.length <= STREAM_SMOOTH_MAX_CHARS} source={selectionSource} onSelect={onAddSelection} />
+				? <SelectableResponseText key={index} blocks={run} streaming={streaming} fadeStreamingText={fadeStreamingText && (Platform.OS === "ios" || text.length <= STREAM_SMOOTH_MAX_CHARS)} source={selectionSource} onSelect={onAddSelection} />
 				: run.kind === "code"
 					? <DiagramFence key={index} code={run.text} codeBlock={<CodeBlock {...run} nestedScroll={nestedScroll} />} />
 				: run.kind === "image"
@@ -253,10 +253,13 @@ export function SelectableResponseText({ blocks, source, onSelect, streaming = f
 		if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
 		return <Text key={index}>{separator}────────</Text>;
 	}), [blocks, openFiles, styles]);
-	const renderedText = useMemo(() => fadeStreamingText ? responseText(content) : undefined, [content, fadeStreamingText]);
+	const nativeFade = Platform.OS === "ios";
+	const animateInlineColors = fadeStreamingText && !nativeFade;
+	const renderedText = useMemo(() => animateInlineColors ? responseText(content) : undefined, [content, animateInlineColors]);
 	const fades = useStreamingTextFade(renderedText, streaming);
-	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
-		{fadeStreamingText && fades.length ? fadeResponseText(content, fades, t.textPrimary) : content}
+	const appendedTextFade = nativeFade && fadeStreamingText ? (streaming ? "streaming" : "settled") : undefined;
+	return <Text selectable uiTextView appendedTextFade={appendedTextFade} selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
+		{animateInlineColors && fades.length ? fadeResponseText(content, fades, t.textPrimary) : content}
 	</Text>;
 }
 
@@ -279,13 +282,11 @@ function fadeResponseText(content: ReactNode, fades: TextFade[], baseColor: stri
 		if (isValidElement<ResponseTextProps>(node)) {
 			const { children, label, style: ownStyle } = node.props;
 			if (label !== undefined) {
-				// iOS uses the link's text fragments for hit testing and VoiceOver.
 				offset += label.length;
 				return node;
 			}
 			const ownColor = StyleSheet.flatten(ownStyle)?.color;
-			const inheritedColor = Platform.OS === "ios" ? baseColor : color;
-			const next = visit(children, ownStyle, typeof ownColor === "string" ? ownColor : inheritedColor);
+			const next = visit(children, ownStyle, typeof ownColor === "string" ? ownColor : color);
 			return next === children ? node : cloneElement(node, { children: next });
 		}
 		if (typeof node !== "string") return node;
@@ -301,7 +302,6 @@ function fadeResponseText(content: ReactNode, fades: TextFade[], baseColor: stri
 			const from = Math.max(start, fade.start);
 			const to = Math.min(end, fade.end);
 			if (from > at) parts.push(node.slice(at - start, from - start));
-			// The iOS text view flattens spans against the root, so copy the run's style.
 			parts.push(<Text key={from} style={[style, { color: withAlpha(color, fade.opacity) }]}>{node.slice(from - start, to - start)}</Text>);
 			at = to;
 		}

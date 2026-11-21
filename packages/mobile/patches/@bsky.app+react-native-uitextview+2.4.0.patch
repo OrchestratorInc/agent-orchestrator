@@ -1,11 +1,108 @@
 diff --git a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
-index 45700cd..ecb864d 100644
+index 45700cd..1b8506f 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
 +++ b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
-@@ -26,13 +26,59 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
+@@ -3,6 +3,7 @@
+ #import "RNUITextViewComponentDescriptor.h"
+ #import "RNUITextViewChild.h"
+ #import <React/RCTConversions.h>
++#import <QuartzCore/QuartzCore.h>
+ 
+ #import <react/renderer/textlayoutmanager/RCTAttributedTextUtils.h>
+ #import <react/renderer/components/RNUITextViewSpec/EventEmitters.h>
+@@ -26,13 +27,151 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
    }
  }
  
++struct AOTextReveal {
++  NSRange characters;
++  CFTimeInterval beganAt;
++};
++
++static constexpr CFTimeInterval AOTextFadeDuration = 0.3;
++
++// Only glyph drawing changes during a fade. TextKit keeps the same storage,
++// line layout and selection until a new batch of characters actually arrives.
++@interface AOStreamingLayoutManager : NSLayoutManager
++- (void)revealCharacters:(NSRange)characters;
++- (void)finishReveals;
++@end
++
++@implementation AOStreamingLayoutManager {
++  std::vector<AOTextReveal> _reveals;
++  CADisplayLink *_displayLink;
++}
++
++- (void)revealCharacters:(NSRange)characters
++{
++  _reveals.push_back({characters, CACurrentMediaTime()});
++  [self invalidateDisplayForCharacterRange:characters];
++  if (_displayLink == nil) {
++    _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(updateReveals:)];
++    [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
++  }
++}
++
++- (void)updateReveals:(CADisplayLink *)displayLink
++{
++  const NSUInteger start = _reveals.front().characters.location;
++  const NSUInteger end = NSMaxRange(_reveals.back().characters);
++  auto firstVisible = _reveals.begin();
++  while (firstVisible != _reveals.end() && displayLink.targetTimestamp - firstVisible->beganAt >= AOTextFadeDuration) {
++    ++firstVisible;
++  }
++  _reveals.erase(_reveals.begin(), firstVisible);
++  [self invalidateDisplayForCharacterRange:NSMakeRange(start, end - start)];
++  if (_reveals.empty()) {
++    [_displayLink invalidate];
++    _displayLink = nil;
++  }
++}
++
++- (void)finishReveals
++{
++  if (_reveals.empty()) return;
++  const NSUInteger start = _reveals.front().characters.location;
++  const NSUInteger end = NSMaxRange(_reveals.back().characters);
++  _reveals.clear();
++  [_displayLink invalidate];
++  _displayLink = nil;
++  [self invalidateDisplayForCharacterRange:NSMakeRange(start, end - start)];
++}
++
++- (void)drawGlyphsForGlyphRange:(NSRange)glyphs atPoint:(CGPoint)origin
++{
++  CGContextRef context = UIGraphicsGetCurrentContext();
++  if (_reveals.empty() || context == nil) {
++    [super drawGlyphsForGlyphRange:glyphs atPoint:origin];
++    return;
++  }
++
++  const CFTimeInterval now = CACurrentMediaTime();
++  NSUInteger cursor = glyphs.location;
++  const NSUInteger end = NSMaxRange(glyphs);
++  for (const auto &reveal : _reveals) {
++    const NSRange range = [self glyphRangeForCharacterRange:reveal.characters actualCharacterRange:nullptr];
++    const NSUInteger start = MAX(cursor, range.location);
++    const NSUInteger stop = MIN(end, NSMaxRange(range));
++    if (stop <= start) continue;
++
++    if (start > cursor) {
++      [super drawGlyphsForGlyphRange:NSMakeRange(cursor, start - cursor) atPoint:origin];
++    }
++    const CGFloat remaining = MAX(0.0, 1.0 - (now - reveal.beganAt) / AOTextFadeDuration);
++    CGContextSaveGState(context);
++    CGContextSetAlpha(context, 1.0 - remaining * remaining);
++    [super drawGlyphsForGlyphRange:NSMakeRange(start, stop - start) atPoint:origin];
++    CGContextRestoreGState(context);
++    cursor = stop;
++  }
++  if (cursor < end) {
++    [super drawGlyphsForGlyphRange:NSMakeRange(cursor, end - cursor) atPoint:origin];
++  }
++}
++@end
++
 +// iOS 15 uses the responder menu; iOS 16+ uses the UITextView edit-menu delegate.
 +@interface AOResponseTextView : UITextView
 +@property (nonatomic) BOOL addToChatEnabled;
@@ -60,15 +157,24 @@ index 45700cd..ecb864d 100644
    UIView * _view;
 -  UITextView * _textView;
 +  AOResponseTextView * _textView;
++  NSTextStorage *_streamingTextStorage;
++  AOStreamingLayoutManager *_streamingLayout;
++  BOOL _wasStreaming;
    RNUITextViewShadowNode::ConcreteState::Shared _state;
    UITapGestureRecognizer * _outsideTapRecognizer;
    BOOL _suppressSelectionChange;
-@@ -53,12 +99,16 @@ - (instancetype)initWithFrame:(CGRect)frame
+@@ -53,12 +192,22 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
      self.contentView = _view;
      self.clipsToBounds = true;
  
 -    _textView = [[UITextView alloc] init];
-+    _textView = [[AOResponseTextView alloc] init];
++    _streamingTextStorage = [[NSTextStorage alloc] init];
++    _streamingLayout = [[AOStreamingLayoutManager alloc] init];
++    [_streamingTextStorage addLayoutManager:_streamingLayout];
++    NSTextContainer *container = [[NSTextContainer alloc] initWithSize:CGSizeZero];
++    container.widthTracksTextView = YES;
++    [_streamingLayout addTextContainer:container];
++    _textView = [[AOResponseTextView alloc] initWithFrame:CGRectZero textContainer:container];
 +    __weak RNUITextView *weakSelf = self;
 +    _textView.addToChatHandler = ^{ [weakSelf addSelectedTextToChat]; };
      _textView.scrollEnabled = false;
@@ -81,16 +187,26 @@ index 45700cd..ecb864d 100644
      // Keep UIKit's initial state in sync with the Codegen prop default. Since
      // both oldProps and newProps default to `tail`, updateProps will not apply
      // this value on the first render.
-@@ -109,6 +159,8 @@ - (void)prepareForRecycle
+@@ -95,6 +244,7 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
+   if (self.window) {
+     [self.window addGestureRecognizer:_outsideTapRecognizer];
+   } else {
++    [_streamingLayout finishReveals];
+     [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
+   }
+ }
+@@ -109,6 +259,10 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
  {
    [super prepareForRecycle];
    _state.reset();
++  [_streamingLayout finishReveals];
++  _wasStreaming = NO;
 +  [_textView resignFirstResponder];
 +  _textView.addToChatEnabled = NO;
  
    // Reset the frame to zero so that when it properly lays out on the next use
    _textView.frame = CGRectZero;
-@@ -136,7 +188,20 @@ - (void)drawRect:(CGRect)rect
+@@ -136,18 +290,40 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
    const auto &props = *std::static_pointer_cast<RNUITextViewProps const>(_props);
  
    const auto attrString = _state->getData().attributedString;
@@ -112,11 +228,48 @@ index 45700cd..ecb864d 100644
  
    // Setting attributedText clears any active text selection, and re-assigning
    // the frame triggers a layout flush that has the same effect. Bail out
-@@ -196,10 +261,16 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   // entirely when nothing actually changed so a JS-side state update made in
+   // response to onSelectionChange doesn't deselect what the user is selecting.
++  const BOOL streaming = props.appendedTextFade == RNUITextViewAppendedTextFade::Streaming;
++  const BOOL allowFade = self.window && props.appendedTextFade != RNUITextViewAppendedTextFade::Off &&
++      (streaming || _wasStreaming) && !UIAccessibilityIsReduceMotionEnabled();
++  _wasStreaming = streaming;
+   const BOOL textChanged = ![_textView.attributedText isEqualToAttributedString:convertedAttrString];
+   const BOOL frameChanged = !CGRectEqualToRect(_textView.frame, _view.frame);
+   if (!textChanged && !frameChanged) {
+     return;
+   }
+   if (textChanged) {
++    NSString *previousText = _textView.text;
++    NSString *nextText = convertedAttrString.string;
++    const BOOL appended = previousText.length > 0 && nextText.length > previousText.length &&
++        [nextText hasPrefix:previousText];
++    if (!appended) [_streamingLayout finishReveals];
+     // Reassigning attributedText clears any active selection. Save it and
+     // restore after, while suppressing the synthetic textViewDidChangeSelection
+     // events the clear-then-restore would otherwise produce — those would
+@@ -159,6 +335,9 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
+       _textView.selectedRange = savedRange;
+     }
+     _suppressSelectionChange = NO;
++    if (appended && allowFade) {
++      [_streamingLayout revealCharacters:NSMakeRange(previousText.length, nextText.length - previousText.length)];
++    }
+   }
+   if (frameChanged) {
+     _textView.frame = _view.frame;
+@@ -196,10 +375,23 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
      _textView.textContainer.maximumNumberOfLines = newViewProps.numberOfLines;
    }
  
 +  _textView.addToChatEnabled = newViewProps.addToChatEnabled;
++
++  if (oldViewProps.appendedTextFade != newViewProps.appendedTextFade) {
++    if (newViewProps.appendedTextFade == RNUITextViewAppendedTextFade::Off) {
++      [_streamingLayout finishReveals];
++    }
++    [self setNeedsDisplay];
++  }
 +
    if (oldViewProps.selectable != newViewProps.selectable) {
      _textView.selectable = newViewProps.selectable;
@@ -129,7 +282,7 @@ index 45700cd..ecb864d 100644
    if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
      if (@available(iOS 11.0, *)) {
        _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
-@@ -310,6 +381,14 @@ - (CGPoint)getLocationOfPress:(UIGestureRecognizer*)sender
+@@ -310,6 +502,14 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
  - (void)handlePressIfNecessary:(UITapGestureRecognizer*)sender
  {
    const auto location = [self getLocationOfPress:sender];
@@ -144,7 +297,7 @@ index 45700cd..ecb864d 100644
    const auto eventEmitter = [self getTouchEventEmitter:location];
  
    if (eventEmitter) {
-@@ -337,6 +416,49 @@ - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
+@@ -337,6 +537,49 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
  
  // MARK: - UITextViewDelegate
  
@@ -211,7 +364,7 @@ index 15b5c6b..e7f8e76 100644
    return shadowView;
  }
 diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
-index 30b49b0..85e7686 100644
+index 30b49b0..34c48fb 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
 @@ -1,5 +1,6 @@
@@ -232,10 +385,11 @@ index 30b49b0..85e7686 100644
  interface TextLayoutEvent extends TargetedEvent {
    lines: string[]
  }
-@@ -29,7 +34,10 @@ interface NativeProps extends ViewProps {
+@@ -29,7 +34,11 @@ interface NativeProps extends ViewProps {
    numberOfLines?: CodegenTypes.Int32
    allowFontScaling?: CodegenTypes.WithDefault<boolean, true>
    ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, 'tail'>
++  appendedTextFade?: CodegenTypes.WithDefault<'off' | 'streaming' | 'settled', 'off'>
 +  addToChatEnabled?: boolean
 +  onAddToChat?: CodegenTypes.BubblingEventHandler<AddToChatEvent>
    selectable?: boolean
@@ -244,7 +398,7 @@ index 30b49b0..85e7686 100644
    /**
     * Callback fired when the text selection changes.
 diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts
-index 30b49b0..85e7686 100644
+index 30b49b0..34c48fb 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts
 @@ -1,5 +1,6 @@
@@ -265,10 +419,11 @@ index 30b49b0..85e7686 100644
  interface TextLayoutEvent extends TargetedEvent {
    lines: string[]
  }
-@@ -29,7 +34,10 @@ interface NativeProps extends ViewProps {
+@@ -29,7 +34,11 @@ interface NativeProps extends ViewProps {
    numberOfLines?: CodegenTypes.Int32
    allowFontScaling?: CodegenTypes.WithDefault<boolean, true>
    ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, 'tail'>
++  appendedTextFade?: CodegenTypes.WithDefault<'off' | 'streaming' | 'settled', 'off'>
 +  addToChatEnabled?: boolean
 +  onAddToChat?: CodegenTypes.BubblingEventHandler<AddToChatEvent>
    selectable?: boolean
@@ -277,33 +432,35 @@ index 30b49b0..85e7686 100644
    /**
     * Callback fired when the text selection changes.
 diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts
-index 8fea174..624d445 100644
+index 8fea174..50a1016 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts
-@@ -11,6 +11,8 @@ export type SelectionChangeEvent = {
+@@ -11,6 +11,9 @@ export type SelectionChangeEvent = {
      };
  };
  type UITextViewProps = TextProps & {
++    appendedTextFade?: 'off' | 'streaming' | 'settled';
 +    addToChatEnabled?: boolean;
 +    onAddToChat?: (event: {nativeEvent: {target: number; text: string}}) => void;
      uiTextView?: boolean;
      /**
       * Fired when the native text selection changes. Only fires on iOS when
 diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts
-index 8fea174..624d445 100644
+index 8fea174..50a1016 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts
-@@ -11,6 +11,8 @@ export type SelectionChangeEvent = {
+@@ -11,6 +11,9 @@ export type SelectionChangeEvent = {
      };
  };
  type UITextViewProps = TextProps & {
++    appendedTextFade?: 'off' | 'streaming' | 'settled';
 +    addToChatEnabled?: boolean;
 +    onAddToChat?: (event: {nativeEvent: {target: number; text: string}}) => void;
      uiTextView?: boolean;
      /**
       * Fired when the native text selection changes. Only fires on iOS when
 diff --git a/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
-index 30b49b0..85e7686 100644
+index 30b49b0..34c48fb 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
 @@ -1,5 +1,6 @@
@@ -324,10 +481,11 @@ index 30b49b0..85e7686 100644
  interface TextLayoutEvent extends TargetedEvent {
    lines: string[]
  }
-@@ -29,7 +34,10 @@ interface NativeProps extends ViewProps {
+@@ -29,7 +34,11 @@ interface NativeProps extends ViewProps {
    numberOfLines?: CodegenTypes.Int32
    allowFontScaling?: CodegenTypes.WithDefault<boolean, true>
    ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, 'tail'>
++  appendedTextFade?: CodegenTypes.WithDefault<'off' | 'streaming' | 'settled', 'off'>
 +  addToChatEnabled?: boolean
 +  onAddToChat?: CodegenTypes.BubblingEventHandler<AddToChatEvent>
    selectable?: boolean
@@ -336,13 +494,14 @@ index 30b49b0..85e7686 100644
    /**
     * Callback fired when the text selection changes.
 diff --git a/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx b/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx
-index 840d76a..13166f1 100644
+index 840d76a..293e2fc 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx
 +++ b/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx
-@@ -31,6 +31,8 @@ export type SelectionChangeEvent = {
+@@ -31,6 +31,9 @@ export type SelectionChangeEvent = {
  }
  
  type UITextViewProps = TextProps & {
++  appendedTextFade?: 'off' | 'streaming' | 'settled'
 +  addToChatEnabled?: boolean
 +  onAddToChat?: (event: {nativeEvent: {target: number; text: string}}) => void
    uiTextView?: boolean
