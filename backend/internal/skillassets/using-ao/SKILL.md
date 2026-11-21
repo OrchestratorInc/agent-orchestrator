@@ -43,6 +43,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 - When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
+- In a Chat session, the `ao` tool server gives the session commands as tools: `session_spawn`, `session_wait`, `session_read`, `session_send`, `session_list`, `pending_list`, `pending_respond`, `pr_status`, `report`, and others. Each does what the matching `ao` command does, and works when the shell cannot reach the daemon. After `session_spawn`, call `session_wait` rather than polling `ao session ls`. A tool that starts or changes another session runs only when this session has full access; when one refuses, run the `ao` command, which asks the user for approval as any command does.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
 - To refer to a session in Orchestrator Chat or the Orchestrator terminal, use the canonical in-app

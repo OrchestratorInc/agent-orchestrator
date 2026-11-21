@@ -29,6 +29,10 @@ func (d daemonClient) GetJSON(ctx context.Context, path string, out any) error {
 	return d.do(ctx, http.MethodGet, path, nil, out)
 }
 
+func (d daemonClient) DoJSON(ctx context.Context, method, path string, body, out any) error {
+	return d.do(ctx, method, path, body, out)
+}
+
 func (d daemonClient) PostJSON(ctx context.Context, path string, body, out any) error {
 	return d.do(ctx, http.MethodPost, path, body, out)
 }

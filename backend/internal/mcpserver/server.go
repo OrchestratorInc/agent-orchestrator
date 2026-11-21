@@ -39,6 +39,7 @@ var Version = "dev"
 type Daemon interface {
 	GetJSON(ctx context.Context, path string, out any) error
 	PostJSON(ctx context.Context, path string, body, out any) error
+	DoJSON(ctx context.Context, method, path string, body, out any) error
 }
 
 type server struct {
@@ -127,7 +128,7 @@ func (s *server) handleMCP(ctx context.Context, state *mcpState, line []byte) *m
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
-		tools := append(append([]map[string]any{}, mcpTools...), s.cuaTools(ctx, state)...)
+		tools := append(append(append([]map[string]any{}, mcpTools...), catalogDefinitions()...), s.cuaTools(ctx, state)...)
 		resp.Result = map[string]any{"tools": tools}
 	case "tools/call":
 		var p struct {
@@ -141,6 +142,10 @@ func (s *server) handleMCP(ctx context.Context, state *mcpState, line []byte) *m
 		case "html_render":
 			resp.Result = s.callHTMLRender(ctx, p.Arguments)
 		default:
+			if tool, ok := findCatalogTool(p.Name); ok {
+				resp.Result = s.callCatalog(ctx, tool, p.Arguments)
+				break
+			}
 			if s.cuaTools(ctx, state) != nil && state.cuaNames[p.Name] {
 				resp.Result = s.callCua(ctx, p.Name, p.Arguments)
 				break
