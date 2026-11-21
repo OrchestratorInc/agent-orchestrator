@@ -36,7 +36,7 @@ type primeImportProof struct {
 // PrepareImportedSession forks through the provider's taskless RPC startup.
 // EOF disposes its engine before AO checkpoints the exact returned native ID.
 // Native output and the retry proof stay in AO's managed Prime session root.
-func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (_ ports.NativeSessionRef, retErr error) {
 	var empty ports.NativeSessionRef
 	source, found, err := p.LocateTranscript(ctx, ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir})
 	if err != nil {
@@ -72,10 +72,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if ref, found, err := readPrimeImportProof(ctx, root, marker, proof, expected); err != nil || found {
 		return ref, err
 	}
-	before, err := primeSessionFiles(ctx, root)
-	if err != nil {
-		return empty, err
-	}
 	binary, err := p.primeAgentBinary(ctx)
 	if err != nil {
 		return empty, err
@@ -87,20 +83,42 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if env == nil {
 		env = map[string]string{}
 	}
-	env["PRIME_AGENT_SESSION_DIR"] = root
 	profile, err := primeDataDir(r.DataDir)
 	if err != nil {
 		return empty, err
 	}
 	env[primeAgentCodingAgentDirEnv] = profile
 	env["PRIME_AGENT_DAEMON_SOCKET"] = filepath.Join(profile, "daemon.sock")
+	// The provider writes only to this preparation's private output directory.
+	// A shared-root files-minus-before snapshot cannot establish ownership:
+	// another import or an ordinary session may create files concurrently.
+	attemptRoot, err := os.MkdirTemp(root, ".ao-import-attempt-")
+	if err != nil {
+		return empty, err
+	}
+	adopted := false
+	var stderr []byte
+	defer func() {
+		if !adopted {
+			if err := os.RemoveAll(attemptRoot); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("remove unadopted prime fork: %w", err))
+			}
+		}
+		if retErr != nil && len(stderr) > 0 {
+			if len(stderr) > primeForkStderrLimit {
+				stderr = stderr[len(stderr)-primeForkStderrLimit:]
+			}
+			retErr = fmt.Errorf("%w; prime stderr tail: %s", retErr, strings.TrimSpace(string(stderr)))
+		}
+	}()
+	env["PRIME_AGENT_SESSION_DIR"] = attemptRoot
 	runner := p.runCommand
 	if runner == nil {
 		runner = runPrimeNativeFork
 	}
 	forkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	_, err = runner(forkCtx, binary, workspace, env, "--mode", "rpc", "--offline", "--daemon-socket", env["PRIME_AGENT_DAEMON_SOCKET"], "--session-dir", root, "--cwd", workspace, "--fork", source)
+	stderr, err = runner(forkCtx, binary, workspace, env, "--mode", "rpc", "--offline", "--daemon-socket", env["PRIME_AGENT_DAEMON_SOCKET"], "--session-dir", attemptRoot, "--cwd", workspace, "--fork", source)
 	if err != nil {
 		if ctxErr := forkCtx.Err(); ctxErr != nil {
 			return empty, ctxErr
@@ -111,22 +129,19 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err != nil || after.digest != expected.digest || after.count != expected.count {
 		return empty, errors.New("prime native source changed during preparation")
 	}
-	files, err := primeSessionFiles(ctx, root)
+	files, err := primeSessionFiles(ctx, attemptRoot)
 	if err != nil {
 		return empty, err
 	}
 	for path := range files {
-		if before[path] {
-			continue
-		}
-		history, err := readPrimeNativeHistory(ctx, root, path, expected.count)
+		history, err := readPrimeNativeHistory(ctx, attemptRoot, path, expected.count)
 		if err != nil || !primeForkMatches(history, proof, expected) {
 			continue
 		}
 		if proof.TargetID != "" {
 			return empty, errors.New("prime native fork identity is ambiguous")
 		}
-		complete, err := readPrimeNativeHistory(ctx, root, path, 0)
+		complete, err := readPrimeNativeHistory(ctx, attemptRoot, path, 0)
 		if err != nil {
 			return empty, err
 		}
@@ -145,8 +160,18 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return empty, err
 	}
 	if err := publishPrimeImportProof(root, marker, data); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			// Another preparation may have published this same import. Reuse
+			// only its fully validated proof and discard our unadopted output.
+			if ref, found, proofErr := readPrimeImportProof(ctx, root, marker, proof, expected); proofErr != nil {
+				return empty, errors.Join(err, proofErr)
+			} else if found {
+				return ref, nil
+			}
+		}
 		return empty, err
 	}
+	adopted = true
 	return ports.NativeSessionRef{NativeSessionID: proof.TargetID, ConfigDir: root, TranscriptPath: filepath.Join(root, proof.TargetPath)}, nil
 }
 
@@ -229,6 +254,25 @@ func runPrimeNativeFork(ctx context.Context, binary, workingDir string, env map[
 	})
 	// A nil stdin supplies EOF, not a prompt or an RPC command. Prime's RPC
 	// shutdown disposes the engine/kernel and exits after the native fork.
-	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	return nil, cmd.Run()
+	var stderr primeForkStderrTail
+	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	err := cmd.Run()
+	return stderr.data, err
+}
+
+const primeForkStderrLimit = 4 << 10
+
+type primeForkStderrTail struct{ data []byte }
+
+func (tail *primeForkStderrTail) Write(data []byte) (int, error) {
+	n := len(data)
+	if n >= primeForkStderrLimit {
+		tail.data = append(tail.data[:0], data[n-primeForkStderrLimit:]...)
+	} else {
+		if discard := len(tail.data) + n - primeForkStderrLimit; discard > 0 {
+			tail.data = append(tail.data[:0], tail.data[discard:]...)
+		}
+		tail.data = append(tail.data, data...)
+	}
+	return n, nil
 }
