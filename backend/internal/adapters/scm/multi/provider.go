@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
@@ -256,6 +257,40 @@ func (m *Provider) ChangePullRequestState(ctx context.Context, request ports.SCM
 		return fmt.Errorf("%w: pull request state changes for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
 	}
 	return changer.ChangePullRequestState(ctx, request)
+}
+
+// mergeQueuer returns the sub-provider for name when it has merge queues.
+func (m *Provider) mergeQueuer(name string) (ports.SCMMergeQueuer, error) {
+	if m == nil {
+		return nil, fmt.Errorf("%w: merge queue provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	queuer, ok := p.(ports.SCMMergeQueuer)
+	if !ok {
+		return nil, fmt.Errorf("%w: merge queues for provider %q", ports.ErrSCMUnsupported, name)
+	}
+	return queuer, nil
+}
+
+// EnqueuePullRequest delegates to the sub-provider matching request.PR.Repo.Provider.
+func (m *Provider) EnqueuePullRequest(ctx context.Context, request ports.SCMEnqueueRequest) (domain.MergeQueueEntry, error) {
+	queuer, err := m.mergeQueuer(request.PR.Repo.Provider)
+	if err != nil {
+		return domain.MergeQueueEntry{}, err
+	}
+	return queuer.EnqueuePullRequest(ctx, request)
+}
+
+// DequeuePullRequest delegates to the sub-provider matching request.PR.Repo.Provider.
+func (m *Provider) DequeuePullRequest(ctx context.Context, request ports.SCMDequeueRequest) error {
+	queuer, err := m.mergeQueuer(request.PR.Repo.Provider)
+	if err != nil {
+		return err
+	}
+	return queuer.DequeuePullRequest(ctx, request)
 }
 
 // stacker returns the sub-provider for name when it supports stacks.

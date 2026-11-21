@@ -1056,6 +1056,129 @@ describe("SessionInspector PR section", () => {
     expect(screen.getByRole("menuitemradio", { name: "Squash and merge" })).toBeInTheDocument();
   });
 
+  describe("merge queue", () => {
+    const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const queuePR = (overrides: Partial<SessionPRSummary> = {}) => prSummary(7, "open", {
+      url: "https://example.com/pr/7",
+      headSha: head,
+      mergeQueueRequired: true,
+      review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+      ...overrides,
+    });
+    // The daemon serves whatever the PR currently is, so a refetch after a write shows the write.
+    const serveLive = (initial: SessionPRSummary) => {
+      const live = { current: initial };
+      const respond = commonGetsResponder();
+      getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { prs: [live.current], linkedPrs: [] } }
+        : respond(path));
+      renderWithQuery(
+        <SessionInspector session={session([pr(initial.number, initial.state, { url: initial.url })])} />,
+        undefined,
+        (client) => seedPRSummaries(client, [initial]),
+      );
+      return live;
+    };
+
+    it("adds a ready PR to the queue where the base branch requires one", async () => {
+      const live = serveLive(queuePR());
+      postMock.mockImplementation(async (path: string) => {
+        if (path !== "/api/v1/prs/{id}/merge") return { data: { ok: true }, error: undefined };
+        live.current = queuePR({ mergeQueue: { state: "queued", position: 3, estimatedSecondsToMerge: 540 } });
+        return { data: { ok: true, prNumber: 7, method: "squash", state: "open", stateChangedAt: "2026-11-13T09:00:00Z", queue: { state: "queued", position: 3, estimatedSecondsToMerge: 540 } }, error: undefined };
+      });
+
+      const add = await screen.findByRole("button", { name: "Add PR #7 to the merge queue" });
+      expect(add).toHaveTextContent("Add to merge queue");
+      await waitFor(() => expect(add).toBeEnabled());
+      expect(screen.queryByRole("button", { name: /Squash and merge/ })).not.toBeInTheDocument();
+      await userEvent.click(add);
+
+      // The same merge route, pinned to the head on screen; the daemon decides it's an enqueue.
+      await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/merge", {
+        params: { path: { id: "7" } },
+        body: { prUrl: "https://example.com/pr/7", expectedHeadSha: head, method: "squash", allowNoChecks: true },
+      }));
+      const queued = await screen.findByRole("button", { name: "PR #7: Queued · #3" });
+      expect(queued).toBeDisabled();
+      expect(screen.getByTestId("pr-queue-status")).toHaveTextContent("Waiting in the queue · Position 3 · about 9 min");
+      expect(prSection("Pull request").queryByText("merged")).not.toBeInTheDocument();
+    });
+
+    it("leaves the merge method to the queue", async () => {
+      serveLive(queuePR());
+      await screen.findByRole("button", { name: "Add PR #7 to the merge queue" });
+      await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+      expect(screen.getByText("The merge queue sets the merge method.")).toBeInTheDocument();
+      expect(screen.queryByRole("menuitemradio", { name: "Squash and merge" })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Close pull request" })).toBeInTheDocument();
+    });
+
+    it("keeps a queue PR greyed out while something still holds it", async () => {
+      serveLive(queuePR({ ci: { autoInjectCI: true, state: "failing", failingChecks: [{ name: "lint", status: "failed", conclusion: "failure" }], checks: [] } }));
+      const add = await screen.findByRole("button", { name: "Add PR #7 to the merge queue" });
+      expect(add).toBeDisabled();
+      expect(add).toHaveAttribute("title", "Merging opens once the failing checks pass.");
+    });
+
+    it("shows a queued PR's place and takes it out of the queue", async () => {
+      const live = serveLive(queuePR({ mergeQueue: { state: "awaiting_checks", position: 1 } }));
+      postMock.mockImplementation(async (path: string) => {
+        if (path === "/api/v1/prs/{id}/dequeue") live.current = queuePR();
+        return { data: { ok: true, prNumber: 7, changedAt: "2026-11-13T09:05:00Z" }, error: undefined };
+      });
+
+      expect(await screen.findByRole("button", { name: "PR #7: Queued · #1" })).toBeDisabled();
+      expect(screen.getByTestId("pr-queue-status")).toHaveTextContent("Queue checks running · Position 1");
+      // Queued is not blocked: no reason is offered for a merge that is under way.
+      expect(screen.getByRole("button", { name: "PR #7: Queued · #1" })).not.toHaveAttribute("title");
+      expect(screen.queryByRole("button", { name: /merge queue$/ })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+      expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("menuitem", { name: "Remove from queue" }));
+
+      await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/dequeue", {
+        params: { path: { id: "7" } },
+        body: { prUrl: "https://example.com/pr/7" },
+      }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add PR #7 to the merge queue" })).toBeEnabled());
+      expect(screen.queryByTestId("pr-queue-status")).not.toBeInTheDocument();
+      expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
+    });
+
+    it("says why a PR couldn't leave the queue", async () => {
+      serveLive(queuePR({ mergeQueue: { state: "locked", position: 1 } }));
+      postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/dequeue"
+        ? { data: undefined, error: { error: { code: "PR_ACTION_REJECTED", message: "GitHub refused the change" } } }
+        : { data: { ok: true }, error: undefined });
+      await userEvent.click(await screen.findByRole("button", { name: "More actions for PR #7" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Remove from queue" }));
+      const statuses = await within(screen.getByTestId("pr-action-button")).findAllByRole("status");
+      expect(statuses.some((node) => /GitHub refused the change|Could not remove PR #7/.test(node.textContent ?? ""))).toBe(true);
+    });
+
+    it("says a queued PR is in the queue, not blocked, on its tab", async () => {
+      servePRTab(queuePR({
+        mergeQueue: { state: "queued", position: 4 },
+        // What a direct merge would be told on a queue-protected branch.
+        mergeability: { state: "blocked", reasons: ["blocked_by_provider"], prUrl: "https://example.com/pr/7", conflictFiles: [] },
+      }));
+      const side = within(await screen.findByTestId("pr-tab-side"));
+      expect(side.getByText("In merge queue")).toBeInTheDocument();
+      expect(side.queryByText(/blocked|unavailable/i)).not.toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "PR #7: Queued · #4" })).toBeDisabled();
+    });
+
+    it("leaves a PR on a branch with no queue exactly as it was", async () => {
+      serveLive(queuePR({ mergeQueueRequired: false }));
+      const merge = await screen.findByRole("button", { name: "Squash and merge: PR #7" });
+      await waitFor(() => expect(merge).toBeEnabled());
+      expect(screen.queryByRole("button", { name: /merge queue/ })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("pr-queue-status")).not.toBeInTheDocument();
+    });
+  });
+
   const conversationPR = () => prSummary(7, "open", {
     url: "https://example.com/pr/7",
     detailsObservedAt: "2026-06-15T12:00:00Z",
