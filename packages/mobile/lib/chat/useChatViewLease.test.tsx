@@ -186,7 +186,7 @@ it("treats an older daemon without chat-view support as best-effort", async () =
 it("counts the chat as covered only by sheets above it in its own stack", () => {
 	const chat = { key: "chat", name: "session/[id]" };
 	expect(coveredOnlyBySheets([chat], "chat")).toBe(true);
-	expect(coveredOnlyBySheets([chat, { key: "s", name: "sheets/composer-picker" }], "chat")).toBe(true);
+	expect(coveredOnlyBySheets([chat, { key: "s", name: "sheets/conversation-usage" }], "chat")).toBe(true);
 	expect(coveredOnlyBySheets([chat, { key: "p", name: "preview/[id]" }], "chat")).toBe(false);
 	expect(coveredOnlyBySheets([{ key: "tabs", name: "(tabs)" }], "chat")).toBe(false);
 	expect(coveredOnlyBySheets(undefined, "chat")).toBe(false);

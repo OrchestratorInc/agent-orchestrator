@@ -252,3 +252,59 @@ func TestChatPermissionModesRouteListsEachAgentsModes(t *testing.T) {
 		t.Fatalf("permission modes = %d %s\nwant 200 %s", status, body, want)
 	}
 }
+
+type fakeSwitchCatalog struct{ catalog ports.AgentModelCatalog }
+
+func (f fakeSwitchCatalog) ModelCatalog(context.Context, string, string, bool) (ports.AgentModelCatalog, error) {
+	return f.catalog, nil
+}
+
+func switchWithCatalog(t *testing.T, svc *fakeConversationService, body string) (int, string) {
+	t.Helper()
+	r := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc, Models: fakeSwitchCatalog{ports.AgentModelCatalog{
+		CustomModelEntry: ports.CustomModelEntryDirect,
+		Models: []ports.AgentModelInfo{
+			{ID: "claude-opus-5-5", Efforts: []string{"low", "medium", "high", "max"}},
+			{ID: "claude-haiku-4-5-20251001"},
+		},
+	}}}).Register(r)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(body)))
+	return rec.Code, rec.Body.String()
+}
+
+func TestProviderSwitchChecksEffortAgainstTheTargetCatalog(t *testing.T) {
+	for _, tc := range []struct {
+		body, want, model string
+		status            int
+		called            bool
+	}{
+		{`{"targetHarness":"claude-code","effort":"ultra-mega"}`, `effort \"ultra-mega\" is not one of low, medium, high, max`, "", http.StatusBadRequest, false},
+		{`{"targetHarness":"claude-code","model":"claude-haiku-4-5-20251001","effort":"high"}`, "takes no reasoning effort", "", http.StatusBadRequest, false},
+		{`{"targetHarness":"claude-code","model":"claude-opus-5-5[1m]","effort":"MAX"}`, `{"status":"ok"}`, "claude-opus-5-5[1m]", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"Claude-Opus-5-5"}`, `{"status":"ok"}`, "claude-opus-5-5", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"opus"}`, `{"status":"ok"}`, "opus", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"o"}`, "o is not in claude-code's model list", "o", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"gpt-5.5"}`, "gpt-5.5 is not in claude-code's model list", "gpt-5.5", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","permissionMode":"bypass"}`, `permission mode \"bypass\" is not one of`, "", http.StatusBadRequest, false},
+	} {
+		svc := &fakeConversationService{}
+		status, body := switchWithCatalog(t, svc, tc.body)
+		if status != tc.status || !bytes.Contains([]byte(body), []byte(tc.want)) || (svc.switchRequest.TargetHarness != "") != tc.called || svc.switchRequest.Model != tc.model {
+			t.Fatalf("%s: %d %s called=%v model=%q", tc.body, status, body, svc.switchRequest.TargetHarness != "", svc.switchRequest.Model)
+		}
+	}
+	svc := &fakeConversationService{}
+	if _, body := switchWithCatalog(t, svc, `{"targetHarness":"claude-code","effort":"MAX"}`); svc.switchRequest.Effort != "max" {
+		t.Fatalf("effort = %q (%s), want the catalog's own value", svc.switchRequest.Effort, body)
+	}
+}
+
+func TestProviderSwitchReportsWhatAForcedSwitchStopped(t *testing.T) {
+	svc := &fakeConversationService{switchResult: domain.ProviderSwitchResult{StoppedTurn: true, CancelledQueued: 2, FailedApprovals: true}}
+	status, body := providerSwitchRouteRequest(t, svc, http.MethodPost, "/sessions/p1-1/provider-switch", `{"targetHarness":"codex","force":true}`)
+	if status != http.StatusOK || string(bytes.TrimSpace(body)) != `{"status":"ok","stoppedTurn":true,"cancelledQueuedMessages":2,"failedPendingApprovals":true}` {
+		t.Fatalf("switch = %d %s", status, body)
+	}
+}

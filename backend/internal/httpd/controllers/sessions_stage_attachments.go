@@ -16,8 +16,9 @@ import (
 // that fails is reported before any message claiming to carry an attachment is
 // recorded — the timeline never shows an attachment that is not on disk.
 //
-// The caps and blocked-type rules are the spawn ones, unchanged: this is the
-// same operation against a session that already exists.
+// The count and blocked-type rules are the spawn ones, unchanged: this is the
+// same operation against a session that already exists. A large file arrives
+// as an uploadId (see uploadAttachment), not as inline bytes.
 func (c *SessionsController) stageAttachments(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/attachments")
@@ -46,7 +47,7 @@ func (c *SessionsController) stageAttachments(w http.ResponseWriter, r *http.Req
 	id := sessionID(r)
 	paths, err := c.Svc.StageAttachments(r.Context(), id, attachments)
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		writeAttachmentWriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, StageSessionAttachmentsResponse{

@@ -30,8 +30,20 @@ type ShellTerminal struct {
 	WorkingDir string           `json:"workingDir"`
 	Title      string           `json:"title"`
 	// TerminalTitle is present only when the program's title should label the tab.
-	TerminalTitle string    `json:"terminalTitle,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	TerminalTitle string              `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	EndedAt       *time.Time          `json:"endedAt,omitempty"`
+	ResumeHarness domain.AgentHarness `json:"resumeHarness,omitempty"`
+}
+
+// ReopenShellTerminalInput asks to replace an ended shell with a fresh one in
+// the same place. ResumeAgent also resumes the agent that was running there;
+// nothing the old shell ran is ever replayed.
+type ReopenShellTerminalInput struct {
+	HandleID    string
+	Shell       string
+	ResumeAgent bool
+	Cols, Rows  int
 }
 
 // OpenShellTerminalInput is the request to open a new shell pane. An empty

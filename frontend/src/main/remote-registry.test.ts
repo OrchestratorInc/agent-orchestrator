@@ -15,7 +15,7 @@ describe("connected remote hosts", () => {
 			base: "http://127.0.0.1:7654/token",
 			previewUrl: (_sessionId, sourceUrl) => sourceUrl,
 			resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl,
-			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url) => url,
+			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url) => url,
 			close: async () => { closed++; },
 		}));
 		await registry.connect(workbox);
@@ -32,7 +32,7 @@ describe("connected remote hosts", () => {
 			base: `http://127.0.0.1:7654/${entry.hostId}`,
 			previewUrl: (_sessionId, sourceUrl) => sourceUrl,
 			resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl,
-			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url) => url,
+			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url) => url,
 			close: async () => { closed.push(entry.url); },
 		}));
 		await registry.connect(workbox);
@@ -43,7 +43,7 @@ describe("connected remote hosts", () => {
 	});
 
 	it("closes an in-flight connection before app shutdown finishes", async () => {
-		let finishStart!: (value: { base: string; previewUrl: (_sessionId: string, sourceUrl: string) => string; resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => string; agentBrowserUrl: (_sessionId: string) => Promise<string>; isAgentBrowserUrl: (url: string) => boolean; externalUrl: (url: string) => string; close: () => Promise<void> }) => void;
+		let finishStart!: (value: { base: string; previewUrl: (_sessionId: string, sourceUrl: string) => string; resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => string; agentBrowserUrl: (_sessionId: string) => Promise<string>; isAgentBrowserUrl: (url: string) => boolean; isRenderUrl: (url: string) => boolean; externalUrl: (url: string) => string; close: () => Promise<void> }) => void;
 		let closeCount = 0;
 		const registry = new RemoteRegistry(async () => new Promise((resolve) => { finishStart = resolve; }));
 		const connecting = registry.connect(workbox);
@@ -53,7 +53,7 @@ describe("connected remote hosts", () => {
 			base: "http://127.0.0.1:7654/token",
 			previewUrl: (_sessionId, sourceUrl) => sourceUrl,
 			resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl,
-			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url) => url,
+			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url) => url,
 			close: async () => { closeCount++; },
 		});
 		await Promise.all([connecting, shutdown]);
@@ -67,7 +67,7 @@ describe("connected remote hosts", () => {
 			base: `http://127.0.0.1:7654/${entry.url.includes("https") ? "tailscale" : "lan"}`,
 			previewUrl: (_sessionId, sourceUrl) => sourceUrl,
 			resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl,
-			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url) => url,
+			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url) => url,
 			close: async () => { closed.push(entry.url); },
 		}));
 		await registry.connect(workbox);
@@ -83,7 +83,7 @@ describe("connected remote hosts", () => {
 		expect(closed).toEqual([workbox.url, "https://workbox.tailnet"]);
 	});
 	it("does not leave a proxy serving after a connect and disconnect overlap", async () => {
-		let finishStart!: (value: { base: string; previewUrl: (_sessionId: string, sourceUrl: string) => string; resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => string; agentBrowserUrl: (_sessionId: string) => Promise<string>; isAgentBrowserUrl: (url: string) => boolean; externalUrl: (url: string) => string; close: () => Promise<void> }) => void;
+		let finishStart!: (value: { base: string; previewUrl: (_sessionId: string, sourceUrl: string) => string; resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => string; agentBrowserUrl: (_sessionId: string) => Promise<string>; isAgentBrowserUrl: (url: string) => boolean; isRenderUrl: (url: string) => boolean; externalUrl: (url: string) => string; close: () => Promise<void> }) => void;
 		let startCount = 0;
 		let closeCount = 0;
 		const registry = new RemoteRegistry(async () => {
@@ -100,7 +100,7 @@ describe("connected remote hosts", () => {
 			base: "http://127.0.0.1:7654/token",
 			previewUrl: (_sessionId, sourceUrl) => sourceUrl,
 			resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl,
-			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url) => url,
+			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url) => url,
 			close: async () => { closeCount++; },
 		});
 		await Promise.all([first, second, disconnect]);
