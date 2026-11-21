@@ -33,6 +33,8 @@ var _ ports.AgentTranscriptLocator = (*Plugin)(nil)
 type agyImportProof struct {
 	ID, SourceRoot, SourcePath, CWD, Fingerprint string
 	Version                                      string
+	Meta                                         bool `json:",omitempty"`
+	Brain                                        bool `json:",omitempty"`
 }
 
 func (p *Plugin) checkImportVersion(ctx context.Context) error {
@@ -78,14 +80,11 @@ func importBinaryVersion(ctx context.Context, binary string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-// PrepareImportedSession snapshots just the selected closed conversation DB.
+// PrepareImportedSession snapshots the selected closed conversation and assets.
 // No settings, keyring state, caches, auth files, or original files are written.
 // A separate Gemini root permits the same native ID without two writers sharing
 // one conversation. Only the private copy's workspace metadata is changed.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	if err := p.checkImportVersion(ctx); err != nil {
-		return ports.NativeSessionRef{}, err
-	}
 	if !importID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.DataDir) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.SourceCWD) || r.SourceFingerprint == "" {
 		return ports.NativeSessionRef{}, errors.New("agy: incomplete native import selection")
 	}
@@ -94,27 +93,34 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, errors.New("agy: import workspace must exist and be absolute")
 	}
 	proof := agyImportProof{ID: r.NativeSessionID, SourceRoot: r.ConfigDir, SourcePath: r.TranscriptPath, CWD: launch, Fingerprint: r.SourceFingerprint, Version: supportedImportVersion}
-	encoded, err := json.Marshal(proof)
-	if err != nil {
-		return ports.NativeSessionRef{}, err
-	}
-	hash := sha256.Sum256(encoded)
 	parent := filepath.Join(r.DataDir, "native-imports", "agy")
-	dest := filepath.Join(parent, hex.EncodeToString(hash[:16]))
 	mode := CLIStorageDir
 	if r.Chat {
 		mode = ACPStorageDir
 	}
-	ref := ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: dest, TranscriptPath: filepath.Join(dest, mode, "conversations", r.NativeSessionID+".db")}
-	if info, err := os.Lstat(dest); err == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return ports.NativeSessionRef{}, errors.New("agy: private import root is not a directory")
-		}
-		if err := validatePreparedImport(ctx, ref, launch, &proof); err != nil {
+	// The receipt binds whether optional native assets existed. Try each proven
+	// shape without consulting the source or installed binary. Zero flags retain
+	// the root names and receipts of imports prepared before asset snapshots.
+	for _, flags := range [][2]bool{{false, false}, {true, false}, {false, true}, {true, true}} {
+		candidate := proof
+		candidate.Meta, candidate.Brain = flags[0], flags[1]
+		ref, _, err := preparedImportRef(r.DataDir, mode, candidate)
+		if err != nil {
 			return ports.NativeSessionRef{}, err
 		}
-		return ref, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+		if info, err := os.Lstat(ref.ConfigDir); err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return ports.NativeSessionRef{}, errors.New("agy: private import root is not a directory")
+			}
+			if err := validatePreparedImport(ctx, ref, launch, &candidate); err != nil {
+				return ports.NativeSessionRef{}, err
+			}
+			return ref, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return ports.NativeSessionRef{}, err
+		}
+	}
+	if err := p.checkImportVersion(ctx); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	archive, err := ReadImportArchive(ctx, r.ConfigDir, r.TranscriptPath)
@@ -148,6 +154,20 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, err
 	}
 	defer func() { _ = provider.Close() }()
+	sourceMode := strings.Split(filepath.ToSlash(rel), "/")[0]
+	assets, err := readImportAssets(ctx, provider, sourceMode, r.NativeSessionID, true)
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if err := writeImportAssets(stage, mode, assets); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	_, proof.Meta = assets[filepath.Join("conversations", r.NativeSessionID+".meta")]
+	_, proof.Brain = assets[filepath.Join("brain", r.NativeSessionID)]
+	ref, encoded, err := preparedImportRef(r.DataDir, mode, proof)
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
 	input, err := provider.Open(rel)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
@@ -202,16 +222,33 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err := remapImportDB(ctx, staged, launch); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
+	after, err := readImportAssets(ctx, provider, sourceMode, r.NativeSessionID, true)
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if !equalImportAssets(assets, after) {
+		return ports.NativeSessionRef{}, errImportSelectionChanged
+	}
 	if err := os.WriteFile(filepath.Join(stage, importProofName), encoded, 0o600); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	if err := validatePreparedImport(ctx, ports.NativeSessionRef{NativeSessionID: ref.NativeSessionID, ConfigDir: stage, TranscriptPath: staged}, launch, &proof); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
-	if err := os.Rename(stage, dest); err != nil {
+	if err := os.Rename(stage, ref.ConfigDir); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	return ref, nil
+}
+
+func preparedImportRef(dataDir, mode string, proof agyImportProof) (ports.NativeSessionRef, []byte, error) {
+	encoded, err := json.Marshal(proof)
+	if err != nil {
+		return ports.NativeSessionRef{}, nil, err
+	}
+	hash := sha256.Sum256(encoded)
+	dest := filepath.Join(dataDir, "native-imports", "agy", hex.EncodeToString(hash[:16]))
+	return ports.NativeSessionRef{NativeSessionID: proof.ID, ConfigDir: dest, TranscriptPath: filepath.Join(dest, mode, "conversations", proof.ID+".db")}, encoded, nil
 }
 
 func remapImportDB(ctx context.Context, path, cwd string) error {
@@ -289,6 +326,9 @@ func validatePreparedImport(ctx context.Context, ref ports.NativeSessionRef, cwd
 	if proof.ID != ref.NativeSessionID || proof.CWD != cwd || proof.Version != supportedImportVersion || proof.Fingerprint == "" || (expected != nil && proof != *expected) {
 		return errors.New("agy: prepared native identity/workspace proof mismatch")
 	}
+	if err := validatePreparedImportAssets(ctx, ref, proof); err != nil {
+		return err
+	}
 	if source, err := os.Stat(proof.SourcePath); err == nil {
 		if target, err := os.Stat(ref.TranscriptPath); err == nil && os.SameFile(source, target) {
 			return errors.New("agy: prepared history must not share the source inode")
@@ -326,6 +366,12 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 		var a ImportArchive
 		var err error
 		if prepared {
+			if err := validatePreparedImportAssets(ctx, ports.NativeSessionRef{NativeSessionID: ref.NativeSessionID, ConfigDir: ref.ConfigDir, TranscriptPath: path}, proof); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return "", false, err
+			}
 			a, err = readImportArchive(ctx, ref.ConfigDir, path, false)
 		} else {
 			a, err = ReadImportArchive(ctx, ref.ConfigDir, path)
