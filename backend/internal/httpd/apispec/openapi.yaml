@@ -487,6 +487,89 @@ paths:
         to it skips it
       tags:
       - conversations
+  /api/v1/agents/{agent}/endpoint:
+    delete:
+      operationId: clearAgentEndpoint
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentEndpointResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove the custom API endpoint for one agent
+      tags:
+      - agents
+    put:
+      operationId: setAgentEndpoint
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetAgentEndpointRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentEndpointResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Store a custom API base URL and key for one agent
+      tags:
+      - agents
   /api/v1/agents/{agent}/install:
     get:
       operationId: getAgentInstallStatus
@@ -17216,6 +17299,8 @@ components:
           type: string
         available:
           type: boolean
+        customEndpoint:
+          $ref: '#/components/schemas/AgentEndpointStatus'
         displayCommand:
           type: string
         documentationUrl:
@@ -17300,6 +17385,46 @@ components:
           type:
           - "null"
           - boolean
+      type: object
+    AgentEndpointResponse:
+      properties:
+        endpoint:
+          $ref: '#/components/schemas/AgentEndpointStatus'
+      required:
+      - endpoint
+      type: object
+    AgentEndpointStatus:
+      properties:
+        authStyle:
+          enum:
+          - bearer
+          - api-key
+          type: string
+        authStyles:
+          items:
+            type: string
+          type: array
+        baseUrl:
+          type: string
+        configured:
+          type: boolean
+        defaultAuthStyle:
+          enum:
+          - bearer
+          - api-key
+          type: string
+        hasApiKey:
+          type: boolean
+        model:
+          type: string
+        supportsModel:
+          type: boolean
+      required:
+      - configured
+      - hasApiKey
+      - authStyles
+      - defaultAuthStyle
+      - supportsModel
       type: object
     AgentInfo:
       properties:
@@ -26572,6 +26697,26 @@ components:
       - ok
       - sessionId
       - state
+      type: object
+    SetAgentEndpointRequest:
+      properties:
+        apiKey:
+          description: API key; omit to keep the stored key.
+          type: string
+        authStyle:
+          description: Credential form; defaults per harness.
+          enum:
+          - bearer
+          - api-key
+          type: string
+        baseUrl:
+          description: Absolute http(s) provider endpoint URL.
+          type: string
+        model:
+          description: Optional model override.
+          type: string
+      required:
+      - baseUrl
       type: object
     SetBrowserRemoteAccessRequest:
       properties:

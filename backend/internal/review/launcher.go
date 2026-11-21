@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -681,6 +682,15 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 		for key, value := range providerkeys.Withheld(l.dataDir, string(spec.Harness)) {
 			if _, set := spec.ProjectEnv[key]; !set {
 				env[key] = value
+			}
+		}
+		// A reviewer of a harness the user pointed at a custom endpoint uses
+		// that endpoint too, as the harness's sessions do.
+		if endpointEnv, err := harnessendpoint.ForDataDir(l.dataDir).Env(string(spec.Harness)); err == nil {
+			for key, value := range endpointEnv {
+				if _, set := spec.ProjectEnv[key]; !set {
+					env[key] = value
+				}
 			}
 		}
 	}

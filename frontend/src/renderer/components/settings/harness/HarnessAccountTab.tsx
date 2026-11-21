@@ -15,6 +15,7 @@ import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import { installStage, showsInstallProgress, type HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
 import { HarnessCloudLine, type HarnessCloudState } from "./HarnessCloudLine";
+import { HarnessCustomEndpointGroup } from "./HarnessCustomEndpointGroup";
 import { HarnessInstallProgress, useInstallJustFinished } from "./HarnessInstallProgress";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessStatusDot, HarnessTimestamp } from "./harness-ui";
 
@@ -176,6 +177,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			onLogout,
 		}} /> : null}
 		{accountProvider && loginPanel ? <HarnessDetailGroup title={t("settings.harness.account")}>{loginPanel}</HarnessDetailGroup> : null}
+		{isInstalled && authPlan?.customEndpoint ? <HarnessCustomEndpointGroup agentId={details.agentId} endpoint={authPlan.customEndpoint} hostId={hostId} disabled={authBusy || details.busy} /> : null}
 		{details.loginUnconfirmed && !authBusy ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.loginUnconfirmedHint")}</p> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel

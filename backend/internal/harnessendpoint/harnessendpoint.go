@@ -1,0 +1,361 @@
+// Package harnessendpoint stores a user-chosen API endpoint (base URL and API
+// key) per harness and maps it onto the environment variables each harness
+// reads natively. The registry is generic: a harness gains support by adding
+// one Spec naming its own variables. Nothing here special-cases a provider.
+//
+// Configs live under AO's data dir beside its provider keys (never an
+// OS-default app-data location), one owner-only JSON file per harness. The API key is never returned to
+// clients; Status exposes only whether one is stored.
+package harnessendpoint
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// AuthStyle selects which of a harness's credential variables carries the key.
+type AuthStyle string
+
+const (
+	// AuthBearer sends the key as an Authorization bearer token. Most
+	// third-party gateways expect this form.
+	AuthBearer AuthStyle = "bearer"
+	// AuthAPIKey sends the key in the provider's API-key header.
+	AuthAPIKey AuthStyle = "api-key"
+)
+
+// Spec names the environment variables one harness reads for a custom endpoint.
+type Spec struct {
+	AgentID string
+	// BaseURLEnv receives the endpoint URL.
+	BaseURLEnv string
+	// KeyEnv maps each supported auth style to the variable carrying the key.
+	KeyEnv map[AuthStyle]string
+	// DefaultAuthStyle is used when a request leaves the style empty.
+	DefaultAuthStyle AuthStyle
+	// ModelEnv optionally receives a model override; empty means unsupported.
+	ModelEnv string
+}
+
+// AuthStyles returns the spec's supported auth styles in stable order.
+func (s Spec) AuthStyles() []AuthStyle {
+	out := make([]AuthStyle, 0, len(s.KeyEnv))
+	for style := range s.KeyEnv {
+		out = append(out, style)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// specs is the reviewed registry. Variable names come from each harness's own
+// documentation; clients can never supply variable names.
+var specs = map[string]Spec{
+	"claude-code": {
+		AgentID:    "claude-code",
+		BaseURLEnv: "ANTHROPIC_BASE_URL",
+		KeyEnv: map[AuthStyle]string{
+			AuthBearer: "ANTHROPIC_AUTH_TOKEN",
+			AuthAPIKey: "ANTHROPIC_API_KEY",
+		},
+		DefaultAuthStyle: AuthBearer,
+		ModelEnv:         "ANTHROPIC_MODEL",
+	},
+}
+
+// Lookup returns the spec for agentID.
+func Lookup(agentID string) (Spec, bool) {
+	spec, ok := specs[agentID]
+	return spec, ok
+}
+
+// Config is one harness's stored endpoint.
+type Config struct {
+	BaseURL   string    `json:"baseUrl"`
+	AuthStyle AuthStyle `json:"authStyle"`
+	APIKey    string    `json:"apiKey"`
+	Model     string    `json:"model,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// Input is a requested change. An empty APIKey keeps the stored key, so the
+// UI can edit the URL or model without the key ever round-tripping.
+type Input struct {
+	BaseURL   string    `json:"baseUrl" description:"Absolute http(s) provider endpoint URL."`
+	AuthStyle AuthStyle `json:"authStyle,omitempty" enum:"bearer,api-key" description:"Credential form; defaults per harness."`
+	APIKey    string    `json:"apiKey,omitempty" description:"API key; omit to keep the stored key."`
+	Model     string    `json:"model,omitempty" description:"Optional model override."`
+}
+
+// Status is the display-safe view of one harness's endpoint support.
+type Status struct {
+	Configured       bool        `json:"configured"`
+	BaseURL          string      `json:"baseUrl,omitempty"`
+	AuthStyle        AuthStyle   `json:"authStyle,omitempty" enum:"bearer,api-key"`
+	Model            string      `json:"model,omitempty"`
+	HasAPIKey        bool        `json:"hasApiKey"`
+	AuthStyles       []AuthStyle `json:"authStyles"`
+	DefaultAuthStyle AuthStyle   `json:"defaultAuthStyle" enum:"bearer,api-key"`
+	SupportsModel    bool        `json:"supportsModel"`
+}
+
+// ErrUnsupported reports a harness without a custom-endpoint spec.
+var ErrUnsupported = errors.New("custom endpoint is not supported for this harness")
+
+// ValidationError reports user-correctable input problems.
+type ValidationError struct{ Message string }
+
+func (e *ValidationError) Error() string { return e.Message }
+
+// Store persists endpoint configs under root/<agentID>/endpoint.json.
+type Store struct {
+	root string
+}
+
+// ForDataDir returns the store under AO's data directory. An empty dataDir
+// yields a disabled store rather than one rooted at a relative path.
+func ForDataDir(dataDir string) *Store {
+	if strings.TrimSpace(dataDir) == "" {
+		return NewStore("")
+	}
+	return NewStore(filepath.Join(dataDir, "harness-endpoints"))
+}
+
+// NewStore returns a store rooted at root. A nil or empty-root store reports
+// nothing configured and refuses writes.
+func NewStore(root string) *Store {
+	return &Store{root: strings.TrimSpace(root)}
+}
+
+const fileName = "endpoint.json"
+
+func (s *Store) path(agentID string) (string, error) {
+	if s == nil || s.root == "" {
+		return "", errors.New("harness endpoint store is unavailable")
+	}
+	if _, ok := specs[agentID]; !ok {
+		return "", ErrUnsupported
+	}
+	return filepath.Join(s.root, agentID, fileName), nil
+}
+
+// Load returns the stored config for agentID.
+func (s *Store) Load(agentID string) (Config, bool, error) {
+	if s == nil || s.root == "" {
+		return Config{}, false, nil
+	}
+	path, err := s.path(agentID)
+	if errors.Is(err, ErrUnsupported) {
+		return Config{}, false, nil
+	}
+	if err != nil {
+		return Config{}, false, err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return Config{}, false, nil
+	}
+	if err != nil {
+		return Config{}, false, fmt.Errorf("read %s endpoint: %w", agentID, err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, false, fmt.Errorf("parse %s endpoint: %w", agentID, err)
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" {
+		return Config{}, false, nil
+	}
+	return cfg, true, nil
+}
+
+// Status returns the display-safe view for agentID. ok is false when the
+// harness has no spec.
+func (s *Store) Status(agentID string) (Status, bool, error) {
+	spec, ok := specs[agentID]
+	if !ok {
+		return Status{}, false, nil
+	}
+	status := Status{
+		AuthStyles:       spec.AuthStyles(),
+		DefaultAuthStyle: spec.DefaultAuthStyle,
+		SupportsModel:    spec.ModelEnv != "",
+	}
+	cfg, found, err := s.Load(agentID)
+	if err != nil {
+		return status, true, err
+	}
+	if found {
+		status.Configured = true
+		status.BaseURL = cfg.BaseURL
+		status.AuthStyle = cfg.AuthStyle
+		status.Model = cfg.Model
+		status.HasAPIKey = true
+	}
+	return status, true, nil
+}
+
+// Save validates in and stores it for agentID, keeping the stored key when
+// in.APIKey is empty.
+func (s *Store) Save(agentID string, in Input, now time.Time) (Status, error) {
+	spec, ok := specs[agentID]
+	if !ok {
+		return Status{}, ErrUnsupported
+	}
+	path, err := s.path(agentID)
+	if err != nil {
+		return Status{}, err
+	}
+	existing, found, err := s.Load(agentID)
+	if err != nil {
+		return Status{}, err
+	}
+	cfg, err := normalize(spec, in)
+	if err != nil {
+		return Status{}, err
+	}
+	if cfg.APIKey == "" {
+		if !found {
+			return Status{}, &ValidationError{Message: "An API key is required."}
+		}
+		cfg.APIKey = existing.APIKey
+	}
+	cfg.UpdatedAt = now.UTC()
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return Status{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return Status{}, fmt.Errorf("create %s endpoint dir: %w", agentID, err)
+	}
+	if err := writeFileAtomic(path, data); err != nil {
+		return Status{}, fmt.Errorf("write %s endpoint: %w", agentID, err)
+	}
+	status, _, err := s.Status(agentID)
+	return status, err
+}
+
+// Delete removes agentID's stored endpoint. Deleting a missing config is not
+// an error.
+func (s *Store) Delete(agentID string) error {
+	path, err := s.path(agentID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete %s endpoint: %w", agentID, err)
+	}
+	return nil
+}
+
+// Configured reports whether agentID has a usable stored endpoint.
+func (s *Store) Configured(agentID string) (bool, error) {
+	_, found, err := s.Load(agentID)
+	return found, err
+}
+
+// Env returns the variables a session of agentID should receive for its
+// configured endpoint, or nil when none is configured. The key variable of
+// every other auth style maps to "" so a credential inherited from the
+// daemon's environment is not sent alongside the configured one. Callers
+// decide precedence: project configuration should still win.
+func (s *Store) Env(agentID string) (map[string]string, error) {
+	spec, ok := specs[agentID]
+	if !ok {
+		return nil, nil
+	}
+	cfg, found, err := s.Load(agentID)
+	if err != nil || !found {
+		return nil, err
+	}
+	style := cfg.AuthStyle
+	if _, ok := spec.KeyEnv[style]; !ok {
+		style = spec.DefaultAuthStyle
+	}
+	env := map[string]string{
+		spec.BaseURLEnv:    cfg.BaseURL,
+		spec.KeyEnv[style]: cfg.APIKey,
+	}
+	for other, name := range spec.KeyEnv {
+		if other != style {
+			env[name] = ""
+		}
+	}
+	if spec.ModelEnv != "" && cfg.Model != "" {
+		env[spec.ModelEnv] = cfg.Model
+	}
+	return env, nil
+}
+
+func normalize(spec Spec, in Input) (Config, error) {
+	baseURL := strings.TrimSpace(in.BaseURL)
+	apiKey := strings.TrimSpace(in.APIKey)
+	model := strings.TrimSpace(in.Model)
+	for _, value := range []string{baseURL, apiKey, model} {
+		if strings.ContainsAny(value, "\r\n\x00") {
+			return Config{}, &ValidationError{Message: "Values must be a single line."}
+		}
+	}
+	if baseURL == "" {
+		return Config{}, &ValidationError{Message: "A base URL is required."}
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return Config{}, &ValidationError{Message: "The base URL must be an absolute http:// or https:// URL."}
+	}
+	if parsed.User != nil {
+		return Config{}, &ValidationError{Message: "Put credentials in the API key field, not the base URL."}
+	}
+	style := in.AuthStyle
+	if style == "" {
+		style = spec.DefaultAuthStyle
+	}
+	if _, ok := spec.KeyEnv[style]; !ok {
+		return Config{}, &ValidationError{Message: fmt.Sprintf("Unsupported auth style %q.", style)}
+	}
+	if model != "" && spec.ModelEnv == "" {
+		return Config{}, &ValidationError{Message: "This harness does not support a model override here."}
+	}
+	if strings.ContainsAny(model, " \t") {
+		return Config{}, &ValidationError{Message: "The model name must not contain spaces."}
+	}
+	return Config{
+		BaseURL:   strings.TrimRight(baseURL, "/"),
+		AuthStyle: style,
+		APIKey:    apiKey,
+		Model:     model,
+	}, nil
+}
+
+// writeFileAtomic writes data owner-only via a same-directory temp file and
+// rename, so a crash cannot leave a truncated config and the key is never
+// readable by other users, even briefly (CreateTemp opens files 0600).
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".endpoint-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
