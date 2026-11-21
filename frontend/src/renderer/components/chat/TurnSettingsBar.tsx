@@ -40,6 +40,7 @@ import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
+import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
 	ApprovalMode,
@@ -1053,7 +1054,7 @@ function restoreComposerFocus(event: Event) {
 	const trigger = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker'][data-shortcut-opened]");
 	if (!trigger) return;
 	delete trigger.dataset.shortcutOpened;
-	const composer = document.querySelector<HTMLElement>('[aria-label="Message the agent"]');
+	const composer = queryShown<HTMLElement>('[aria-label="Message the agent"]');
 	if (!composer || composer.getAttribute("aria-disabled") === "true") return;
 	event.preventDefault();
 	composer.focus();

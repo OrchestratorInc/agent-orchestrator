@@ -80,10 +80,10 @@ export function SessionFileTab({
 				<>
 					<span
 						aria-hidden="true"
-						className="size-2 rounded-full bg-foreground group-hover:hidden group-has-[:focus-visible]:hidden"
+						className="size-2 rounded-full bg-foreground group-hover:hidden focus-visible-in-group:hidden"
 						data-testid="unsaved-tab-indicator"
 					/>
-					<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-has-[:focus-visible]:block" />
+					<X aria-hidden="true" className="hidden size-icon-sm group-hover:block focus-visible-in-group:block" />
 				</>
 			) : <X className="size-icon-sm" aria-hidden="true" />}
 		</Pressable>

@@ -879,7 +879,7 @@ const api = {
 		},
 	},
 	notifications: {
-		show: (notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) =>
+		show: (notification: { id: string; title: string; body?: string; type?: string; watched?: boolean; tag?: string; alertWhenFocused?: boolean }) =>
 			ipcRenderer.invoke("notifications:show", notification) as Promise<void>,
 		setBadge: (count: number) => ipcRenderer.invoke("notifications:setBadge", count) as Promise<void>,
 		devBounce: () => ipcRenderer.invoke("notifications:devBounce") as Promise<void>,

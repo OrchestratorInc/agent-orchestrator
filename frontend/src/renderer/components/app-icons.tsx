@@ -11,6 +11,7 @@ import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SV
 import {
 	Activity as MynaActivity,
 	Archive as MynaArchive,
+	At as MynaAt,
 	ArrowDown as MynaArrowDown,
 	ArrowLeft as MynaArrowLeft,
 	ArrowLeftRight as MynaArrowLeftRight,
@@ -151,6 +152,10 @@ import {
 	Music as MynaMusic,
 	Database as MynaDatabase,
 	ChartBar as MynaChartBar,
+	Menu as MynaMenu,
+	DotsVertical as MynaDotsVertical,
+	LayersThree as MynaLayersThree,
+	Edit as MynaEdit,
 } from "@mynaui/icons-react";
 import {
 	ArrowDownUp as LucideArrowDownUp,
@@ -215,6 +220,7 @@ import {
 	Check as LucideCheck,
 	Ellipsis as LucideEllipsis,
 	EllipsisVertical as LucideEllipsisVertical,
+	MessagesSquare as LucideMessagesSquare,
 	GripVertical as LucideGripVertical,
 	Pause as LucidePause,
 	Play as LucidePlay,
@@ -281,6 +287,7 @@ export const ArrowRightLeft = fromMyna(MynaArrowLeftRight, "arrow-right-left");
 export const ArrowUp = fromMyna(MynaArrowUp, "arrow-up", "full");
 export const ArrowUpFromLine = fromMyna(MynaUpload, "arrow-up-from-line");
 export const ArrowUpRight = fromMyna(MynaArrowUpRight, "arrow-up-right", "full");
+export const AtSign = fromMyna(MynaAt, "at-sign");
 export const BadgeCheck = fromMyna(MynaCheckWaves, "badge-check", "full");
 export const Ban = fromMyna(MynaBan, "ban");
 export const Bell = fromMyna(MynaBell, "bell");
@@ -417,6 +424,7 @@ export const Monitor = fromMyna(MynaMonitor, "monitor");
 export const MonitorCog = fromLucide(LucideMonitorCog, "monitor-cog");
 export const MonitorSmartphone = fromLucide(LucideMonitorSmartphone, "monitor-smartphone");
 export const MoreHorizontal = fromLucide(LucideEllipsis, "ellipsis");
+export const MessagesSquare = fromLucide(LucideMessagesSquare, "messages-square");
 export const MoreVertical = fromLucide(LucideEllipsisVertical, "ellipsis-vertical");
 export const Music = fromMyna(MynaMusic, "music");
 export const MousePointer2 = fromMyna(MynaMousePointer, "mouse-pointer-2", "full");
@@ -509,3 +517,12 @@ export const Ungroup = fromLucide(LucideUngroup, "ungroup");
 export const UserPlus = fromMyna(MynaUserPlus, "user-plus");
 export const ZoomIn = fromMyna(MynaSearchPlus, "zoom-in");
 export const ZoomOut = fromMyna(MynaSearchMinus, "zoom-out");
+
+// The onboarding illustrations' icons.
+export const CircleCheckBig = fromMyna(MynaCheckCircle, "circle-check-big");
+export const ListFilter = fromMyna(MynaFilter, "list-filter");
+export const Menu = fromMyna(MynaMenu, "menu");
+export const EllipsisVertical = fromMyna(MynaDotsVertical, "ellipsis-vertical");
+export const Cog = fromMyna(MynaCog, "cog");
+export const Layers = fromMyna(MynaLayersThree, "layers");
+export const SquarePen = fromMyna(MynaEdit, "square-pen");

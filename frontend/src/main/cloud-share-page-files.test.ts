@@ -21,16 +21,19 @@ describe("pageFileReferences", () => {
 <svg><image href="icon.svg"/><use xlink:href="sprite.svg#x"/></svg>
 <table background="old.gif"><td style="background: url('cell.png')">x</td></table>
 <img src="a&amp;b.png">`;
-		expect(pageFileReferences(html)).toEqual([
+		const urls = (references: ReturnType<typeof pageFileReferences>) => references.map((reference) => reference.url);
+		expect(urls(pageFileReferences(html))).toEqual([
 			"bg.jpg", "img/a.webp", "favicon.png", "photos/team.jpg", "photos/team-2x.jpg", "photos/team-3x.jpg",
 			"wide.avif", "narrow.png", "clip.mp4", "clip-poster.png", "clip.webm", "subs.vtt", "sound.mp3",
 			"icon.svg", "sprite.svg#x", "old.gif", "cell.png", "a&b.png",
 		]);
+		// Only the <use> is marked: a sandboxed page cannot load another file's symbol.
+		expect(pageFileReferences(html).filter((reference) => reference.svgUse).map((reference) => reference.url)).toEqual(["sprite.svg#x"]);
 	});
 
 	it("skips comments, scripts and a stylesheet link", () => {
 		const html = `<!-- <img src="hidden.png"> --><script>const s = '<img src="script.png">';</script><link rel="stylesheet" href="a.css"><img src="shown.png">`;
-		expect(pageFileReferences(html)).toEqual(["shown.png"]);
+		expect(pageFileReferences(html)).toEqual([{ url: "shown.png" }]);
 	});
 });
 
@@ -97,7 +100,7 @@ describe("collectPageFiles", () => {
 		expect(skipped).toEqual([
 			{ reference: "clip.mp4", reason: "video" },
 			{ reference: "../top.png", reason: "outside" },
-			{ reference: "missing.png", reason: "missing" },
+			{ reference: "missing.png", reason: "missing", relativePath: "docs/missing.png" },
 			{ reference: "link.png", reason: "outside" },
 			{ reference: "_ao/x.png", reason: "unservable" },
 		]);
@@ -109,6 +112,15 @@ describe("collectPageFiles", () => {
 		const { files, skipped } = await collectPageFiles(dataDir, "sess-1", "docs/report.html", `<img src="up.png"><img src="images/same.jpg">`);
 		expect(files.map((file) => [file.path, file.file.relativePath])).toEqual([["images/same.jpg", "docs/b.jpg"]]);
 		expect(skipped).toEqual([{ reference: "up.png", reason: "outside" }]);
+	});
+
+	it("leaves out another file's SVG symbol, and keeps the page's own", async () => {
+		await fs.writeFile(path.join(artifacts, "docs", "sprite.svg"), "<svg/>");
+		const html = `<svg><use href="sprite.svg#mark"/><use xlink:href="sprite.svg#other"/><use href="#local"/></svg><img src="sprite.svg">`;
+		const { files, skipped } = await collectPageFiles(dataDir, "sess-1", "docs/report.html", html);
+		// The <img> still loads it as an image.
+		expect(files.map((file) => file.path)).toEqual(["sprite.svg"]);
+		expect(skipped).toEqual([{ reference: "sprite.svg#mark", reason: "svg_use" }]);
 	});
 
 	it("resolves a page at the top of the artifacts folder", async () => {

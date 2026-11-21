@@ -447,6 +447,65 @@ describe("cloudShare IPC", () => {
 		expect(await snapshots()).toEqual([]);
 	});
 
+	it("says what a page left out though the control plane cannot take its files", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "report.html"), `<video src="clip.mp4"></video><img src="../outside.png">`);
+		const { publish } = setup();
+		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 2, videos: 1, unsupported: false } });
+	});
+
+	it("offers to republish a page when a file it uses changes, appears or goes, though the page did not", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "chart.svg"), "<svg>one</svg>");
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="chart.svg"><img src="later.png">`);
+		const { invoke, publish, file, records } = setup({ files: true });
+		await publish();
+		const inspect = () => invoke("cloudShare:inspect", file) as Promise<{ fingerprint: string; publishedFingerprint?: string; pageFilesChanged?: boolean }>;
+		const unchanged = await inspect();
+		expect(unchanged.fingerprint).toBe(unchanged.publishedFingerprint);
+		expect(unchanged.pageFilesChanged).toBeUndefined();
+
+		// Only the image is rewritten.
+		const later = new Date(Date.now() + 60_000);
+		await fs.writeFile(path.join(docs, "chart.svg"), "<svg>two, longer</svg>");
+		await fs.utimes(path.join(docs, "chart.svg"), later, later);
+		const changed = await inspect();
+		expect(changed.fingerprint).toBe(changed.publishedFingerprint);
+		expect(changed.pageFilesChanged).toBe(true);
+
+		// Republishing records the files as they are now.
+		await publish();
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+
+		// A file the page used that was missing appears, or one goes.
+		await fs.writeFile(path.join(docs, "later.png"), "png");
+		expect((await inspect()).pageFilesChanged).toBe(true);
+		await publish();
+		await fs.rm(path.join(docs, "chart.svg"));
+		expect((await inspect()).pageFilesChanged).toBe(true);
+		// The record names each file in the session's artifacts, the page's own fingerprint apart.
+		expect(Object.keys((await records.publishedPageFiles(JSON.stringify(["https://cp.test", "sess-1", "docs/report.html"]))) ?? {}).sort()).toEqual(["docs/chart.svg", "docs/later.png"]);
+	});
+
+	it("offers to republish a page when a symlink it uses is pointed at another file", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "old.png"), "old");
+		await fs.writeFile(path.join(docs, "new.png"), "new");
+		await fs.symlink("old.png", path.join(docs, "chart.png"));
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="chart.png">`);
+		const { invoke, publish, file, records } = setup({ files: true });
+		await publish();
+		const inspect = () => invoke("cloudShare:inspect", file) as Promise<{ pageFilesChanged?: boolean }>;
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		// Kept by the path the page names, not the file it led to.
+		expect(Object.keys((await records.publishedPageFiles(JSON.stringify(["https://cp.test", "sess-1", "docs/report.html"]))) ?? {})).toEqual(["docs/chart.png"]);
+
+		// Neither the page nor old.png changes: only where chart.png leads.
+		await fs.rm(path.join(docs, "chart.png"));
+		await fs.symlink("new.png", path.join(docs, "chart.png"));
+		expect((await inspect()).pageFilesChanged).toBe(true);
+	});
+
 	it("publishes nothing when the file is rewritten while it is being copied", async () => {
 		const { invoke, file, requests, sender } = setup();
 		const big = path.join(dataDir, "artifacts", "sess-1", "docs", "report.html");

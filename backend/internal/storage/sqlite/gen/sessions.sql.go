@@ -1017,6 +1017,49 @@ func (q *Queries) ListChatHibernationCandidates(ctx context.Context) ([]domain.S
 	return items, nil
 }
 
+const listPreviewSessions = `-- name: ListPreviewSessions :many
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions
+WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY id
+`
+
+type ListPreviewSessionsRow struct {
+	ID              domain.SessionID
+	WorkspacePath   string
+	PreviewURL      string
+	PreviewRevision int64
+}
+
+// Live workers with only the columns the preview poller reads.
+func (q *Queries) ListPreviewSessions(ctx context.Context) ([]ListPreviewSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPreviewSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPreviewSessionsRow{}
+	for rows.Next() {
+		var i ListPreviewSessionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspacePath,
+			&i.PreviewURL,
+			&i.PreviewRevision,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReleasedArchivedSessions = `-- name: ListReleasedArchivedSessions :many
 SELECT s.id, s.terminated_at, s.updated_at FROM sessions s
 WHERE s.is_terminated = 1 AND s.is_task_preparation = 0

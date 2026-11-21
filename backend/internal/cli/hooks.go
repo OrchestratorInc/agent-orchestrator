@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -903,6 +904,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			c.reportHookFailure(agent, event, sessionID, fmt.Errorf("read stdin: %w", err))
 		}
 	}
+	if agent == string(domain.HarnessOpenInterpreter) && !openinterpreter.IsRootHook(payload) {
+		return nil
+	}
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
@@ -958,7 +962,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessContinue:
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
-		domain.HarnessOMP, domain.HarnessPi,
+		domain.HarnessOMP, domain.HarnessPi, domain.HarnessTau,
 		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessMiniMaxCode:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 		if domain.AgentHarness(agent) == domain.HarnessPi {
@@ -1201,7 +1205,7 @@ func shouldEmitSessionStartContext(agent, event string) bool {
 		return false
 	}
 	switch agent {
-	case "agy", "devin":
+	case "agy", "devin", "open-interpreter":
 		return true
 	default:
 		return false

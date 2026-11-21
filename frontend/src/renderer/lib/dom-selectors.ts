@@ -13,6 +13,17 @@ export const OPEN_BROWSER_OVERLAY_SELECTOR =
 export const BROWSER_OVERLAY_CANDIDATE_SELECTOR =
 	'[role="dialog"], [role="alertdialog"], [data-browser-native-overlay="true"]';
 
+// The aside pane's reply box (AsidePane): a second composer beside a Cloud
+// session's conversation. Opening a mention or an aside reply puts the caret
+// there; the conversation's composer must not take it back on its own.
+const ASIDE_REPLY_BOX_SELECTOR = "[data-aside-reply-box]";
+
+export function asideReplyBoxHasFocus(): boolean {
+	if (typeof document === "undefined") return false;
+	const active = document.activeElement;
+	return active instanceof Element && active.closest(ASIDE_REPLY_BOX_SELECTOR) !== null;
+}
+
 export function isDialogOrMenuOpen(): boolean {
 	if (typeof document === "undefined") return false;
 	return document.querySelector(OPEN_DIALOG_OR_MENU_SELECTOR) !== null;
@@ -27,6 +38,31 @@ export function isDialogOrMenuOpenOutside(host: Element): boolean {
 	const elements = document.querySelectorAll(OPEN_DIALOG_OR_MENU_SELECTOR);
 	for (const element of elements) {
 		if (!element.contains(host)) return true;
+	}
+	return false;
+}
+
+/**
+ * Like `root.querySelector(selector)`, but skips elements inside a hidden
+ * <Activity>. Recently viewed chats stay mounted there (see KeepRecentAlive),
+ * so a document-wide lookup for "the composer" would otherwise find a hidden
+ * one first. React hides an Activity with an inline `display: none`.
+ */
+export function queryShown<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T | null {
+	for (const element of root.querySelectorAll<T>(selector)) {
+		if (!inHiddenActivity(element)) return element;
+	}
+	return null;
+}
+
+/** Every match of `selector` outside a hidden <Activity>, in document order. */
+export function queryAllShown<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T[] {
+	return Array.from(root.querySelectorAll<T>(selector)).filter((element) => !inHiddenActivity(element));
+}
+
+function inHiddenActivity(element: Element): boolean {
+	for (let node: Element | null = element; node; node = node.parentElement) {
+		if (node instanceof HTMLElement && node.style.display === "none") return true;
 	}
 	return false;
 }

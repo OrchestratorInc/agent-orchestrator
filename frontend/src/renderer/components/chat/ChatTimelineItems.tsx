@@ -140,6 +140,9 @@ import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
+import { MentionedText, MentionTintContext } from "./MentionChip";
+import { AsideIcon, asideBoxClass, NO_MENTION_TINT, useAsideMarker } from "./AsideMarker";
+import type { TimelineMention } from "../../lib/cloud-mentions";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -940,13 +943,16 @@ function inlineImageRenderer(attachments: string[], sessionId: string, apiBaseUr
  * color, and inline image chips. Undefined when neither applies, which keeps
  * UserMarkdown's memo; stable while the message and its attachments are.
  */
-function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null) {
+function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null, mentions?: readonly TimelineMention[]) {
 	const renderTokens = useComposerTokenRenderer(sessionId, body);
 	const attachmentKey = attachments.join("\n");
 	return useMemo(() => {
 		const renderImages = inlineImageRenderer(attachmentKey ? attachmentKey.split("\n") : [], sessionId, apiBaseUrl);
-		return renderTokens ? (text: string) => renderTokens(text, renderImages) : renderImages;
-	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl]);
+		const render = renderTokens ? (text: string) => renderTokens(text, renderImages) : renderImages;
+		// The people and teams a shared Cloud message named stay chips once sent.
+		if (!mentions?.length) return render;
+		return (text: string) => <MentionedText text={text} mentions={mentions} renderText={render} />;
+	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl, mentions]);
 }
 
 // A list, quote or code block at either end of a message sits flush with the
@@ -1225,10 +1231,14 @@ export function HumanMessage({
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
-	// The skills and files it sent as chips, drawn as colored text.
-	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
+	// The skills and files it sent as chips, drawn as colored text, and the people it named.
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl, message.mentions);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
+	// A message that tags people started an aside: it draws as only a dashed box
+	// with its text and chips (no author line, no fill, no tint), the same for
+	// everyone, with the aside icon right under it at its left edge.
+	const aside = useAsideMarker(message.asideId) && !editing ? message.asideId : undefined;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
 	// So does a status: it leads the row, and the time and actions follow it in
@@ -1242,11 +1252,12 @@ export function HumanMessage({
 		<div
 			className="group/message relative flex flex-col items-end gap-1"
 			data-chat-message-id={!queued && !editing ? message.id : undefined}
+			data-chat-focus-id={message.id}
 			data-find-message-id={!queued && !editing && message.origin !== "automation" && message.origin !== "daemon" && !message.continuation ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
-			{message.authorName ? (
+			{message.authorName && !aside ? (
 				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
 					{message.authorName}
 				</span>
@@ -1295,7 +1306,22 @@ export function HumanMessage({
 							<CloudMessageAttachments attachments={message.cloudAttachments} className="contents" />
 						</AttachmentStrip>
 					) : null}
-					{showBubble ? (
+					{aside ? (
+						<div className={cn("flex max-w-[min(78%,560px)] flex-col items-start gap-1", animateIn && "chat-human-message-enter")} data-chat-aside={aside}>
+							<div className={asideBoxClass(queued)} data-chat-aside-box="" data-queued={queued ? "" : undefined}>
+								<MentionTintContext.Provider value={NO_MENTION_TINT}>
+									<CollapsibleHumanBody stateKey={visibleMessageText}>
+										{body ? (
+											<div data-chat-message-body="" className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+												<UserMarkdown text={body} renderText={renderText} />
+											</div>
+										) : null}
+									</CollapsibleHumanBody>
+								</MentionTintContext.Provider>
+							</div>
+							<AsideIcon asideId={aside} />
+						</div>
+					) : showBubble ? (
 						<div
 							/* Themes draw sent and queued differently; light theme needs to tell them
 							   apart in CSS because it paints an enclosure only around a sent one. */
@@ -1807,7 +1833,7 @@ export function ActivityRow({
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} retry={activity.detail.retry} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
-	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
+	else if (artifactRef) content = <RenderFrame artifact={artifactRef} foldKey={activity.id} />;
 	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;
@@ -3552,7 +3578,10 @@ export function SteerMessage({
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
 	// Only the person's own steer is marked; a steer from another session is not theirs.
-	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl, activity.detail?.mentions);
+	// Guidance that tags people started an aside: a dashed box with the aside icon, as a message.
+	const asideShown = useAsideMarker(activity.detail?.asideId);
+	const aside = asideShown && !senderSessionId ? activity.detail?.asideId : undefined;
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
@@ -3598,7 +3627,7 @@ export function SteerMessage({
 		</>
 	);
 	return (
-		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")}>
+		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")} data-chat-focus-id={activity.id}>
 			{automationSteer ? (
 				<AutomationMessageFrame
 					label={<>[from {senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}]</>}
@@ -3628,8 +3657,21 @@ export function SteerMessage({
 							/>
 						</AttachmentStrip>
 					) : null}
-					{body || (!annotationSummary && attachments.length === 0 && remainingContent.length === 0) ? (
-						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+					{aside ? (
+						<div className="flex max-w-[min(78%,560px)] flex-col items-start gap-1" data-chat-aside={aside}>
+							<div className={cn(asideBoxClass(), "break-words")} data-chat-aside-box="">
+								{body ? (
+									<MentionTintContext.Provider value={NO_MENTION_TINT}>
+										<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+											<UserMarkdown text={body} renderText={renderText} />
+										</div>
+									</MentionTintContext.Provider>
+								) : null}
+							</div>
+							<AsideIcon asideId={aside} />
+						</div>
+					) : body || (!annotationSummary && attachments.length === 0 && remainingContent.length === 0) ? (
+						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground" data-chat-focus-bubble="">
 							{body ? (
 								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
 									<UserMarkdown text={body} renderText={renderText} />

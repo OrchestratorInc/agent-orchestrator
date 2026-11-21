@@ -1,6 +1,8 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	alreadyLooking,
+	createTaggedToasts,
 	dockBounceType,
 	osToastChimeControllable,
 	shouldReplaceBounce,
@@ -23,6 +25,21 @@ describe("shouldToast", () => {
 		expect(shouldToast({ title: "" }, true)).toBe(false);
 		expect(shouldToast({}, true)).toBe(false);
 		expect(shouldToast({ title: "needs input" }, false)).toBe(false);
+	});
+});
+
+describe("alreadyLooking", () => {
+	it("skips visual signals while the window has focus, or the prompt is on screen", () => {
+		expect(alreadyLooking(true, {})).toBe(true);
+		expect(alreadyLooking(false, { watched: true })).toBe(true);
+		expect(alreadyLooking(false, {})).toBe(false);
+	});
+
+	it("alerts while focused for a cloud mention or aside reply about a session not on screen", () => {
+		expect(alreadyLooking(true, { watched: false, alertWhenFocused: true })).toBe(false);
+		expect(alreadyLooking(false, { alertWhenFocused: true })).toBe(false);
+		// The session on screen stays quiet even then.
+		expect(alreadyLooking(true, { watched: true, alertWhenFocused: true })).toBe(true);
 	});
 });
 
@@ -107,5 +124,49 @@ describe("dockBounceType", () => {
 	it("bounces once for unknown or missing types", () => {
 		expect(dockBounceType("some_future_type")).toBe("informational");
 		expect(dockBounceType(undefined)).toBe("informational");
+	});
+});
+
+describe("createTaggedToasts", () => {
+	const toast = () => ({ close: vi.fn() });
+
+	it("replaces the toast showing under the same tag, so a session shows its newest mention", () => {
+		const toasts = createTaggedToasts<ReturnType<typeof toast>>();
+		const first = toast();
+		const second = toast();
+		toasts.show("cloud-session:s1", first);
+		toasts.show("cloud-session:s1", second);
+		expect(first.close).toHaveBeenCalledTimes(1);
+		expect(second.close).not.toHaveBeenCalled();
+		expect(toasts.size).toBe(1);
+	});
+
+	it("keeps toasts with other tags, or none, side by side", () => {
+		const toasts = createTaggedToasts<ReturnType<typeof toast>>();
+		const a = toast();
+		const b = toast();
+		toasts.show("cloud-session:s1", a);
+		toasts.show("cloud-session:s2", b);
+		toasts.show(undefined, toast());
+		expect(a.close).not.toHaveBeenCalled();
+		expect(b.close).not.toHaveBeenCalled();
+		expect(toasts.size).toBe(2);
+	});
+
+	it("forgets a toast once it closes, so a later one does not close it again", () => {
+		const toasts = createTaggedToasts<ReturnType<typeof toast>>();
+		const first = toast();
+		toasts.show("cloud-session:s1", first);
+		toasts.forget("cloud-session:s1", first);
+		toasts.show("cloud-session:s1", toast());
+		expect(first.close).not.toHaveBeenCalled();
+	});
+
+	it("drops the oldest tag past its bound", () => {
+		const toasts = createTaggedToasts<ReturnType<typeof toast>>(2);
+		toasts.show("a", toast());
+		toasts.show("b", toast());
+		toasts.show("c", toast());
+		expect(toasts.size).toBe(2);
 	});
 });

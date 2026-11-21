@@ -7,7 +7,7 @@ import type { SessionLinkSource } from "../lib/use-session-link-navigation";
 import type { PullRequestFacts, SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, artifactExcerpt, markdownPreviewSource } from "./SessionLinkPreviewCard";
 
-const mocks = vi.hoisted(() => ({ restore: vi.fn(), source: vi.fn(), artifactFile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ restore: vi.fn(), source: vi.fn(), artifactFile: vi.fn(), dismiss: vi.fn() }));
 
 vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	sessionArtifactFileQueryOptions: (sessionId: string, path: string, rawUrl: string) => ({
@@ -28,6 +28,7 @@ vi.mock("./ui/hover-card", () => ({
 	HoverCardContent: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
 		<div {...props}>{children}</div>
 	),
+	useHoverCardDismiss: () => mocks.dismiss,
 }));
 
 function pr(
@@ -76,6 +77,7 @@ describe("SessionLinkPreviewCard", () => {
 		mocks.restore.mockReset();
 		mocks.restore.mockResolvedValue({ status: "success" });
 		mocks.source.mockReset();
+		mocks.dismiss.mockReset();
 		mocks.source.mockReturnValue(source());
 	});
 
@@ -159,7 +161,7 @@ describe("SessionLinkPreviewCard", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("No saved session is available.");
 	});
 
-	it("opens the session when a live card is clicked", async () => {
+	it("closes itself and opens the session when a live card is clicked", async () => {
 		mocks.source.mockReturnValue(source({ workspaces: [workspace(session())] }));
 		const onOpen = vi.fn();
 
@@ -169,6 +171,10 @@ describe("SessionLinkPreviewCard", () => {
 
 		await userEvent.click(card);
 		expect(onOpen).toHaveBeenCalledTimes(1);
+		// Closed before the session opens: otherwise it outlives its hidden link
+		// and is drawn at the window's top-left corner.
+		expect(mocks.dismiss).toHaveBeenCalledTimes(1);
+		expect(mocks.dismiss.mock.invocationCallOrder[0]).toBeLessThan(onOpen.mock.invocationCallOrder[0]!);
 	});
 
 	it("keeps the card inert without a handler and keeps a terminated card's Resume button separate", async () => {
@@ -183,6 +189,7 @@ describe("SessionLinkPreviewCard", () => {
 		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
 		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
 		expect(onOpen).not.toHaveBeenCalled();
+		expect(mocks.dismiss).not.toHaveBeenCalled();
 	});
 
 	it("localizes the PR count instead of adding an English suffix", () => {

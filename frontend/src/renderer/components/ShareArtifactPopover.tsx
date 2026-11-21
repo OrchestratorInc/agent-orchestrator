@@ -457,7 +457,7 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, inten
 
 /** Whether the link serves an older version of the file, or its old name: Republish would update it. */
 function linkOutdated(share: Pick<CloudShareLink, "name">, inspection: CloudShareInspection): boolean {
-	return share.name !== inspection.name ||
+	return share.name !== inspection.name || Boolean(inspection.pageFilesChanged) ||
 		Boolean(inspection.publishedFingerprint && !sameShareFingerprint(inspection.publishedFingerprint, inspection.fingerprint));
 }
 

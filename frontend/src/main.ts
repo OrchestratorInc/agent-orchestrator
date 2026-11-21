@@ -265,6 +265,8 @@ import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, isPrivacyGuideTarget, P
 import { appBundlePath, readAppPrivacy, requestAppPrivacy, type AppPrivacyGrants } from "./main/app-privacy";
 import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
+	alreadyLooking,
+	createTaggedToasts,
 	dockBounceType,
 	shouldReplaceBounce,
 	shouldSignalAttention,
@@ -4105,13 +4107,18 @@ function cancelDockBounce(): void {
 	app.dock?.cancelBounce(id);
 }
 
+// One OS toast per tag (a cloud session's mention): a newer one replaces it.
+const taggedToasts = createTaggedToasts<ElectronNotification>();
+
 ipcMain.handle(
 	"notifications:show",
-	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) => {
+	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean; tag?: string; alertWhenFocused?: boolean }) => {
 		if (!notification.id || !mainWindow) return;
 		// "Already looking" = the window has focus, or the renderer reports the
 		// prompt itself is on screen (`watched`). Visual signals are skipped then.
-		const looking = mainWindow.isFocused() || notification.watched === true;
+		// A cloud mention or aside reply about a session not on screen alerts
+		// even while the window has focus (`alertWhenFocused`).
+		const looking = alreadyLooking(mainWindow.isFocused(), notification);
 		// On Linux the sound ignores that guess: Wayland gives apps no reliable
 		// visibility, so a window parked on another workspace still reports
 		// focused/visible and would otherwise stay silent. macOS and Windows
@@ -4140,12 +4147,15 @@ ipcMain.handle(
 				icon: process.platform === "darwin" ? undefined : windowIconPath(),
 			});
 			toast.on("click", () => {
+				taggedToasts.forget(notification.tag, toast);
 				if (!mainWindow) return;
 				if (mainWindow.isMinimized()) mainWindow.restore();
 				mainWindow.show();
 				mainWindow.focus();
 				getShellWebContents()?.send("notifications:click", notification.id);
 			});
+			toast.on("close", () => taggedToasts.forget(notification.tag, toast));
+			taggedToasts.show(notification.tag, toast);
 			toast.show();
 		}
 

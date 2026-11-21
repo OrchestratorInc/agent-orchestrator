@@ -132,10 +132,60 @@ function connectionFooter(): { drawn: boolean; modifiers: Modifier[] } {
 describe("ManualConnectSheet on iOS", () => {
 	it("labels every field for VoiceOver and hides the password", () => {
 		render();
-		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "Port"], ["manual-connect-password", "Password"], ["manual-connect-tls", "Use TLS"]]) {
+		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "Port"], ["manual-connect-password", "Password"]]) {
 			expect(hasModifier(field(testID), "accessibilityLabel", label)).toBe(true);
 		}
 		expect(field("manual-connect-password").type).toBe("SecureField");
+		// The address decides TLS; there is nothing to switch.
+		expect(renderer!.root.findAll((node) => node.props.testID === "manual-connect-tls" || node.props.label === "Use TLS")).toEqual([]);
+		expect(field("manual-connect-port").props.text.value).toBe("");
+	});
+
+	it("connects to a typed tunnel over TLS on 443 without being told either", async () => {
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "h-0123456789abcdef0123.useao.dev");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.probeIdentity).toHaveBeenCalledWith(expect.objectContaining({ host: "h-0123456789abcdef0123.useao.dev", httpPort: "443", secure: true }));
+		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "h-0123456789abcdef0123.useao.dev", httpPort: "443", secure: true }));
+		expect(fixtures.saveHost).toHaveBeenCalledWith(expect.objectContaining({
+			endpoints: [{ kind: "tunnel", host: "h-0123456789abcdef0123.useao.dev", port: 443, secure: true }],
+		}));
+	});
+
+	// Plain HTTP to a public name would hand the password to whoever blocked TLS.
+	it("sends a custom domain's credential over TLS only, never plain HTTP", async () => {
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "nas.example.com");
+		await type("manual-connect-port", "8080");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		for (const mock of [fixtures.probeIdentity, fixtures.ping]) {
+			expect(mock).toHaveBeenCalledOnce();
+			expect(mock).toHaveBeenCalledWith(expect.objectContaining({ host: "nas.example.com", httpPort: "8080", secure: true }));
+		}
+	});
+
+	it("says how to reach a Tailscale name on the Connect Mobile port when HTTPS does not answer", async () => {
+		fixtures.ping.mockRejectedValueOnce(new TypeError("Network request failed"));
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "my-pc.tail1234.ts.net");
+		await type("manual-connect-port", "3011");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.announce).toHaveBeenCalledWith(expect.stringContaining("enter https://my-pc.tail1234.ts.net in Host and leave Port empty."), { queue: true });
+	});
+
+	it("uses plain HTTP on the Connect Mobile port for a private address left without a port", async () => {
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", httpPort: "3011", secure: false }));
 	});
 
 	it("connects from the bar once the form is complete", async () => {
@@ -289,6 +339,12 @@ describe("ManualConnectSheet on Android", () => {
 		act(() => { renderer = create(<AndroidSheet onConnected={onConnected} {...props} />); });
 		return { onConnected };
 	}
+
+	it("has no TLS switch: the address decides it", async () => {
+		await renderAndroid();
+		expect(renderer!.root.findAll((node) => hasModifier(node, "testID", "manual-connect-tls") || node.props.label === "Use TLS")).toEqual([]);
+		expect(field("manual-connect-host")).toBeDefined();
+	});
 
 	it("shows a rejected password as the password field's own error", async () => {
 		await renderAndroid({ editingHost: paired });

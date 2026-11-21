@@ -95,7 +95,9 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 	// from sanitized issue refs; keep the URL well-formed regardless.
 	path := "sessions/" + url.PathEscape(session)
 	if !opts.steer {
-		return c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == ""}, nil)
+		return c.retryWhileCode(ctx, []string{"CHAT_INTERFACE_TRANSITION"}, func() error {
+			return c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == ""}, nil)
+		})
 	}
 	return c.steerMessage(ctx, path, message, strings.TrimSpace(opts.clientMessageID), opts.recoverOnly)
 }
