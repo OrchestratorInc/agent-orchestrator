@@ -1872,7 +1872,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Allow the action once, always allow its kind of action on this site for the session, or deny it. Allowed for the session's owner and its editors; a viewer gets 403. A decision on an approval already decided otherwise, or expired, gets 409. */
+        /** @description Allow the action once, always allow its kind of action on this site for the session, or deny it. Only the session's creator, or the person it was started for, may decide (BrowserApproval.canDecide); anyone else gets 403. A decision on an approval already decided otherwise, or expired, gets 409. */
         post: operations["decideBrowserApproval"];
         delete?: never;
         options?: never;
@@ -4496,6 +4496,16 @@ export interface components {
              * @description When the worker stops waiting and the action is refused.
              */
             expiresAt: string;
+            /** @description Whether the caller may decide it: only the session's creator, or the person it was started for (a session from before creators were recorded: the organization's owners and admins). Absent from an older control plane, where any non-viewer could; treat it as true. */
+            canDecide?: boolean;
+            decider?: components["schemas"]["BrowserApprovalDecider"];
+        };
+        /** @description Who a session's browser approvals wait for. */
+        BrowserApprovalDecider: {
+            /** Format: uuid */
+            userId?: string;
+            /** @description The person's display name, else their email. */
+            name?: string;
         };
         BrowserApprovalList: {
             pending: components["schemas"]["BrowserApproval"][];
