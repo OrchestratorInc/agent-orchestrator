@@ -3323,6 +3323,89 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent stopped before this turn finished")).not.toBeInTheDocument();
 	});
 
+	describe("a turn that settles while its chat is kept alive hidden", () => {
+		// Hours ago, like a chat left in the background and opened again.
+		const startedAt = Date.now() - 4 * 3_600_000;
+		const at = (seconds: number) => new Date(startedAt + seconds * 1000).toISOString();
+		// The reader left mid-turn, between steps, so the row said "Thinking". The
+		// reply came later, and the provider never closed its thinking rows.
+		const turnSnapshot = (state: "running" | "completed"): ConversationSnapshot => {
+			const base = structuredClone(chatFixtureSettled);
+			const message = (id: string, sequence: number, role: "user" | "assistant", text: string, second: number): ConversationMessage => ({
+				kind: "message", id, turnId: "turn-late", sequence, revision: 0, role, origin: role === "user" ? "human" : "provider",
+				text, content: [], streaming: false, createdAt: at(second), ...(role === "user" ? { delivery: "accepted" as const } : {}),
+			});
+			const step = (id: string, sequence: number, activityKind: "reasoning" | "file_change", status: "running" | "completed", second: number): ConversationActivity => ({
+				kind: "activity", id, turnId: "turn-late", sequence, revision: 0, activityKind, status,
+				summary: activityKind === "reasoning" ? "Reasoning" : "Created report.py",
+				...(activityKind === "file_change" ? { detail: { files: [{ path: "report.py", status: "added" as const, additions: 12, deletions: 0 }] } } : {}),
+				createdAt: at(second),
+			});
+			const next = base.latestSequence;
+			return {
+				...base,
+				controller: { state: state === "running" ? "busy" : "ready" },
+				latestSequence: state === "running" ? next + 4 : next + 5,
+				turns: [...base.turns, {
+					id: "turn-late", state, providerTurnId: "provider-late", requestedAt: at(0), startedAt: at(0),
+					...(state === "completed" ? { completedAt: at(130), diff: { files: [{ path: "report.py", additions: 12, deletions: 0, status: "added" as const }] } } : {}),
+				}],
+				items: [
+					...base.items,
+					message("late-ask", next + 1, "user", "Write the report script", 0),
+					step("late-think-1", next + 2, "reasoning", "running", 20),
+					step("late-file", next + 3, "file_change", "completed", 40),
+					step("late-think-2", next + 4, "reasoning", "running", 60),
+					...(state === "completed" ? [message("late-answer", next + 5, "assistant", "The report script is ready.", 128)] : []),
+				],
+			};
+		};
+		const shown = (mode: "visible" | "hidden", snapshot: ConversationSnapshot) => (
+			<Activity mode={mode}>
+				<ChatWorkspace snapshot={snapshot} onRollback={vi.fn()} onOpenFiles={vi.fn()} />
+			</Activity>
+		);
+
+		it.each([
+			["settled while hidden", true],
+			["settled in the render that shows it", false],
+		] as const)("drops the live row once shown again: %s", async (_case, settleWhileHidden) => {
+			const running = turnSnapshot("running");
+			const settled = turnSnapshot("completed");
+			const view = render(shown("visible", running));
+			expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Thinking·4h/);
+
+			view.rerender(shown("hidden", running));
+			if (settleWhileHidden) view.rerender(shown("hidden", settled));
+			view.rerender(shown("visible", settled));
+
+			expect(await screen.findByText("1 File Changed")).toBeInTheDocument();
+			await waitFor(() => expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument());
+			expect(document.querySelector("[data-turn-live-row]")).toBeNull();
+		});
+
+		it("keeps the live row while the turn is still running when shown again", async () => {
+			const running = turnSnapshot("running");
+			const view = render(shown("visible", running));
+			view.rerender(shown("hidden", running));
+			view.rerender(shown("visible", running));
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 300));
+			});
+			expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Thinking·4h/);
+			expect(screen.queryByText("1 File Changed")).not.toBeInTheDocument();
+		});
+
+		it("fades the live row out and removes it when the turn settles in view", async () => {
+			const view = render(shown("visible", turnSnapshot("running")));
+			view.rerender(shown("visible", turnSnapshot("completed")));
+			// Still in the DOM for its fade, then gone.
+			expect(document.querySelector("[data-turn-live-row]")).not.toBeNull();
+			await waitFor(() => expect(document.querySelector("[data-turn-live-row]")).toBeNull());
+			expect(screen.getByText("1 File Changed")).toBeInTheDocument();
+		});
+	});
+
 	it.each([
 		["codex", false],
 		["opencode", true],
