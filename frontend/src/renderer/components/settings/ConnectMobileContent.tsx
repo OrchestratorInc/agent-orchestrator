@@ -574,6 +574,23 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSettled: invalidate,
 	});
 
+	const setLoopbackTunnel = useMutation({
+		mutationFn: async (loopbackTunnel: boolean) => {
+			const { error } = await apiClient.POST("/api/v1/mobile/loopback-tunnel", { body: { enabled: loopbackTunnel } });
+			if (error) throw apiErrorException(error);
+		},
+		onMutate: async (loopbackTunnel) => {
+			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
+			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, loopbackTunnel });
+			return { previous };
+		},
+		onError: (_error, _enabled, context) => {
+			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
+		},
+		onSettled: invalidate,
+	});
+
 	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
 	// is deliberately not tied to the connection picker. iOS refuses cleartext
 	// to a 100.x address, so a Tailscale pairing without it works on Android and
@@ -1042,6 +1059,22 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					onCheckedChange={(next) => {
 						clearActionErrors();
 						setBrowserRemoteAccess.mutate(next);
+					}}
+				/>
+			</SettingsRow>
+			<SettingsRow
+				icon={Globe}
+				label={t("remote.shareLocalhost")}
+				description={t("remote.shareLocalhostDescription")}
+				data-testid="mobile-loopback-tunnel"
+			>
+				<Switch
+					aria-label={t("remote.shareLocalhost")}
+					disabled={busy}
+					checked={status.loopbackTunnel ?? true}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setLoopbackTunnel.mutate(next);
 					}}
 				/>
 			</SettingsRow>
