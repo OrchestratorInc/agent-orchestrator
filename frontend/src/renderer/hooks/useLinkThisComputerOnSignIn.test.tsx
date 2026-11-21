@@ -38,7 +38,7 @@ import { isRetryableLinkError, useLinkThisComputerOnSignIn } from "./useLinkThis
 const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
 
 beforeEach(() => {
-	vi.mocked(linkThisComputer).mockClear();
+	vi.mocked(linkThisComputer).mockReset().mockImplementation(async () => ({ hostId: "h_this", added: true }));
 	vi.mocked(apiClient.POST).mockClear();
 	vi.mocked(fetchMobileStatus).mockClear();
 	fake.signedIn = false;
@@ -295,21 +295,24 @@ test("HTTP 429 rate limit is treated as retryable by the link attempt", async ()
 test("a cancelled link attempt does not record completion on error", async () => {
 	fake.signedIn = true;
 	let rejectLink!: (err: Error) => void;
-	vi.mocked(linkThisComputer).mockImplementation(
+	vi.mocked(linkThisComputer).mockImplementationOnce(
 		() => new Promise((_, reject) => { rejectLink = reject; }),
 	);
-	const { unmount } = renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	const { rerender } = renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
 	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledTimes(1));
 
-	// User unmounts (e.g. signs out) while link is in flight
-	unmount();
-	// Link attempt rejects with permanent error 403 after unmount
+	// User signs out while link is in flight; the effect cleanup marks the attempt cancelled.
+	fake.signedIn = false;
+	rerender();
+
+	// Link attempt rejects with permanent error 403 after sign-out.
 	rejectLink(new AccountHostSyncError("Forbidden", 403));
 	await new Promise((resolve) => setTimeout(resolve, 10));
 
-	// A new mount (signing back in) should still run and link
-	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "h_this", added: true });
-	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	// User signs back in to the same account on the same mounted hook:
+	// it should retry and not be blocked by the cancelled attempt having recorded completion.
+	fake.signedIn = true;
+	rerender();
 	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledTimes(2));
 });
 

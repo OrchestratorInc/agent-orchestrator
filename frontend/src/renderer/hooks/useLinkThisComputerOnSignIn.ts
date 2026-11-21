@@ -9,45 +9,24 @@ import { linkThisComputer } from "../lib/link-this-computer";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { useSettings } from "./useSettings";
 
-export const LINK_RETRY_INIT_MS = 30_000;
-export const LINK_RETRY_MAX_MS = 300_000;
-export const LINK_MAX_RETRIES = 5;
+const LINK_RETRY_INIT_MS = 30_000;
+const LINK_RETRY_MAX_MS = 300_000;
+const LINK_MAX_RETRIES = 5;
 
 function extractErrorInfo(cause: unknown): {
 	status?: number;
 	error?: string;
-	code?: string;
 } {
 	let current: unknown = cause;
 	let status: number | undefined;
 	let error: string | undefined;
-	let code: string | undefined;
 
 	for (let depth = 0; depth < 8 && current && typeof current === "object"; depth++) {
-		if (current instanceof AccountHostSyncError && typeof current.status === "number") {
-			status ??= current.status;
-		}
 		if ("status" in current && typeof (current as { status: unknown }).status === "number") {
 			status ??= (current as { status: number }).status;
 		}
-		if ("error" in current) {
-			const errVal = (current as { error: unknown }).error;
-			if (typeof errVal === "string") {
-				error ??= errVal;
-			} else if (typeof errVal === "object" && errVal !== null) {
-				if ("error" in errVal && typeof (errVal as { error: unknown }).error === "string") {
-					error ??= (errVal as { error: string }).error;
-				}
-				if ("code" in errVal && typeof (errVal as { code: unknown }).code === "string") {
-					code ??= (errVal as { code: string }).code;
-				}
-				if ("status" in errVal && typeof (errVal as { status: unknown }).status === "number") {
-					status ??= (errVal as { status: number }).status;
-				}
-			}
-		}
-		if ("code" in current && typeof (current as { code: unknown }).code === "string") {
-			code ??= (current as { code: string }).code;
+		if ("error" in current && typeof (current as { error: unknown }).error === "string") {
+			error ??= (current as { error: string }).error;
 		}
 		if ("cause" in current && current.cause) {
 			current = current.cause;
@@ -56,11 +35,11 @@ function extractErrorInfo(cause: unknown): {
 		}
 	}
 
-	return { status, error, code };
+	return { status, error };
 }
 
 export function isRetryableLinkError(cause: unknown): boolean {
-	const { status, error, code } = extractErrorInfo(cause);
+	const { status, error } = extractErrorInfo(cause);
 	if (status !== undefined) {
 		return status === 409 || status === 429 || status >= 500;
 	}
@@ -70,11 +49,7 @@ export function isRetryableLinkError(cause: unknown): boolean {
 		error === "bad_request" ||
 		error === "not_found" ||
 		error === "not_implemented" ||
-		error === "method_not_allowed" ||
-		code === "forbidden" ||
-		code === "unauthorized" ||
-		code === "bad_request" ||
-		code === "not_found"
+		error === "method_not_allowed"
 	) {
 		return false;
 	}
@@ -83,12 +58,18 @@ export function isRetryableLinkError(cause: unknown): boolean {
 
 /**
  * Links this computer to the account once the desktop is signed in, when
- * Connect Mobile already serves it remotely and no account holds it yet:
+ * Connect Mobile already serves it remotely and no account holds it yet.
  * Connect Mobile turned on while signed in links it the same way, so signing
  * in afterwards needs no second step. The computer then moves to its fixed
  * address by itself. A computer an account holds is left alone, so signing in
  * to another account does not take it from the first, and one its account
  * removed on another device is not listed again; Allow access moves it.
+ *
+ * Retries with exponential backoff (30s→300s, 5 retries) while waiting for the
+ * daemon, remote access, or the public tunnel to become ready, stopping early
+ * on permanent errors and exhausting retries until the next sign-in or app
+ * restart. Remote access enabled outside Connect Mobile (such as via CLI)
+ * after retries run out is not linked automatically.
  *
  * Development builds never link themselves: their identity is temporary, and
  * an account-directed listing would outlive the checkout that made it. Allow
