@@ -58,47 +58,62 @@ func (m *Manager) computerUseTarget(ctx context.Context) (hostID, label string) 
 	return strings.TrimSpace(hostID), strings.TrimSpace(label)
 }
 
-// computerUseSnapshotTTL is how long a starting session keeps the target it
-// first saw: long enough to build its prompt and its tool server, short
-// enough that a later restart reads the setting again.
-const computerUseSnapshotTTL = 2 * time.Minute
+// computerUseSnapshotLimit only tidies up a snapshot whose session never
+// reached its tool server (a start that failed between the two). It never
+// changes the target a starting session sees: the tool server consumes the
+// snapshot however long the start took.
+const computerUseSnapshotLimit = 24 * time.Hour
 
 type computerUseSnapshot struct {
 	hostID, label string
 	at            time.Time
 }
 
-// computerUseTargetFor is computerUseTarget read once per starting session:
-// its prompt and its tool server see the same computer even if the user
-// changes the setting between the two.
+// computerUseTargetFor reads "Run computer use on" once for a starting
+// session and keeps that answer for its tool server, so the prompt and the
+// tool server name the same computer even if the user changes the setting
+// while the session starts.
 func (m *Manager) computerUseTargetFor(ctx context.Context, sessionID domain.SessionID) (hostID, label string) {
 	if sessionID == "" {
 		return m.computerUseTarget(ctx)
 	}
-	now := time.Now()
 	m.computerUseMu.Lock()
-	for id, snapshot := range m.computerUseSpawns {
-		if now.Sub(snapshot.at) > computerUseSnapshotTTL {
-			delete(m.computerUseSpawns, id)
-		}
-	}
 	snapshot, ok := m.computerUseSpawns[sessionID]
 	m.computerUseMu.Unlock()
 	if ok {
 		return snapshot.hostID, snapshot.label
 	}
 	hostID, label = m.computerUseTarget(ctx)
+	now := time.Now()
 	m.computerUseMu.Lock()
+	defer m.computerUseMu.Unlock()
+	for id, old := range m.computerUseSpawns {
+		if now.Sub(old.at) > computerUseSnapshotLimit {
+			delete(m.computerUseSpawns, id)
+		}
+	}
 	if m.computerUseSpawns == nil {
 		m.computerUseSpawns = map[domain.SessionID]computerUseSnapshot{}
 	}
 	if existing, raced := m.computerUseSpawns[sessionID]; raced {
-		hostID, label = existing.hostID, existing.label
-	} else {
-		m.computerUseSpawns[sessionID] = computerUseSnapshot{hostID: hostID, label: label, at: now}
+		return existing.hostID, existing.label
 	}
-	m.computerUseMu.Unlock()
+	m.computerUseSpawns[sessionID] = computerUseSnapshot{hostID: hostID, label: label, at: now}
 	return hostID, label
+}
+
+// takeComputerUseTarget is the tool server's read: the target the session's
+// prompt was built with, which it then releases, or the setting now when no
+// prompt read it first.
+func (m *Manager) takeComputerUseTarget(ctx context.Context, sessionID domain.SessionID) (hostID, label string) {
+	m.computerUseMu.Lock()
+	snapshot, ok := m.computerUseSpawns[sessionID]
+	delete(m.computerUseSpawns, sessionID)
+	m.computerUseMu.Unlock()
+	if ok {
+		return snapshot.hostID, snapshot.label
+	}
+	return m.computerUseTarget(ctx)
 }
 
 func (m *Manager) computerUseRemoteLabel(ctx context.Context, sessionID domain.SessionID) string {

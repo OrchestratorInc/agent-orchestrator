@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -218,9 +219,44 @@ func TestStartingSessionSeesOneComputerUseTarget(t *testing.T) {
 	if got := servers[0].Env[config.EnvComputerUseTarget]; got != "host-mac" {
 		t.Fatalf("tool server target = %q, want the computer the prompt names", got)
 	}
+	// The tool server released the snapshot: the session's next start reads
+	// the setting again.
+	if hostID, _ := m.computerUseTargetFor(ctx, "mer-9"); hostID != "" {
+		t.Fatalf("restart target = %q, want the current setting", hostID)
+	}
 	// Another session starting now reads the new setting.
 	servers = m.aoMCPServers(ctx, domain.HarnessClaudeCode, map[string]string{EnvSessionID: "mer-10"})
 	if got := servers[0].Env[config.EnvComputerUseTarget]; got != "local" {
 		t.Fatalf("new session target = %q, want local", got)
+	}
+}
+
+// However long a session takes to start, its tool server gets the target its
+// prompt was built with.
+func TestSlowStartKeepsItsComputerUseTarget(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(),
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+	m.SetComputerUseEnabled(func(context.Context) bool { return true })
+	hostID := "host-mac"
+	m.SetComputerUseRemote(func(context.Context) (string, string) { return hostID, "Studio Mac" })
+	if got, _ := m.computerUseTargetFor(ctx, "slow-1"); got != "host-mac" {
+		t.Fatalf("prompt target = %q", got)
+	}
+	m.computerUseMu.Lock()
+	snapshot := m.computerUseSpawns["slow-1"]
+	snapshot.at = snapshot.at.Add(-time.Hour)
+	m.computerUseSpawns["slow-1"] = snapshot
+	m.computerUseMu.Unlock()
+	hostID = ""
+	// Another session starting in between must not drop the slow one's snapshot.
+	m.computerUseTargetFor(ctx, "other-1")
+	servers := m.aoMCPServers(ctx, domain.HarnessClaudeCode, map[string]string{EnvSessionID: "slow-1"})
+	if got := servers[0].Env[config.EnvComputerUseTarget]; got != "host-mac" {
+		t.Fatalf("tool server target after a slow start = %q, want host-mac", got)
 	}
 }

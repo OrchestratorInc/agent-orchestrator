@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -592,11 +593,21 @@ func TestDamagedRemoteSettingsCanBeReset(t *testing.T) {
 // computer's request deadline, say) does not stop it: the read completes and
 // fills the cache, so the next caller gets the full list at once.
 func TestToolReadOutlivesTheCallerThatStartedIt(t *testing.T) {
+	started := make(chan struct{})
 	release := make(chan struct{})
+	var mu sync.Mutex
+	describes := 0
 	driver := &fakeDriver{daemonUp: true}
 	driver.onCall = func(args []string) ([]byte, []byte, error) {
 		if args[0] != "describe" {
 			return []byte(`{}`), nil, nil
+		}
+		mu.Lock()
+		describes++
+		first := describes == 1
+		mu.Unlock()
+		if first {
+			close(started)
 		}
 		<-release
 		if args[1] == "click" {
@@ -606,20 +617,43 @@ func TestToolReadOutlivesTheCallerThatStartedIt(t *testing.T) {
 	}
 	s := newTestService(t, driver, "darwin")
 	ctx, cancel := context.WithCancel(context.Background())
+	failed := make(chan error, 1)
+	go func() {
+		_, err := s.AgentTools(ctx)
+		failed <- err
+	}()
+	<-started
 	cancel()
-	if _, err := s.AgentTools(ctx); !errors.Is(err, context.Canceled) {
+	if err := <-failed; !errors.Is(err, context.Canceled) {
 		t.Fatalf("AgentTools(cancelled) error = %v, want context.Canceled", err)
 	}
 	close(release)
+	// The read the cancelled caller started fills the cache on its own.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.mu.Lock()
+		cached := len(s.agentTools.tools)
+		s.mu.Unlock()
+		if cached == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the cancelled caller's read never filled the cache")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	before := describes
+	mu.Unlock()
 	tools, err := s.AgentTools(context.Background())
 	if err != nil || len(tools) != 1 || tools[0].Name != "click" {
-		t.Fatalf("AgentTools() after the read = %+v, %v", tools, err)
+		t.Fatalf("AgentTools() = %+v, %v", tools, err)
 	}
-	s.mu.Lock()
-	cached := len(s.agentTools.tools)
-	s.mu.Unlock()
-	if cached != 1 {
-		t.Fatalf("cached %d tools, want the completed read's 1", cached)
+	mu.Lock()
+	after := describes
+	mu.Unlock()
+	if after != before {
+		t.Fatalf("the next caller read the driver again (%d more describe calls)", after-before)
 	}
 }
 
