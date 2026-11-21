@@ -2864,10 +2864,13 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 // reaching the provider. An empty expectedTurnID keeps the untargeted behaviour
 // for internal callers (handoffs, provider switches) that mean "the current turn".
 func (c *Controller) InterruptTurn(ctx context.Context, expectedTurnID string) error {
+	var aimed domain.ConversationTurn
 	if expectedTurnID != "" {
 		// Answer the common stale case before cancelling forks or withdrawing steers
 		// that belong to a later turn. The check is repeated under sendMu below.
-		if _, stopped, err := c.stopTarget(ctx, expectedTurnID); err != nil || stopped {
+		var stopped bool
+		var err error
+		if aimed, stopped, err = c.stopTarget(ctx, expectedTurnID); err != nil || stopped {
 			return err
 		}
 	}
@@ -2881,8 +2884,12 @@ func (c *Controller) InterruptTurn(ctx context.Context, expectedTurnID string) e
 	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
 	// it so Stop does not wait for that steer to time out. Withdrawing also
 	// refuses later steers for the turn; a Stop that fails gives them back.
+	// A targeted Stop withdraws only from its own turn: if that turn ends and the
+	// next starts before this runs, the next turn's steers are not settled.
 	var restore func()
-	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+	if targeted, ok := c.conv.(ports.ChatTurnSteerWithdrawer); ok && expectedTurnID != "" {
+		restore = targeted.WithdrawPendingSteersFor(aimed.ProviderTurnID)
+	} else if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
 		restore = withdrawer.WithdrawPendingSteers()
 	}
 	restoreSteering := func() {
@@ -2914,6 +2921,15 @@ func (c *Controller) InterruptTurn(ctx context.Context, expectedTurnID string) e
 	cutoff := c.now()
 	c.mu.Lock()
 	turn := c.pendingTurnID
+	if expectedTurnID != "" && target.State == domain.TurnStateQueued && target.ProviderTurnID != turn {
+		// A message still waiting in the queue is not the turn in flight. Stopping
+		// it must not interrupt the running turn or cancel the rest of the queue;
+		// the queued message has its own cancel.
+		c.mu.Unlock()
+		c.sendMu.Unlock()
+		restoreSteering()
+		return ErrNoActiveTurn
+	}
 	if turn != "" {
 		// Publish the queue cutoff before releasing sendMu. A completion can then
 		// win the provider race, but it cannot drain pre-Stop work as if Stop had
@@ -2936,7 +2952,15 @@ func (c *Controller) InterruptTurn(ctx context.Context, expectedTurnID string) e
 		// The list uses the snapshot's visibility and ordering rules, so its first
 		// row is the same running turn whose Working bar the user pressed Stop on.
 		providerTurnID := providerTurnIDs[0]
-		if target.ProviderTurnID != "" && slices.Contains(providerTurnIDs, target.ProviderTurnID) {
+		if expectedTurnID != "" {
+			// A targeted Stop settles only work that includes its own turn. If its
+			// turn is not among the visible running ones, the Working bar belongs to
+			// some other turn, and Stop must not reach it.
+			if target.ProviderTurnID == "" || !slices.Contains(providerTurnIDs, target.ProviderTurnID) {
+				c.sendMu.Unlock()
+				restoreSteering()
+				return ErrNoActiveTurn
+			}
 			providerTurnID = target.ProviderTurnID
 		}
 		if err := c.conv.Interrupt(ctx, providerTurnID); err != nil &&

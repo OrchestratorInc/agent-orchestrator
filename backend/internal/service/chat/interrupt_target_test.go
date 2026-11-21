@@ -115,3 +115,31 @@ func TestInterruptTurnRejectsAnUnknownTurn(t *testing.T) {
 		t.Fatalf("provider interrupt attempts = %d, want 0", got)
 	}
 }
+
+// Stop aimed at a message still waiting in the queue is not a Stop of the turn
+// running ahead of it: that turn keeps running and the queue keeps its message.
+func TestInterruptTurnForAQueuedMessageLeavesTheRunningTurnAlone(t *testing.T) {
+	conv := newInterruptRecorder()
+	h := newHarnessWithConversation(t, conv)
+	ctx := context.Background()
+
+	startRecordedTurn(t, h, conv, "long job", "provider-turn-1")
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "next", ClientMessageID: "client-next", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil || queued.State != domain.TurnStateQueued {
+		t.Fatalf("queue behind the running turn: turn=%+v err=%v", queued, err)
+	}
+
+	if err := h.svc.InterruptTurn(ctx, testSession, queued.ID); !errors.Is(err, chatsvc.ErrNoActiveTurn) {
+		t.Fatalf("Stop for a queued message = %v, want ErrNoActiveTurn", err)
+	}
+	if got := conv.attemptCount(); got != 0 {
+		t.Fatalf("provider interrupt attempts = %d; Stop for a queued message reached the running turn", got)
+	}
+	snapshot := h.awaitSnapshot(t, func(store.ConversationSnapshot) bool { return true })
+	states := turnStateByText(t, snapshot)
+	if states["long job"] != domain.TurnStateRunning || states["next"] != domain.TurnStateQueued {
+		t.Fatalf("turn states = %v, want the running turn running and the message still queued", states)
+	}
+}

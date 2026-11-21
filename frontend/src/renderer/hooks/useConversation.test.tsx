@@ -2342,7 +2342,7 @@ describe("Stop", () => {
 	});
 
 	it("drops a steer refusal once the turn it was aimed at is gone", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_TURN_NOT_STEERABLE");
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
 		apiErrorMessageMock.mockReturnValue("the agent did not collect the guidance");
 		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_TURN_NOT_STEERABLE" } });
 		const { result, rerender } = renderStop();
@@ -2356,7 +2356,7 @@ describe("Stop", () => {
 	});
 
 	it("still knows the harness cannot steer after the turn changes", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_STEER_UNSUPPORTED");
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
 		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_STEER_UNSUPPORTED" } });
 		const { result, rerender } = renderStop();
 		await act(async () => {
@@ -2370,7 +2370,7 @@ describe("Stop", () => {
 
 	it("keeps a steer that is still in flight pending when the turn changes", async () => {
 		const response = deferred<{ data: undefined; error: { code: string } }>();
-		apiErrorCodeMock.mockReturnValue("CHAT_NO_ACTIVE_TURN");
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
 		postMock.mockReturnValue(response.promise);
 		const { result, rerender } = renderStop();
 		let steered: Promise<unknown> | undefined;
