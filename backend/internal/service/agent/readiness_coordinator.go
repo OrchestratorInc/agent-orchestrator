@@ -430,6 +430,21 @@ func readinessFailureCategory(snapshot domain.AgentReadinessSnapshot) string {
 	return ""
 }
 
+// retryAutomatically reports whether a failed check earns a background retry.
+// An inconclusive auth result is the adapter saying it cannot tell; asking
+// again on a timer returns the same answer and costs a CLI run each time, so it
+// waits for the next request instead. Timeouts and failed checks get one pass
+// through the retry delays, then stop: before this they retried at the last
+// delay for as long as the daemon ran. Either way the hold is unchanged: a
+// display request after it re-checks at once, as soon as a background retry
+// would have run.
+func retryAutomatically(failureCode string, failures, delays int) bool {
+	if failureCode == domain.AgentReadinessReasonAuthCheckInconclusive {
+		return false
+	}
+	return failures >= 1 && failures <= delays
+}
+
 func isReadinessFailureCode(code string) bool {
 	switch code {
 	case domain.AgentReadinessReasonInstallCheckTimeout,
@@ -521,13 +536,18 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 		delay := c.retryDelays[min(entry.failures-1, len(c.retryDelays)-1)]
 		entry.nextRetryAt = c.now().Add(delay)
 		entry.retryGeneration++
-		generation := entry.retryGeneration
 		if installFailed {
 			failureCode = entry.snapshot.Installation.ReasonCode
 		} else {
 			failureCode = entry.snapshot.Authentication.ReasonCode
 		}
-		go c.scheduleRetry(id, generation, delay)
+		// The hold answers display requests from the cache (retry_delayed)
+		// until delay passes, as before; a launch, a forced re-check or an
+		// invalidation still checks at once. Only the background retry is
+		// limited.
+		if retryAutomatically(failureCode, entry.failures, len(c.retryDelays)) {
+			go c.scheduleRetry(id, entry.retryGeneration, delay)
+		}
 	} else {
 		entry.failures = 0
 		entry.nextRetryAt = time.Time{}
@@ -723,6 +743,57 @@ func (c *readinessCoordinator) Warm() <-chan struct{} {
 		_, _ = c.ensureMode(c.ctx, nil, domain.AgentReadinessPurposeDisplay, readinessInvalidateAuthentication, false)
 	}()
 	return done
+}
+
+// WarmUsed is Warm with the launch-time authentication pass limited to
+// authIDs: the harnesses this install has sessions for. Installation is still
+// warmed for every harness through the process-free presence check, and done
+// closes after these two passes, so model catalog updates wait only for them.
+// The other installed harnesses are then checked one at a time, so every
+// picker knows their sign-in state shortly after launch without that work
+// competing with the launch or piling up as one burst of agent CLIs. Unknown
+// ids are ignored.
+func (c *readinessCoordinator) WarmUsed(authIDs []string) <-chan struct{} {
+	c.mu.Lock()
+	known := make([]string, 0, len(authIDs))
+	for _, id := range authIDs {
+		if c.entries[id] != nil && !slices.Contains(known, id) {
+			known = append(known, id)
+		}
+	}
+	c.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		func() {
+			defer close(done)
+			_, _ = c.ensureMode(c.ctx, nil, domain.AgentReadinessPurposeDisplay, readinessInvalidateInstallation, true)
+			if len(known) > 0 {
+				_, _ = c.ensureMode(c.ctx, known, domain.AgentReadinessPurposeDisplay, readinessInvalidateAuthentication, false)
+			}
+		}()
+		for _, id := range c.installedExcept(known) {
+			if c.ctx.Err() != nil {
+				return
+			}
+			_, _ = c.ensureMode(c.ctx, []string{id}, domain.AgentReadinessPurposeDisplay, readinessInvalidateAuthentication, false)
+		}
+	}()
+	return done
+}
+
+// installedExcept lists, in id order, the harnesses whose installation is
+// confirmed and that are not in skip.
+func (c *readinessCoordinator) installedExcept(skip []string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var ids []string
+	for id, entry := range c.entries {
+		if entry.snapshot.Installation.State == domain.AgentInstallationInstalled && !slices.Contains(skip, id) {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func (c *readinessCoordinator) normalizeIDs(ids []string) ([]string, error) {

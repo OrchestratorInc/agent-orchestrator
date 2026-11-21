@@ -24,7 +24,7 @@ func TestHarnessUpdateWarmupWaitsForReadinessAndChecksOnlyInstalledHarnesses(t *
 			func(context.Context) (agentsvc.Readiness, error) {
 				close(readinessCalled)
 				return agentsvc.Readiness{Agents: []domain.AgentReadinessSnapshot{
-					{ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
+					{ID: "codex", UsageCount: 1, Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
 					{ID: "claude-code", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled}},
 					{ID: "cursor", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationUnknown}},
 					{ID: "unregistered", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
