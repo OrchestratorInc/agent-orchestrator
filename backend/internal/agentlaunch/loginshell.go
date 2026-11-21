@@ -29,7 +29,13 @@ const repinPOSIX = `if [ -n "$AO_PATH_PIN" ]; then case ":$PATH:" in ":$AO_PATH_
 const repinPromptHook = `if [ -z "$_AO_PATH_REPINNED" ]; then _AO_PATH_REPINNED=1; ` + repinPOSIX + `; fi`
 
 const bashEnvWrapper = "# Written by Orchestrator: runs your BASH_ENV, then keeps Orchestrator's ao first on PATH.\n" +
+	// Keep the PID shell-local, even if an older wrapper exported it. An
+	// exec replacement has the same PID but must run its own startup hook.
+	`export -n _AO_BASH_ENV_PID` + "\n" +
+	`if [ "${_AO_BASH_ENV_PID:-}" != "$$" ]; then` + "\n" +
+	`export -n _AO_BASH_ENV_PID="$$"` + "\n" +
 	`if [ -n "$AO_USER_BASH_ENV" ] && [ -r "$AO_USER_BASH_ENV" ]; then . "$AO_USER_BASH_ENV"; fi` + "\n" +
+	"fi\n" +
 	repinPOSIX + "\n"
 
 // LoginShellEnv returns the variables that keep the first directory of the
@@ -58,13 +64,22 @@ func LoginShellEnv(path string, getenv func(string) string, configured map[strin
 		}
 		return getenv(key)
 	}
-	// A daemon started from an AO shell already sees these wrappers; the
-	// user's own value is the one they saved.
-	userValue := func(key, saved, ours string) string {
-		if value := lookup(key); value != ours {
+	// A nested daemon can inherit wrappers belonging to any AO data dir,
+	// including an older daemon's wrappers. Only a saved non-wrapper value
+	// is a real user hook; an already-poisoned saved value must be discarded.
+	userValue := func(key, saved, suffix string) string {
+		isWrapper := func(value string) bool {
+			return strings.HasSuffix(filepath.Clean(value), string(os.PathSeparator)+suffix)
+		}
+		value := lookup(key)
+		if !isWrapper(value) {
 			return value
 		}
-		return lookup(saved)
+		value = lookup(saved)
+		if isWrapper(value) {
+			return ""
+		}
+		return value
 	}
 	// An interactive bash reads no BASH_ENV: before its first prompt, after
 	// every startup file, this puts the pin back once.
@@ -79,15 +94,21 @@ func LoginShellEnv(path string, getenv func(string) string, configured map[strin
 	return map[string]string{
 		envPathPin:       pin,
 		"ZDOTDIR":        dir,
-		envUserZDOTDIR:   userValue("ZDOTDIR", envUserZDOTDIR, dir),
+		envUserZDOTDIR:   userValue("ZDOTDIR", envUserZDOTDIR, filepath.Join("runtime", "login-shell")),
 		"BASH_ENV":       bashEnv,
-		envUserBashEnv:   userValue("BASH_ENV", envUserBashEnv, bashEnv),
+		envUserBashEnv:   userValue("BASH_ENV", envUserBashEnv, filepath.Join("runtime", "login-shell", "bash_env")),
 		"PROMPT_COMMAND": prompt,
 	}, nil
 }
 
 func zshWrapper(name string) string {
+	// Each startup file has its own guard: sourcing .zshenv must not prevent
+	// .zprofile/.zshrc/.zlogin from running later in the same shell.
+	sentinel := "_AO_" + strings.ToUpper(strings.TrimPrefix(name, ".")) + "_PID"
 	return "# Written by Orchestrator: runs your " + name + ", then keeps Orchestrator's ao first on PATH.\n" +
+		"typeset -g +x " + sentinel + "\n" +
+		"if [[ \"${" + sentinel + ":-}\" != \"$$\" ]]; then\n" +
+		"typeset -g +x " + sentinel + "=\"$$\"\n" +
 		"_ao_zdotdir=\"$ZDOTDIR\"\n" +
 		"ZDOTDIR=\"${AO_USER_ZDOTDIR:-$HOME}\"\n" +
 		// /etc/zshrc names the history file after ZDOTDIR before .zshrc runs.
@@ -97,7 +118,8 @@ func zshWrapper(name string) string {
 		"ZDOTDIR=\"$_ao_zdotdir\"\n" +
 		"unset _ao_zdotdir\n" +
 		"[[ -n \"$AO_PATH_PIN\" ]] && path=(\"$AO_PATH_PIN\" \"${(@)path:#$AO_PATH_PIN}\")\n" +
-		lastInteractiveFile[name]
+		lastInteractiveFile[name] +
+		"fi\n"
 }
 
 // lastInteractiveFile hands an interactive zsh its user's ZDOTDIR back after
