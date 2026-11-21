@@ -33,9 +33,11 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 });
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
 	background: (color: string) => ({ background: color }),
-	clickable: (handler: () => void) => ({ clickable: handler }),
+	clickable: (handler: () => void, options?: { indication?: boolean }) => ({ clickable: handler, indication: options?.indication }),
 	clip: () => ({ clip: true }),
 	dropShadow: () => ({ dropShadow: true }),
+	height: (value: number) => ({ height: value }),
+	padding: (start: number, top: number, end: number, bottom: number) => ({ padding: [start, top, end, bottom] }),
 	paddingAll: (all: number) => ({ paddingAll: all }),
 	selectable: (selected: boolean, handler: () => void, role: string) => ({ selectable: { selected, handler, role } }),
 	selectableGroup: () => ({ selectableGroup: true }),
@@ -85,7 +87,41 @@ describe("BoardTabBar on Android", () => {
 		const [tabs, newTask] = renderer!.root.findAllByType("ComposeHost" as never);
 		expect(tabs.findAllByType("ComposeText" as never).map((text) => text.props.children)).toEqual(["Workers", "Projects"]);
 		expect(newTask.findByType("Icon" as never).props.source).toBe("drawable:add");
-		expect(modifier(newTask.findByType("Box" as never), "semantics")).toEqual({ contentDescription: "New task" });
+		const pill = newTask.findByType("Row" as never);
+		expect(modifier(pill, "semantics")).toEqual({ contentDescription: "New task" });
+		// A slim inverted pill reading "+ New".
+		expect(modifier(pill, "height")).toBe(44);
+		expect(modifier(pill, "background")).toBe("#accent");
+		expect(newTask.findByType("Icon" as never).props.tint).toBe("#onAccent");
+		expect(newTask.findByType("ComposeText" as never).props.children).toBe("New");
+	});
+
+	// Material 3's navigation bar item, in the app's own solid colours.
+	it("backs the selected tab's icon alone with an inverted 64x36 pill, with no surface behind the bar", () => {
+		render({ selected: "(projects)" });
+		const indicator = (title: string) => renderer!.root.find((node) => (node.type as unknown) === "Box" && node.props.modifiers?.some((entry: { testID?: string }) => entry.testID === `board-tab-indicator-${title}`));
+		expect(modifier(indicator("projects"), "size")).toEqual([64, 36]);
+		expect(modifier(indicator("projects"), "background")).toBe("#accent");
+		expect(modifier(indicator("workers"), "background")).toBeUndefined();
+		const [tabs] = renderer!.root.findAllByType("ComposeHost" as never);
+		const row = tabs.findByType("Row" as never);
+		expect(modifier(row, "background")).toBeUndefined();
+		expect(modifier(row, "dropShadow")).toBeUndefined();
+		// The selected icon in the pill's own ink.
+		expect(tabs.findAllByType("Icon" as never).map((icon) => icon.props.tint)).toEqual(["#textSecondary", "#onAccent"]);
+	});
+
+	it("draws no press ripple, on the tabs or the round button, and keeps the tabs' semantics", () => {
+		const props = render();
+		const tab = withTag("board-tab-projects");
+		expect(modifier(tab, "selectable")).toMatchObject({ selected: false, role: "tab" });
+		expect(modifier(tab, "indication")).toBe(false);
+		// The plain click comes after `selectable`, so it is the inner handler and takes the touch.
+		const keys = (tab.props.modifiers as Modifier[]).map((entry) => Object.keys(entry)[0]);
+		expect(keys.indexOf("clickable")).toBeGreaterThan(keys.indexOf("selectable"));
+		act(() => (modifier(tab, "clickable") as () => void)());
+		expect(props.onSelect).toHaveBeenCalledWith("(projects)");
+		expect(modifier(withTag("spawn-worker"), "indication")).toBe(false);
 	});
 
 	it("selects tabs as tabs, for TalkBack, and starts a task from the round button", () => {
