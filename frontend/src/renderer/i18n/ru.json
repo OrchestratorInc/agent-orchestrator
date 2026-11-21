@@ -92,6 +92,7 @@
 	"chat.removeAllAnnotations": "Удалить все аннотации",
 	"chat.excerpt.selectedText": "Выбранный текст:",
 	"chat.excerpt.flowchartAttached": "Блок-схема прикреплена",
+	"chat.excerpt.quoted": "«{{text}}»",
 	"chat.removeAnnotation": "Удалить аннотацию {{count}}",
 	"chat.startup.queuePlaceholder": "Добавьте следующее сообщение в очередь, пока {{agent}} готовится",
 	"chat.archived.body": "История сохранена. Восстановите сессию, чтобы продолжить.",

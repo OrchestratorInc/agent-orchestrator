@@ -243,6 +243,7 @@ import {
 	type ChatEditOutcome,
 	type ConversationActivity,
 	type ConversationBranchPoint,
+	type ConversationContentSummary,
 	type ConversationItem,
 	type ConversationMessage,
 	type ConversationTurn,
@@ -368,6 +369,22 @@ const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
 type MessageEditDraft = ChatDraftInlineEdit;
+
+/** The excerpts and file references a local echo carries, as its message's content. */
+export function localEchoContent(echo: Pick<ConversationLocalEcho, "excerpts" | "fileReferences">): ConversationContentSummary[] {
+	return [
+		...(echo.excerpts ?? []).map((excerpt) => ({
+			annotationId: excerpt.id, annotationOrder: excerpt.order,
+			type: "excerpt",
+			text: excerpt.text,
+			comment: excerpt.comment,
+			sourceConversationId: excerpt.conversationId,
+			sourceMessageId: excerpt.messageId,
+			sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
+		})),
+		...(echo.fileReferences ?? []).map((fileReference) => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order })),
+	];
+}
 
 /**
  * A stream refresh replaces the complete snapshot object. Queue prompts do not
@@ -1273,6 +1290,7 @@ function ChatWorkspaceContent({
 					origin: "human",
 					text: echo.text,
 				continuation: echo.continuation,
+					content: localEchoContent(echo),
 					streaming: false,
 					delivery: "queued",
 					clientMessageId: echo.clientMessageId,
@@ -4396,15 +4414,7 @@ export function Timeline({
 				origin: "human",
 				text: echo.text,
 				continuation: echo.continuation,
-				content: [...(echo.excerpts?.map((excerpt) => ({
-					annotationId: excerpt.id, annotationOrder: excerpt.order,
-					type: "excerpt",
-					text: excerpt.text,
-					comment: excerpt.comment,
-					sourceConversationId: excerpt.conversationId,
-					sourceMessageId: excerpt.messageId,
-					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
-				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
+				content: localEchoContent(echo),
 				streaming: false,
 				delivery: echo.delivery ?? (echo.backgroundWake || echo.turnId ? "accepted" : "sending"),
 				createdAt: echo.createdAt,

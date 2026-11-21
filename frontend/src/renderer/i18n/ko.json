@@ -98,6 +98,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.excerpt.selectedText": "선택한 텍스트:",
 	"chat.excerpt.flowchartAttached": "순서도 첨부",
+	"chat.excerpt.quoted": "“{{text}}”",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 준비 중에 다음 메시지를 대기열에 추가하세요",
 	"chat.archived.body": "기록은 유지됩니다. 계속하려면 세션을 복원하세요.",

@@ -98,6 +98,7 @@
 	"chat.removeAllAnnotations": "Tüm açıklama notlarını kaldır",
 	"chat.excerpt.selectedText": "Seçili metin:",
 	"chat.excerpt.flowchartAttached": "Akış şeması eklendi",
+	"chat.excerpt.quoted": "“{{text}}”",
 	"chat.removeAnnotation": "{{count}} numaralı açıklama notunu kaldır",
 	"chat.startup.queuePlaceholder": "{{agent}} hazırlanırken sonraki mesajınızı sıraya ekleyin",
 	"chat.archived.body": "Geçmiş saklanır. Devam etmek için oturumu geri yükleyin.",

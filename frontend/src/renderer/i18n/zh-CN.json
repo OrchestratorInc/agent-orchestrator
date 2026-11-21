@@ -98,6 +98,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.excerpt.selectedText": "所选文本：",
 	"chat.excerpt.flowchartAttached": "已附加流程图",
+	"chat.excerpt.quoted": "“{{text}}”",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 准备期间可先排队发送消息",
 	"chat.archived.body": "历史记录已保留。恢复会话以继续。",
