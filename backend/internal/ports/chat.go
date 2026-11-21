@@ -34,6 +34,12 @@ var (
 	// ErrChatDriverIncompatible means the installed provider speaks a protocol
 	// version AO does not support.
 	ErrChatDriverIncompatible = errors.New("chat driver incompatible")
+	// ErrChatSandboxUnavailable means the provider is installed and speaks the
+	// protocol, but its sandbox cannot start on this host. Reviewers run
+	// read-only with approvals disabled, so the sandbox is their only route to
+	// read the checkout and submit a result; launching one anyway would spend a
+	// model turn on commands that can never run.
+	ErrChatSandboxUnavailable = errors.New("chat sandbox unavailable")
 	// ErrChatAuthRequired means the provider is installed but not authenticated.
 	ErrChatAuthRequired = errors.New("chat driver requires authentication")
 	// ErrChatResumeFailed means a stored provider conversation could not be
@@ -1202,6 +1208,26 @@ type ChatPermissionModeChecker interface {
 	SupportsPermissionMode(mode PermissionMode) bool
 }
 
+// ChatSandboxProbeConfig is the posture a sandbox probe must reproduce. It
+// carries no model, prompt, or credentials: the probe only proves that a
+// command can start inside the provider's sandbox from this checkout.
+type ChatSandboxProbeConfig struct {
+	// WorkspacePath is the checkout the reviewer will run in.
+	WorkspacePath string
+}
+
+// ChatSandboxProber is implemented by a driver that can prove its sandbox
+// starts before AO commits to a review. It is deliberately separate from
+// ChatDriver: most Chat flows can fall back to a different posture, while a
+// reviewer cannot.
+type ChatSandboxProber interface {
+	// ProbeSandbox runs a no-op command in the provider's read-only sandbox.
+	// It returns ErrChatSandboxUnavailable (wrapped with the provider's own
+	// error) when the sandbox cannot start, and nil when the provider does not
+	// support the probe so callers keep their previous behaviour.
+	ProbeSandbox(ctx context.Context, cfg ChatSandboxProbeConfig) error
+}
+
 // ChatDriver opens conversations for one harness.
 type ChatDriver interface {
 	// Harness is the agent this driver serves.
@@ -1216,6 +1242,14 @@ type ChatDriver interface {
 	// Resume reattaches to an existing one. It returns ErrChatResumeFailed
 	// rather than silently starting a new conversation.
 	Resume(ctx context.Context, cfg ChatResumeConfig) (ChatConversation, error)
+}
+
+// ChatEnvironmentValidator checks provider prerequisites against the environment
+// overrides that a new session will inherit over the daemon environment. It must
+// not mutate the environment, create files, or launch a provider. These checks
+// are per request and must not be cached with global Chat capabilities.
+type ChatEnvironmentValidator interface {
+	ValidateEnvironment(ctx context.Context, env map[string]string) error
 }
 
 // ChatDriverReconnector attaches only to a surviving provider. Implementations

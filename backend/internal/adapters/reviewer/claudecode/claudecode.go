@@ -35,6 +35,10 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerClaudeCode
 }
 
+// ReviewActivityHooks reports that the reviewer installs AO's Claude Code
+// hooks before every launch, so its active and idle signals are reliable.
+func (r *Reviewer) ReviewActivityHooks() bool { return true }
+
 // InvalidateBinaryResolution forgets the worker plugin's cached executable, so
 // the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {

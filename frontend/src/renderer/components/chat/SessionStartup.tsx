@@ -21,6 +21,7 @@ export function SessionStartup({
 	onRetry,
 	retrying,
 	retryError,
+	retryLabel,
 }: {
 	failed: boolean;
 	steps: readonly SessionProvisionStep[];
@@ -31,6 +32,7 @@ export function SessionStartup({
 	onRetry?: () => void;
 	retrying?: boolean;
 	retryError?: string;
+	retryLabel?: string;
 }) {
 	const { t } = useTranslation();
 	// A start that has just begun reveals its steps one by one; reopening a session
@@ -86,7 +88,7 @@ export function SessionStartup({
 					<p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p>
 					{onRetry ? (
 						<Button type="button" size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
-							{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}
+							{retrying ? t("chat.startup.retrying") : retryLabel ?? t("chat.startup.retry")}
 						</Button>
 					) : null}
 					{retryError ? <p role="alert" className="text-xs leading-snug text-destructive">{retryError}</p> : null}

@@ -19,6 +19,7 @@ import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
 import { startSessionManagementTelemetry } from "./lib/session-management-telemetry";
+import { applyPerformanceOptOut, startPerformanceTelemetry } from "./lib/performance-telemetry";
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
@@ -45,11 +46,14 @@ aoBridge.telemetry.onPolicy((view) => applyRendererTelemetryPolicy(view.eventsEn
 // The analytics opt-out lives in main (shared with the daemon and mobile). Apply
 // it to this renderer's PostHog client at launch and whenever Settings flips it.
 void aoBridge.telemetry.getAnalyticsOptOut().then((optedOut) => {
-	if (optedOut) void applyAnalyticsOptOut(true);
+	if (!optedOut) return;
+	void applyAnalyticsOptOut(true);
+	applyPerformanceOptOut(true);
 }).catch(() => undefined);
 aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
 	useAnalyticsOptOutStore.setState({ optedOut, loaded: true });
 	void applyAnalyticsOptOut(optedOut);
+	applyPerformanceOptOut(optedOut);
 });
 
 if (import.meta.env.DEV) {
@@ -98,6 +102,7 @@ const bootstrapSessionManagementTelemetry = () => {
 	void initTelemetry().then((enabled) => {
 		if (enabled) {
 			startSessionManagementTelemetry();
+			startPerformanceTelemetry();
 			return;
 		}
 		if (!isDeniedEvent("ao.renderer.session_management_summary") && sessionManagementTelemetryRetries++ < 12) {

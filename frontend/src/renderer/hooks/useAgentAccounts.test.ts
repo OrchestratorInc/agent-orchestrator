@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentAccountLabel, agentAccountName, withoutSameLogins } from "./useAgentAccounts";
+import { agentAccountLabel, agentAccountName, oneRowPerLogin, withoutSameLogins } from "./useAgentAccounts";
 
 const cli = { id: "device-claude", sameLoginAs: "acct-a" };
 const a = { id: "acct-a" };
@@ -25,6 +25,14 @@ describe("withoutSameLogins", () => {
 	});
 });
 
+describe("oneRowPerLogin", () => {
+	it("lists a login once whichever of its two accounts is kept", () => {
+		expect(ids(oneRowPerLogin([cli, a, b], "device-claude"))).toEqual(["device-claude", "acct-b"]);
+		expect(ids(oneRowPerLogin([cli, a, b], "acct-a"))).toEqual(["acct-a", "acct-b"]);
+		expect(ids(oneRowPerLogin([cli, a, b]))).toEqual(["acct-a", "acct-b"]);
+	});
+});
+
 describe("agentAccountLabel", () => {
 	const t = (key: string, options?: { provider: string }) => key === "settings.agentAccounts.cliLoginOf" ? `${options?.provider} CLI login` : key;
 	const acme = { id: "acct-a", provider: "claude" as const, device: false, email: "a@example.com", orgName: "Acme" };
@@ -45,6 +53,13 @@ describe("agentAccountLabel", () => {
 		expect(agentAccountLabel(device, [device, acme], t)).toBe("a@example.com · Claude Code CLI login");
 		expect(agentAccountLabel(acme, [device, acme], t)).toBe("a@example.com");
 		expect(agentAccountLabel({ ...device, orgName: undefined }, [device, { ...acme, orgName: undefined }], t)).toBe("a@example.com · Claude Code CLI login");
+	});
+
+	it("adds nothing when only one of two same-email accounts knows its organization", () => {
+		const cli = { ...device, orgId: "de6f970e-1", orgName: "a@example.com's Organization" };
+		const signedOut = { id: "acct-s", provider: "claude" as const, device: false, email: "a@example.com", signedIn: false };
+		expect(agentAccountLabel(cli, [cli, signedOut], t)).toBe("a@example.com");
+		expect(agentAccountLabel(signedOut, [cli, signedOut], t)).toBe("a@example.com");
 	});
 
 	it("adds the organization ID when names cannot tell organizations apart", () => {

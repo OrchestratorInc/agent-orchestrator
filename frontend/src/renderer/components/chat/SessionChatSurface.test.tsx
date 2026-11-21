@@ -93,6 +93,8 @@ const sideMocks = vi.hoisted(() => ({
 	show: vi.fn(),
 	addReference: vi.fn(),
 	sides: [] as { id: string; hasWork: boolean }[],
+	loaded: false,
+	pending: false,
 	activeId: "existing-side" as string | undefined,
 	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
@@ -256,6 +258,7 @@ vi.mock("./ChatWorkspace", async () => {
 	};
 });
 
+import { sessionUiKey } from "../../lib/hosts";
 import { SessionChatSurface } from "./SessionChatSurface";
 import {
 	peekSessionSearchReveal,
@@ -321,6 +324,9 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+// The skills hook also takes the remembered list; these tests are about gating.
+const catalogCall = (hook: unknown) => (hook as ReturnType<typeof vi.fn>).mock.lastCall?.slice(0, 3);
+
 describe("SessionChatSurface recovery", () => {
 	it.each<[string, WorkspaceSession, boolean]>([
 		["a live session", session, false],
@@ -328,7 +334,16 @@ describe("SessionChatSurface recovery", () => {
 		["a session read as terminated", { ...session, status: "terminated" }, true],
 	])("tells the commands whether %s can only be restored", (_name, target, terminated) => {
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={target} /></Wrapper>);
-		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated]);
+		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false]);
+	});
+
+	it("tells the commands when a turn is active", () => {
+		conversationState.snapshot = {
+			capabilities: [],
+			turns: [{ id: "turn-1", state: "running", requestedAt: "2026-11-16T00:00:00Z" }],
+		};
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true]);
 	});
 });
 
@@ -510,6 +525,30 @@ describe("SessionChatSurface search reveal", () => {
 		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-2"));
 		expect(screen.getByTestId("annotation-text")).toHaveTextContent("timeout");
 		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
+	});
+
+	// A match on another machine is keyed by host and id. This machine's open
+	// session with the same id must not take it, and that machine's session must.
+	it("takes only its own machine's search target", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const remoteKey = sessionUiKey("sess-1", "h_air");
+		requestSessionSearchReveal(remoteKey, { messageId: "msg-remote", text: "flaky", find: true });
+		const local = render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		expect(screen.getByTestId("annotation-request")).not.toHaveTextContent("msg-remote");
+		expect(peekSessionSearchReveal(remoteKey)).toMatchObject({ messageId: "msg-remote" });
+		local.unmount();
+
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} hostId="h_air" />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-remote"));
+		expect(peekSessionSearchReveal(remoteKey)).toBeUndefined();
 	});
 
 	// Main's find in chat (useChatFind) searches the whole history; a result
@@ -1246,13 +1285,13 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
 		}
 	});
 
@@ -1268,18 +1307,18 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
 		}
 	});
 
@@ -1287,7 +1326,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 	});
 });
@@ -1352,24 +1391,22 @@ describe("SessionChatSurface continuation identity", () => {
 
 describe("side command routing", () => {
 	beforeEach(() => {
-		useUiStore.setState({ developerMode: true, sideChats: true });
+		// Developer mode stays off: side chats do not depend on it.
+		useUiStore.setState({ developerMode: false });
 		conversationState.snapshot = { ...conversationState.snapshot, capabilities: ["resume"] };
-	});
-	afterEach(() => {
-		useUiStore.setState({ developerMode: false, sideChats: false });
 	});
 
 	it.each([
-		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
-		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
-	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
-		useUiStore.setState(flags);
+		["the harness cannot resume", [], undefined],
+		["the session is on another machine", ["resume"], "h_air"],
+	] as const)("sends /btw to the main chat when %s", async (_case, capabilities, hostId) => {
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [...capabilities] };
 		sideMocks.create.mockReset();
 		const mainSend = conversationCommandState.send;
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(
 			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...session, provider }} />
+				<SessionChatSurface session={{ ...session, provider: "codex" }} hostId={hostId} />
 			</Wrapper>,
 		);
 		await act(async () => {
@@ -1377,6 +1414,35 @@ describe("side command routing", () => {
 		});
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+	});
+
+	it("reports whether the session has side chats, and is creating one, only once their list has loaded", () => {
+		const onSideChatsChange = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const surface = () => (
+			<Wrapper client={queryClient}>
+				{/* A fresh session object rerenders the memoized surface. */}
+				<SessionChatSurface session={{ ...session }} onSideChatsChange={onSideChatsChange} />
+			</Wrapper>
+		);
+		try {
+			const view = render(surface());
+			expect(onSideChatsChange).not.toHaveBeenCalled();
+			sideMocks.loaded = true;
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: false });
+			sideMocks.pending = true;
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: true });
+			sideMocks.pending = false;
+			sideMocks.sides = [{ id: "side-1", hasWork: false }];
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: true, creating: false });
+		} finally {
+			sideMocks.loaded = false;
+			sideMocks.pending = false;
+			sideMocks.sides = [];
+		}
 	});
 
 	it(
@@ -1481,7 +1547,6 @@ describe("SessionChatSurface startup recovery", () => {
 describe("selection side-chat operation ownership", () => {
 	const excerpt: ChatDraftExcerptReference = { id: "selection-operation", conversationId: "conv-sess-1", messageId: "message", revision: 1, text: "selected text", role: "assistant" };
 	function mount() {
-		useUiStore.setState({ developerMode:true, sideChats:true });
 		conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"] };
 		sideMocks.create.mockReset(); sideMocks.addReference.mockReset(); sideMocks.show.mockReset();
 		sideMocks.activeId = undefined; sideMocks.sides = [];

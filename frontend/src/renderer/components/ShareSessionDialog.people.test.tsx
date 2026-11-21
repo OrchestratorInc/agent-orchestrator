@@ -211,6 +211,20 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(first.parentElement!.firstElementChild).toBe(first);
 	});
 
+	it("still lists the workspace for a project nobody has been added to", async () => {
+		mocks.projectAccess = { entries: [] };
+		renderDialog();
+		await screen.findByText("Platform");
+		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
+		expect(await screen.findByRole("heading", { name: /Share project/ })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.calls).toContainEqual(["getShareAccess", undefined]));
+		const workspace = await screen.findByText("Everyone in your workspace");
+		const list = workspace.closest("[data-share-access-list]")!;
+		expect(list.querySelectorAll("li")).toHaveLength(1);
+		expect(list.firstElementChild!.hasAttribute("data-share-workspace-row")).toBe(true);
+		expect(screen.getByText("People with access")).toBeInTheDocument();
+	});
+
 	it("shows a team's people its new access at once, before the change is saved", async () => {
 		const saved = gate();
 		mocks.gates.updateShareEntry = [saved];
@@ -355,12 +369,13 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(row(list, "Platform").textContent).toContain("Can write");
 		const input = await stageCheckout();
 		const field = input.closest("[data-people-field]") as HTMLElement;
-		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
+		// The staged chip renders after the pick; wait for it rather than racing a busy runner.
+		await userEvent.click(await within(field).findByRole("button", { name: /Change access: Can watch/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(document.activeElement).toBe(input);
 		await stageCheckout();
-		expect(within(field).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can watch");
+		expect(await within(field).findByRole("button", { name: /Change access/ })).toHaveTextContent("Can watch");
 		view.reopen(false);
 		view.reopen(true);
 		await screen.findByText("Platform");
