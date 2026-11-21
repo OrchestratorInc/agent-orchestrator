@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import { Users } from "lucide-react";
+import { Users } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useTeamsEnabled } from "../../hooks/useTeamsEnabled";
 import type { WorkspaceShare } from "../../types/workspace";

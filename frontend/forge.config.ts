@@ -44,7 +44,8 @@ const PACKAGED_EXTERNAL_DEPENDENCIES = [
 
 function ignoreFromVitePackage(file: string): boolean {
 	if (!file) return false;
-	if (file.startsWith("/.vite")) return false;
+	// Release source maps are uploaded to Sentry, never shipped (vite.sentry.ts).
+	if (file.startsWith("/.vite")) return file.endsWith(".map");
 	if (file === "/node_modules") return false;
 	return !PACKAGED_EXTERNAL_DEPENDENCIES.some(
 		(dependency) => file === dependency || file.startsWith(`${dependency}/`),
@@ -104,6 +105,9 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"agent-browser",
 		"resources/acp-runtime",
 		...(platform === "darwin" ? ["update-helper", "wake-helper", "dictation-helper", "cloudflared", "assets/mac/en.lproj"] : []),
+		// macOS 26+ Liquid Glass app icon (CFBundleIconName below), precompiled
+		// from assets/brand/AO.icon by scripts/generate-brand-assets.swift.
+		...(platform === "darwin" ? ["assets/Assets.car"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -185,6 +189,9 @@ const config: ForgeConfig = {
 			ProductName: WINDOWS_DISPLAY_NAME,
 		},
 		extendInfo: {
+			// macOS 26+ draws the Icon Composer icon from Resources/Assets.car;
+			// older macOS keeps using CFBundleIconFile (assets/icon.icns).
+			CFBundleIconName: "AppIcon",
 			LSHasLocalizedDisplayName: true,
 			CFBundleDevelopmentRegion: "en",
 			// In a signed build, macOS checks the dictation helper's speech and
@@ -200,6 +207,9 @@ const config: ForgeConfig = {
 		// App icon. electron-packager appends the per-platform extension
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the
 		// deb/rpm makers below, and the runtime window icon from src/main.ts.
+		// Keep the .icon bundle out of assets/: packager compiles an
+		// assets/icon.icon itself, which fails on macOS 15 build hosts. The
+		// precompiled Assets.car ships as an extra resource instead.
 		icon: "assets/icon",
 		extraResource: extraResourcesForPlatform(process.platform),
 		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
@@ -295,6 +305,7 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					if (!existsSync(path.join(resourcesPath, "Assets.car"))) throw new Error(`packaged macOS app icon catalog missing from ${resourcesPath}`);
 					if (!existsSync(path.join(resourcesPath, "dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator"))) throw new Error(`packaged macOS dictation helper missing from ${resourcesPath}`);
 					// Run it: remote access depends on this signed copy starting, not just existing.
 					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
@@ -479,6 +490,7 @@ const config: ForgeConfig = {
 				{ entry: "src/main.ts", config: "vite.main.config.ts", target: "main" },
 				{ entry: "src/preload.ts", config: "vite.preload.config.ts", target: "preload" },
 				{ entry: "src/annotate-preload.ts", config: "vite.preload.config.ts", target: "preload" },
+				{ entry: "src/privacy-guide-preload.ts", config: "vite.preload.config.ts", target: "preload" },
 			],
 			renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],
 		}),

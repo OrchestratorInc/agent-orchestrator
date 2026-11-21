@@ -1,6 +1,10 @@
 import { type ReactElement, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { sessionArtifacts, type WorkspaceSession } from "../types/workspace";
+import { sessionArtifacts, sessionDeliverables, type WorkspaceSession } from "../types/workspace";
+import { sessionPublishedCheck, type PublishedCheck } from "../lib/unpublish-artifacts";
+import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
+import { useSettings } from "../hooks/useSettings";
+import { useHostShareLinks } from "./ShareArtifactPopover";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
 
@@ -12,9 +16,14 @@ export type SessionArchiveChoice = { deleteArtifacts: boolean };
 // delete prompt. Callers keep driving `open` themselves: the trigger is rendered
 // as-is so repeated taps re-open the confirm instead of toggling it shut.
 //
+// Put a tooltip inside `trigger`, never around this component: a portal stays a
+// React child, so the confirm's focus would open the tooltip above it, and the
+// tooltip would take Escape.
+//
 // A session with artifact files also offers an unchecked "Delete N
 // artifacts" box. Checking it turns Confirm destructive, since the delete
-// cannot be undone and a restored session comes back without the files.
+// cannot be undone and a restored session comes back without the files. It
+// says how many are published: their links stop working with the files.
 export function SessionArchiveDialog({
 	onConfirm,
 	onOpenChange,
@@ -40,7 +49,12 @@ export function SessionArchiveDialog({
 	// conversation and work so it can be re-provisioned later.
 	const isCloud = session?.cloud !== undefined;
 	const body = isCloud ? t("archive.bodyCloud") : t("archive.body");
-	const artifactCount = session ? sessionArtifacts(session).length : 0;
+	// Counted as every list shows them: registered files, a bundle as one. The
+	// delete still takes the whole folder, so its other files are mentioned.
+	const deliverables = session ? sessionDeliverables(session) : [];
+	const artifactCount = deliverables.length;
+	const otherFiles = session ? sessionArtifacts(session).length > deliverables.reduce((sum, artifact) => sum + (artifact.bundle?.fileCount ?? 1), 0) : false;
+	const published = sessionPublishedCheck(session);
 	const deleting = artifactCount > 0 && deleteArtifacts;
 	return (
 		<>
@@ -68,11 +82,34 @@ export function SessionArchiveDialog({
 							<label htmlFor={checkboxId} className="text-foreground">
 								{t("archive.deleteArtifacts", { count: artifactCount })}
 							</label>
-							<p className="text-settings-muted">{t("archive.deleteArtifactsHint", { count: artifactCount })}</p>
+							<p className="text-settings-muted">
+								{t("archive.deleteArtifactsHint", { count: artifactCount })}
+								{otherFiles ? ` ${t("archive.deleteArtifactsFiles")}` : null}
+								{session?.hostId ? <HostPublishedNote session={session} /> : published.lookup.length > 0 ? <LookedUpPublishedNote check={published} /> : <PublishedNote count={published.known} />}
+							</p>
 						</div>
 					</div>
 				) : null}
 			</ConfirmDialog>
 		</>
 	);
+}
+
+function PublishedNote({ count }: { count: number }) {
+	const { t } = useTranslation();
+	return count > 0 ? <>{` ${t("archive.deleteArtifactsPublished", { count })}`}</> : null;
+}
+
+/**
+ * The note for a cloud session, whose files' links are recorded on this
+ * computer only and so are looked up; mounted only then, while the confirm is open.
+ */
+function LookedUpPublishedNote({ check }: { check: PublishedCheck }) {
+	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
+	return <PublishedNote count={usePublishedLinkCount(baseUrl, check, true)} />;
+}
+
+/** The note for a remote host's session, whose links only this computer's host links name. */
+function HostPublishedNote({ session }: { session: WorkspaceSession }) {
+	return <PublishedNote count={sessionPublishedCheck(session, useHostShareLinks()).known} />;
 }

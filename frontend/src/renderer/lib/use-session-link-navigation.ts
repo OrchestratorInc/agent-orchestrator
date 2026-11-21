@@ -30,7 +30,8 @@ function useCloudLinkSource(_hostId: string): SessionLinkSource {
 	}, [org?.id, projects.data, sessions.data]);
 	return {
 		ready: orgReady && Boolean(org?.id) && projects.isSuccess && sessions.isSuccess,
-		isLoading: !orgReady || projects.isLoading || sessions.isLoading,
+		// Signed out means the source is absent, not that it is on its way.
+		isLoading: orgReady && (projects.isLoading || sessions.isLoading),
 		isError: projects.isError || sessions.isError,
 		workspaces,
 	};
@@ -45,7 +46,8 @@ function useRemoteLinkSource(hostId: string): SessionLinkSource {
 	);
 	return {
 		ready: state?.status === "success",
-		isLoading: state === undefined || state.status === "pending",
+		// A host with no running query never settles on its own, so only a live fetch counts as loading.
+		isLoading: state?.status === "pending" && state.fetchStatus !== "idle",
 		isError: state?.status === "error",
 		workspaces: state?.data ?? [],
 	};
@@ -67,7 +69,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		const artifact = parseArtifactLink(url);
 		const target = parseSessionLink(url) ?? artifact;
 		if (!target) {
-			showGlobalToast("This AO session link is malformed or unsupported.", undefined, {
+			showGlobalToast("This Orchestrator-managed session link is malformed or unsupported.", undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,
@@ -76,7 +78,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			return false;
 		}
 		if (!source.ready) {
-			showGlobalToast(`AO could not verify that session. Check the ${remoteHostId ? "host" : sourceKind === "cloud" ? "Cloud" : "daemon"} connection and try again.`, undefined, {
+			showGlobalToast(`Orchestrator could not verify that session. Check the ${remoteHostId ? "host" : sourceKind === "cloud" ? "Cloud" : "daemon"} connection and try again.`, undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,
@@ -86,7 +88,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		}
 		const resolved = resolveSessionLink(url, source.workspaces);
 		if (!resolved) {
-			showGlobalToast("That session is missing or is not accessible in this AO workspace.", undefined, {
+			showGlobalToast("That session is missing or is not accessible in this Orchestrator workspace.", undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,

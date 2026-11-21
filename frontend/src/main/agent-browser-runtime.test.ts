@@ -82,7 +82,9 @@ describe("AO action translation", () => {
 			"2500",
 		]);
 		expect(nativeArgumentsForAction("tab-select", { tabId: "t2" })).toEqual(["tab", "t2"]);
-		expect(nativeArgumentsForAction("get", { property: "text" })).toEqual(["get", "text"]);
+		// agent-browser's `get text` needs a selector; page text reads <body>.
+		expect(nativeArgumentsForAction("get", { property: "text" })).toEqual(["get", "text", "body"]);
+		expect(nativeArgumentsForAction("get", { property: "text", ref: "e4" })).toEqual(["get", "text", "@e4"]);
 		const stableWait = nativeArgumentsForAction("wait", { stableMs: 750, timeoutMs: 2_500 });
 		expect(stableWait.slice(0, 2)).toEqual(["wait", "--fn"]);
 		expect(stableWait[2]).toContain("750");
@@ -154,7 +156,7 @@ describe("agent-browser runtime lifecycle", () => {
 		try {
 			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
 				code: "AGENT_BROWSER_COMMAND_FAILED",
-				message: "Browser automation did not target AO tab t3",
+				message: "Browser automation did not target Orchestrator tab t3",
 			});
 			expect(processRunner.mock.calls.some(([, args]) => JSON.stringify(args) === JSON.stringify(["tab", "t2", "--json"]))).toBe(true);
 		} finally {

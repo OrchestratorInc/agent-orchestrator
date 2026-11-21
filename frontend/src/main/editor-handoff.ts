@@ -1,3 +1,4 @@
+import { terminalCommand, LINUX_TERMINAL_LAUNCHERS } from "./terminal-command";
 import { createHash } from "node:crypto";
 import { closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
@@ -9,6 +10,8 @@ import {
 	type EditorHandoffStateOptions,
 	type EditorId,
 	type EditorPreferenceState,
+	isBrowserArtifactPath,
+	type OpenArtifactInBrowserInput,
 	type OpenSessionArtifactsInput,
 	type OpenSessionTargetInput,
 	type OpenSessionTargetResult,
@@ -95,6 +98,8 @@ export type EditorHandoffDeps = {
 	openDirectory: (workspacePath: string) => Promise<void>;
 	/** Shows one file selected in the system file manager. */
 	revealPath: (filePath: string) => Promise<void>;
+	/** Opens one file in the system's default browser. */
+	openInBrowser?: (filePath: string) => Promise<void>;
 	/** Resolves symlinks in an existing path. */
 	realPath: (candidatePath: string) => Promise<string>;
 	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
@@ -117,6 +122,7 @@ export type EditorHandoff = {
 	setPreferredEditor(editorId: unknown): Promise<EditorId>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
 	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
+	openArtifactInBrowser(input: OpenArtifactInBrowserInput): Promise<void>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
 };
 
@@ -225,62 +231,18 @@ function resolveOnPath(
 	return undefined;
 }
 
-function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-function appleScriptString(value: string): string {
-	return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-}
-
-function windowsCommandArg(value: string): string {
-	return `"${value.replaceAll('"', '""')}"`;
-}
-
-const LINUX_TERMINAL_LAUNCHERS = [
-	{ command: "x-terminal-emulator", argsBeforeCommand: ["-e"] },
-	{ command: "gnome-terminal", argsBeforeCommand: ["--"] },
-	{ command: "konsole", argsBeforeCommand: ["-e"] },
-	{ command: "xfce4-terminal", argsBeforeCommand: ["--execute"] },
-	{ command: "kitty", argsBeforeCommand: [] },
-	{ command: "alacritty", argsBeforeCommand: ["-e"] },
-] as const;
-
 function resolveTerminalEditor(editorCommand: string, deps: EditorHandoffDeps, isExecutable: (candidatePath: string) => boolean): ResolvedCommand | undefined {
-	if (deps.platform === "darwin") {
-		return {
-			command: "/usr/bin/osascript",
-			argsForWorkspace: (workspacePath) => {
-				const commandLine = `exec ${shellQuote(editorCommand)} ${shellQuote(workspacePath)}`;
-				const script = `tell application "Terminal"\nactivate\ndo script ${appleScriptString(commandLine)}\nend tell`;
-				return ["-e", script];
-			},
-		};
-	}
-	if (deps.platform === "win32") {
-		return {
-			command: deps.env.ComSpec || deps.env.COMSPEC || "cmd.exe",
-			argsForFile: (filePath) => ["/d", "/s", "/v:off", "/k", `"${[editorCommand, filePath].map(windowsCommandArg).join(" ")}"`],
-			argsForWorkspace: () => {
-				// launch() sets cwd to the workspace, so opening "." avoids sending the
-				// workspace path through cmd.exe variable expansion (for example %TEMP%).
-				const commandLine = [editorCommand, "."].map(windowsCommandArg).join(" ");
-				// /s strips the first and last quotes around the command string. The
-				// extra outer pair preserves the quotes around both executable paths.
-				return ["/d", "/s", "/v:off", "/k", `"${commandLine}"`];
-			},
-		};
-	}
-	for (const launcher of LINUX_TERMINAL_LAUNCHERS) {
-		const resolved = resolveOnPath(launcher.command, deps.platform, deps.env, isExecutable);
-		if (resolved) {
-			return {
-				command: resolved,
-				argsForWorkspace: (workspacePath) => [...launcher.argsBeforeCommand, editorCommand, workspacePath],
-			};
+	const resolve = (target: string) => terminalCommand([editorCommand, target], deps.platform, deps.env, isExecutable);
+	const spec = resolve(".");
+	return spec
+		? {
+			command: spec.command,
+			argsForFile: (filePath) => resolve(filePath)!.args,
+			// launch() sets cwd to the workspace, so opening "." on Windows keeps the
+			// workspace path out of cmd.exe variable expansion (for example %TEMP%).
+			argsForWorkspace: (workspace) => resolve(deps.platform === "win32" ? "." : workspace)!.args,
 		}
-	}
-	return undefined;
+		: undefined;
 }
 
 // Expands a candidate's Windows install locations into real paths. Each entry
@@ -494,6 +456,10 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		name: deps.platform === "darwin" ? "Finder" : deps.platform === "win32" ? "File Explorer" : "File Manager",
 		kind: "file_manager",
 	};
+	// Linux opens folders through xdg-open, so there is no single app to take an icon from.
+	const fileManagerIconPath = deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app"
+		: deps.platform === "win32" ? path.win32.join(deps.env.SystemRoot || deps.env.windir || "C:\\Windows", "explorer.exe")
+			: undefined;
 
 	const icons = new Map<string, Promise<string | undefined>>();
 	const readIcon = (iconPath: string) => {
@@ -636,7 +602,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 				const terminal = terminals.find((entry) => entry.target.id === target.id);
 				let iconPath = editor?.command.iconPath ?? (terminal
 					? terminal.command.iconPath ?? terminal.command.command
-					: target.kind === "file_manager" && deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app" : undefined);
+					: target.kind === "file_manager" ? fileManagerIconPath : undefined);
 				if (editor) {
 					// CLI shims may point into a relocated .app. Use that actual bundle's
 					// native icon before falling back to the registered installation or executable.
@@ -710,6 +676,21 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			const filePath = input.path === undefined ? undefined : await artifactFilePath(pathAPI(deps.platform), deps.realPath, artifactDir, input.path);
 			await openTarget(target, terminal?.command, filePath ? pathAPI(deps.platform).dirname(filePath) : artifactDir, filePath);
 			return target;
+		},
+
+		async openArtifactInBrowser(input) {
+			const sessionId = typeof input.sessionId === "string" ? input.sessionId.trim() : "";
+			if (!sessionId) throw new Error("Session is required.");
+			if (!deps.openInBrowser) throw new Error("Opening in a browser is not available.");
+			const api = pathAPI(deps.platform);
+			if (typeof input.path !== "string" || !isBrowserArtifactPath(input.path)) {
+				throw new Error("This file does not open in a browser.");
+			}
+			const artifactDir = await deps.resolveArtifactDir(sessionId);
+			const filePath = await artifactFilePath(api, deps.realPath, artifactDir, input.path);
+			// The resolved file, not just the name asked for, must be one a browser renders.
+			if (!isBrowserArtifactPath(filePath)) throw new Error("This file does not open in a browser.");
+			await deps.openInBrowser(filePath);
 		},
 
 		async copyWorkspacePath(sessionId) {

@@ -811,6 +811,59 @@ func TestClosedThreadDoesNotStopTheController(t *testing.T) {
 	}
 }
 
+/* ---- provider state ---------------------------------------------------- */
+
+func awaitActivityEvent(t *testing.T, activity *recordingActivity, event string, state domain.ActivityState) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, signal := range activity.snapshot() {
+			if signal.Event == event && signal.State == state {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no %s %q signal: %+v", state, event, activity.snapshot())
+}
+
+// Claude Code runs cycles on its own after a turn, for example to answer a
+// finished background task. AO has no turn for them, so the provider's own
+// running and idle reports are what keep the session from reading idle while
+// the agent works.
+func TestProviderStateReportsWorkOutsideAOTurns(t *testing.T) {
+	h := newHarness(t)
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState,
+		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
+	awaitActivityEvent(t, h.activity, "chat.provider.running", domain.ActivityActive)
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState,
+		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}})
+	awaitActivityEvent(t, h.activity, "chat.provider.idle", domain.ActivityIdle)
+}
+
+// While AO's own turn runs, its turn events own the activity. A provider idle
+// can lag behind the next turn's start, so it must not end that turn early.
+func TestProviderStateLeavesAOTurnsToTurnEvents(t *testing.T) {
+	h := newHarness(t)
+
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "turn-1"},
+		ports.ChatEvent{Kind: ports.ChatEventProviderState,
+			ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}},
+		ports.ChatEvent{Kind: ports.ChatEventProviderState,
+			ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "turn-1", TurnState: domain.TurnStateCompleted},
+	)
+	awaitActivityEvent(t, h.activity, "chat.turn.completed", domain.ActivityIdle)
+	for _, signal := range h.activity.snapshot() {
+		if signal.Event == "chat.provider.running" || signal.Event == "chat.provider.idle" {
+			t.Fatalf("provider state overrode a running AO turn: %+v", h.activity.snapshot())
+		}
+	}
+}
+
 /* ---- MCP servers ------------------------------------------------------- */
 
 // Servers are announced one at a time and re-announced every turn, so reports

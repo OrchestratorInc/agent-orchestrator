@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -47,6 +50,10 @@ type Provider struct {
 	identityMu       sync.Mutex
 	identity         ports.SCMIdentity
 	identityResolved bool
+	// now and randomSuffix name comment attachments; tests pin them, and nil
+	// means the wall clock and crypto/rand.
+	now          func() time.Time
+	randomSuffix func() string
 }
 
 // NewProvider returns a Provider. If opts.Client is supplied it is used
@@ -151,6 +158,7 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 		return out, scmObserveError(err)
 	}
 
+	p.markCancelledGateFailures(ctx, owner, repo, gq)
 	out.CI = ciSummaryFromGraphQL(gq)
 	out.Review = reviewDecisionFromGraphQL(gq)
 	out.Mergeability = mergeabilityFromGraphQL(gq, rest, out.CI, out.Review)
@@ -234,8 +242,8 @@ const graphQLCheckContextLimit = 100
 
 // checkRunFields is the CheckRun selection every rollup query uses. The
 // workflow name and event identify which runs are reruns of the same check
-// (see latestCheckRuns).
-const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ workflowRun{ event workflow{ name } } }`
+// (see latestCheckRuns). Suite IDs keep cancellation evidence within one run.
+const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ conclusion id workflowRun{ event workflow{ name } } }`
 
 // prObservationQuery is the GraphQL query (derived from PR #28, credited
 // to @whoisasx) that pulls everything we need in one round trip:
@@ -315,14 +323,82 @@ func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobI
 	return string(body), nil
 }
 
+// Cancellation alone cannot explain a failure. Require a gate-only script and
+// cancelled siblings, with no other failure in the complete, unfiltered run.
+func (p *Provider) markCancelledGateFailures(ctx context.Context, owner, repo string, pr map[string]any) {
+	contexts := statusContexts(pr)
+	if pageInfoHasMore(contexts) {
+		return
+	}
+	checks := nodes(contexts["nodes"])
+	for _, n := range checks {
+		suite, _ := n["checkSuite"].(map[string]any)
+		id := str(suite["id"])
+		jobID := int64(num(n["databaseId"]))
+		if id == "" || jobID <= 0 || checkSuiteConclusion(n) != "CANCELLED" || str(n["conclusion"]) != "FAILURE" {
+			continue
+		}
+		failures, cancelled := 0, false
+		for _, peer := range checks {
+			peerSuite, _ := peer["checkSuite"].(map[string]any)
+			if str(peerSuite["id"]) == id {
+				if checkStatusFromGraphQL(peer) == domain.PRCheckFailed {
+					failures++
+				}
+				cancelled = cancelled || str(peer["conclusion"]) == "CANCELLED"
+			}
+		}
+		if failures == 1 && cancelled {
+			if log, err := p.fetchJobLogTail(ctx, owner, repo, jobID); err == nil && cancellationGateLog(log) {
+				n["cancelledGateFailure"] = true
+			}
+		}
+	}
+}
+
+// Recognize the dependency-only assertions in the observed gate logs. Unknown
+// scripts or unreadable logs retain their failures; job names prove nothing.
+func cancellationGateLog(log string) bool {
+	parts := strings.Split(ansi.Strip(log), "##[group]Run ")
+	if len(parts) != 2 {
+		return false
+	}
+	commands, cancelled := 0, false
+	for _, raw := range strings.Split(parts[1], "\n")[1:] {
+		_, line, _ := strings.Cut(raw, " ") // Actions timestamps precede each line.
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "shell:") {
+			return commands > 0 && cancelled
+		}
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		switch line {
+		case "test 'cancelled' = success":
+			cancelled = true
+		case "test 'success' = success", `jq 'map_values(.result)' <<< "$NEEDS"`:
+		case `jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS"`:
+			cancelled = strings.Contains(log, `"result": "cancelled"`) && !strings.Contains(log, `"result": "failure"`) && strings.Contains(log, "Z false\n")
+		default:
+			return false
+		}
+		commands++
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // Projection helpers
 // ---------------------------------------------------------------------------
 
 // ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
 // If ANY visible context concluded failure-class we return CIFailing.
-// Otherwise any pending context wins over passing. An empty rollup is
-// CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
+// Otherwise any pending context wins over passing. A cancelled check is
+// not a failure: it usually means a replacement run is on its way, which
+// the pending case reports. With nothing running, a cancelled check (say,
+// one stopped by hand) settles as CIUnknown even beside passing checks:
+// it proved nothing, so AO must not report the PR as passing. An empty
+// rollup is CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
 // the verdict is conservative: a known failure is still safe — failures
 // don't get un-failed by more pages — but passing/pending/unknown
 // verdicts could hide a failing context on the next page, so we degrade
@@ -340,12 +416,14 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 		// rather than returning CIUnknown for an otherwise-decided PR.
 		return mapRollupState(str(roll["state"]))
 	}
-	pending, passing := false, false
+	pending, passing, cancelled := false, false, false
 	for _, n := range rawNodes {
 		st := checkStatusFromGraphQL(n)
 		switch st {
-		case domain.PRCheckFailed, domain.PRCheckCancelled:
+		case domain.PRCheckFailed:
 			return domain.CIFailing
+		case domain.PRCheckCancelled:
+			cancelled = true
 		case domain.PRCheckQueued, domain.PRCheckInProgress:
 			pending = true
 		case domain.PRCheckPassed:
@@ -358,6 +436,8 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	switch {
 	case pending:
 		return domain.CIPending
+	case cancelled:
+		return domain.CIUnknown
 	case passing:
 		return domain.CIPassing
 	default:
@@ -648,7 +728,12 @@ func checkStatusFromGraphQL(n map[string]any) domain.PRCheckStatus {
 	switch conclusion {
 	case "SUCCESS", "NEUTRAL":
 		return domain.PRCheckPassed
-	case "FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE":
+	case "FAILURE":
+		if boolv(n["cancelledGateFailure"]) && checkSuiteConclusion(n) == "CANCELLED" {
+			return domain.PRCheckCancelled
+		}
+		return domain.PRCheckFailed
+	case "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE":
 		return domain.PRCheckFailed
 	case "CANCELLED":
 		return domain.PRCheckCancelled
@@ -668,8 +753,16 @@ func checkStatusFromGraphQL(n map[string]any) domain.PRCheckStatus {
 	return domain.PRCheckUnknown
 }
 
+// checkSuiteConclusion is the upper-cased conclusion of the check suite a
+// CheckRun belongs to, or "" while the suite is running or when the field is
+// missing.
+func checkSuiteConclusion(n map[string]any) string {
+	suite, _ := n["checkSuite"].(map[string]any)
+	return strings.ToUpper(strings.TrimSpace(str(suite["conclusion"])))
+}
+
 func isFailingCheckStatus(s domain.PRCheckStatus) bool {
-	return s == domain.PRCheckFailed || s == domain.PRCheckCancelled
+	return s == domain.PRCheckFailed
 }
 
 // ---------------------------------------------------------------------------
