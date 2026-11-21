@@ -2316,7 +2316,6 @@ textarea,
 .chat-md-stream [data-markdown="code-header"] > span:last-child { @apply ml-auto flex items-center opacity-0 transition-opacity duration-150; }
 .chat-md-stream [data-markdown="code-block"]:is(:hover, :focus-within) [data-markdown="code-header"] > span:last-child { @apply opacity-100; }
 .chat-md-stream pre > [data-markdown="code"] { @apply font-mono text-xs leading-[1.6] text-foreground; }
-.chat-md-stream [data-markdown="code-lines"] { display: block; }
 .chat-md-stream [data-animated="true"] { animation: stream-char-in 300ms ease backwards; }
 .chat-md-stream :is(pre, [data-markdown="code"]) [data-animated="true"] { animation: none; }
 
