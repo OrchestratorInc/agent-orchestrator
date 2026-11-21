@@ -766,6 +766,42 @@ paths:
                 type: string
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/browser-profile:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: getMyBrowserProfile
+      tags: [Account]
+      description: >-
+        Whether the caller has a saved cloud browser profile in this
+        organization: the sign-ins their Cloud sessions' browsers start with.
+        Present when CurrentAccount reports browserProfiles.
+      responses:
+        "200":
+          description: The caller's profile status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudBrowserProfileStatus"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: wipeMyBrowserProfile
+      tags: [Account]
+      description: >-
+        Wipes the caller's cloud browser profile in this organization: every
+        saved version and its key. The next session starts signed out.
+        Sessions already running keep the sign-ins they loaded until they end
+        and can no longer save them. Idempotent.
+      responses:
+        "200":
+          description: The profile is wiped.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudBrowserProfileWiped"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/agents:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -4106,6 +4142,141 @@ paths:
           $ref: "#/components/responses/WorkerScopeRequired"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/browser-profile:
+    get:
+      operationId: getWorkerBrowserProfile
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Returns the sealed browser profile snapshot of the person who started
+        the worker's session, in the session's organization. The person is
+        derived from the session and cannot be supplied by the sandbox. The
+        body is ciphertext the control plane cannot read; the sandbox opens
+        it with the key from getWorkerBrowserProfileKey. Requires
+        `worker:connect`. Absent when the deployment does not keep browser
+        profiles.
+      responses:
+        "200":
+          description: The latest snapshot.
+          headers:
+            X-AO-Browser-Profile-Generation:
+              description: The snapshot's generation, the base for the next save.
+              schema:
+                type: integer
+                format: int64
+                minimum: 1
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "204":
+          description: The person has no snapshot yet (generation 0).
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "404":
+          description: >-
+            Browser profiles are off on this deployment, or the session has no
+            person to own one (BROWSER_PROFILE_NO_OWNER): the worker then uses
+            a temporary profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putWorkerBrowserProfile
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Saves a sealed snapshot as the generation after
+        X-AO-Browser-Profile-Base-Generation. Fails with 409
+        BROWSER_PROFILE_CONFLICT when another session saved first: the worker
+        fetches the newer snapshot, reapplies its changes and saves again.
+        Content-Length is required. Requires `worker:connect`.
+      parameters:
+        - name: X-AO-Browser-Profile-Base-Generation
+          in: header
+          required: true
+          description: The generation this snapshot was made from; 0 for the first save.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The saved generation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerBrowserProfileSaved"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: Another session saved first (BROWSER_PROFILE_CONFLICT), or the profile was wiped.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "411":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/browser-profile/key:
+    post:
+      operationId: getWorkerBrowserProfileKey
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Returns the data key that seals the session creator's browser profile,
+        creating it on first use. The control plane keeps it only wrapped by
+        its key-management key and records every unwrap (person, session,
+        time). POST because each call is audited. The key must never be
+        logged, persisted, or put in the coding agent's environment.
+        Requires `worker:connect`.
+      responses:
+        "200":
+          description: The data key.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerBrowserProfileKey"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "404":
+          description: Browser profiles are off, or the session has no owner (BROWSER_PROFILE_NO_OWNER).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/children:
     get:
       operationId: listWorkerChildren
@@ -5866,6 +6037,12 @@ components:
             The control plane keeps several accounts per coding agent
             (listAgentAccounts) and moves a session between them
             (switchSessionAgentAccount). Absent or false otherwise.
+        browserProfiles:
+          type: boolean
+          description: >-
+            Cloud sessions' browsers keep the person's sign-ins across
+            sessions (getMyBrowserProfile, wipeMyBrowserProfile), and
+            createSession accepts browserProfile. Absent or false otherwise.
     AgentCapability:
       type: string
       enum:
@@ -6043,6 +6220,75 @@ components:
           description: '"standalone" for a project created without a repository; "scratch" for one whose repository AO created.'
         layout:
           $ref: "#/components/schemas/ProjectLayout"
+        browserTemporary:
+          type: boolean
+          description: >-
+            Every session in the project opens its browser in a temporary
+            profile: signed out, and cleared when the session ends. A
+            session's own browserProfile choice wins. Absent means off.
+    SessionBrowserProfile:
+      type: string
+      enum: [persistent, temporary]
+      description: >-
+        The session's browser profile. persistent starts with the creator's
+        saved sign-ins and saves new ones; temporary starts signed out and
+        saves nothing. Omitted follows the project's browserTemporary, else
+        persistent. Send only to a control plane whose CurrentAccount reports
+        browserProfiles.
+    CloudBrowserProfileStatus:
+      type: object
+      additionalProperties: false
+      required: [saved]
+      properties:
+        saved:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+        sizeBytes:
+          type: integer
+          format: int64
+          minimum: 0
+    CloudBrowserProfileWiped:
+      type: object
+      additionalProperties: false
+      required: [wiped, runningSessions]
+      properties:
+        wiped:
+          type: boolean
+          description: False when there was nothing to wipe.
+        runningSessions:
+          type: integer
+          minimum: 0
+          description: Sessions still running with the sign-ins they loaded.
+    WorkerBrowserProfileSaved:
+      type: object
+      additionalProperties: false
+      required: [generation]
+      properties:
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+    WorkerBrowserProfileKey:
+      type: object
+      additionalProperties: false
+      required: [key, orgId, userId]
+      properties:
+        orgId:
+          type: string
+          format: uuid
+          description: The organization whose profile the key seals.
+        userId:
+          type: string
+          format: uuid
+          description: The person whose profile the key seals; snapshots are bound to them.
+        key:
+          type: string
+          format: byte
+          minLength: 44
+          maxLength: 44
+          description: The 32-byte AES-256 data key, base64.
     ProjectLayout:
       type: string
       enum: [workspace]
@@ -9953,6 +10199,8 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        browserProfile:
+          $ref: "#/components/schemas/SessionBrowserProfile"
         requestedOutput:
           $ref: "#/components/schemas/RequestedOutput"
         interfaceMode:

@@ -433,6 +433,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/browser-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Whether the caller has a saved cloud browser profile in this organization: the sign-ins their Cloud sessions' browsers start with. Present when CurrentAccount reports browserProfiles. */
+        get: operations["getMyBrowserProfile"];
+        put?: never;
+        post?: never;
+        /** @description Wipes the caller's cloud browser profile in this organization: every saved version and its key. The next session starts signed out. Sessions already running keep the sign-ins they loaded until they end and can no longer save them. Idempotent. */
+        delete: operations["wipeMyBrowserProfile"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/agents": {
         parameters: {
             query?: never;
@@ -2516,6 +2536,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/browser-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Returns the sealed browser profile snapshot of the person who started
+         *     the worker's session, in the session's organization. The person is
+         *     derived from the session and cannot be supplied by the sandbox. The
+         *     body is ciphertext the control plane cannot read; the sandbox opens
+         *     it with the key from getWorkerBrowserProfileKey. Requires
+         *     `worker:connect`. Absent when the deployment does not keep browser
+         *     profiles.
+         *      */
+        get: operations["getWorkerBrowserProfile"];
+        /** @description Saves a sealed snapshot as the generation after
+         *     X-AO-Browser-Profile-Base-Generation. Fails with 409
+         *     BROWSER_PROFILE_CONFLICT when another session saved first: the worker
+         *     fetches the newer snapshot, reapplies its changes and saves again.
+         *     Content-Length is required. Requires `worker:connect`.
+         *      */
+        put: operations["putWorkerBrowserProfile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/browser-profile/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Returns the data key that seals the session creator's browser profile,
+         *     creating it on first use. The control plane keeps it only wrapped by
+         *     its key-management key and records every unwrap (person, session,
+         *     time). POST because each call is audited. The key must never be
+         *     logged, persisted, or put in the coding agent's environment.
+         *     Requires `worker:connect`.
+         *      */
+        post: operations["getWorkerBrowserProfileKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/children": {
         parameters: {
             query?: never;
@@ -3344,6 +3417,8 @@ export interface components {
             agentSwitchHarnesses?: components["schemas"]["CloudAgentHarness"][];
             /** @description The control plane keeps several accounts per coding agent (listAgentAccounts) and moves a session between them (switchSessionAgentAccount). Absent or false otherwise. */
             agentAccounts?: boolean;
+            /** @description Cloud sessions' browsers keep the person's sign-ins across sessions (getMyBrowserProfile, wipeMyBrowserProfile), and createSession accepts browserProfile. Absent or false otherwise. */
+            browserProfiles?: boolean;
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -3438,8 +3513,49 @@ export interface components {
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
             layout?: components["schemas"]["ProjectLayout"];
+            /** @description Every session in the project opens its browser in a temporary profile: signed out, and cleared when the session ends. A session's own browserProfile choice wins. Absent means off. */
+            browserTemporary?: boolean;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * @description The session's browser profile. persistent starts with the creator's saved sign-ins and saves new ones; temporary starts signed out and saves nothing. Omitted follows the project's browserTemporary, else persistent. Send only to a control plane whose CurrentAccount reports browserProfiles.
+         * @enum {string}
+         */
+        SessionBrowserProfile: "persistent" | "temporary";
+        CloudBrowserProfileStatus: {
+            saved: boolean;
+            /** Format: date-time */
+            updatedAt?: string;
+            /** Format: int64 */
+            sizeBytes?: number;
+        };
+        CloudBrowserProfileWiped: {
+            /** @description False when there was nothing to wipe. */
+            wiped: boolean;
+            /** @description Sessions still running with the sign-ins they loaded. */
+            runningSessions: number;
+        };
+        WorkerBrowserProfileSaved: {
+            /** Format: int64 */
+            generation: number;
+        };
+        WorkerBrowserProfileKey: {
+            /**
+             * Format: uuid
+             * @description The organization whose profile the key seals.
+             */
+            orgId: string;
+            /**
+             * Format: uuid
+             * @description The person whose profile the key seals; snapshots are bound to them.
+             */
+            userId: string;
+            /**
+             * Format: byte
+             * @description The 32-byte AES-256 data key, base64.
+             */
+            key: string;
         };
         /**
          * @description "workspace" lays the project out like a local workspace: every session checks the main repository and each additional one (repos) out side by side inside one workspace folder, and the agent starts in that folder (agentStartsIn is treated as parent). Set only when the project is created; any settings write that includes layout is refused (422), even with the project's current value. A standalone project has no repository, so creating one with this layout is refused (422).
@@ -5290,6 +5406,7 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            browserProfile?: components["schemas"]["SessionBrowserProfile"];
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
@@ -7026,6 +7143,52 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getMyBrowserProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's profile status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudBrowserProfileStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    wipeMyBrowserProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The profile is wiped. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudBrowserProfileWiped"];
                 };
             };
             default: components["responses"]["Error"];
@@ -10621,6 +10784,122 @@ export interface operations {
             401: components["responses"]["WorkerUnauthorized"];
             403: components["responses"]["WorkerScopeRequired"];
             default: components["responses"]["Error"];
+        };
+    };
+    getWorkerBrowserProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest snapshot. */
+            200: {
+                headers: {
+                    /** @description The snapshot's generation, the base for the next save. */
+                    "X-AO-Browser-Profile-Generation"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description The person has no snapshot yet (generation 0). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            /** @description Browser profiles are off on this deployment, or the session has no person to own one (BROWSER_PROFILE_NO_OWNER): the worker then uses a temporary profile. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putWorkerBrowserProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The generation this snapshot was made from; 0 for the first save. */
+                "X-AO-Browser-Profile-Base-Generation": number;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The saved generation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerBrowserProfileSaved"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            404: components["responses"]["Error"];
+            /** @description Another session saved first (BROWSER_PROFILE_CONFLICT), or the profile was wiped. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            411: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getWorkerBrowserProfileKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The data key. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerBrowserProfileKey"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            /** @description Browser profiles are off, or the session has no owner (BROWSER_PROFILE_NO_OWNER). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Error"];
         };
     };
     listWorkerChildren: {

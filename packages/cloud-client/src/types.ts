@@ -186,6 +186,12 @@ export type AddAgentAccountInput = Schemas["AddAgentAccountInput"];
 export type RenameAgentAccountInput = Schemas["RenameAgentAccountInput"];
 export type SessionAgentAccount = Schemas["SessionAgentAccount"];
 export type SwitchSessionAgentAccountInput = Schemas["SwitchSessionAgentAccountInput"];
+
+export type SessionBrowserProfile = Schemas["SessionBrowserProfile"];
+export type CloudBrowserProfileStatus = Schemas["CloudBrowserProfileStatus"];
+export type CloudBrowserProfileWiped = Schemas["CloudBrowserProfileWiped"];
+export type WorkerBrowserProfileSaved = Schemas["WorkerBrowserProfileSaved"];
+export type WorkerBrowserProfileKey = Schemas["WorkerBrowserProfileKey"];
 export type EditQueuedMessageInput = Schemas["EditQueuedMessageInput"];
 export type UserMessageEditedEvent = Schemas["UserMessageEditedEvent"];
 export type ChatModel = Schemas["ChatModel"];
