@@ -22524,6 +22524,8 @@ components:
       type: object
     PRStackLayerResponse:
       properties:
+        behindParent:
+          type: integer
         ci:
           type: string
         headBranch:
