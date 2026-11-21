@@ -60,7 +60,7 @@ var specs = map[string]Spec{
 	"claude-code": {
 		AgentID:    "claude-code",
 		BaseURLEnv: "ANTHROPIC_BASE_URL",
-		KeyEnv: map[AuthStyle]string{
+		KeyEnv: map[AuthStyle]string{ //nolint:gosec // G101: environment variable names, not credentials.
 			AuthBearer: "ANTHROPIC_AUTH_TOKEN",
 			AuthAPIKey: "ANTHROPIC_API_KEY",
 		},
@@ -226,7 +226,7 @@ func (s *Store) Save(agentID string, in Input, now time.Time) (Status, error) {
 		cfg.APIKey = existing.APIKey
 	}
 	cfg.UpdatedAt = now.UTC()
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(cfg, "", "  ") //nolint:gosec // G117: Config intentionally persists the user's API key to an owner-only 0600 file so launches can pass it to the harness.
 	if err != nil {
 		return Status{}, err
 	}
