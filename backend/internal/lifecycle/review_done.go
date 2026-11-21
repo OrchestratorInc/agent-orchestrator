@@ -287,37 +287,47 @@ func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id
 	return delivered, found && !delivered && turn == domain.TurnStateQueued, err
 }
 
-// Caller holds react.mu. A queued Chat relay is an attempt, not delivery.
-// Its stable id lets another observation or a restart settle it without a
-// second paste. Only turns that never started retry within the attempt cap.
-func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int) (sendOnceOutcome, error) {
-	attempts := m.react.attempts[key]
+// Caller holds key's send lock, which serializes this key's
+// settle-send-record span. react.mu is taken only around the shared maps and
+// the persisted payload, so a slow Chat store read or relay never blocks
+// other keys. A queued Chat relay is an attempt, not delivery. Its stable id
+// lets another observation or a restart settle it without a second paste.
+// Only turns that never started retry within the attempt cap.
+func (m *Manager) sendChatReviewFeedback(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int) (sendOnceOutcome, error) {
+	m.react.mu.Lock()
+	attempts, seen := m.react.attempts[key], m.react.seen[key]
+	m.react.mu.Unlock()
 	if attempts > 0 {
 		delivered, queued, err := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts-1)
 		if err != nil || queued {
 			return sendOnceSuppressed, err
 		}
 		if delivered {
-			if m.react.seen[key] == sig {
+			if seen == sig {
 				return sendOnceAccounted, nil
 			}
+			m.react.mu.Lock()
+			defer m.react.mu.Unlock()
 			m.react.seen[key] = sig
 			return sendOnceAccounted, m.persistPRSignaturesLocked(ctx, prURL)
 		}
 	}
-	if m.react.seen[key] == sig || (maxAttempts > 0 && attempts >= maxAttempts) {
+	if seen == sig || (maxAttempts > 0 && attempts >= maxAttempts) {
 		return sendOnceAccounted, nil
 	}
 	outcome, sendErr := m.guard.Nudge(ports.WithClientMessageID(ctx, reviewFeedbackClientID(key, sig, attempts)), id, msg)
 	if outcome != sessionguard.Sent {
 		return sendOnceSuppressed, sendErr
 	}
-	m.react.attempts[key] = attempts + 1
 	delivered, _, readErr := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts)
+	m.react.mu.Lock()
+	m.react.attempts[key] = attempts + 1
 	if delivered && readErr == nil {
 		m.react.seen[key] = sig
 	}
-	if err := errors.Join(sendErr, readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
+	persistErr := m.persistPRSignaturesLocked(ctx, prURL)
+	m.react.mu.Unlock()
+	if err := errors.Join(sendErr, readErr, persistErr); err != nil {
 		return sendOnceAccounted, err
 	}
 	if delivered {
