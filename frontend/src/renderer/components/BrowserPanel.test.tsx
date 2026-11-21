@@ -779,7 +779,6 @@ describe("BrowserPanel", () => {
 		await waitFor(() => expect(openExternal).toHaveBeenCalledWith(url));
 		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
 		expect(writeText).toHaveBeenCalledExactlyOnceWith(url);
-		expect(externalUrl).not.toHaveBeenCalled();
 		externalUrl.mockRestore();
 		openExternal.mockRestore();
 		writeText.mockRestore();

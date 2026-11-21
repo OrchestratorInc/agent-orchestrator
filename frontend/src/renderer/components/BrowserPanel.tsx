@@ -888,8 +888,11 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// A remote preview's address works only in this panel, which trusts its
 	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
-		if (!session.hostId || !isHostLocalWebLink(url)) return url;
-		return aoBridge.remotes.externalUrl(session.hostId, url);
+		if (!session.hostId) return url;
+		return aoBridge.remotes.externalUrl(session.hostId, url).catch((error: unknown) => {
+			if (isHostLocalWebLink(url)) throw error;
+			return url;
+		});
 	};
 
 	const openCurrentPageExternally = async () => {
