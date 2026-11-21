@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
+	Platform,
 	Pressable,
 	RefreshControl,
 	SectionList,
@@ -49,6 +50,7 @@ import { refreshControlColors } from "../../lib/refreshControlColors";
 import { toolbarIcon } from "../../lib/toolbarIcon";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { iconSize, radius, space, stateOpacity, type } from "../../lib/tokens";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { userFacingError } from "../../lib/connectionError";
 import { ToastHost } from "../../lib/Toast";
 import type { ToastDuration } from "../../lib/Toast.types";
@@ -82,6 +84,9 @@ function NotificationsContent() {
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
+	// Android's clear pill bar: the list starts below it (iOS insets itself).
+	const glassInset = useGlassBarInset();
+	const barInset = Platform.OS === "android" ? glassInset : 0;
 	const { hostStates, cloud, configForHost, refreshHost, restore } = useApp();
 	// Orchestrator Cloud is one more feed here, beside each machine's.
 	const cloudState = useCloud();
@@ -578,8 +583,8 @@ function NotificationsContent() {
 				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={
 					items.length === 0
-						? { flexGrow: 1 }
-						: { paddingBottom: insets.bottom + 24 }
+						? { flexGrow: 1, paddingTop: barInset }
+						: { paddingTop: barInset, paddingBottom: insets.bottom + 24 }
 				}
 				stickySectionHeadersEnabled={false}
 				refreshControl={
@@ -587,6 +592,7 @@ function NotificationsContent() {
 						refreshing={refreshing}
 						// The refresh control gives each platform's own feedback.
 						onRefresh={() => void load("refresh")}
+						progressViewOffset={barInset}
 						{...refreshControlColors(t)}
 					/>
 				}

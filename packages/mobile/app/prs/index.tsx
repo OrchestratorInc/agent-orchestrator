@@ -27,6 +27,7 @@ import { useToast } from "../../lib/useToast";
 import { Button, EmptyState } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import type { DashboardPR } from "../../lib/api";
 import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
 import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
@@ -66,6 +67,9 @@ export default function PRsScreen() {
 
 function PRList() {
 	const t = useTheme();
+	// Android's clear pill bar: the list starts below it (iOS insets itself).
+	const glassInset = useGlassBarInset();
+	const barInset = Platform.OS === "android" ? glassInset : 0;
 	const styles = useThemedStyles(makeStyles);
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();
 	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId, cloud } = useApp();
@@ -232,10 +236,10 @@ function PRList() {
 				keyExtractor={listKey}
 				onViewableItemsChanged={onViewableItemsChanged}
 				contentInsetAdjustmentBehavior="automatic"
-				contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
+				contentContainerStyle={{ flexGrow: 1, paddingTop: barInset, paddingBottom: space.xxl }}
 				stickySectionHeadersEnabled={false}
 				ListHeaderComponent={listHeader}
-				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
+				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} progressViewOffset={barInset} {...refreshControlColors(t)} />}
 				renderSectionHeader={({ section }) => <PRSectionHeader label={section.label} count={section.data.length} />}
 				renderItem={({ item: { pr, session }, index, section }) => {
 					const config = configForHost(session.hostId);

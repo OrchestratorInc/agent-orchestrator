@@ -28,6 +28,7 @@ const fixtures = vi.hoisted(() => ({
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", green: "green", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
 }));
 
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0, useHeaderOverlap: () => 0 }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
