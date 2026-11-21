@@ -4828,9 +4828,10 @@ type ForkSessionResponse struct {
 // MovePreviewResponse is what a move to AO Cloud would push now: the branch
 // and the uncommitted paths its WIP commit would carry.
 type MovePreviewResponse struct {
-	Branch     string             `json:"branch"`
-	Changes    []MoveChange       `json:"changes"`
-	Transcript MoveTranscriptInfo `json:"transcript"`
+	Branch        string             `json:"branch"`
+	DefaultBranch string             `json:"defaultBranch,omitempty" description:"The repository's default branch: the project's configured one, else origin's. Absent when neither is known."`
+	Changes       []MoveChange       `json:"changes"`
+	Transcript    MoveTranscriptInfo `json:"transcript"`
 }
 
 // MoveTranscriptInfo says whether a move would carry the agent's conversation

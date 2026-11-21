@@ -46,15 +46,15 @@ func PushBranch(ctx context.Context, worktree string, c Capture, maxFileBytes in
 	tip := c.Tip()
 	ref := "refs/heads/" + c.Branch
 	if out, err := runGit(ctx, worktree, nil, nil, "push", "--porcelain", "--no-verify", "origin", tip+":"+ref); err != nil {
-		var ge *gitError
-		if errors.As(err, &ge) && (strings.Contains(out, "[rejected]") || strings.Contains(ge.stderr, "[rejected]")) {
+		err = remoteError(err, out)
+		if errors.Is(err, ErrRemoteAhead) {
 			return fmt.Errorf("%w: %s", ErrRemoteAhead, c.Branch)
 		}
 		return err
 	}
 	remote, err := gitLine(ctx, worktree, "ls-remote", "origin", ref)
 	if err != nil {
-		return err
+		return remoteError(err, "")
 	}
 	if id, _, _ := strings.Cut(remote, "\t"); id != tip {
 		return fmt.Errorf("%w: origin has %q, want %s", ErrPushNotVisible, id, tip)
@@ -152,8 +152,8 @@ func onRemote(ctx context.Context, dir, commit string) (bool, error) {
 	if contains() {
 		return true, nil
 	}
-	if _, err := runGit(ctx, dir, nil, nil, "fetch", "--quiet", "origin"); err != nil {
-		return false, err
+	if out, err := runGit(ctx, dir, nil, nil, "fetch", "--quiet", "origin"); err != nil {
+		return false, remoteError(err, out)
 	}
 	return contains(), nil
 }

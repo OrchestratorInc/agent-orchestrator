@@ -7942,6 +7942,8 @@ export interface components {
         MovePreviewResponse: {
             branch: string;
             changes: components["schemas"]["MoveChange"][];
+            /** @description The repository's default branch: the project's configured one, else origin's. Absent when neither is known. */
+            defaultBranch?: string;
             transcript: components["schemas"]["ControllersMoveTranscriptInfo"];
         };
         NotificationEnvelope: {

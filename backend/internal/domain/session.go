@@ -469,6 +469,11 @@ type SessionRecord struct {
 	// MoveConversationPlaced is set on a session moved here from AO Cloud once
 	// its conversation and the conversation's sidecar folder are placed.
 	MoveConversationPlaced bool `json:"-"`
+	// MoveStarted is the move id of a move to AO Cloud whose export pushed the
+	// branch and that has neither finished nor been rolled back. Restoring at
+	// startup leaves such a session stopped; an explicit restore or resume ends
+	// the move here and clears it.
+	MoveStarted string `json:"-"`
 	// StaleBinary is set while the session's current launch still runs a
 	// harness release an update has since replaced. It is derived when the row
 	// is read: any later launch starts on the installed release and reads as

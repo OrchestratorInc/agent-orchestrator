@@ -759,6 +759,18 @@ func (s *Store) SetSessionMoveConversationPlaced(ctx context.Context, id domain.
 	return rows > 0, nil
 }
 
+// SetSessionMoveStarted records, or with an empty moveID clears, a move to AO
+// Cloud in progress. It returns ok=false when the session id does not exist.
+func (s *Store) SetSessionMoveStarted(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionMoveStarted(ctx, gen.SetSessionMoveStartedParams{MoveStarted: moveID, UpdatedAt: updatedAt, ID: id})
+	if err != nil {
+		return false, fmt.Errorf("set session move started %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // sessionMoveFromJSON reads the moved_to column. An empty or unreadable value is no move.
 func sessionMoveFromJSON(raw string) *domain.SessionMove {
 	if raw == "" {
@@ -1289,6 +1301,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		HibernatedAt:           nullTimeToTimePtr(row.HibernatedAt),
 		MovedTo:                sessionMoveFromJSON(row.MovedTo),
 		MoveConversationPlaced: row.MoveConversationPlaced != 0,
+		MoveStarted:            row.MoveStarted,
 		StaleBinary:            staleBinaryFromRow(row),
 		IsPinned:               row.IsPinned,
 		PinnedAt:               nullTimeToTimePtr(row.PinnedAt),

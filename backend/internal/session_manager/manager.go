@@ -3513,6 +3513,7 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if rec.MovedTo != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
 	}
+	m.endMoveHere(ctx, rec)
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3864,6 +3865,7 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if rec.MovedTo != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
 	}
+	m.endMoveHere(ctx, rec)
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {
 		case <-m.persistentHostReconcileDone:
@@ -5035,9 +5037,34 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 		if !rec.IsTerminated {
 			continue
 		}
+		// A session that moved, or whose move to AO Cloud pushed its branch and
+		// did not finish, may be running in AO Cloud: it stays stopped here
+		// until the move finishes or the user restores it.
+		if rec.MovedTo != nil || rec.MoveStarted != "" {
+			m.logger.Info("restore-all: leaving a moved or moving session stopped", "sessionID", rec.ID, "moveID", rec.MoveStarted)
+			continue
+		}
 		m.restoreAllSession(ctx, rec)
 	}
 	return nil
+}
+
+// endMoveHere clears a session's unfinished move to AO Cloud: an explicit
+// restore or resume (including a failed move's rollback) runs it here, so
+// the move is over.
+func (m *Manager) endMoveHere(ctx context.Context, rec domain.SessionRecord) {
+	if rec.MoveStarted == "" {
+		return
+	}
+	store, ok := m.store.(interface {
+		SetSessionMoveStarted(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error)
+	})
+	if !ok {
+		return
+	}
+	if _, err := store.SetSessionMoveStarted(ctx, rec.ID, "", m.clock().UTC()); err != nil {
+		m.logger.Warn("clear an unfinished session move", "sessionID", rec.ID, "error", err)
+	}
 }
 
 // restoreAllSession restores one terminated session marked for restore at

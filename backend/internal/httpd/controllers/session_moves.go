@@ -60,7 +60,7 @@ func (c *SessionMovesController) preview(w http.ResponseWriter, r *http.Request)
 		changes = append(changes, MoveChange{Path: ch.Path, Status: moveChangeStatus(ch.Status)})
 	}
 	envelope.WriteJSON(w, http.StatusOK, MovePreviewResponse{
-		Branch: out.Branch, Changes: changes,
+		Branch: out.Branch, DefaultBranch: out.DefaultBranch, Changes: changes,
 		Transcript: MoveTranscriptInfo{Bytes: out.Transcript.Bytes, Subagents: out.Transcript.Subagents, Unavailable: out.Transcript.Unavailable},
 	})
 }

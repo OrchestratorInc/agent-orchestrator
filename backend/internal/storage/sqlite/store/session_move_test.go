@@ -42,3 +42,32 @@ func TestSessionMovedToRoundTrips(t *testing.T) {
 		t.Fatal("unknown session reported as updated")
 	}
 }
+
+func TestSessionMoveStartedRoundTrips(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mov")
+	r, err := s.CreateSession(ctx, sampleRecord("mov"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+	if ok, err := s.SetSessionMoveStarted(ctx, r.ID, "m-1", now); err != nil || !ok {
+		t.Fatalf("set: ok=%v err=%v", ok, err)
+	}
+	all, err := s.ListAllSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range all {
+		if rec.ID == r.ID && rec.MoveStarted != "m-1" {
+			t.Fatalf("ListAllSessions MoveStarted = %q, want m-1", rec.MoveStarted)
+		}
+	}
+	if ok, err := s.SetSessionMoveStarted(ctx, r.ID, "", now); err != nil || !ok {
+		t.Fatalf("clear: ok=%v err=%v", ok, err)
+	}
+	if got, _, _ := s.GetSession(ctx, r.ID); got.MoveStarted != "" {
+		t.Fatalf("cleared MoveStarted = %q", got.MoveStarted)
+	}
+}

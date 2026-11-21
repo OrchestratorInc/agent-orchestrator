@@ -22872,6 +22872,10 @@ components:
           items:
             $ref: '#/components/schemas/MoveChange'
           type: array
+        defaultBranch:
+          description: 'The repository''s default branch: the project''s configured
+            one, else origin''s. Absent when neither is known.'
+          type: string
         transcript:
           $ref: '#/components/schemas/ControllersMoveTranscriptInfo'
       required:

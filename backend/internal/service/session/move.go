@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,10 @@ type MoveNoter interface {
 
 type sessionMoveStore interface {
 	SetSessionMovedTo(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error)
+}
+
+type sessionMoveStartedStore interface {
+	SetSessionMoveStarted(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error)
 }
 
 type sessionMoveImportStore interface {
@@ -133,9 +138,12 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 		label = machineName()
 	}
 	wt := rec.Metadata.WorkspacePath
+	if _, err := sessionmove.RefuseDefaultBranch(ctx, wt, project.Config.WorktreeBaseBranch()); err != nil {
+		return MoveExport{}, s.moveAPIError(ctx, err)
+	}
 	c, err := sessionmove.CaptureWorktree(ctx, sessionmove.CaptureOptions{Worktree: wt, Label: label, Exclude: project.Config.Symlinks})
 	if err != nil {
-		return MoveExport{}, moveAPIError(err)
+		return MoveExport{}, s.moveAPIError(ctx, err)
 	}
 	out := MoveExport{Changes: len(c.Changes), Submodules: c.Submodules}
 
@@ -165,17 +173,27 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 			return MoveExport{}, err
 		}
 	}
+	// From the push on, AO Cloud may start the session, so restoring at startup
+	// leaves it stopped here until the move finishes or the user resumes it.
+	if store, ok := s.store.(sessionMoveStartedStore); ok {
+		if _, err := store.SetSessionMoveStarted(ctx, id, in.MoveID, s.clock().UTC()); err != nil {
+			return MoveExport{}, err
+		}
+	}
 	if err := sessionmove.PushBranch(ctx, wt, c, sessionmove.GitHubFileLimit); err != nil {
-		return MoveExport{}, moveAPIError(err)
+		return MoveExport{}, s.moveAPIError(ctx, err)
 	}
 	return out, nil
 }
 
 // MovePreview is what a move to AO Cloud would push now.
 type MovePreview struct {
-	Branch     string
-	Changes    []sessionmove.Change
-	Transcript MoveTranscriptInfo
+	Branch string
+	// DefaultBranch is the repository's default branch, which a Cloud project
+	// the move creates gets; "" when it cannot be resolved.
+	DefaultBranch string
+	Changes       []sessionmove.Change
+	Transcript    MoveTranscriptInfo
 }
 
 // MoveTranscriptInfo says whether a move would carry the agent's conversation.
@@ -209,14 +227,18 @@ func (s *Service) PreviewMove(ctx context.Context, id domain.SessionID) (MovePre
 		return MovePreview{}, err
 	}
 	wt := rec.Metadata.WorkspacePath
+	defaultBranch, err := sessionmove.RefuseDefaultBranch(ctx, wt, project.Config.WorktreeBaseBranch())
+	if err != nil {
+		return MovePreview{}, s.moveAPIError(ctx, err)
+	}
 	c, err := sessionmove.CaptureWorktree(ctx, sessionmove.CaptureOptions{Worktree: wt, Exclude: project.Config.Symlinks})
 	if err != nil {
-		return MovePreview{}, moveAPIError(err)
+		return MovePreview{}, s.moveAPIError(ctx, err)
 	}
 	if err := sessionmove.CheckPush(ctx, wt, c, sessionmove.GitHubFileLimit); err != nil {
-		return MovePreview{}, moveAPIError(err)
+		return MovePreview{}, s.moveAPIError(ctx, err)
 	}
-	return MovePreview{Branch: c.Branch, Changes: c.Changes, Transcript: s.moveTranscriptInfo(ctx, rec, project)}, nil
+	return MovePreview{Branch: c.Branch, DefaultBranch: defaultBranch, Changes: c.Changes, Transcript: s.moveTranscriptInfo(ctx, rec, project)}, nil
 }
 
 // moveSource loads a session that can move to AO Cloud and its project.
@@ -294,7 +316,7 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 			"This project is a different repository from the moved session's.", map[string]any{"repoKey": key, "want": m.RepoKey})
 	}
 	if err := sessionmove.ImportBranch(ctx, project.Path, m.Branch, m.Tip); err != nil {
-		return MoveImportOutcome{}, moveAPIError(err)
+		return MoveImportOutcome{}, s.moveAPIError(ctx, err)
 	}
 
 	prompt := in.HandoffNote
@@ -318,13 +340,15 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 			return MoveImportOutcome{}, err
 		}
 		defer func() { _ = os.RemoveAll(dir) }()
-		archive, sidecarWarning, err := writeImportArchive(ctx, dir, m.Harness, *t)
+		archive, sidecarWarning, sidecarErr, err := writeImportArchive(ctx, dir, m.Harness, *t)
 		if sidecarWarning != "" {
+			s.moveLog().WarnContext(ctx, "move: sidecar folder stays in AO Cloud", "move", in.MoveID, "err", sidecarErr)
 			warnings = append(warnings, sidecarWarning)
 			incomplete = true
 		}
 		if err != nil {
-			warnings = append(warnings, "The conversation could not be read, so the session starts from the handoff note: "+err.Error())
+			s.moveLog().WarnContext(ctx, "move: conversation cannot be read", "move", in.MoveID, "err", err)
+			warnings = append(warnings, "The conversation could not be read, so the session starts from the handoff note.")
 			incomplete = true
 		} else {
 			// The resumed conversation holds the task; the note is only its fallback.
@@ -348,7 +372,8 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 	}
 	for _, url := range m.PullRequests {
 		if _, err := s.ClaimPR(ctx, sess.ID, url, ClaimPROptions{AllowTakeover: true}); err != nil {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("Could not claim %s: %v", url, err))
+			s.moveLog().WarnContext(ctx, "move: claim a pull request", "session", sess.ID, "pr", url, "err", err)
+			out.Warnings = append(out.Warnings, fmt.Sprintf("Could not claim %s: %s", url, publicMessage(err, "claim it from the session menu")))
 		}
 	}
 	for _, set := range []func() error{
@@ -358,7 +383,8 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		func() error { _, err := s.SetAutoInjectCI(ctx, sess.ID, m.AutoInjectCI); return err },
 	} {
 		if err := set(); err != nil {
-			out.Warnings = append(out.Warnings, "Could not copy a session setting: "+err.Error())
+			s.moveLog().WarnContext(ctx, "move: copy a session setting", "session", sess.ID, "err", err)
+			out.Warnings = append(out.Warnings, "Could not copy a session setting; check the session's settings.")
 		}
 	}
 	if fresh, err := s.Get(ctx, sess.ID); err == nil {
@@ -421,7 +447,7 @@ func (s *Service) tellOrchestrator(ctx context.Context, rec domain.SessionRecord
 	msg := fmt.Sprintf("Worker %s moved to Orchestrator Cloud as session %s and continues there. Do not respawn it.", rec.ID, d.SessionID)
 	for _, o := range orchestrators {
 		if err := s.manager.Send(ctx, o.ID, msg, nil); err != nil {
-			s.logger.WarnContext(ctx, "tell orchestrator about a session move", "orchestrator", o.ID, "err", err)
+			s.moveLog().WarnContext(ctx, "tell orchestrator about a session move", "orchestrator", o.ID, "err", err)
 		}
 	}
 }
@@ -439,6 +465,29 @@ func machineName() string {
 func moveRequestHash(in MoveImportInput) string {
 	sum := sha256.Sum256([]byte(string(in.ProjectID) + "\x00" + in.Manifest.Branch + "\x00" + in.Manifest.Tip))
 	return hex.EncodeToString(sum[:])
+}
+
+// moveAPIError is moveAPIError for a request: git's raw output for a failure
+// it explains without it, or one it cannot explain, goes to the log only.
+func (s *Service) moveAPIError(ctx context.Context, err error) error {
+	mapped := moveAPIError(err)
+	var apiErr *apierr.Error
+	if errors.As(mapped, &apiErr) {
+		if slices.ContainsFunc(quietMoveErrors, func(e error) bool { return errors.Is(err, e) }) {
+			s.moveLog().WarnContext(ctx, "move: git failed", "code", apiErr.Code, "err", err)
+		}
+		return mapped
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return apierr.InternalCause("MOVE_GIT_FAILED", "Git failed while moving the session. The Orchestrator log has the details.", err)
+}
+
+// quietMoveErrors are refusals whose message says what to fix, so git's raw
+// output stays out of the response.
+var quietMoveErrors = []error{
+	sessionmove.ErrRemoteAuth, sessionmove.ErrRemoteRejected, sessionmove.ErrRemoteUnreachable, sessionmove.ErrRemoteAhead,
 }
 
 // moveAPIError turns a move refusal into a 409 the app can explain.
@@ -470,12 +519,19 @@ func moveAPIError(err error) error {
 		{sessionmove.ErrBranchCheckedOut, "MOVE_BRANCH_CHECKED_OUT", "The branch is checked out in a worktree here."},
 		{sessionmove.ErrLocalAhead, "MOVE_LOCAL_AHEAD", "%s here has commits that Orchestrator Cloud's does not. Push them first."},
 		{sessionmove.ErrMissingCommit, "MOVE_MISSING_COMMIT", "Origin does not have the commit Orchestrator Cloud pushed."},
+		{sessionmove.ErrDefaultBranch, "MOVE_DEFAULT_BRANCH", "The session is on %s, the repository's default branch. A move pushes the session's uncommitted work to its branch, so only a session on its own branch can move."},
+		{sessionmove.ErrRemoteRejected, "MOVE_PUSH_REJECTED", "Origin refused the push, for example because the branch is protected. Only a session on a branch you can push to can move."},
+		{sessionmove.ErrRemoteAuth, "MOVE_ORIGIN_AUTH", "Origin refused this computer's Git credentials. Check that you can fetch and push the repository here, then try again."},
+		{sessionmove.ErrRemoteUnreachable, "MOVE_ORIGIN_UNREACHABLE", "Could not reach origin. Check the network connection, then try again."},
 	} {
 		if errors.Is(err, c.err) {
 			msg := c.msg
 			if strings.Contains(msg, "%s") {
 				// sessionmove formats these as "<sentinel>: <paths>".
 				msg = fmt.Sprintf(msg, strings.TrimPrefix(err.Error(), c.err.Error()+": "))
+			}
+			if slices.Contains(quietMoveErrors, c.err) {
+				return apierr.Conflict(c.code, msg, nil)
 			}
 			return apierr.Conflict(c.code, msg, map[string]any{"detail": err.Error()})
 		}
@@ -547,7 +603,7 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 	out := MoveTranscript{AgentSessionID: nativeID, Gzip: buf.Bytes()}
 	var sidecar bytes.Buffer
 	if ok, err := t.WriteCloudSidecar(ctx, rec, project, &sidecar, CloudTranscriptMaxBytes); err != nil {
-		s.logger.WarnContext(ctx, "move: sidecar folder stays behind", "session", id, "err", err)
+		s.moveLog().WarnContext(ctx, "move: sidecar folder stays behind", "session", id, "err", err)
 	} else if ok {
 		out.SidecarGzip = sidecar.Bytes()
 	}
@@ -609,10 +665,21 @@ func (s *Service) moveTargetRefusal(ctx context.Context, project domain.ProjectR
 		}
 	}
 	var refusal *apierr.Error
-	if errors.As(moveAPIError(err), &refusal) {
+	if errors.As(s.moveAPIError(ctx, err), &refusal) && refusal.Kind == apierr.KindConflict {
 		return refusal
 	}
-	return apierr.Conflict("MOVE_CHECK_FAILED", "Could not check the branch here: "+err.Error(), nil)
+	s.moveLog().WarnContext(ctx, "move: check a branch for a move here", "project", project.ID, "branch", branch, "err", err)
+	return apierr.Conflict("MOVE_CHECK_FAILED", "Could not check the branch here. The Orchestrator log has the details.", nil)
+}
+
+// publicMessage is an API error's own message, which is written for the user,
+// or fallback for anything else, whose text may be raw tool output.
+func publicMessage(err error, fallback string) string {
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) && apiErr.Kind != apierr.KindInternal && apiErr.Message != "" {
+		return apiErr.Message
+	}
+	return fallback
 }
 
 // movesConversation reports a harness whose conversation a move carries.
@@ -636,47 +703,56 @@ func conversationNotPlaced(in MoveImportInput, sess domain.Session) bool {
 // folder, into dir and writes the archive the spawn places it from: for
 // Codex the rollout itself, for OpenCode 2 its session export document. A sidecar that cannot be read is left out and
 // described in the warning.
-func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHarness, t MoveImportTranscript) (archive, warning string, err error) {
+// sidecarErr is the raw cause of the warning, for the log.
+func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHarness, t MoveImportTranscript) (archive, warning string, sidecarErr, err error) {
 	zr, err := gzip.NewReader(bytes.NewReader(t.Gzip))
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	transcript := filepath.Join(dir, t.AgentSessionID+".jsonl")
 	if filepath.Base(transcript) != t.AgentSessionID+".jsonl" {
-		return "", "", fmt.Errorf("invalid conversation id %q", t.AgentSessionID)
+		return "", "", nil, fmt.Errorf("invalid conversation id %q", t.AgentSessionID)
 	}
 	f, err := os.OpenFile(transcript, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	n, err := io.Copy(f, io.LimitReader(zr, CloudTranscriptMaxBytes+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	if n > CloudTranscriptMaxBytes {
-		return "", "", nativetransfer.ErrTooLarge
+		return "", "", nil, nativetransfer.ErrTooLarge
 	}
 	if harness != domain.HarnessClaudeCode {
-		return transcript, "", nil
+		return transcript, "", nil, nil
 	}
 	if len(t.SidecarGzip) > 0 {
 		sidecar := filepath.Join(dir, t.AgentSessionID)
-		if err := nativetransfer.ExtractClaudeSidecar(bytes.NewReader(t.SidecarGzip), sidecar, CloudTranscriptMaxBytes); err != nil {
+		if sidecarErr = nativetransfer.ExtractClaudeSidecar(bytes.NewReader(t.SidecarGzip), sidecar, CloudTranscriptMaxBytes); sidecarErr != nil {
 			_ = os.RemoveAll(sidecar)
-			warning = "Subagent transcripts and saved tool output stayed in Orchestrator Cloud: " + err.Error()
+			warning = "Subagent transcripts and saved tool output stayed in Orchestrator Cloud."
 		}
 	}
 	archive = filepath.Join(dir, "conversation.tgz")
 	out, err := os.OpenFile(archive, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", warning, err
+		return "", warning, sidecarErr, err
 	}
 	_, err = nativetransfer.WriteClaudeArchiveFromCloud(ctx, out, transcript, t.ProjectDir)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
-	return archive, warning, err
+	return archive, warning, sidecarErr, err
+}
+
+// moveLog is the service's logger, or one that drops records when it has none.
+func (s *Service) moveLog() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.New(slog.DiscardHandler)
 }

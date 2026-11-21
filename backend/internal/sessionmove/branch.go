@@ -21,8 +21,8 @@ const originHeads = "+refs/heads/*:refs/remotes/origin/*"
 
 // FetchOrigin fetches every origin branch into repo.
 func FetchOrigin(ctx context.Context, repo string) error {
-	_, err := runGit(ctx, repo, nil, nil, "fetch", "-q", "origin", originHeads)
-	return err
+	out, err := runGit(ctx, repo, nil, nil, "fetch", "-q", "origin", originHeads)
+	return remoteError(err, out)
 }
 
 // ImportBranch fetches origin and makes branch in repo point at tip, which

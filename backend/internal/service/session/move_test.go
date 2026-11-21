@@ -32,6 +32,13 @@ func (m moveStore) SetSessionMovedTo(_ context.Context, id domain.SessionID, mov
 	return true, nil
 }
 
+func (m moveStore) SetSessionMoveStarted(_ context.Context, id domain.SessionID, moveID string, _ time.Time) (bool, error) {
+	rec, ok := m.sessions[id]
+	rec.MoveStarted = moveID
+	m.sessions[id] = rec
+	return ok, nil
+}
+
 func (m moveStore) SetSessionMoveConversationPlaced(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
 	rec, ok := m.sessions[id]
 	rec.MoveConversationPlaced = true
@@ -89,11 +96,23 @@ func TestMoveRefusalsNameTheFiles(t *testing.T) {
 		{fmt.Errorf("%w: vendor/sub", sessionmove.ErrDirtySubmodule), "Commit or discard the changes inside vendor/sub first."},
 		{&sessionmove.FileTooLargeError{Limit: 1, Files: []sessionmove.Blob{{Path: "big.bin"}, {Path: "big.bin"}, {Path: "data.csv"}}}, "Over GitHub's 100 MiB file limit: big.bin, data.csv."},
 		{fmt.Errorf("%w: MERGE_HEAD exists", sessionmove.ErrOperationInProgress), "Finish or abort the merge, rebase or conflict in the worktree first."},
+		{fmt.Errorf("%w: main", sessionmove.ErrDefaultBranch), "The session is on main, the repository's default branch. A move pushes the session's uncommitted work to its branch, so only a session on its own branch can move."},
+		{fmt.Errorf("%w: git push: exit status 1: fatal: Authentication failed", sessionmove.ErrRemoteAuth), "Origin refused this computer's Git credentials. Check that you can fetch and push the repository here, then try again."},
 	} {
 		var got *apierr.Error
 		if !errors.As(moveAPIError(tc.err), &got) || got.Message != tc.want {
 			t.Errorf("moveAPIError(%v) = %v, want message %q", tc.err, got, tc.want)
 		}
+	}
+	// Git's raw output stays out of a refusal about origin.
+	var got *apierr.Error
+	if errors.As(moveAPIError(fmt.Errorf("%w: fatal: secret", sessionmove.ErrRemoteUnreachable)), &got) && got.Details != nil {
+		t.Errorf("origin refusal details = %v, want none", got.Details)
+	}
+	// One it cannot explain is a 500 whose message is not git's.
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore()})
+	if !errors.As(svc.moveAPIError(context.Background(), errors.New("git push: fatal: raw")), &got) || got.Code != "MOVE_GIT_FAILED" || strings.Contains(got.Message, "raw") {
+		t.Errorf("unexplained error = %v, want MOVE_GIT_FAILED without git's text", got)
 	}
 }
 
@@ -208,7 +227,7 @@ func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
 	_ = sw.Close()
 	transcript := MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes(), SidecarGzip: sidecar.Bytes()}
 
-	archive, warning, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript)
+	archive, warning, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript)
 	if err != nil || warning != "" {
 		t.Fatal(err, warning)
 	}
@@ -224,7 +243,7 @@ func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
 
 	// A sidecar that cannot be read stays behind; the transcript still moves.
 	transcript.SidecarGzip = []byte("plain")
-	if _, warning, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript); err != nil || !strings.Contains(warning, "stayed in Orchestrator Cloud") {
+	if _, warning, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript); err != nil || !strings.Contains(warning, "stayed in Orchestrator Cloud") {
 		t.Fatalf("unreadable sidecar: warning %q, err %v", warning, err)
 	}
 
@@ -232,7 +251,7 @@ func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
 		"not gzip":   {AgentSessionID: id, ProjectDir: transcript.ProjectDir, Gzip: []byte("plain")},
 		"id as path": {AgentSessionID: "../" + id, ProjectDir: transcript.ProjectDir, Gzip: gz.Bytes()},
 	} {
-		if _, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, bad); err == nil {
+		if _, _, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, bad); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}
@@ -245,7 +264,7 @@ func TestWriteImportArchivePassesACodexRolloutAsIs(t *testing.T) {
 	zw := gzip.NewWriter(&gz)
 	_, _ = zw.Write([]byte(rollout))
 	_ = zw.Close()
-	path, warning, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessCodex, MoveImportTranscript{AgentSessionID: id, Gzip: gz.Bytes()})
+	path, warning, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessCodex, MoveImportTranscript{AgentSessionID: id, Gzip: gz.Bytes()})
 	if err != nil || warning != "" {
 		t.Fatal(err, warning)
 	}
@@ -577,5 +596,110 @@ func TestExportMoveWritesTheNoteBeforePushing(t *testing.T) {
 	}
 	if got := git(wt, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("local HEAD = %s, want %s", got, head)
+	}
+}
+
+// A session on the default branch would push its uncommitted work onto it, so
+// both preview and export refuse before committing or pushing anything.
+func TestExportMoveRefusesTheDefaultBranch(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, seed, wt := root+"/origin.git", root+"/seed", root+"/wt"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "init", "-q", "-b", "main", seed)
+	git(seed, "commit", "-q", "--allow-empty", "-m", "seed")
+	git(seed, "push", "-q", origin, "main")
+	git(root, "clone", "-q", origin, wt)
+	head := git(wt, "rev-parse", "HEAD")
+	if err := os.WriteFile(wt+"/dirty.txt", []byte("uncommitted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{st}})
+	var refusal *apierr.Error
+	if _, err := svc.PreviewMove(context.Background(), "mer-2"); !errors.As(err, &refusal) || refusal.Code != "MOVE_DEFAULT_BRANCH" {
+		t.Fatalf("PreviewMove err = %v, want MOVE_DEFAULT_BRANCH", err)
+	}
+	if _, err := svc.ExportMove(context.Background(), "mer-2", MoveExportInput{MoveID: "m-1", SourceLabel: "Mac"}); !errors.As(err, &refusal) || refusal.Code != "MOVE_DEFAULT_BRANCH" {
+		t.Fatalf("ExportMove err = %v, want MOVE_DEFAULT_BRANCH", err)
+	}
+	if !strings.Contains(refusal.Message, "main") {
+		t.Fatalf("message %q does not name the branch", refusal.Message)
+	}
+	if got := git(wt, "ls-remote", "origin", "refs/heads/main"); !strings.HasPrefix(got, head) {
+		t.Fatalf("origin main = %q, want %s", got, head)
+	}
+	if got := git(wt, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("local HEAD = %s, want %s", got, head)
+	}
+	if got := git(wt, "status", "--porcelain"); got != "?? dirty.txt" {
+		t.Fatalf("worktree status = %q, want the dirty file untouched", got)
+	}
+	if st.sessions["mer-2"].MoveStarted != "" {
+		t.Fatal("a refused export recorded a move in progress")
+	}
+}
+
+// An export records the move in progress before it pushes, so a restart
+// during the move does not relaunch the agent here.
+func TestExportMoveRecordsTheMoveBeforePushing(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, seed, wt := root+"/origin.git", root+"/seed", root+"/wt"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "init", "-q", "-b", "main", seed)
+	git(seed, "commit", "-q", "--allow-empty", "-m", "seed")
+	git(seed, "push", "-q", origin, "main")
+	git(root, "clone", "-q", origin, wt)
+	git(wt, "switch", "-q", "-c", "feat/move")
+	if err := os.WriteFile(wt+"/new.txt", []byte("uncommitted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{st}})
+	if preview, err := svc.PreviewMove(context.Background(), "mer-2"); err != nil || preview.DefaultBranch != "main" {
+		t.Fatalf("PreviewMove = %+v, %v; want default branch main", preview, err)
+	}
+	out, err := svc.ExportMove(context.Background(), "mer-2", MoveExportInput{MoveID: "m-1", SourceLabel: "Mac"})
+	if err != nil {
+		t.Fatalf("ExportMove: %v", err)
+	}
+	if got := git(wt, "ls-remote", "origin", "refs/heads/feat/move"); !strings.HasPrefix(got, out.Manifest.Tip) {
+		t.Fatalf("origin feat/move = %q, want %s", got, out.Manifest.Tip)
+	}
+	if got := st.sessions["mer-2"].MoveStarted; got != "m-1" {
+		t.Fatalf("MoveStarted = %q, want m-1", got)
 	}
 }

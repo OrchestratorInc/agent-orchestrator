@@ -289,6 +289,7 @@ var shippedMigrations = map[int64]string{
 	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
 	20261107221212658: "20261107221212658_add_session_moved_to.sql",
 	20261121170116818: "20261121170116818_add_session_move_conversation_placed.sql",
+	20261121170942121: "20261121170942121_add_session_move_started.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

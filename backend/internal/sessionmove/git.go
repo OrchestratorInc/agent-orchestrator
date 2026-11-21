@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -171,4 +172,47 @@ func blobContents(ctx context.Context, dir string, ids []string) (map[string][]b
 		contents[fields[0]] = body[:size]
 	}
 	return contents, nil
+}
+
+// Failures talking to origin, told apart so the app can say what to fix. Each
+// wraps git's own error, which carries the raw output for the log.
+var (
+	ErrRemoteAuth        = errors.New("origin refused the credentials")
+	ErrRemoteRejected    = errors.New("origin refused the push")
+	ErrRemoteUnreachable = errors.New("origin could not be reached")
+)
+
+// remoteError classifies a failed fetch, push or ls-remote; out is its stdout,
+// where push --porcelain reports per-ref rejections. A non-fast-forward
+// rejection is ErrRemoteAhead. Anything else is returned unchanged.
+func remoteError(err error, out string) error {
+	var ge *gitError
+	if err == nil || !errors.As(err, &ge) {
+		return err
+	}
+	text := strings.ToLower(out + "\n" + ge.stderr)
+	has := func(subs ...string) bool {
+		for _, s := range subs {
+			if strings.Contains(text, s) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("[remote rejected]", "protected branch", "gh006", "pre-receive hook declined"):
+		return fmt.Errorf("%w: %w", ErrRemoteRejected, err)
+	case has("[rejected]", "non-fast-forward", "fetch first"):
+		return fmt.Errorf("%w: %w", ErrRemoteAhead, err)
+	case has("authentication failed", "could not read username", "could not read password",
+		"terminal prompts disabled", "permission denied", "permission to", "invalid username or password",
+		"repository not found", "the requested url returned error: 403", "the requested url returned error: 401",
+		"host key verification failed"):
+		return fmt.Errorf("%w: %w", ErrRemoteAuth, err)
+	case has("could not resolve host", "could not resolve hostname", "connection timed out", "operation timed out",
+		"connection refused", "failed to connect", "network is unreachable", "connection reset", "early eof",
+		"unable to access", "could not read from remote repository", "the remote end hung up"):
+		return fmt.Errorf("%w: %w", ErrRemoteUnreachable, err)
+	}
+	return err
 }
