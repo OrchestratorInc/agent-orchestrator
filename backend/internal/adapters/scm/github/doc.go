@@ -46,7 +46,9 @@
 //     because the cancelled check proved nothing.
 //     Passing if all non-skipped contexts concluded SUCCESS / NEUTRAL.
 //     Unknown otherwise. Empty rollup falls back to the rollup-level
-//     "state" field. Only the newest CheckRun per workflow, event and job
+//     "state" field. A null rollup is None only after head checks and workflow
+//     runs confirm no checks for at least two minutes. Otherwise it stays
+//     Unknown, or Pending while a workflow waits to start. Only the newest CheckRun per workflow, event and job
 //     counts: a run superseded on the same commit (cancelled by a re-run,
 //     an earlier failed attempt) is dropped, as GitHub's checks list does.
 //

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -295,6 +296,15 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 			if err := p.fetchRemainingCheckContexts(ctx, ref, pr); err != nil {
 				return nil, err
 			}
+		}
+		if err := p.confirmNoRollupCI(ctx, ref.Repo, pr); err != nil {
+			if !errors.Is(err, ErrAuthFailed) {
+				return nil, err
+			}
+			// Actions access can differ between repositories in one batch.
+			out[i] = scmObservationFromGraphQL(ref, pr)
+			out[i].Fetched, out[i].Error = false, err
+			continue
 		}
 		p.markCancelledGateFailures(ctx, ref.Repo.Owner, ref.Repo.Name, pr)
 		out[i] = scmObservationFromGraphQL(ref, pr)
@@ -682,7 +692,7 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	roll := statusRollup(pr)
 	if roll == nil {
-		return domain.CIUnknown
+		return noRollupCIState(pr)
 	}
 	return mapRollupState(str(roll["state"]))
 }
