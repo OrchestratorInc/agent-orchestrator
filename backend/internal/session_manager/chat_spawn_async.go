@@ -28,9 +28,8 @@ type asyncChatSpawn struct {
 	releaseHarness    func()
 	retry             bool
 	// attribution is the trailer decision made before the first prompt,
-	// handed to workspace setup in the background.
-	attribution      string
-	attributionKnown bool
+	// applied by the workspace setup in the background.
+	attribution spawnAttribution
 }
 
 type asyncChatSpawnRun struct {
@@ -215,13 +214,9 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	m.logAsyncChatSpawnStage(id, "workspace_create", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
-	if in.attributionKnown {
-		// Handed over just before setup, which applies and forgets it.
-		m.keepSpawnAttribution(id, in.attribution)
-	}
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
 		provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
-		err := m.provisionWorkspace(ctx, in.project, id, ws.Path)
+		err := m.provisionSpawnWorkspace(ctx, in.project, id, ws.Path, in.attribution)
 		provisioned(err)
 		if err != nil {
 			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
@@ -230,7 +225,11 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		}
 	} else {
 		// A reused workspace skips Setup but still credits Orchestrator.
-		m.applyCommitAttribution(ctx, in.project, id, ws.Path, attributionFromSettings)
+		if in.attribution.decided {
+			m.configureAttribution(ctx, in.project, ws.Path, in.attribution.coAuthor)
+		} else {
+			m.applyCommitAttribution(ctx, in.project, id, ws.Path, attributionFromSettings)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
@@ -505,8 +504,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	}
 	// A retry decides attribution again, before its prompt is written, and
 	// carries the decision to its workspace setup.
-	attribution := m.recordSpawnAttributionFor(ctx, project, rec.ID)
-	m.takeSpawnAttribution(rec.ID)
+	attribution := spawnAttribution{coAuthor: m.recordSpawnAttributionFor(ctx, project, rec.ID), decided: true}
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return RestoreResult{}, false, err
@@ -557,7 +555,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		cfg: cfg, project: project, projectKind: projectKind,
 		record: rec, branch: branch, systemPrompt: systemPrompt, systemPromptFile: systemPromptFile,
 		retry: true, releaseHarness: releaseHarness,
-		attribution: attribution, attributionKnown: true,
+		attribution: attribution,
 	})
 	if err != nil {
 		return RestoreResult{}, false, err

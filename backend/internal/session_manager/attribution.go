@@ -77,7 +77,18 @@ const (
 	// attributionRecorded is for an existing session whose reclaimed worktree
 	// was recreated: it keeps the choice it started with.
 	attributionRecorded
+	// attributionDecided is for a spawn's own setup: it applies the decision
+	// the spawn made before writing the session's first prompt.
+	attributionDecided
 )
+
+// spawnAttribution is the trailer decision a spawn made before its first
+// prompt. The spawn carries it to its workspace setup itself, so no other
+// spawn, retry or settings change can replace it on the way.
+type spawnAttribution struct {
+	coAuthor string
+	decided  bool
+}
 
 // recordSpawnAttribution decides, once per spawn and before the session's
 // first prompt is written, whether its commits get the trailer and its PRs the
@@ -85,23 +96,23 @@ const (
 // config then all follow this one decision, whatever the settings say later.
 // A retry decides again, so a choice from an attempt made before the settings
 // changed is not kept.
-func (m *Manager) recordSpawnAttribution(ctx context.Context, projectID domain.ProjectID, sessionID domain.SessionID) {
+func (m *Manager) recordSpawnAttribution(ctx context.Context, projectID domain.ProjectID, sessionID domain.SessionID) spawnAttribution {
 	if m.store == nil || projectID == "" || sessionID == "" {
-		return
+		return spawnAttribution{}
 	}
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		m.logger.Warn("attribution: load project", "project", projectID, "error", err)
-		return
+		return spawnAttribution{}
 	}
-	m.recordSpawnAttributionFor(ctx, project, sessionID)
+	return spawnAttribution{coAuthor: m.recordSpawnAttributionFor(ctx, project, sessionID), decided: true}
 }
 
 // recordSpawnAttributionFor decides the trailer and footer for a starting
-// session from the current settings, records both, and keeps the trailer
-// decision for the workspace setup that follows. That setup applies the kept
-// decision whether or not recording it succeeded, so neither a failed write
-// nor a row left by an earlier attempt can change it. Returns the trailer.
+// session from the current settings, records both, and returns the trailer.
+// The spawn hands that return value to its own workspace setup, which
+// applies it whether or not recording it succeeded, so neither a failed
+// write nor a row left by an earlier attempt can change it.
 func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID) string {
 	// The beta is read once, so one toggle cannot give the trailer and the
 	// footer different answers.
@@ -113,7 +124,6 @@ func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.
 	if sessionID == "" {
 		return coAuthor
 	}
-	m.keepSpawnAttribution(sessionID, coAuthor)
 	if m.store != nil {
 		// Recorded even without a trailer, which also clears one an earlier
 		// attempt recorded, so a recreated worktree gets this decision.
@@ -123,27 +133,6 @@ func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.
 	}
 	m.recordPRFooterChoice(ctx, project, sessionID, enabled)
 	return coAuthor
-}
-
-// keepSpawnAttribution holds a trailer decision for the session's workspace
-// setup, which takes it.
-func (m *Manager) keepSpawnAttribution(sessionID domain.SessionID, coAuthor string) {
-	m.spawnAttributionMu.Lock()
-	defer m.spawnAttributionMu.Unlock()
-	if m.spawnAttribution == nil {
-		m.spawnAttribution = map[domain.SessionID]string{}
-	}
-	m.spawnAttribution[sessionID] = coAuthor
-}
-
-// takeSpawnAttribution returns and forgets the trailer decision a spawn kept
-// for this session.
-func (m *Manager) takeSpawnAttribution(sessionID domain.SessionID) (string, bool) {
-	m.spawnAttributionMu.Lock()
-	defer m.spawnAttributionMu.Unlock()
-	coAuthor, ok := m.spawnAttribution[sessionID]
-	delete(m.spawnAttribution, sessionID)
-	return coAuthor, ok
 }
 
 // recordPRFooterChoice keeps whether a starting session's agents sign PRs, so
@@ -194,21 +183,25 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 	coAuthor := ""
 	switch choice {
 	case attributionFromSettings:
-		// The spawn decided before writing the session's first prompt; apply
-		// that decision, so a settings change since then cannot split the
-		// prompt from the commits. Without one (an import) decide now.
-		if decided, ok := m.takeSpawnAttribution(sessionID); ok {
-			coAuthor = decided
-		} else {
-			coAuthor = m.recordSpawnAttributionFor(ctx, project, sessionID)
-			m.takeSpawnAttribution(sessionID)
-		}
+		// A session set up without a spawn-time decision (an import) decides
+		// now, and records it like a spawn.
+		coAuthor = m.recordSpawnAttributionFor(ctx, project, sessionID)
 	case attributionRecorded:
 		recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
 		if err != nil {
 			m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
 		}
 		coAuthor = recorded
+	}
+	return m.configureAttribution(ctx, project, workspacePath, coAuthor)
+}
+
+// configureAttribution routes a workspace's git worktrees through the
+// dispatcher with trailer coAuthor, or undoes an earlier session's setup when
+// coAuthor is empty, and returns coAuthor.
+func (m *Manager) configureAttribution(ctx context.Context, project domain.ProjectRecord, workspacePath, coAuthor string) string {
+	if workspacePath == "" {
+		return ""
 	}
 	base := attribution.HooksDir(m.dataDir)
 	if coAuthor == "" {

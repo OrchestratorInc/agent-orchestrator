@@ -401,7 +401,7 @@ func TestSpawnAttributionIsDecidedOnceBeforeThePrompt(t *testing.T) {
 			project.RepoOriginURL = "https://github.com/o/r"
 			st.projects["mer"] = project
 
-			_, systemPrompt, err := m.buildSpawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1")
+			_, systemPrompt, attr, err := m.spawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -410,7 +410,7 @@ func TestSpawnAttributionIsDecidedOnceBeforeThePrompt(t *testing.T) {
 			}
 			// The setting flips while the workspace is still being set up.
 			beta = !start
-			m.applyCommitAttribution(ctx, project, "mer-1", wt, attributionFromSettings)
+			m.configureAttribution(ctx, project, wt, attr.coAuthor)
 
 			if footer, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); !recorded || footer != start {
 				t.Fatalf("recorded footer = %v (recorded %v), want %v", footer, recorded, start)
@@ -450,14 +450,15 @@ func TestSpawnTrailerDecisionHoldsWhenTheFooterIsUnsettled(t *testing.T) {
 	st.workspaceRepoErr = errors.New("database is locked")
 	st.workspaceRepoErrOnce = true
 
-	if _, _, err := m.buildSpawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1"); err != nil {
+	_, _, attr, err := m.spawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); recorded {
 		t.Fatal("recorded a footer choice from a failed repository lookup")
 	}
 	beta = false
-	m.applyCommitAttribution(ctx, project, "mer-1", wt, attributionFromSettings)
+	m.configureAttribution(ctx, project, wt, attr.coAuthor)
 	if got, _ := st.SessionCommitAttribution(ctx, "mer-1"); got != attribution.Bot.CoAuthor() {
 		t.Fatalf("recorded trailer after the settings change = %q, want the spawn's", got)
 	}
@@ -499,11 +500,12 @@ func TestSpawnDecisionHoldsWhenRecordingTheTrailerFails(t *testing.T) {
 			}
 			st.commitAttributionErr = errors.New("disk I/O error")
 
-			if _, _, err := m.buildSpawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1"); err != nil {
+			_, _, attr, err := m.spawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1")
+			if err != nil {
 				t.Fatal(err)
 			}
 			beta = !tc.betaAtSpawn
-			m.applyCommitAttribution(ctx, project, "mer-1", wt, attributionFromSettings)
+			m.configureAttribution(ctx, project, wt, attr.coAuthor)
 			if got := strings.Contains(commitMessage(t, wt), "Co-authored-by: "+attribution.Bot.CoAuthor()); got != tc.wantInCommits {
 				t.Fatalf("commit trailer = %v, want the spawn's %v", got, tc.wantInCommits)
 			}
@@ -533,36 +535,39 @@ func TestSpawnAttributionReadsTheBetaOnce(t *testing.T) {
 	}
 }
 
-// A spawn that fails before its workspace setup leaves no pending decision
-// behind, whether it runs synchronously or in the background.
-func TestFailedSpawnForgetsItsAttributionDecision(t *testing.T) {
+// A spawn carries its decision to its own workspace setup: a settings change
+// before setup runs, synchronously or in the background, does not replace it.
+// Setup deciding again would record an empty trailer here.
+func TestSpawnCarriesItsDecisionToSetup(t *testing.T) {
 	ctx := context.Background()
 	t.Run("synchronous", func(t *testing.T) {
-		m, _, _, ws := newManager()
-		m.SetCommitAttributionEnabled(func(context.Context) bool { return true })
-		ws.createErr = errors.New("worktree add failed")
-		if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err == nil {
-			t.Fatal("spawn succeeded, want the worktree failure")
+		m, st, _, _ := newManager()
+		// On for the spawn's one read only: setup that read it again would
+		// see it off.
+		reads := 0
+		m.SetCommitAttributionEnabled(func(context.Context) bool { reads++; return reads == 1 })
+		session, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode})
+		if err != nil {
+			t.Fatal(err)
 		}
-		if n := len(m.spawnAttribution); n != 0 {
-			t.Fatalf("%d pending decisions after the failed spawn, want none", n)
+		if got, _ := st.SessionCommitAttribution(ctx, session.ID); got != attribution.Bot.CoAuthor() {
+			t.Fatalf("recorded trailer = %q, want the spawn's", got)
 		}
 	})
 	t.Run("asynchronous chat", func(t *testing.T) {
-		m, _, _ := newChatManager(&recordingLauncher{})
+		m, st, _ := newChatManager(&recordingLauncher{})
 		m.browserCapabilities = browsersvc.NewAuthority()
-		m.SetCommitAttributionEnabled(func(context.Context) bool { return true })
+		beta := true
+		m.SetCommitAttributionEnabled(func(context.Context) bool { return beta })
 		deferred := deferredBackground(m)
-		m.workspace.(*fakeWorkspace).createErr = errors.New("worktree add failed")
-		if _, _, _, err := m.Spawn(ctx, asyncChatSpawnConfig("do the thing")); err != nil {
+		session, _, _, err := m.Spawn(ctx, asyncChatSpawnConfig("do the thing"))
+		if err != nil {
 			t.Fatalf("spawn: %v", err)
 		}
-		if n := len(m.spawnAttribution); n != 0 {
-			t.Fatalf("%d pending decisions once the spawn answered, want none (carried by the spawn)", n)
-		}
+		beta = false
 		(*deferred)[0]()
-		if n := len(m.spawnAttribution); n != 0 {
-			t.Fatalf("%d pending decisions after the failed start, want none", n)
+		if got, _ := st.SessionCommitAttribution(ctx, session.ID); got != attribution.Bot.CoAuthor() {
+			t.Fatalf("recorded trailer after the background setup = %q, want the spawn's", got)
 		}
 	})
 }
