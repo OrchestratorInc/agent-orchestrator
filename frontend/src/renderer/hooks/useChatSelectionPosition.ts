@@ -7,6 +7,7 @@ export function useChatSelectionPosition(
 	viewportRef: RefObject<HTMLDivElement | null>,
 	buttonRef: RefObject<HTMLDivElement | null>,
 	onInvalid: () => void,
+	pinned = false,
 ) {
 	const [position, setPosition] = useState<{ left: number; top: number; visible: boolean }>();
 	useLayoutEffect(() => {
@@ -24,9 +25,10 @@ export function useChatSelectionPosition(
 			frame = undefined;
 			const selection = window.getSelection();
 			const current = selection?.rangeCount ? selection.getRangeAt(0) : undefined;
-			if (!source?.isConnected || !viewport.contains(source) || !current || selection?.isCollapsed ||
+			if (!source?.isConnected || !viewport.contains(source) || !range.startContainer.isConnected || !range.endContainer.isConnected ||
+				(!pinned && (!current || selection?.isCollapsed ||
 				current.startContainer !== range.startContainer || current.startOffset !== range.startOffset ||
-				current.endContainer !== range.endContainer || current.endOffset !== range.endOffset) {
+				current.endContainer !== range.endContainer || current.endOffset !== range.endOffset))) {
 				onInvalid();
 				return;
 			}
@@ -85,6 +87,6 @@ export function useChatSelectionPosition(
 			window.removeEventListener("resize", schedule);
 			document.removeEventListener("selectionchange", schedule);
 		};
-	}, [range, viewportRef, buttonRef, onInvalid]);
+	}, [range, viewportRef, buttonRef, onInvalid, pinned]);
 	return position;
 }

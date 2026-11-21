@@ -83,14 +83,31 @@ func (m *Manager) initializeNativeRestore(parent context.Context, original domai
 	if err := poll(plan.Restored); err != nil {
 		return err
 	}
-	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: plan.TargetID(), Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
+	target := strings.TrimSpace(plan.TargetID())
+	if target == "" || target != plan.TargetID() {
+		return errors.New("native restore did not identify its conversation")
+	}
+	if target != original.Metadata.AgentSessionID {
+		return errors.New("native restore changed the requested conversation")
+	}
+	current, err := m.getRecord(ctx, original.ID)
+	if err != nil {
+		return err
+	}
+	if current.IsTerminated {
+		return errors.New("native restore terminated before publication")
+	}
+	if err := m.exactLaunchPreWrite(original.ID, original.Harness, handle, launchID, errors.New("native restore generation lost before publication"))(ctx, current); err != nil {
+		return err
+	}
+	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: target, Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
 		return err
 	}
 	rec, err := m.getRecord(ctx, original.ID)
 	if err != nil {
 		return err
 	}
-	if rec.IsTerminated || rec.Metadata.RuntimeHandleID != handle.ID || rec.Metadata.RuntimeLaunchID != launchID || rec.Metadata.AgentSessionID != plan.TargetID() || rec.Metadata.AgentSessionIDLaunchID != launchID {
+	if rec.IsTerminated || rec.Metadata.RuntimeHandleID != handle.ID || rec.Metadata.RuntimeLaunchID != launchID || rec.Metadata.AgentSessionID != target || rec.Metadata.AgentSessionIDLaunchID != launchID {
 		return errors.New("native restore identity publication not confirmed")
 	}
 	return nil
@@ -118,6 +135,55 @@ func (m *Manager) rollbackNativeInitialization(ctx context.Context, original dom
 		rollbackErr = fmt.Errorf("native restore quarantine: %w", rollbackErr)
 	}
 	return errors.Join(destroyErr, rollbackErr)
+}
+
+// The handle remains unpublished and ordinary input remains fenced throughout
+// this proof. A failed witness destroys only this replacement runtime.
+func (m *Manager) verifyNativeRestore(ctx context.Context, verifier ports.NativeRestoreVerifier, cfg ports.RestoreConfig, generation string, handle ports.RuntimeHandle) error {
+	reader, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return errors.New("native restore requires a current rendered terminal")
+	}
+	wait := m.nativeRestoreProofWait
+	if wait <= 0 {
+		wait = 60 * time.Second
+	}
+	proofCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for {
+		output, err := reader.GetStyledOutput(proofCtx, handle, 32)
+		if err != nil {
+			// A failed read of the replacement's screen is not evidence against
+			// it: retry like an unready composer until the proof deadline, and
+			// report the last read failure if the deadline ends the proof.
+			if proofCtx.Err() != nil {
+				return errors.Join(proofCtx.Err(), err)
+			}
+			if sleepErr := sleepContext(proofCtx, 250*time.Millisecond); sleepErr != nil {
+				return errors.Join(sleepErr, err)
+			}
+			continue
+		}
+		ready, err := verifier.VerifyNativeRestore(proofCtx, cfg, generation, output)
+		if err != nil {
+			return err
+		}
+		if ready {
+			// A receipt and retained viewport survive the child. Publish identity
+			// only while the exact replacement generation is still observable.
+			alive, err := m.exactLaunchAlive(proofCtx, handle, domain.SessionID(cfg.Session.ID), generation)
+			if err != nil {
+				return fmt.Errorf("native restore process verification: %w", err)
+			}
+			if !alive {
+				return errors.New("native restore process exited before identity publication")
+			}
+			return nil
+		}
+		if err := sleepContext(proofCtx, 250*time.Millisecond); err != nil {
+			return err
+		}
+	}
 }
 
 // exactLaunchAlive reports whether the exact AO supervisor for launchID, and

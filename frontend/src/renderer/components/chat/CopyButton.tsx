@@ -6,8 +6,9 @@
  * block and the message action row so both confirm the same way.
  */
 
+import { cn } from "../../lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy } from "@/components/app-icons";
 import { aoBridge } from "../../lib/bridge";
 import { Button, type ButtonProps } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -26,7 +27,7 @@ export function CopyButton({
 	/** Confirmation once the text is on the clipboard; callers outside Chat pass a localized one. */
 	copiedLabel = "Copied",
 }: {
-	text: string;
+	text: string | (() => string);
 	label: string;
 	compact?: boolean;
 	size?: ButtonProps["size"];
@@ -42,7 +43,7 @@ export function CopyButton({
 		// Through the bridge rather than `navigator.clipboard`: in Electron that
 		// reaches the native clipboard, which does not need the document to be focused
 		// or a permission the renderer cannot prompt for.
-		void aoBridge.clipboard.writeText(text).then(
+		void aoBridge.clipboard.writeText(typeof text === "function" ? text() : text).then(
 			() => {
 				setCopied(true);
 				clearTimeout(timer.current);
@@ -64,9 +65,9 @@ export function CopyButton({
 			className={className}
 		>
 			{copied ? (
-				<Check aria-hidden="true" className="size-3 text-success" />
+				<Check aria-hidden="true" className={cn(compact ? "size-3.5" : "size-3", "text-success")} />
 			) : (
-				<Copy aria-hidden="true" className="size-3" />
+				<Copy aria-hidden="true" className={compact ? "size-3.5" : "size-3"} />
 			)}
 			{compact ? null : copied ? copiedLabel : "Copy"}
 		</Button>

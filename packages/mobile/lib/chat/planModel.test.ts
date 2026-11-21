@@ -83,14 +83,14 @@ describe("plan panel", () => {
 	it("carries a step's state in its mark, not an uppercase label on every row", () => {
 		expect(source).not.toContain("textTransform");
 		expect(source).not.toContain("STILL CHANGING");
-		expect(source).toContain("<Spinning enabled={live}>");
+		expect(source).toContain("live ? <Spinner size={16}");
 	});
 
 	it("turns the in-progress mark only while the turn runs", () => {
 		// A stopped or failed turn, or a plan kept across turns, leaves a step in
 		// progress after the agent has stopped; it must not keep spinning.
 		expect(source).toContain("<StepMark status={step.status} live={Boolean(live)} slotHeight={markSlotHeight} />");
-		expect(source).not.toContain("<Spinning enabled>");
+		expect(source).not.toContain("<Spinning");
 	});
 
 	it("opens a plan only while its turn runs and has steps left", () => {

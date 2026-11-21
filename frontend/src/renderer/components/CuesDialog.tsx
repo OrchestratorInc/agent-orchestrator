@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2 } from "lucide-react";
+import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2 } from "@/components/app-icons";
 import { apiErrorMessage } from "../lib/api-client";
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useUiStore } from "../stores/ui-store";

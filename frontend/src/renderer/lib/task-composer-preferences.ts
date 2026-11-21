@@ -4,6 +4,11 @@ export type TaskComposerAgentPreference = {
 	model: string;
 	mode: string;
 	effort?: string;
+	/**
+	 * The user chose `effort`. An effort saved without it predates the marker,
+	 * when a launch saved the level shown whether or not anyone chose it.
+	 */
+	effortChosen?: true;
 };
 
 export type TaskComposerContextPreferences = {
@@ -41,13 +46,14 @@ function readAll(): TaskComposerPreferences {
 			const agents: Record<string, TaskComposerAgentPreference> = {};
 			for (const [agent, config] of Object.entries(candidate.agents)) {
 				if (!config || typeof config !== "object" || Array.isArray(config)) continue;
-				const fields = config as { model?: unknown; mode?: unknown; effort?: unknown };
+				const fields = config as { model?: unknown; mode?: unknown; effort?: unknown; effortChosen?: unknown };
 				if (typeof fields.model !== "string" || typeof fields.mode !== "string") continue;
 				if (fields.effort !== undefined && typeof fields.effort !== "string") continue;
 				agents[agent] = {
 					model: fields.model,
 					mode: fields.mode,
 					...(typeof fields.effort === "string" ? { effort: fields.effort } : {}),
+					...(typeof fields.effort === "string" && fields.effortChosen === true ? { effortChosen: true as const } : {}),
 				};
 			}
 			preferences[context] = { lastAgent: candidate.lastAgent, agents };

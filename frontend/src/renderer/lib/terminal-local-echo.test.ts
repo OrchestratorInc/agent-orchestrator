@@ -276,6 +276,32 @@ describe("withLineBufferedLocalInput", () => {
 		expect(writes).toEqual(["\x1b[Ka", "b"]);
 	});
 
+	it("passes hover reports through without flushing the unsent draft", () => {
+		const { inner, wrapped, writes } = createWrapped();
+		inner.emitConnection("open");
+		wrapped.sendInput("h", "a");
+		wrapped.sendInput("h", "b");
+
+		wrapped.sendInput("h", "\x1b[<35;10;4M");
+		wrapped.sendInput("h", "\x1b[<35;11;4M");
+		expect(inner.inputs).toEqual(["\x1b[<35;10;4M", "\x1b[<35;11;4M"]);
+		// The draft is still local and visible; no rollback is scheduled for it.
+		vi.advanceTimersByTime(10_000);
+		expect(writes).toEqual(["\x1b[Ka", "b"]);
+
+		// Enter still sends the whole line, in order, after the hover updates.
+		wrapped.sendInput("h", "\r");
+		expect(inner.inputs).toEqual(["\x1b[<35;10;4M", "\x1b[<35;11;4M", "ab", "\r"]);
+	});
+
+	it("still flushes the draft ahead of a click, so the program sees the typed text first", () => {
+		const { inner, wrapped } = createWrapped();
+		inner.emitConnection("open");
+		wrapped.sendInput("h", "a");
+		wrapped.sendInput("h", "\x1b[<0;10;4M");
+		expect(inner.inputs).toEqual(["a\x1b[<0;10;4M"]);
+	});
+
 	it("does not predict before the socket is open", () => {
 		const { inner, wrapped, writes } = createWrapped();
 		wrapped.sendInput("h", "a");

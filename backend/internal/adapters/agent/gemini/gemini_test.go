@@ -48,6 +48,19 @@ func TestAuthStatusUsesCachedAPIKey(t *testing.T) {
 	}
 }
 
+// AO exports a saved GEMINI_API_KEY to itself, but Gemini sessions do not get
+// one another harness's panel saved; the check must not count it either.
+func TestAuthStatusIgnoresAKeyGeminiSessionsDoNotGet(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "ao-saved-key")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
+	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"GEMINI_API_KEY": ""})
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(ctx)
+	if err != nil || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown without the held-back key", status, err)
+	}
+}
+
 func TestAuthStatusIgnoresGoogleAPIKeyAlone(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GOOGLE_API_KEY", "google-sdk-key")

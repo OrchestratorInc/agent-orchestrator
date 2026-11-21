@@ -100,7 +100,7 @@ describe("CoderTemplateOptions", () => {
 		renderOptions();
 		expect(await screen.findByText("Template options")).toBeInTheDocument();
 		// Set apart from the repositories AO checks out itself.
-		expect(screen.getByText("Your Coder template's own options. AO checks out this project's repositories itself.")).toBeInTheDocument();
+		expect(screen.getByText("Your Coder template's own options. Orchestrator checks out this project's repositories itself.")).toBeInTheDocument();
 		expect(mocks.getCoderTemplateParameters).toHaveBeenCalledWith("org-1", "tpl-1", expect.anything());
 
 		const branch = screen.getByRole("textbox", { name: "Base branch" });
@@ -323,7 +323,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
 		// This one means the session will fail to start, so it keeps the warning color.
-		expect((await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.", shown)).parentElement).toHaveClass("text-warning");
+		expect((await screen.findByText("Your template also clones Alice into the working folder, so Orchestrator cannot start there. Untick it.", shown)).parentElement).toHaveClass("text-warning");
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
 	});
 
@@ -337,7 +337,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 				</QueryClientProvider>,
 			);
 			expect(await screen.findByText("Your template also clones Alice. Untick to keep one copy.", shown)).toBeInTheDocument();
-			expect(screen.queryByText(/so AO cannot start there/)).not.toBeInTheDocument();
+			expect(screen.queryByText(/so Orchestrator cannot start there/)).not.toBeInTheDocument();
 			unmount();
 		}
 	});
@@ -428,7 +428,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		const bothRepos = [...projectRepos, "https://github.com/11x-ai/bob-svc"];
 		renderOptions({ github_repos: "[\"Alice\",\"bob-svc\"]" }, bothRepos, "~/work/{repo}");
-		expect(await screen.findByText("Your template also clones Alice and Bob into the working folder, so AO cannot start there. Untick them.", shown)).toBeInTheDocument();
+		expect(await screen.findByText("Your template also clones Alice and Bob into the working folder, so Orchestrator cannot start there. Untick them.", shown)).toBeInTheDocument();
 	});
 
 	it("stays hidden until the connection's mode is known", async () => {

@@ -364,6 +364,9 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { pr } = automation;
+	// When it happened on the forge, not when AO delivered it: AO holds PR
+	// nudges while the session waits on the user, so delivery can lag by a lot.
+	const at = ("at" in automation && automation.at) || createdAt;
 	const prLink = <Text accessibilityRole={forgeURL(pr.url) ? "link" : undefined} onPress={openForge(pr.url)} suppressHighlighting style={styles.strong}>#{pr.number}</Text>;
 	let tone = t.amber;
 	let heading: ReactNode;
@@ -391,7 +394,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			break;
 		}
 		case "changesRequested":
-			heading = <><Text style={styles.strong}>{automation.author ? `@${automation.author}` : "AO reviewer"}</Text> requested changes on {prLink}</>;
+			heading = <><Text style={styles.strong}>{automation.author ? `@${automation.author}` : "Built-in reviewer"}</Text> requested changes on {prLink}</>;
 			detail = automation.body ? <Folded><ChatMarkdown text={safeMarkdown(automation.body)} /></Folded> : null;
 			break;
 		case "mergeConflict":
@@ -409,7 +412,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 						{heading}
 						{pr.title ? <Text style={styles.prTitle}>{"  "}{pr.title}</Text> : null}
 					</Text>
-					<Text style={styles.time}>{clockTime(createdAt)}</Text>
+					<Text style={styles.time}>{clockTime(at)}</Text>
 				</View>
 				{detail ? <View style={styles.detail}>{detail}</View> : null}
 			</View>
@@ -490,7 +493,7 @@ function FileChip({ path, line, end }: { path: string; line?: number; end?: numb
 			accessibilityRole={files ? "button" : undefined}
 			accessibilityLabel={`Open ${path}`}
 			disabled={!files}
-			onPress={() => { haptics.tap(); files?.openFile(path); }}
+			onPress={() => { haptics.tap(); files?.openFile(path, undefined, line); }}
 			style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
 		>
 			<Feather name="file-text" size={12} color={t.textTertiary} />

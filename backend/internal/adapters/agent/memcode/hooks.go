@@ -123,7 +123,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return err
 	}
 	if !component.MatchString(cfg.SessionID) {
-		return errors.New("invalid AO session identity")
+		return errors.New("invalid Orchestrator-managed session identity")
 	}
 	if cfg.Config.Model != "" && cfg.Env["MEMCODE_ENDPOINT_URL"] != "" {
 		return errors.New("memcode custom endpoint models must be selected in the native TUI")

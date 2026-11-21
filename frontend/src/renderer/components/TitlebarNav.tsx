@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, PanelLeft } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
@@ -46,10 +46,12 @@ export function useCanGoForward(): boolean {
 }
 
 export function TitlebarNav({
+  onBack,
   historyLocked = false,
   isFullScreen = false,
   zoomFactor = 1,
 }: {
+  onBack?: () => void;
   historyLocked?: boolean;
   isFullScreen?: boolean;
   zoomFactor?: number;
@@ -150,7 +152,7 @@ export function TitlebarNav({
           {/* Not a button on purpose. Only the label opts out of window drag (for
               the build-info tooltip); the rest of the row stays draggable. */}
           <span
-            className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+            className="flex w-max select-none items-center gap-1.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
             ref={brandRef}
             style={{ maxWidth: brandMaxWidth }}
@@ -174,9 +176,9 @@ export function TitlebarNav({
         >
           <div className="flex items-center gap-1">
             <TitlebarButton
-              disabled={historyLocked || !canGoBack}
+              disabled={!onBack && (historyLocked || !canGoBack)}
               label={t("titlebar.goBack")}
-              onClick={() => router.history.back()}
+              onClick={onBack ?? (() => router.history.back())}
               shortcut="history-back"
             >
               <ArrowLeft className="size-icon-lg" aria-hidden="true" />

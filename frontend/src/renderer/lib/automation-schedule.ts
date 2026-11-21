@@ -293,3 +293,39 @@ export function formatTimeDraft(raw: string): string {
 	if (digits.length <= 2) return digits;
 	return `${digits.slice(0, 2)}:${digits.slice(2)}`;
 }
+
+/** A recurrence rule reduced to what a person reads in a list: cadence and clock time. */
+export type ScheduleSummary =
+	| { kind: "daily"; time: { hour: number; minute: number } | null }
+	| { kind: "weekdays"; time: { hour: number; minute: number } | null }
+	| { kind: "weekly"; days: WeekdayCode[]; time: { hour: number; minute: number } | null }
+	| { kind: "monthly"; day: number; time: { hour: number; minute: number } | null }
+	| { kind: "other"; frequency: string | null; time: { hour: number; minute: number } | null };
+
+/**
+ * Summarizes a daemon RRULE (optionally with a DTSTART line) for display.
+ * Rules with an interval, or day lists AO does not author, fall back to
+ * `other` with only their frequency so the list never claims a cadence
+ * the scheduler will not follow.
+ */
+export function describeSchedule(rruleText: string): ScheduleSummary {
+	const parts = parseRRuleParts(rruleText);
+	const frequency = parts.FREQ?.toLowerCase() || null;
+	const time = parts.BYHOUR !== undefined && parts.BYMINUTE !== undefined ? parseHourMinute(parts.BYHOUR, parts.BYMINUTE) : null;
+	const simple = !parts.INTERVAL || parts.INTERVAL === "1";
+	if (!simple) return { kind: "other", frequency, time };
+	if (frequency === "daily" && !parts.BYDAY) return { kind: "daily", time };
+	if (frequency === "weekly" || (frequency === "daily" && parts.BYDAY)) {
+		const raw = parts.BYDAY?.split(",") ?? [];
+		const days = raw.filter((day): day is WeekdayCode => WEEKDAY_CODES.includes(day as WeekdayCode));
+		if (days.length === 0 || days.length !== raw.length) return { kind: "other", frequency, time };
+		const ordered = WEEKDAY_CODES.filter((code) => days.includes(code));
+		if (ordered.join(",") === "MO,TU,WE,TH,FR") return { kind: "weekdays", time };
+		if (ordered.length === 7) return { kind: "daily", time };
+		return { kind: "weekly", days: ordered, time };
+	}
+	if (frequency === "monthly" && /^(?:[1-9]|[12]\d|3[01])$/.test(parts.BYMONTHDAY ?? "")) {
+		return { kind: "monthly", day: Number(parts.BYMONTHDAY), time };
+	}
+	return { kind: "other", frequency, time };
+}
