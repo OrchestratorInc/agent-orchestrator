@@ -1932,8 +1932,13 @@ export function CloudSessionChatSurface({
 				name: attachment.name || "attachment", data: attachment.data,
 			}, { signal }))));
 	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
+	// The newest accepted send's event per session, so a later send that fails
+	// cannot hide an earlier one still waiting for its turn. Sequences only grow,
+	// so a record stops mattering once the chat has read that far.
+	const [acceptedThrough, setAcceptedThrough] = useState<Readonly<Record<string, number>>>({});
 	const send = useMutation({
-		mutationFn: async ({ text, attachmentIds, clientMessageId, display, mentions, afterSwitch }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; mentions?: ComposerMention[]; afterSwitch?: boolean }) => {
+		// `sessionId` names the session the send went to: this surface outlives it.
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display, mentions, afterSwitch }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; mentions?: ComposerMention[]; afterSwitch?: boolean; sessionId: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			// A message sent with an agent switch goes to the new agent, which
 			// starts on the model and effort the switch named: the old agent's
@@ -1978,12 +1983,17 @@ export function CloudSessionChatSurface({
 				throw mentionRefusedError(error);
 			}
 		},
-		onSuccess: (result) => {
+		onSuccess: (data, { sessionId }) => {
 			// The send released the lease to whoever is next in line.
 			leaseRef.current.sent();
-			// A message that tags people started an aside: it opens beside the conversation.
-			const asideId = result && typeof result === "object" && "event" in result ? asideIdOf(result.event) : undefined;
-			if (asideId) openAside(session.id, asideId);
+			const sequence = data?.event?.sequence;
+			if (typeof sequence === "number") {
+				setAcceptedThrough((current) => (current[sessionId] ?? 0) >= sequence ? current : { ...current, [sessionId]: sequence });
+			}
+			// A message that tags people started an aside: it opens beside the
+			// conversation of the session the send went to.
+			const asideId = data && typeof data === "object" && "event" in data ? asideIdOf(data.event) : undefined;
+			if (asideId) openAside(sessionId, asideId);
 			void invalidate();
 		},
 	});
@@ -2228,10 +2238,17 @@ export function CloudSessionChatSurface({
 		navigateToMessage({ id: target.id, text: target.text, messageId: reply?.id ?? target.messageId });
 	}, [navigateToMessage]);
 	useChatMessageFocus(sessionUiKey(session.id), undefined, eventsQuery.isSuccess, focusMessage);
+	// A message the control plane accepted whose event this chat has not read yet.
+	// Its turn is not in the snapshot until then, but a next message would wait
+	// behind it all the same. A refused send records nothing, and another
+	// session's send is not this chat's.
+	const acceptedSequence = acceptedThrough[session.id];
+	const sendAwaitingTurn = acceptedSequence !== undefined &&
+		(eventsQuery.data?.at(-1)?.sequence ?? 0) < acceptedSequence;
 	// A next-message suggestion once a turn settles, as a local chat offers, only
 	// while this person can send and the chat is in front.
 	const promptSuggestion = useCloudPromptSuggestion(session, snapshot,
-		chatInFront && !send.isPending && !activeTurn && !startStopped && !readOnly && !lease.locked && !newWorkDisabled && !controllerTransitioning);
+		chatInFront && !send.isPending && !sendAwaitingTurn && !activeTurn && !startStopped && !readOnly && !lease.locked && !newWorkDisabled && !controllerTransitioning);
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
 		onConversationWorkChange?.({
@@ -2662,6 +2679,7 @@ export function CloudSessionChatSurface({
 			loadingOlder={history?.loadingOlder}
 			onLoadOlder={onLoadOlder}
 			localEchos={openingEchos}
+			sendAwaitingTurn={sendAwaitingTurn}
 			openingStartedAt={opening?.createdAt}
 			onLinkOpen={openLinkInBrowser}
 			onSessionLinkOpen={openSessionLink}
@@ -2792,6 +2810,7 @@ export function CloudSessionChatSurface({
 				const content = cloudAnnotationContent(excerpts, fileReferences);
 				const agentText = numbered ? message.text + formatNumberedAnnotations(excerpts ?? [], fileReferences) : excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
 				const sendMessage = (afterSwitch?: boolean) => send.mutateAsync({
+					sessionId: session.id,
 					// A message of only files and captures or quotes starts with them.
 					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
 					attachmentIds: message.attachmentIds,

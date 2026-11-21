@@ -32,7 +32,7 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
-import { agentAccountLabel, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountUsable, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
 import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -55,7 +55,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
 	const accountRows = oneRowPerLogin(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
 	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
-		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !row.signedIn })),
+		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !agentAccountUsable(row) })),
 		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
 		onPick: task.account.choose,
 		disabled: accountRows.length < 2,
@@ -63,7 +63,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
-	const stalePick = Boolean(task.account?.value && hostAccounts.data && !accountRows.some((row) => row.id === task.account?.value && row.signedIn));
+	const stalePick = Boolean(task.account?.value && hostAccounts.data && !accountRows.some((row) => row.id === task.account?.value && agentAccountUsable(row)));
 	useEffect(() => {
 		if (stalePick) taskRef.current.account?.choose(undefined);
 	}, [stalePick]);
@@ -118,7 +118,12 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		// The worktree is still being created when the id arrives; ask again until it
 		// exists, backing off so a stalled preparation is not polled every 1.5s.
 		refetchInterval: (query) => (query.state.data ? 30_000 : Math.min(1_500 * 2 ** query.state.errorUpdateCount, 15_000)),
+		// Each read restarts the host's expiry for this preparation, so keep
+		// reading while the window is hidden: the page still holds the worktree.
+		refetchIntervalInBackground: true,
 		queryFn: async () => {
+			// The host restarts the expiry as the read arrives, so time it from its start.
+			const readAt = Date.now();
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: preparedId as string } },
 			});
@@ -126,9 +131,17 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			return {
 				paths: (data?.files ?? []).filter((file) => file.status !== "deleted").map((file) => file.path),
 				truncated: Boolean(data?.truncated),
+				readAt,
 			};
 		},
 	});
+	// A read that answered restarted the host's expiry; the next visit offers a
+	// kept preparation by its time.
+	const { notePreparationUsed } = task;
+	const lastReadAt = workspaceFiles.data?.readAt;
+	useEffect(() => {
+		if (preparedId && lastReadAt) notePreparationUsed(preparedId, lastReadAt);
+	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
 	// the first message of its Chat session, up to the size one upload may be.

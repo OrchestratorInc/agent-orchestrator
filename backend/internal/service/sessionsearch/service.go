@@ -652,7 +652,7 @@ func (s *Service) indexChatWithStamp(ctx context.Context, conversation domain.Se
 		return 0, errors.New("session search: store is required")
 	}
 	sourceKey := conversationSourceKey(conversation)
-	previous, hadPrevious, err := s.store.GetSessionSearchSource(ctx, sourceKey)
+	previous, hadPrevious, err := s.sourceState(ctx, sourceKey)
 	if err != nil {
 		return 0, err
 	}
@@ -1318,10 +1318,18 @@ func (s *Service) Sweep(ctx context.Context) (int, error) {
 	return written, ctx.Err()
 }
 
+// sourceState reads a source's stored state. Every sweep reads it once per
+// conversation, so the read is not cancellable: a cancellable context makes the
+// SQLite driver and database/sql each start a watcher goroutine for every query.
+// A sweep still stops on ctx between sources.
+func (s *Service) sourceState(ctx context.Context, sourceKey string) (domain.SessionSearchSource, bool, error) {
+	return s.store.GetSessionSearchSource(context.WithoutCancel(ctx), sourceKey)
+}
+
 // recordSourceError marks a source unavailable without deleting what it already
 // contributed, so a temporarily missing file does not erase history.
 func (s *Service) recordSourceError(ctx context.Context, sourceKey string, kind domain.SessionSearchSourceKind, target domain.SessionSearchTarget, cause error) {
-	previous, had, err := s.store.GetSessionSearchSource(ctx, sourceKey)
+	previous, had, err := s.sourceState(ctx, sourceKey)
 	if err != nil {
 		s.log.Warn("session search source read failed", "source", sourceKey, "error", err)
 		return
