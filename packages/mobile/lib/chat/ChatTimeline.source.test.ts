@@ -138,6 +138,13 @@ describe("a turn's action row", () => {
 		expect(actions).toContain("<View style={styles.turnActions}>");
 		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
 	});
+	// The row's height is fixed, so the time cannot grow past it: uncapped, the
+	// largest text sizes drew its line taller than the row and cut it off. At
+	// the chrome cap (1.3) the footnote's 17pt line is 22pt, inside the 28pt
+	// control the row is built around.
+	it("caps the time's text size where its line still fits the row", () => {
+		expect(actions).toContain("maxFontSizeMultiplier={fontScaleCap.chrome}");
+	});
 	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
 		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
 		expect(source).not.toContain("styles.responseActions");

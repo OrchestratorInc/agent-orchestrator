@@ -109,7 +109,7 @@ import {
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { iconSize, radius, type, space, touchTarget } from "../tokens";
+import { fontScaleCap, iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
@@ -845,7 +845,9 @@ function TurnActions({ turn, reply, onRollback, onFork }: { turn: ConversationTu
 			{copyText ? <CopyResponseButton text={copyText} /> : null}
 			{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}
 			{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}
-			{time ? <Text style={styles.turnTime} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
+			{/* The row's height is fixed, so the time stops growing where its line
+			    still fits it; uncapped, the largest text sizes cut it off. */}
+			{time ? <Text style={styles.turnTime} maxFontSizeMultiplier={fontScaleCap.chrome} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
 		</View>
 	);
 }
