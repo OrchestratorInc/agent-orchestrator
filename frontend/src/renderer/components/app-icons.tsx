@@ -107,6 +107,7 @@ import {
 	Presentation as MynaPresentation,
 	QuestionCircle as MynaQuestionCircle,
 	Refresh as MynaRefresh,
+	Repeat as MynaRepeat,
 	Rows as MynaRows,
 	Save as MynaSave,
 	Search as MynaSearch,
@@ -446,6 +447,7 @@ export const QrCode = fromLucide(LucideQrCode, "qr-code");
 export const Quote = fromLucide(LucideQuote, "quote");
 export const RefreshCw = fromMyna(MynaRefresh, "refresh-cw");
 export const Regex = fromLucide(LucideRegex, "regex");
+export const Repeat = fromMyna(MynaRepeat, "repeat");
 export const RotateCcw = fromLucide(LucideRotateCcw, "rotate-ccw");
 export const RotateCw = fromLucide(LucideRotateCw, "rotate-cw");
 export const Route = fromLucide(LucideRoute, "route");
