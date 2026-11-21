@@ -114,6 +114,42 @@ describe("handing a follow-up from the new chat page to its session", () => {
 		expect(readChatSessionDraft(sessionId).composer.text).toBe("Also add");
 	});
 
+	it("keeps a follow-up whose save fails in the box, unsent, until the person sends it", async () => {
+		const sessionId = "handoff-session-save-fails";
+		handOffComposerDraft(sessionId, { text: "Also add tests", send: true });
+		const storage = window.localStorage;
+		const write = storage.setItem.bind(storage);
+		let failWrite = true;
+		const composerText = (value: string) => {
+			try {
+				return JSON.parse(value).composer?.text;
+			} catch {
+				return undefined;
+			}
+		};
+		const setItem = vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+			if (failWrite && composerText(value) === "Also add tests") throw new DOMException("full", "QuotaExceededError");
+			write(key, value);
+		});
+		try {
+			const onSend = vi.fn().mockResolvedValue(undefined);
+			renderComposer({ draftSessionId: sessionId, onSend, willQueue: true });
+			const field = screen.getByLabelText("Message the agent");
+
+			await waitFor(() => expect(field).toHaveTextContent("Also add tests"));
+			expect(screen.getByRole("alert")).toHaveTextContent("couldn’t be saved");
+			await act(async () => {});
+			expect(onSend).not.toHaveBeenCalled();
+
+			failWrite = false;
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+			expect(onSend.mock.calls[0][0]).toBe("Also add tests");
+		} finally {
+			setItem.mockRestore();
+		}
+	});
+
 	it("puts a follow-up below the session's own draft, for the person to send", async () => {
 		const sessionId = "handoff-session-own-draft";
 		writeChatComposerText(sessionId, "My own words");

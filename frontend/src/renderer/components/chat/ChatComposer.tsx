@@ -727,6 +727,8 @@ export const ChatComposer = memo(function ChatComposer({
  const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
 	const unsavedText = useRef<{ text: string; revision: number } | undefined>(undefined);
+	// A handed-off follow-up the session's draft could not save (see the hand-off).
+	const unsavedHandoff = useRef<string | undefined>(undefined);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
 	const restoredAttachments = useMemo<FileAttachment[]>(
 		() =>
@@ -803,6 +805,22 @@ export const ChatComposer = memo(function ChatComposer({
 		setAttachmentDraftPersistenceError(null);
 		automaticDeliveryRecoveryAttempted.current = undefined;
 	}, [draftScope, draftScopeKey, parkUnsentSends]);
+	// A handed-off follow-up whose save failed stays in the box and in memory, like
+	// typing whose save failed, beside the save error. It runs after the reset
+	// above, which starts the scope with nothing unsaved, and before the restore,
+	// which then leaves the unsaved text alone. Nothing sends it by itself: the
+	// person's Enter saves it as part of the send.
+	useEffect(() => {
+		const text = unsavedHandoff.current;
+		if (text === undefined) return;
+		unsavedHandoff.current = undefined;
+		unsavedText.current = { text, revision: composerRevision.current };
+		textRef.current = text;
+		hasTextRef.current = text.trim().length > 0;
+		setHasText(hasTextRef.current);
+		editor.current?.setText(text);
+		setTextDraftPersistenceError("chat.draft.saveFailed");
+	}, [draftScopeKey]);
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
 		initialKey: attachmentScopeKey,
@@ -1528,7 +1546,8 @@ export const ChatComposer = memo(function ChatComposer({
 		const text = kept ? `${kept}\n\n${handoff.text}` : handoff.text;
 		const result = writeChatComposerText(draftScope, text);
 		if (!result.ok) {
-			setTextDraftPersistenceError("chat.draft.saveFailed");
+			// Shown once the scope's reset has run (see unsavedHandoff).
+			unsavedHandoff.current = text;
 			return;
 		}
 		composerRevision.current = result.draft.composer.revision;
