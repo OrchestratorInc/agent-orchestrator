@@ -4701,6 +4701,43 @@ paths:
       summary: Keep this Mac from idle-sleeping while Connect Mobile is on
       tags:
       - mobile
+  /api/v1/mobile/loopback-tunnel:
+    post:
+      operationId: setMobileLoopbackTunnel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersSetLoopbackTunnelRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Let paired desktops reach this machine's localhost ports, or stop them
+      tags:
+      - mobile
   /api/v1/mobile/pairing-code:
     post:
       operationId: createMobilePairingCode
@@ -13458,6 +13495,45 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/servers:
+    get:
+      operationId: listSessionServers
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersSessionServersResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the TCP ports a session's processes listen on
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/stop-turn:
     post:
       operationId: stopSessionTurn
@@ -19224,6 +19300,28 @@ components:
       - title
       - exists
       type: object
+    ControllersSessionServer:
+      properties:
+        command:
+          type: string
+        pid:
+          type: integer
+        port:
+          type: integer
+      required:
+      - port
+      - pid
+      - command
+      type: object
+    ControllersSessionServersResponse:
+      properties:
+        servers:
+          items:
+            $ref: '#/components/schemas/ControllersSessionServer'
+          type: array
+      required:
+      - servers
+      type: object
     ControllersSessionView:
       properties:
         activity:
@@ -19488,6 +19586,13 @@ components:
           type:
           - "null"
           - boolean
+      required:
+      - enabled
+      type: object
+    ControllersSetLoopbackTunnelRequest:
+      properties:
+        enabled:
+          type: boolean
       required:
       - enabled
       type: object
@@ -22255,6 +22360,8 @@ components:
           $ref: '#/components/schemas/ControllersKeepAwakeStatus'
         loopbackOnly:
           type: boolean
+        loopbackTunnel:
+          type: boolean
         noPublicTunnel:
           type: boolean
         password:
@@ -22281,6 +22388,7 @@ components:
       - accountLinked
       - accountLinkRefused
       - browserRemoteAccess
+      - loopbackTunnel
       - loopbackOnly
       - noPublicTunnel
       - endpoints

@@ -1193,6 +1193,18 @@ type StartPreviewServerRequest struct {
 	Configuration string `json:"configuration,omitempty" description:"Named preview configuration. Optional when exactly one configuration exists."`
 }
 
+// SessionServer is a TCP port one of a session's processes listens on.
+type SessionServer struct {
+	Port    int    `json:"port"`
+	PID     int    `json:"pid"`
+	Command string `json:"command"`
+}
+
+// SessionServersResponse lists the ports a session's processes listen on.
+type SessionServersResponse struct {
+	Servers []SessionServer `json:"servers"`
+}
+
 // PreviewServerStatusResponse reports the deterministic server AO owns for one
 // session. Logs are bounded to the latest lines and never contain global
 // process or port discovery.
@@ -3250,6 +3262,8 @@ type MobileStatusResponse struct {
 	// devices may not list the machine, and linking again repairs both.
 	AccountLinkRefused  bool `json:"accountLinkRefused"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
+	// LoopbackTunnel means paired desktops may reach this machine's localhost ports.
+	LoopbackTunnel bool `json:"loopbackTunnel"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
 	// NoPublicTunnel means the user disabled the managed public connector.
@@ -3301,6 +3315,11 @@ type PairDeviceResponse struct {
 
 // SetRequireDeviceCredentialsRequest turns the pairing password off or on.
 type SetRequireDeviceCredentialsRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SetLoopbackTunnelRequest turns the localhost tunnel for paired desktops on or off.
+type SetLoopbackTunnelRequest struct {
 	Enabled bool `json:"enabled"`
 }
 

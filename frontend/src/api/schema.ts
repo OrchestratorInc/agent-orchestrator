@@ -1887,6 +1887,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mobile/loopback-tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Let paired desktops reach this machine's localhost ports, or stop them */
+        post: operations["setMobileLoopbackTunnel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mobile/pairing-code": {
         parameters: {
             query?: never;
@@ -4471,6 +4488,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the TCP ports a session's processes listen on */
+        get: operations["listSessionServers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/stop-turn": {
         parameters: {
             query?: never;
@@ -6584,6 +6618,14 @@ export interface components {
             sessionId: string;
             title: string;
         };
+        ControllersSessionServer: {
+            command: string;
+            pid: number;
+            port: number;
+        };
+        ControllersSessionServersResponse: {
+            servers: components["schemas"]["ControllersSessionServer"][];
+        };
         ControllersSessionView: {
             activity: components["schemas"]["DomainActivity"];
             artifactFiles?: components["schemas"]["SessionArtifact"][];
@@ -6659,6 +6701,9 @@ export interface components {
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
             lidClosed?: null | boolean;
+        };
+        ControllersSetLoopbackTunnelRequest: {
+            enabled: boolean;
         };
         ControllersSetRequireDeviceCredentialsRequest: {
             enabled: boolean;
@@ -7703,6 +7748,7 @@ export interface components {
             hostId: string;
             keepAwake: components["schemas"]["ControllersKeepAwakeStatus"];
             loopbackOnly: boolean;
+            loopbackTunnel: boolean;
             noPublicTunnel: boolean;
             password: string;
             /** Format: date-time */
@@ -16008,6 +16054,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ControllersSetKeepAwakeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setMobileLoopbackTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersSetLoopbackTunnelRequest"];
             };
         };
         responses: {
@@ -26526,6 +26623,56 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionServers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersSessionServersResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

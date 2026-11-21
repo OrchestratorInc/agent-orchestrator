@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -25,6 +26,7 @@ import (
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
 	tunnel      http.Handler // lanTunnelPath, behind the same auth
+	loopback    http.Handler // loopbackTunnelPath, behind the same auth
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
@@ -37,6 +39,11 @@ type LANManager struct {
 	cancel       context.CancelFunc
 	bound        int
 	bindHost     string
+
+	daemonPort    atomic.Int64
+	loopbackOff   atomic.Bool
+	loopbackMu    sync.Mutex
+	loopbackConns map[net.Conn]struct{}
 }
 
 // NewLANManager wraps handler in the LAN control-block and authMiddleware
@@ -53,6 +60,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 		lock:        lock,
 	}
 	m.tunnel = auth(http.HandlerFunc(m.serveTunnel))
+	m.loopback = auth(http.HandlerFunc(m.serveLoopbackTunnel))
 	return m
 }
 
@@ -365,6 +373,10 @@ func (m *LANManager) dispatch() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == lanTunnelPath {
 			m.tunnel.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == loopbackTunnelPath {
+			m.loopback.ServeHTTP(w, r)
 			return
 		}
 		m.handler.ServeHTTP(w, r)
