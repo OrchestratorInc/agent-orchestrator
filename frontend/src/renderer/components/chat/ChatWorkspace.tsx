@@ -6114,16 +6114,36 @@ function LiveRowPresence({ reducedMotion, className, children, ref }: {
 	ref?: Ref<HTMLDivElement>;
 }) {
 	const [isPresent, safeToRemove] = usePresence();
+	const row = useRef<HTMLDivElement | null>(null);
+	const setRow = useCallback((node: HTMLDivElement | null) => {
+		row.current = node;
+		if (typeof ref === "function") ref(node);
+		else if (ref) ref.current = node;
+	}, [ref]);
+	// AnimatePresence hands each render a new callback, so the timer reads the
+	// latest one instead of restarting whenever the turn re-renders.
+	const remove = useRef(safeToRemove);
+	useLayoutEffect(() => {
+		remove.current = safeToRemove;
+	});
 	useEffect(() => {
-		if (isPresent || !safeToRemove) return;
-		const timer = window.setTimeout(safeToRemove, reducedMotion ? 0 : LIVE_ROW_EXIT_MS);
-		return () => window.clearTimeout(timer);
-	}, [isPresent, reducedMotion, safeToRemove]);
+		if (isPresent) return;
+		const duration = reducedMotion ? 0 : LIVE_ROW_EXIT_MS;
+		// A script animation, as motion's exit was: restoreSettle hides the row for
+		// a moment as the turn settles, which would cancel a CSS transition.
+		const fade = duration > 0 && typeof row.current?.animate === "function"
+			? row.current.animate([{ opacity: 1 }, { opacity: 0 }], { duration, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" })
+			: undefined;
+		const timer = window.setTimeout(() => remove.current?.(), duration);
+		return () => {
+			window.clearTimeout(timer);
+			fade?.cancel();
+		};
+	}, [isPresent, reducedMotion]);
 	return (
 		<div
-			ref={ref}
+			ref={setRow}
 			className={className}
-			style={isPresent ? undefined : { opacity: 0, transition: reducedMotion ? undefined : `opacity ${LIVE_ROW_EXIT_MS}ms cubic-bezier(0.22, 1, 0.36, 1)` }}
 			// Kept in the DOM while it fades, but it never outlasts the turn.
 			data-turn-live-row=""
 		>
