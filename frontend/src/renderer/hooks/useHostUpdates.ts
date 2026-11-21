@@ -13,8 +13,9 @@ const UPDATING_LIMIT_MS = 10 * 60_000;
 
 type HostUpdateState = {
 	view: HostUpdateView | null;
-	updating?: { from: string; since: number };
+	updating?: { from: string; since: number; unconfirmed?: boolean };
 	error?: string;
+	unconfirmed?: boolean;
 };
 
 type Store = {
@@ -48,13 +49,14 @@ export function compareVersions(a: string, b: string): number | null {
 export type HostUpdateAction =
 	| { kind: "update"; version: string }
 	| { kind: "updating" }
-	| { kind: "failed"; error?: string }
+	| { kind: "failed"; error?: string; unconfirmed?: boolean }
 	| { kind: "manual"; version: string };
 
 export function hostUpdateAction(state: HostUpdateState | undefined, localVersion: string | undefined): HostUpdateAction | null {
 	if (state?.updating) return { kind: "updating" };
 	const view = state?.view;
 	if (!view || !localVersion || (compareVersions(view.version, localVersion) ?? 0) >= 0) return null;
+	if (state.unconfirmed) return { kind: "failed", unconfirmed: true };
 	if (state.error !== undefined || view.state === "failed") return { kind: "failed", error: state.error || view.error };
 	if (view.state === "updating") return { kind: "updating" };
 	return view.supported ? { kind: "update", version: view.version } : { kind: "manual", version: view.version };
@@ -81,7 +83,7 @@ function settle(url: string, view: HostUpdateView | null) {
 		requestRemoteHostsRefresh();
 		return;
 	}
-	patch(url, { view, updating: undefined, error: view.state === "failed" ? view.error ?? "" : undefined });
+	patch(url, { view, updating: undefined, error: view.state === "failed" ? view.error ?? "" : undefined, unconfirmed: updating.unconfirmed && view.state === "idle" && view.version === updating.from });
 	if (view.state === "idle" && view.version !== updating.from) requestRemoteHostsRefresh();
 }
 
@@ -97,11 +99,11 @@ export async function refreshHostUpdate(url: string): Promise<void> {
 export async function startHostUpdate(url: string): Promise<void> {
 	const { byUrl, patch } = useHostUpdateStore.getState();
 	const updating = { from: byUrl[url]?.view?.version ?? "", since: Date.now() };
-	patch(url, { updating, error: undefined });
+	patch(url, { updating, error: undefined, unconfirmed: undefined });
 	starting.add(url);
 	try {
 		const view = await aoBridge.remotes.startHostUpdate(url);
-		patch(url, { ...(view ? { view } : {}), updating, error: undefined });
+		patch(url, { ...(view ? { view } : {}), updating: view ? updating : { ...updating, unconfirmed: true }, error: undefined });
 	} catch (cause) {
 		const view = await aoBridge.remotes.hostUpdate(url).catch(() => null);
 		if (view?.state === "updating") patch(url, { view, updating, error: undefined });

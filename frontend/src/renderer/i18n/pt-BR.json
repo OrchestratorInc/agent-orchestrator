@@ -3974,6 +3974,7 @@
 	"remote.hostBehind": "Usa uma versão mais antiga que este computador",
 	"remote.autoUpdateHosts": "Atualizar hosts remotos automaticamente",
 	"remote.autoUpdateHostsDescription": "Os hosts salvos se atualizam sozinhos quando usam uma versão mais antiga que este computador.",
+	"remote.updateUnconfirmed": "Não foi possível confirmar que a atualização começou. Tente novamente.",
 	"remote.hostUnauthorized": "O host rejeitou este dispositivo. Pareie novamente com um novo código de pareamento do host.",
 	"remote.hostNotDaemon": "Este endereço não pertence a uma máquina Orchestrator. Confira o endereço e a senha.",
 	"remote.addHostFailed": "Não foi possível adicionar a máquina.",

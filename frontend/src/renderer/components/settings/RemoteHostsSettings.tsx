@@ -169,7 +169,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}</span> : null}
 							{update?.kind === "update" ? <span className="mt-0.5 block text-warning">{t("remote.hostBehind")}</span> : null}
 							{update?.kind === "manual" ? <span className="mt-0.5 block text-warning">{t("shell.updateOnThatComputer")}</span> : null}
-							{update?.kind === "failed" ? <span className="mt-0.5 block text-error" role="alert">{update.error || t("shell.updateFailed")}</span> : null}
+							{update?.kind === "failed" ? <span className="mt-0.5 block text-error" role="alert">{update.error || (update.unconfirmed ? t("remote.updateUnconfirmed") : t("shell.updateFailed"))}</span> : null}
 						</>
 					) : (
 						<>

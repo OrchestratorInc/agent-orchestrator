@@ -3860,6 +3860,7 @@
 	"remote.hostIncompatible": "Orchestrator sürümleri uyumsuz. Bu bilgisayarda ve uzak makinede Orchestrator uygulamasını güncelleyin.",
 	"remote.updateAO": "Orchestrator uygulamasını güncelle",
 	"remote.autoUpdateHostsDescription": "Kayıtlı makineler, bu bilgisayardan daha eski bir sürüm çalıştırdığında kendilerini günceller.",
+	"remote.updateUnconfirmed": "Güncellemenin başladığı doğrulanamadı. Tekrar deneyin.",
 	"remote.autoUpdateHosts": "Uzak makineleri otomatik güncelle",
 	"remote.hostBehind": "Bu bilgisayardan daha eski bir sürüm çalıştırıyor",
 	"remote.hostUnauthorized": "Makine bu cihazı reddetti. Makineden yeni bir eşleştirme kodu alıp yeniden eşleştirin.",

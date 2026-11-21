@@ -3879,6 +3879,7 @@
 	"remote.hostBehind": "이 컴퓨터보다 이전 버전입니다",
 	"remote.autoUpdateHosts": "원격 호스트 자동 업데이트",
 	"remote.autoUpdateHostsDescription": "저장된 호스트가 이 컴퓨터보다 이전 버전이면 자동으로 업데이트됩니다.",
+	"remote.updateUnconfirmed": "업데이트 시작을 확인하지 못했습니다. 다시 시도하세요.",
 	"remote.hostUnauthorized": "호스트가 이 기기를 거부했습니다. 호스트에서 새 페어링 코드를 받아 다시 페어링하세요.",
 	"remote.hostNotDaemon": "이 주소는 Orchestrator 호스트가 아닙니다. 주소와 비밀번호를 확인하세요.",
 	"remote.addHostFailed": "호스트를 추가할 수 없습니다.",

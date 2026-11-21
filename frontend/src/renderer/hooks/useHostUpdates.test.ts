@@ -156,6 +156,20 @@ describe("host update flow", () => {
 		window.removeEventListener("ao:remote-hosts-changed", refreshed);
 	});
 
+	it("offers Retry when an unconfirmed start finds the host idle on its old version", async () => {
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(null);
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10"));
+		await startHostUpdate(URL);
+		await refreshHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", unconfirmed: true });
+		await refreshHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", unconfirmed: true });
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+		await startHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
+	});
+
 	it("adopts a finished update when the start response was lost", async () => {
 		const refreshed = vi.fn();
 		window.addEventListener("ao:remote-hosts-changed", refreshed);

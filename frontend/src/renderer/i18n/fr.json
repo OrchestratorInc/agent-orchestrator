@@ -3974,6 +3974,7 @@
 	"remote.hostBehind": "Exécute une version plus ancienne que cet ordinateur",
 	"remote.autoUpdateHosts": "Mettre à jour automatiquement les hôtes distants",
 	"remote.autoUpdateHostsDescription": "Les hôtes enregistrés se mettent à jour d’eux-mêmes lorsqu’ils exécutent une version plus ancienne que cet ordinateur.",
+	"remote.updateUnconfirmed": "Impossible de confirmer le démarrage de la mise à jour. Réessayez.",
 	"remote.hostUnauthorized": "L’hôte a refusé cet appareil. Appairez-le de nouveau avec un nouveau code d’appairage de l’hôte.",
 	"remote.hostNotDaemon": "Cette adresse ne correspond pas à un hôte Orchestrator. Vérifiez son adresse et son mot de passe.",
 	"remote.addHostFailed": "Impossible d’ajouter l’hôte.",

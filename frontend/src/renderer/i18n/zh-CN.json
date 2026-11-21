@@ -3861,6 +3861,7 @@
 	"remote.hostBehind": "运行的版本比这台电脑旧",
 	"remote.autoUpdateHosts": "自动更新远程主机",
 	"remote.autoUpdateHostsDescription": "已保存的主机版本比这台电脑旧时会自动更新。",
+	"remote.updateUnconfirmed": "无法确认更新已开始。请重试。",
 	"remote.hostUnauthorized": "主机拒绝了此设备。请在主机上获取新的配对码后重新配对。",
 	"remote.hostNotDaemon": "此地址不是 Orchestrator 主机。请检查地址和密码。",
 	"remote.addHostFailed": "无法添加主机。",

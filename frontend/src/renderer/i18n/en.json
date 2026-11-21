@@ -3862,6 +3862,7 @@
 	"remote.hostBehind": "Runs an older version than this computer",
 	"remote.autoUpdateHosts": "Auto update remote hosts",
 	"remote.autoUpdateHostsDescription": "Saved hosts update themselves when they run an older version than this computer.",
+	"remote.updateUnconfirmed": "Couldn't confirm the update started. Try again.",
 	"remote.hostUnauthorized": "The host rejected this device. Pair again with a new pairing code from the host.",
 	"remote.hostNotDaemon": "This address is not an Orchestrator host. Check its address and password.",
 	"remote.addHostFailed": "Could not add host.",
