@@ -17,6 +17,9 @@ import {
 	type BrowserStyleAdjustment,
 } from "./shared/browser-annotations";
 import { promptPositionForRect, type AnnotationRectLike } from "./shared/browser-annotation-overlay";
+import { installRegionSelect } from "./browser-region-select-preload";
+
+installRegionSelect();
 
 let enabled = false;
 let session = createBrowserAnnotationSession(window.location.href, document.title || undefined);

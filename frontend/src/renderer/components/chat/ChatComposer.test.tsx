@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 import { ChatComposer } from "./ChatComposer";
 import { captureFileReference } from "../../../shared/chat-file-reference";
-import { sendReferenceToChat } from "../../lib/chat-context-bus";
+import { sendImageToChat, sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { TooltipProvider } from "../ui/tooltip";
@@ -2646,6 +2646,22 @@ describe("attachments", () => {
 
 		await userEvent.click(screen.getByLabelText("Remove a.png"));
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+	});
+
+	it("takes an image another panel sends to the session's chat as an attachment", async () => {
+		const sessionId = "browser-snip-image";
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/browser-selection.png"]);
+		renderComposer({ draftSessionId: sessionId, onStageAttachments: stage });
+		act(() => {
+			expect(sendImageToChat(sessionId, png("browser-selection.png"))).toBe(true);
+		});
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		expect(await screen.findByLabelText("Remove browser-selection.png")).toBeTruthy();
+	});
+
+	it("does not take an image when it cannot attach files", () => {
+		renderComposer({ draftSessionId: "browser-snip-no-attach" });
+		expect(sendImageToChat("browser-snip-no-attach", png())).toBe(false);
 	});
 
 	it("shows image-only pastes once in the attachment strip", async () => {

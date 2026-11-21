@@ -210,6 +210,7 @@ import {
 	Settings2 as LucideSettings2,
 	SlidersHorizontal as LucideSlidersHorizontal,
 	Split as LucideSplit,
+	SquareDashedMousePointer as LucideSquareDashedMousePointer,
 	StickyNote as LucideStickyNote,
 	Strikethrough as LucideStrikethrough,
 	WifiOff as LucideWifiOff,
@@ -522,3 +523,6 @@ export const EllipsisVertical = fromMyna(MynaDotsVertical, "ellipsis-vertical");
 export const Cog = fromMyna(MynaCog, "cog");
 export const Layers = fromMyna(MynaLayersThree, "layers");
 export const SquarePen = fromMyna(MynaEdit, "square-pen");
+
+// Browser panel: snip an area of the page into chat.
+export const SquareDashedMousePointer = fromLucide(LucideSquareDashedMousePointer, "square-dashed-mouse-pointer");
