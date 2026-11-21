@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -272,12 +273,18 @@ func TestImportedAgyHandoffRefusesInvalidSourceBeforeStoppingChat(t *testing.T) 
 				}
 			}
 			transition, err := f.manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeTUI, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
-			if err != nil {
-				t.Fatal(err)
-			}
-			settled := awaitTransition(t, f.store, transition.ID)
-			if settled.Phase == domain.SessionInterfaceTransitionCompleted || settled.ErrorDetail == "" {
-				t.Fatalf("invalid source handoff = %+v", settled)
+			if kind == "invalid proof" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				settled := awaitTransition(t, f.store, transition.ID)
+				if settled.Phase == domain.SessionInterfaceTransitionCompleted || settled.ErrorDetail == "" {
+					t.Fatalf("invalid source handoff = %+v", settled)
+				}
+			} else if err == nil || transition.ID != "" {
+				t.Fatalf("invalid history passed readiness: transition=%+v err=%v", transition, err)
+			} else if kind == "missing history" && !errors.Is(err, ErrNativeConversationMissing) {
+				t.Fatalf("missing private history error = %v", err)
 			}
 			if f.store.sessions["session-1"].Mode != domain.SessionModeChat || f.runtime.created != 0 || slices.Contains(*f.events, "stop:chat") {
 				t.Fatalf("source stopped despite failed preflight: %v", *f.events)
