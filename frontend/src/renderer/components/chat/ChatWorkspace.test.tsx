@@ -3603,6 +3603,21 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
 	});
 
+	// The new chat page, between the send and the session existing: its box says a
+	// follow-up can be queued, so it must take typing.
+	it("takes a follow-up while a new chat's session is created, where the surface hands it on", () => {
+		const createdAt = new Date().toISOString();
+		const echo: ConversationLocalEcho[] = [{ clientMessageId: "brief", text: "Fix the build", createdAt }];
+		const snapshot = { ...chatFixtureEmpty, harness: "codex", controller: { state: "ready" as const } };
+		const view = render(<ChatWorkspace sessionRole="worker" snapshot={snapshot} localEchos={echo} openingStartedAt={createdAt} busy />);
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "false");
+
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={snapshot} localEchos={echo} openingStartedAt={createdAt} busy followUpWhileOpening />);
+
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "true");
+		expect(screen.getByText("Queue a follow-up while Codex gets ready")).toBeInTheDocument();
+	});
+
 	// A worker started by `ao spawn` has no local echo or opening time in this
 	// renderer: the daemon's provisioning state and queued brief alone must read
 	// as starting, never as an empty chat whose controller stopped.

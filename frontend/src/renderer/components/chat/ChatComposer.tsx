@@ -131,7 +131,7 @@ import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
+import { subscribeChatComposerReferences, subscribeChatComposerText, takeComposerHandoff, type ComposerHandoff } from "../../lib/chat-context-bus";
 
 /**
  * AO's own `/model`: it opens the composer's agent and model menu instead of
@@ -275,6 +275,12 @@ export type ChatComposerHandle = {
 	isEmpty(): boolean;
 	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
 	setDraft(text: string): void;
+	/**
+	 * Takes the typed text for the surface that replaces this one, with whether
+	 * Enter was pressed on exactly that text. The saved draft is cleared, so it
+	 * does not come back here; the box itself is left for the surface to unmount.
+	 */
+	takeDraft(): ComposerHandoff | undefined;
 };
 
 /**
@@ -638,7 +644,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * own Enter. A held message never overtakes a send that did not go through.
 	 * The daemon then queues each one behind the running turn as usual.
 	 */
-	const [heldSubmit, setHeldSubmit] = useState<HeldSubmit | null>(null);
+	const [heldSubmit, setHeldSubmitState] = useState<HeldSubmit | null>(null);
+	// Read outside render (takeDraft) before React commits the state.
+	const heldSubmitRef = useRef<HeldSubmit | null>(null);
+	const setHeldSubmit = useCallback((held: HeldSubmit | null) => {
+		heldSubmitRef.current = held;
+		setHeldSubmitState(held);
+	}, []);
 	// Held during a submit, and decided when that submit settles.
 	const heldDuringSubmit = useRef<HeldSubmit | null>(null);
 	const submitAccepted = useRef(false);
@@ -1502,6 +1514,27 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [draftScope]);
+	// A follow-up typed on the new chat page while this session was being created
+	// becomes the draft, saved before the restore below loads it into the editor.
+	// Entered there, it is held here and sent once the box can send, which queues
+	// it behind the brief. A draft of the session's own keeps its place: the
+	// follow-up goes below it, for the person to send.
+	useLayoutEffect(() => {
+		if (!draftSessionId || !draftScope) return;
+		const handoff = takeComposerHandoff(draftSessionId);
+		if (!handoff) return;
+		const own = readChatSessionDraft(draftScope).composer;
+		const kept = own.text.trim() ? own.text.replace(/\s+$/, "") : "";
+		const text = kept ? `${kept}\n\n${handoff.text}` : handoff.text;
+		const result = writeChatComposerText(draftScope, text);
+		if (!result.ok) {
+			setTextDraftPersistenceError("chat.draft.saveFailed");
+			return;
+		}
+		composerRevision.current = result.draft.composer.revision;
+		textRef.current = text;
+		if (handoff.send && !kept && !own.delivery) setHeldSubmit({ text, steer: false, own: true });
+	}, [draftScope, draftSessionId, setHeldSubmit]);
 	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
 	// draft below what is already typed, ready for the person's own words.
 	useEffect(() => {
@@ -1580,8 +1613,20 @@ export const ChatComposer = memo(function ChatComposer({
 				if (snapshot) onEditorChange(snapshot);
 				editor.current?.focus();
 			},
+			takeDraft: () => {
+				// The saved draft, not the box: a recalled message is only shown, and a
+				// draft its owner cleared (a launched brief) is not the person's text.
+				const text = unsavedText.current?.text ?? (draftScope ? readChatSessionDraft(draftScope).composer.text : textRef.current);
+				if (!text.trim()) return undefined;
+				// Entered during a send that is still settling, or after it settled.
+				const held = heldDuringSubmit.current ?? heldSubmitRef.current;
+				heldDuringSubmit.current = null;
+				setHeldSubmit(null);
+				persistComposerText("");
+				return { text, send: held?.text === text };
+			},
 		}),
-		[focusEditor, hasDraft, onEditorChange],
+		[draftScope, focusEditor, hasDraft, onEditorChange, persistComposerText, setHeldSubmit],
 	);
 
 	const pick = useCallback((value: string) => {
@@ -2177,7 +2222,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const parked = parkedUnsentId();
 		if (parked && parked !== heldSubmit.unsentId) return;
 		void submitLatest.current(undefined, heldSubmit.steer && canSteerDraft);
-	}, [canSteerDraft, heldSubmit, heldSubmitReady]);
+	}, [canSteerDraft, heldSubmit, heldSubmitReady, setHeldSubmit]);
 
 	function onEditorEnter(
 		snapshot: ComposerEditorSnapshot,
