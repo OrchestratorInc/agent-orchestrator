@@ -94,13 +94,17 @@ or a file path replaces stdin. At most 50 steps.
   (printed once, at the end). The summary line comes last, and the exit status
   is non-zero when a step failed. A batch run with no `--steps`, file, or piped
   input refuses to wait on a terminal.
+- Text typed into the page (`fill` and `type` values, and every `--value`) is
+  shown as `<redacted>` in the step lines, `--json` results and error
+  messages, because it can be a password. The page still receives the real
+  value.
 
 A failed batch looks like this:
 
 ```text
 [1] ok: open http://localhost:5173/login
-[2] ok: act Email --action fill --value ada@example.test -> matched textbox [ref=e3]
-[3] ok: act Password --action fill --value correct-horse -> matched textbox [ref=e4]
+[2] ok: act Email --action fill --value <redacted> -> matched textbox [ref=e3]
+[3] ok: act Password --action fill --value <redacted> -> matched textbox [ref=e4]
 [4] FAILED: act "Sign in" --expect-text Welcome
     error: act was ambiguous (2 candidates); refine the description or add --nth
 Ambiguous — multiple elements matched equally well:
@@ -119,7 +123,13 @@ next batch, after a snapshot. `act` descriptions work across loads, but an
 `act` whose description also matches a heading stops the batch as ambiguous:
 use the ref or `--nth`. Follow every step that should change the page with a
 `wait` (or an `act --expect-*` postcondition), so the batch stops exactly where
-the page stopped doing what you planned. Keep exploration of a page you have not read yet as
+the page stopped doing what you planned. A `wait` or postcondition checks that a
+condition holds, not that the previous step caused it: if "Saved" is already on
+the page, `act Save --expect-text Saved` reports `already-satisfied` and the
+batch continues even if nothing was saved. When a step must cause a new change,
+pick a condition that is false before it runs (text or a URL that only appears
+afterwards, `--expect-navigation`, or `wait --text-gone` for something the step
+removes). Keep exploration of a page you have not read yet as
 single commands, and batch once you know the steps.
 
 Element references such as `e1` are short-lived. After navigation or a substantial DOM replacement, take another snapshot. A stale reference fails explicitly and never falls through to another session or page.

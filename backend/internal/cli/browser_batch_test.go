@@ -34,6 +34,9 @@ func (s *batchBrowserServer) actions() []string {
 func startBatchBrowserServer(t *testing.T, s *batchBrowserServer) Deps {
 	t.Helper()
 	setBrowserIdentity(t)
+	// A developer's own remote browser must not receive desktop test steps.
+	t.Setenv(envAgentBrowserURL, "")
+	t.Setenv(envAgentBrowserToken, "")
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/browser/commands" {
@@ -102,12 +105,17 @@ ao browser act Sign\ in --expect-text "Welcome, \"Ada\""
 		t.Fatalf("json steps = %#v", steps)
 	}
 
+	if steps, err := parseBrowserBatch(`[["act","Name","--action","fill","--value",""]]`); err != nil || steps[0][5] != "" {
+		t.Fatalf("explicit empty value: steps=%#v err=%v", steps, err)
+	}
+
 	for name, input := range map[string]string{
-		"empty":        "  \n# only a comment\n",
-		"unterminated": `act "Sign in`,
-		"bad json":     `[["click", 3]]`,
-		"empty step":   `[[]]`,
-		"too many":     strings.Repeat("snapshot\n", maxBrowserBatchSteps+1),
+		"empty":         "  \n# only a comment\n",
+		"unterminated":  `act "Sign in`,
+		"bad json":      `[["click", 3]]`,
+		"empty step":    `[[]]`,
+		"null argument": `[["act","Name","--action","fill","--value",null]]`,
+		"too many":      strings.Repeat("snapshot\n", maxBrowserBatchSteps+1),
 	} {
 		if _, err := parseBrowserBatch(input); err == nil {
 			t.Errorf("%s: expected a parse error", name)
@@ -127,6 +135,7 @@ func TestBrowserBatchValidatesEveryStepBeforeRunningAny(t *testing.T) {
 		"flag before chrome":      "open http://x\n--json=false chrome setup",
 		"batch flag before batch": "open http://x\n--verbose batch --steps 'click e1'",
 		"json with value":         "open http://x\nsnapshot --json=true",
+		"json after dash value":   "open http://x\nact Message --action fill --value -- --json",
 		"help command":            "open http://x\nhelp click",
 		"help flag":               "open http://x\nclick e1 --help",
 		"act postconditions":      "click e1\nact Save --expect-text Saved --expect-url /done",
@@ -176,7 +185,7 @@ func TestBrowserBatchRunsStepsInOrderWithCompactOutput(t *testing.T) {
 	for _, want := range []string{
 		"Batch completed: 4/4 steps ok",
 		"[1] ok: open http://localhost:5173/login\n",
-		"[2] ok: fill e2 ada@example.test\n",
+		"[2] ok: fill e2 <redacted>\n",
 		`[3] ok: act "Sign in" --expect-text Welcome -> matched button [ref=e3]; postcondition text: satisfied`,
 		"[4] ok: get text\n<<<BEGIN UNTRUSTED EXTERNAL CONTENT>>>\nOrder #42 total $19.99\n<<<END UNTRUSTED EXTERNAL CONTENT>>>",
 	} {
@@ -522,8 +531,8 @@ func TestBrowserBatchStreamsEachStepAsItFinishes(t *testing.T) {
 		t.Fatalf("output when step 2 started:\n%q", seenAtStep2)
 	}
 	final := out.String()
-	if !strings.Contains(final, "Batch completed: 3/3 steps ok") ||
-		strings.Index(final, "[3] ok") > strings.Index(final, "Batch completed") {
+	last, summary := strings.Index(final, "[3] ok"), strings.Index(final, "Batch completed: 3/3 steps ok")
+	if last < 0 || summary < 0 || last > summary {
 		t.Fatalf("summary should come after the steps:\n%s", final)
 	}
 }
@@ -540,5 +549,61 @@ func TestBrowserBatchRefusesTerminalStdin(t *testing.T) {
 	}
 	if got := server.actions(); len(got) != 0 {
 		t.Fatalf("actions = %v", got)
+	}
+}
+
+func TestBrowserBatchStepsFlagWinsEvenWhenEmpty(t *testing.T) {
+	server := &batchBrowserServer{}
+	deps := startBatchBrowserServer(t, server)
+	path := filepath.Join(t.TempDir(), "steps.txt")
+	if err := os.WriteFile(path, []byte("click e1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeCLI(t, deps, "browser", "batch", "--steps=", path); ExitCode(err) != 2 {
+		t.Fatalf("--steps= with a file: err = %v", err)
+	}
+	deps.In = strings.NewReader("click e2\n")
+	if _, _, err := executeCLI(t, deps, "browser", "batch", "--steps="); ExitCode(err) != 2 {
+		t.Fatalf("--steps= alone: err = %v", err)
+	}
+	if got := server.actions(); len(got) != 0 {
+		t.Fatalf("actions = %v", got)
+	}
+}
+
+// Fill and type values can be credentials: they reach the browser unchanged
+// but never appear in the batch report, its JSON, or validation errors.
+func TestBrowserBatchRedactsTypedValues(t *testing.T) {
+	server := &batchBrowserServer{}
+	deps := startBatchBrowserServer(t, server)
+	steps := "fill e2 s3cret-pw\ntype e3 s3cret-pw\nact Password --action fill --value s3cret-pw\nact Password --action=fill --value=s3cret-pw\nclick e4"
+	out, _, err := executeCLI(t, deps, "browser", "batch", "--verbose", "--steps", steps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "s3cret-pw") || !strings.Contains(out, "[1] ok: fill e2 <redacted>") ||
+		!strings.Contains(out, "--value <redacted>") || !strings.Contains(out, "--value=<redacted>") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if server.requests[0].Args["text"] != "s3cret-pw" || server.requests[2].Args["value"] != "s3cret-pw" {
+		t.Fatalf("the browser must still get the real value: %#v", server.requests)
+	}
+	jsonOut, _, err := executeCLI(t, deps, "browser", "--json", "batch", "--steps", steps)
+	if err != nil || strings.Contains(jsonOut, "s3cret-pw") {
+		t.Fatalf("json err=%v out=%s", err, jsonOut)
+	}
+	_, _, err = executeCLI(t, deps, "browser", "batch", "--steps", "fill e2 s3cret-pw\nclik e3\nfill e4 s3cret-pw extra")
+	if err == nil || strings.Contains(err.Error(), "s3cret-pw") {
+		t.Fatalf("validation error = %v", err)
+	}
+	if got := browserBatchReportArgs([]string{"fill", "e2", "-pa55"}); got[2] != browserBatchRedacted {
+		t.Fatalf("a dash-leading value must be redacted too: %#v", got)
+	}
+}
+
+func TestBrowserBatchEchoEscapesControlCharacters(t *testing.T) {
+	got := browserBatchEcho([]string{"get", "text", "a\nb\x1b"})
+	if strings.ContainsAny(got, "\n\x1b") || !strings.Contains(got, `"a\nb\x1b"`) {
+		t.Fatalf("echo = %q", got)
 	}
 }

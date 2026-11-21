@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
@@ -101,7 +102,7 @@ func newBrowserBatchCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comman
 			default:
 				return usageError{errors.New("--snapshot must be auto, always, or never")}
 			}
-			input, err := readBrowserBatchInput(cmd, inline, args)
+			input, err := readBrowserBatchInput(cmd, cmd.Flags().Changed("steps"), inline, args)
 			if err != nil {
 				return err
 			}
@@ -117,7 +118,7 @@ func newBrowserBatchCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comman
 			}
 			for i, step := range steps {
 				if err := validateBrowserBatchStep(step, remote == nil); err != nil {
-					return usageError{fmt.Errorf("step %d (%s): %w", i+1, browserBatchEcho(step), err)}
+					return usageError{fmt.Errorf("step %d (%s): %w", i+1, browserBatchEcho(browserBatchReportArgs(step)), err)}
 				}
 			}
 			// Text output streams one line per step as it finishes, so a
@@ -157,8 +158,10 @@ var browserBatchStdinIsTerminal = func(in io.Reader) bool {
 	return ok && term.IsTerminal(file.Fd())
 }
 
-func readBrowserBatchInput(cmd *cobra.Command, inline string, args []string) (string, error) {
-	if inline != "" {
+func readBrowserBatchInput(cmd *cobra.Command, stepsSet bool, inline string, args []string) (string, error) {
+	// An explicit --steps wins even when empty, so the parser rejects it
+	// instead of falling through to a file or stdin.
+	if stepsSet {
 		if len(args) > 0 {
 			return "", usageError{errors.New("use either --steps or a file argument, not both")}
 		}
@@ -206,9 +209,17 @@ func parseBrowserBatch(input string) ([][]string, error) {
 				steps = append(steps, step)
 				continue
 			}
-			var step []string
-			if err := json.Unmarshal(item, &step); err != nil {
+			// *string tells a JSON null (rejected) from "" (a real empty value).
+			var fields []*string
+			if err := json.Unmarshal(item, &fields); err != nil {
 				return nil, fmt.Errorf("step %d: must be a command string or an array of strings", i+1)
+			}
+			step := make([]string, 0, len(fields))
+			for j, field := range fields {
+				if field == nil {
+					return nil, fmt.Errorf("step %d: argument %d must be a string, not null", i+1, j+1)
+				}
+				step = append(step, *field)
 			}
 			steps = append(steps, step)
 		}
@@ -349,6 +360,11 @@ func validateBrowserBatchStep(step []string, checkTree bool) error {
 	if err := target.ParseFlags(rest); err != nil {
 		return err
 	}
+	// The raw scan above stops at `--`, but pflag may consume `--` as a flag
+	// value (`--value -- --json`) and still set --json.
+	if target.Flags().Changed("json") {
+		return errors.New("--json is set on the batch, not on a step")
+	}
 	positional := target.Flags().Args()
 	if target.Args != nil {
 		if err := target.Args(target, positional); err != nil {
@@ -382,7 +398,7 @@ func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, 
 	// copy would only cost tokens.
 	failureHasSnapshot := false
 	for i, step := range steps {
-		stepResult := browserBatchStepResult{Index: i + 1, Args: step, Status: "skipped"}
+		stepResult := browserBatchStepResult{Index: i + 1, Args: browserBatchReportArgs(step), Status: "skipped"}
 		if !result.OK {
 			result.Steps = append(result.Steps, stepResult)
 			if onStep != nil {
@@ -563,6 +579,30 @@ func writeBrowserBatchSummary(w io.Writer, result browserBatchResult) error {
 	return err
 }
 
+const browserBatchRedacted = "<redacted>"
+
+// browserBatchReportArgs returns the step as it may appear in output: text
+// typed into the page (fill/type values and every --value) can be a
+// credential, so it is replaced. The step that runs keeps the real value.
+func browserBatchReportArgs(step []string) []string {
+	out := append([]string(nil), step...)
+	if (out[0] == "fill" || out[0] == "type") && len(out) > 2 {
+		for i := 2; i < len(out); i++ {
+			out[i] = browserBatchRedacted
+		}
+	}
+	for i := 0; i < len(out); i++ {
+		switch {
+		case out[i] == "--value" && i+1 < len(out):
+			out[i+1] = browserBatchRedacted
+			i++
+		case strings.HasPrefix(out[i], "--value="):
+			out[i] = "--value=" + browserBatchRedacted
+		}
+	}
+	return out
+}
+
 // browserBatchEcho prints a step back compactly: long values are elided so a
 // filled paragraph does not cost its length again in every result.
 func browserBatchEcho(step []string) string {
@@ -572,7 +612,9 @@ func browserBatchEcho(step []string) string {
 		if len([]rune(arg)) > maxArg {
 			arg = string([]rune(arg)[:maxArg]) + "…"
 		}
-		if arg == "" || strings.ContainsAny(arg, " \t\"'\\") {
+		// Quote anything a shell would split or a terminal would act on, so one
+		// step is always one status line.
+		if arg == "" || strings.ContainsAny(arg, " \"'\\") || strings.IndexFunc(arg, unicode.IsControl) >= 0 {
 			arg = strconv.Quote(arg)
 		}
 		parts = append(parts, arg)
