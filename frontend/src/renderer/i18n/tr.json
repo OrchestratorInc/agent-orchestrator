@@ -3663,6 +3663,7 @@
 	"artifacts.share.upgradeTitle": "Daha fazla yayımlamak için planınızı yükseltin",
 	"artifacts.share.limitReached": "Ücretsiz planda en fazla {{limit}} etkin bağlantı olabilir. Daha fazla yayımlamak için planınızı yükseltin.",
 	"artifacts.share.upgrade": "Planı yükselt",
+	"artifacts.share.videoFormat": "Bu video biçimi tarayıcıda oynatılamıyor. MP4, MOV veya WebM kullanın.",
 	"artifacts.share.videoSoon": "Video yayımlama yakında kullanıma sunulacak.",
 	"artifacts.share.notOwner": "Bu oturumun dosyalarını yalnızca oturumu başlatan kişi yayımlayabilir.",
 	"artifacts.share.copyLink": "Bağlantıyı kopyala",
