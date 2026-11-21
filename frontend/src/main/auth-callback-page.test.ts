@@ -4,8 +4,15 @@ import { APP_RETURN_URL, authCallbackReturnUrl, renderAuthCallbackPage } from ".
 describe("renderAuthCallbackPage", () => {
 	it("names the service on success and failure", () => {
 		expect(renderAuthCallbackPage({ provider: "cloud", ok: true })).toContain("<title>Signed in to Orchestrator Cloud</title>");
-		expect(renderAuthCallbackPage({ provider: "claude-code", ok: true })).toContain("<h1>Claude is connected</h1>");
+		expect(renderAuthCallbackPage({ provider: "claude-code", ok: true })).toContain("<h1>Signed in to Claude</h1>");
 		expect(renderAuthCallbackPage({ provider: "github", ok: false })).toContain("<h1>Couldn’t sign in to GitHub</h1>");
+	});
+
+	it("confirms the sign-in only, not the save that follows it", () => {
+		for (const provider of ["cloud", "claude-code", "github"] as const) {
+			const page = renderAuthCallbackPage({ provider, ok: true, returnUrl: APP_RETURN_URL });
+			expect(page).not.toMatch(/saved|connected/i);
+		}
 	});
 
 	it("shows the GitHub login, escaped", () => {
@@ -29,13 +36,14 @@ describe("renderAuthCallbackPage", () => {
 		const failure = renderAuthCallbackPage({ provider: "claude-code", ok: false, returnUrl: APP_RETURN_URL });
 		expect(failure).not.toContain("<script");
 		expect(failure).toContain(`href="${APP_RETURN_URL}"`);
+		expect(failure).toContain("Try signing in again from Orchestrator.");
 	});
 
-	it("has no script or return link when the build doesn't own the app link", () => {
+	it("tells a dev build to close the tab instead of linking to the app", () => {
 		const page = renderAuthCallbackPage({ provider: "cloud", ok: true, returnUrl: authCallbackReturnUrl(false) });
 		expect(page).not.toContain("<script");
 		expect(page).not.toContain("ao-app://");
-		expect(page).toContain("You can close this window and return to Orchestrator.");
+		expect(page).toContain("<p>You can close this tab.</p>");
 	});
 });
 
