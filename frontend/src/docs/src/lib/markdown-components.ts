@@ -55,14 +55,28 @@ function cardMarkdown(tag: string): string {
   return `- ${label}${description ? `: ${description}` : ""}`;
 }
 
+/** List-item and block-quote markers that can come before a code fence, e.g. "* ```mdx". */
+const CONTAINER_PREFIX = /^(?:(?:[*+-]|\d+[.)])\s+|>\s?)*/;
+
+/** The fence marker that opens or closes a fenced code block on this line, if any. */
+function fenceMarker(line: string): string | undefined {
+  const rest = line.trim().replace(CONTAINER_PREFIX, "");
+  return /^(`{3,}|~{3,})/.exec(rest)?.[1];
+}
+
+/** Components whose whole tag is converted. A tag may span several lines. */
+const TAG_START = /^<(PlatformSupport|Card)\b/;
+
 /** Turns MDX components into Markdown, leaving fenced code blocks untouched. */
 export function expandComponents(markdown: string): string {
+  const lines = markdown.split("\n");
   const out: string[] = [];
   let fence: string | undefined;
   let inCards = false;
-  for (const line of markdown.split("\n")) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
     const trimmed = line.trim();
-    const marker = /^(`{3,}|~{3,})/.exec(trimmed)?.[1];
+    const marker = fenceMarker(line);
     if (fence) {
       if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
       out.push(line);
@@ -73,9 +87,21 @@ export function expandComponents(markdown: string): string {
       out.push(line);
       continue;
     }
+
+    const tagName = TAG_START.exec(trimmed)?.[1];
+    if (tagName) {
+      // Collect the rest of a tag the serializer split across lines, e.g. a note with a line break.
+      let tag = trimmed;
+      let end = index;
+      while (!tag.endsWith("/>") && end + 1 < lines.length) tag += `\n${lines[++end]!.trim()}`;
+      if (tag.endsWith("/>")) {
+        out.push(tagName === "Card" ? cardMarkdown(tag) : platformSupportMarkdown(tag));
+        index = end;
+        continue;
+      }
+    }
+
     if (/^<InstallDownloads\s*\/>$/.test(trimmed)) out.push(installDownloadsMarkdown());
-    else if (/^<PlatformSupport\b.*\/>$/.test(trimmed)) out.push(platformSupportMarkdown(trimmed));
-    else if (/^<Card\b.*\/>$/.test(trimmed)) out.push(cardMarkdown(trimmed));
     else if (trimmed === "<Cards>") inCards = true;
     else if (trimmed === "</Cards>") inCards = false;
     // Blank lines between cards would split the list into separate paragraphs.

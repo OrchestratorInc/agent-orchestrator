@@ -50,6 +50,23 @@ describe("expandComponents", () => {
     expect(expandComponents(input)).toBe(input);
   });
 
+  it("leaves components inside a fence that starts in a list item alone", () => {
+    const input = ["* ```mdx", "  <InstallDownloads />", "  ```", "", "<InstallDownloads />"].join("\n");
+    const out = expandComponents(input);
+    expect(out.startsWith(["* ```mdx", "  <InstallDownloads />", "  ```", ""].join("\n"))).toBe(true);
+    expect(out).toContain("Download the latest Orchestrator desktop release:");
+    expect(out.match(/<InstallDownloads/g)).toHaveLength(1);
+  });
+
+  it("converts tags that span several lines", () => {
+    const input = ['<PlatformSupport macos="full" linux="full" windows="partial" note="<>First line', 'Second line</>" />', "", "Next."].join("\n");
+    expect(expandComponents(input)).toBe(
+      ["Platform support:", "", "- macOS: Supported", "- Linux: Supported", "- Windows: Limited", "", "First line\nSecond line", "", "Next."].join("\n"),
+    );
+    const card = ["<Cards>", '  <Card', '    title="Quickstart"', '    href="/quickstart"', "  />", "</Cards>"].join("\n");
+    expect(expandComponents(card)).toBe("- [Quickstart](https://docs.orchestrator.inc/quickstart.md)");
+  });
+
   it("keeps other Markdown and components unchanged", () => {
     const input = '## Heading\n\n<Steps>\n  <Step>\n    Do it.\n  </Step>\n</Steps>\n\n- a\n\n- b';
     expect(expandComponents(input)).toBe(input);
