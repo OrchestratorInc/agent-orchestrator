@@ -44,7 +44,7 @@ import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 import { ViewModeControl, type ViewMode } from "../../lib/view-mode-control";
-import { ARTIFACT_MEDIA_PLAYBACK, artifactPagePlaysMedia } from "../../lib/artifactMediaPlayback";
+import { ARTIFACT_MEDIA_PLAYBACK, artifactMediaActiveScript, artifactMediaGateScript } from "../../lib/artifactMediaPlayback";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
 // would stall the JS thread.
@@ -621,7 +621,7 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 	version: string;
 	/** An HTML page, loaded with the files it links inlined. */
 	page?: { sessionId: string; path: string };
-	/** The pager's page on screen; a neighbour plays no media with sound. */
+	/** The pager's page on screen; a neighbour's media is held until it is shown. */
 	active?: boolean;
 }) {
 	const t = useTheme();
@@ -632,6 +632,10 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 	// then loads from the address the machine answered on, never one a parent
 	// built from the last connection.
 	const source = backend.webSource(file.sessionId, file.path);
+	// Loaded only with a verified connection, when it mounts and when its file
+	// changes: the page loads with the machine's credential (see heldBackend).
+	// The page already showing stays through a reconnect.
+	const verified = useVerifiedFor(backend, source ? sourceKey(source) : "unresolved");
 	// Retry loads the page again as a fresh view, from the source built then.
 	const [attempt, setAttempt] = useState(0);
 	// Bound to this file: a link to another file reuses this view, and a Retry
@@ -652,15 +656,19 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 	useEffect(() => {
 		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [inlined.html, theme]);
-	// An HTML page on screen may play its media; read once, on creation, so the key carries it.
-	const playsMedia = Boolean(page) && artifactPagePlaysMedia(active, html || undefined);
-	// Loaded only with a verified connection, when it mounts and when its file
-	// changes: the page loads with the machine's credential (see heldBackend).
-	// The page already showing stays through a reconnect. A page loaded from its
-	// address that a change of media policy remounts is a new load too, so it
-	// waits as well; one drawn from memory carries no credential.
-	const fromAddress = !(inline && !inlined.failed);
-	const verified = useVerifiedFor(backend, source ? `${sourceKey(source)}${fromAddress && playsMedia ? "|media" : ""}` : "unresolved");
+	// An HTML page plays its media inline, and a neighbour in the pager holds it
+	// (see artifactMediaGateScript) without reloading, so its scroll and form
+	// state stay. The gate starts as the page is when this view is created;
+	// later changes are posted to it.
+	const pageView = Boolean(page);
+	const activeRef = useRef(active);
+	activeRef.current = active;
+	// Built again only for a new view (the key's parts), never on a change of page.
+	const fromMemory = Boolean(inlined.html);
+	const mediaGate = useMemo(() => pageView ? artifactMediaGateScript(activeRef.current) : undefined, [pageView, version, fromMemory, attempt]);
+	useEffect(() => {
+		if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(active));
+	}, [active, pageView]);
 	// One fresh signed address per version: refused again with it, the page
 	// says so and offers Retry rather than renewing forever.
 	const renewed = useRef(false);
@@ -670,10 +678,10 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 	return (
 		<View style={styles.screen}>
 			<WebView
-				{...(playsMedia ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
-				// A new version of the file reloads the page, and so do Retry and a
-				// change of media policy (swiped to or away from a page with media).
-				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}|${playsMedia ? "media" : ""}`}
+				{...(pageView ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
+				injectedJavaScriptBeforeContentLoaded={mediaGate}
+				// A new version of the file reloads the page, and so does Retry.
+				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}`}
 				ref={web}
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.
@@ -693,6 +701,8 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 				onLoadEnd={() => {
 					loaded.current = true;
 					if (inlined.html) web.current?.injectJavaScript(renderThemeScript(theme));
+					// A change while the page was loading was posted before the gate could take it.
+					if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(activeRef.current));
 				}}
 				onHttpError={(event) => {
 					const status = event.nativeEvent.statusCode;
