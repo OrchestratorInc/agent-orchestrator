@@ -25,7 +25,7 @@ const (
 
 var waitPollInterval = 2 * time.Second
 
-func sessionPath(id string, rest string) string { return "sessions/" + url.PathEscape(id) + rest }
+func sessionPath(id, rest string) string { return "sessions/" + url.PathEscape(id) + rest }
 
 func stringArg(args map[string]any, name string) string {
 	value, _ := args[name].(string)

@@ -240,7 +240,7 @@ func (r routeTool) call(ctx context.Context, s *server, args map[string]any) (an
 		return out, nil
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(out, &decoded); err != nil {
+	if json.Unmarshal(out, &decoded) != nil {
 		return out, nil
 	}
 	return r.pick(decoded), nil
