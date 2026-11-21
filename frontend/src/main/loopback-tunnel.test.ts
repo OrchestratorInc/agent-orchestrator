@@ -136,6 +136,19 @@ describe("loopback tunnels", () => {
 		await expect(tunnels.forward("h_off", echo)).rejects.toThrow(/does not share/);
 		await expect(tunnels.forward("h_box", 0)).rejects.toThrow(/1 to 65535/);
 	});
+
+	it("moves a forward off a port another server holds on IPv6 localhost", async () => {
+		const taken = net.createServer();
+		const port = await new Promise<number>((resolve) => {
+			taken.once("error", () => resolve(0));
+			taken.listen(0, "::1", () => resolve((taken.address() as net.AddressInfo).port));
+		});
+		if (!port) return;
+		cleanup.push(() => taken.close());
+		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: { [port]: await echoServer() } } }));
+		expect((await tunnels.forward("h_box", port)).localPort).not.toBe(port);
+		tunnels.stopHost("h_box");
+	});
 });
 
 describe("isLoopbackName", () => {

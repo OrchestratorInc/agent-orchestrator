@@ -88,6 +88,14 @@ function listen(server: Server, port: number): Promise<number> {
 	});
 }
 
+function freeOn(host: string, port: number): Promise<boolean> {
+	return new Promise((resolve) => {
+		const probe = createServer();
+		probe.once("error", (error: NodeJS.ErrnoException) => resolve(error.code !== "EADDRINUSE"));
+		probe.listen(port, host, () => probe.close(() => resolve(true)));
+	});
+}
+
 export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 	const socksPorts = new Map<string, Promise<number>>();
 	const routed = new WeakMap<RoutedSession, Promise<void>>();
@@ -183,7 +191,9 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 				join(client, tunnel);
 			})();
 		});
-		const localPort = await listen(server, remotePort).catch(() => listen(server, 0));
+		const localPort = (await freeOn("::1", remotePort))
+			? await listen(server, remotePort).catch(() => listen(server, 0))
+			: await listen(server, 0);
 		const forward = { hostId, remotePort, localPort };
 		forwards.set(key(hostId, remotePort), { forward, server, clients });
 		return forward;
