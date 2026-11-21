@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useGlobalSearchParams, usePathname, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Alert, Animated, Easing, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Animated, Easing, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SFSymbol } from "sf-symbols-typescript";
 import { formatTimeTerse } from "../../../product-ui/src/formatting";
@@ -159,6 +159,10 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 	const pathname = usePathname();
 	const params = useGlobalSearchParams<{ id?: string; hostId?: string }>();
 	const app = useApp();
+	// The store is a new object on every update; callbacks the rows hold read it
+	// through a ref so they stay the same function, and a row's memo holds.
+	const appRef = useRef(app);
+	appRef.current = app;
 	const cloudState = useCloud();
 	const read = useReadState();
 	const { prefs, toggleIn, setDevice } = useSidebarPrefs();
@@ -202,6 +206,9 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 		return map;
 	}, [app.cloud, app.hostStates]);
 
+	const projectRowsRef = useRef(projectRows);
+	projectRowsRef.current = projectRows;
+
 	// Pinned projects first, in the order they were pinned (desktop's pinnedFirst).
 	const projects = useMemo(() => {
 		const pinned = prefs.pinnedProjects;
@@ -220,8 +227,8 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 		const session = row.session;
 		markRead(row.key, changedAt(session));
 		close?.();
-		router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, hostId: session.hostId ?? app.currentHostId } });
-	}, [app.currentHostId, close, router]);
+		router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, hostId: session.hostId ?? appRef.current.currentHostId } });
+	}, [close, router]);
 
 	const newTask = useCallback((projectId?: string, hostId?: string) => {
 		go(projectId ? { pathname: "/spawn", params: { projectId, ...(hostId ? { hostId } : {}) } } : "/spawn");
@@ -233,14 +240,18 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 	}, [go]);
 
 	const launchOrchestrator = useCallback((node: SidebarProjectNode) => {
-		const row = projectRows.get(node.key);
+		const row = projectRowsRef.current.get(node.key);
 		if (!row) return;
 		// Opens a running orchestrator, or starts or resumes one, as the Projects page did.
 		close?.();
 		openOrchestrator(row);
-	}, [close, openOrchestrator, projectRows]);
+	}, [close, openOrchestrator]);
+	const toggleProject = useCallback((node: SidebarProjectNode) => toggleIn("collapsed", node.key), [toggleIn]);
+	const pinProject = useCallback((node: SidebarProjectNode) => toggleIn("pinnedProjects", node.key), [toggleIn]);
+	const newProjectTask = useCallback((node: SidebarProjectNode) => newTask(node.project.id, node.project.hostId), [newTask]);
 
 	const sessionAction = useCallback((row: SidebarSessionRow, id: WorkerActionId) => {
+		const app = appRef.current;
 		const session = row.session;
 		const hostId = session.hostId;
 		const fail = (title: string) => (cause: unknown) => {
@@ -271,9 +282,10 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 					{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => void app.kill(session.id, hostId).catch(fail("Couldn't archive the session")) },
 				]);
 		}
-	}, [app, close, openPage, openSession]);
+	}, [close, openPage, openSession]);
 
 	const commitRename = useCallback((row: SidebarSessionRow, name: string) => {
+		const app = appRef.current;
 		setRenamingKey(undefined);
 		const next = name.trim();
 		if (!next || next === row.title) return;
@@ -281,7 +293,8 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 			haptics.error();
 			Alert.alert("Couldn't rename the session", userFacingError(cause, "Please try again."));
 		});
-	}, [app]);
+	}, []);
+	const cancelRename = useCallback(() => setRenamingKey(undefined), []);
 
 	const sessionRow = (row: SidebarSessionRow, indented: boolean) => (
 		<SessionRow
@@ -290,12 +303,13 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 			indented={indented}
 			active={row.key === activeKey}
 			renaming={renamingKey === row.key}
+			width={part === "home" ? rowWidth : undefined}
 			colors={colors}
 			styles={styles}
 			onOpen={openSession}
 			onAction={sessionAction}
 			onRename={commitRename}
-			onCancelRename={() => setRenamingKey(undefined)}
+			onCancelRename={cancelRename}
 		/>
 	);
 
@@ -308,6 +322,121 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 	const listedProjects = capRows(projects, SIDEBAR_INITIAL_SECTION_LIMIT, searching || showAll.projects === true);
 	const paired = app.hostStates.length > 0 || Boolean(app.cloud);
 	const sidebar = useSidebarMaybe();
+
+	// Home is one virtualized list, as the board before it was: only the rows
+	// on screen are mounted, each with its native menu, instead of every
+	// project and session at once.
+	const [listWidth, setListWidth] = useState<number>();
+	const onListLayout = useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+		const next = Math.round(event.nativeEvent.layout.width);
+		setListWidth((prev) => (prev === next ? prev : next));
+	}, []);
+	// The rows' width inside the list's side padding.
+	const rowWidth = listWidth ? listWidth - LIST_PADDING * 2 : undefined;
+	const homeItems = useMemo((): HomeItem[] => {
+		if (part !== "home") return [];
+		const items: HomeItem[] = [{ kind: "section", id: "projects" }];
+		if (sectionOpen("projects")) {
+			if (!paired) items.push({ kind: "unpaired" });
+			else if (projects.length === 0) items.push({ kind: "empty", text: searching ? "No matches." : "No projects yet." });
+			for (const node of listedProjects.listed) {
+				const expanded = searching || !prefs.collapsed.includes(node.key);
+				items.push({ kind: "project", node, expanded });
+				if (!expanded) continue;
+				const row = projectRows.get(node.key);
+				if (row) items.push({ kind: "orchestrator", node, row });
+				const capped = capRows(node.sessions, SIDEBAR_PROJECT_SESSION_LIMIT, searching || showAll[node.key] === true, activeKey);
+				for (const session of capped.listed) items.push({ kind: "session", row: session, indented: true });
+				if (capped.hiddenCount > 0) {
+					items.push({ kind: "more", id: node.key, indented: true, label: showAll[node.key] ? "Show fewer agents" : `Show ${capped.hiddenCount} more agent${capped.hiddenCount === 1 ? "" : "s"}` });
+				}
+			}
+			if (listedProjects.hiddenCount > 0) {
+				items.push({ kind: "more", id: "projects", indented: false, label: showAll.projects ? "Show fewer projects" : `Show ${listedProjects.hiddenCount} more project${listedProjects.hiddenCount === 1 ? "" : "s"}` });
+			}
+		}
+		if (tree.standalone.length > 0 || !searching) {
+			items.push({ kind: "section", id: "standalone" });
+			if (sectionOpen("standalone")) {
+				for (const session of standalone.listed) items.push({ kind: "session", row: session, indented: false });
+				if (standalone.hiddenCount > 0) items.push({ kind: "more", id: "standalone", indented: false, label: showAll.standalone ? "Show less" : `Show ${standalone.hiddenCount} more` });
+			}
+		}
+		return items;
+		// sectionOpen, listedProjects and standalone are derived from the values listed.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [part, prefs, paired, projects, searching, showAll, projectRows, activeKey, tree.standalone]);
+	const toggleShowAll = useCallback((id: string) => setShowAll((prev) => ({ ...prev, [id]: !prev[id] })), []);
+	const homeExtra = useMemo(() => ({ activeKey, renamingKey, rowWidth, busyProjects, pathname, projectId: params.id, colors, styles }), [activeKey, renamingKey, rowWidth, busyProjects, pathname, params.id, colors, styles]);
+	const renderHomeItem = ({ item }: { item: HomeItem }) => {
+		switch (item.kind) {
+			case "section": {
+				const projectsSection = item.id === "projects";
+				return (
+					<View style={projectsSection ? null : styles.sectionGap}>
+					<SectionHeader
+						label={projectsSection ? "Projects" : "Sessions"}
+						open={sectionOpen(item.id)}
+						onToggle={() => toggleIn("closedSections", item.id)}
+						trailing={projectsSection
+							? <SectionAction icon="plus" label="New project" onPress={() => go("/cloud/new-project")} colors={colors} />
+							: paired ? <SectionAction icon="plus" label="New standalone agent" onPress={() => newTask(STANDALONE_PROJECT)} colors={colors} /> : null}
+						styles={styles}
+						colors={colors}
+					/>
+					</View>
+				);
+			}
+			case "unpaired":
+				return <UnpairedState />;
+			case "empty":
+				return <Text style={styles.empty}>{item.text}</Text>;
+			case "project": {
+				const node = item.node;
+				const row = projectRows.get(node.key);
+				return (
+					<ProjectRow
+						node={node}
+						expanded={item.expanded}
+						pinned={prefs.pinnedProjects.includes(node.key)}
+						active={pathname.startsWith("/project/") && params.id === node.project.id}
+						orchestratorAction={row?.action}
+						orchestratorBusy={busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id))}
+						colors={colors}
+						styles={styles}
+						onToggle={toggleProject}
+						onOrchestrator={launchOrchestrator}
+						onNewTask={newProjectTask}
+						onOpenProject={openProject}
+						onTogglePin={pinProject}
+					/>
+				);
+			}
+			case "orchestrator": {
+				const { node, row } = item;
+				return (
+					<OrchestratorRow
+						action={row.action}
+						busy={busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id))}
+						workers={node.sessions.length}
+						active={Boolean(row.link?.id) && activeKey === sidebarSessionKey({ id: row.link!.id, hostId: node.project.hostId })}
+						colors={colors}
+						styles={styles}
+						onPress={() => launchOrchestrator(node)}
+						testID={`sidebar-orchestrator-row-${node.project.id}`}
+					/>
+				);
+			}
+			case "session":
+				return sessionRow(item.row, item.indented);
+			case "more":
+				return (
+					<View style={item.indented ? { paddingLeft: SESSION_INDENT + 2 } : null}>
+						<ShowMore expanded={showAll[item.id] === true} label={item.label} onPress={() => toggleShowAll(item.id)} styles={styles} colors={colors} />
+					</View>
+				);
+		}
+	};
 
 	if (part === "drawer") {
 		return (
@@ -366,105 +495,22 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 				</View>
 			) : null}
 
-			<ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { paddingBottom: FAB_HEIGHT + 32 + insets.bottom }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}>
-				<Section
-					label="Projects"
-					open={sectionOpen("projects")}
-					onToggle={() => toggleIn("closedSections", "projects")}
-					trailing={<SectionAction icon="plus" label="New project" onPress={() => go("/cloud/new-project")} colors={colors} />}
-					styles={styles}
-					colors={colors}
-				>
-					{!paired ? (
-						<UnpairedState />
-					) : projects.length === 0 ? (
-						<Text style={styles.empty}>{searching ? "No matches." : "No projects yet."}</Text>
-					) : null}
-					{listedProjects.listed.map((node) => {
-						// Home shows each project's dropdown, its orchestrator and workers, until the user folds it.
-						const expanded = searching || !prefs.collapsed.includes(node.key);
-						const capped = capRows(node.sessions, SIDEBAR_PROJECT_SESSION_LIMIT, searching || showAll[node.key] === true, activeKey);
-						const row = projectRows.get(node.key);
-						return (
-							<View key={node.key}>
-								<ProjectRow
-									node={node}
-									expanded={expanded}
-									pinned={prefs.pinnedProjects.includes(node.key)}
-									active={pathname.startsWith("/project/") && params.id === node.project.id}
-									orchestrator={row ? { action: row.action, busy: busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id)) } : undefined}
-									colors={colors}
-									styles={styles}
-									onToggle={() => toggleIn("collapsed", node.key)}
-									onOrchestrator={() => launchOrchestrator(node)}
-									onNewTask={() => newTask(node.project.id, node.project.hostId)}
-									onOpenProject={() => openProject(node)}
-									onTogglePin={() => toggleIn("pinnedProjects", node.key)}
-								/>
-								{expanded ? (
-									<View>
-										{row ? (
-											<OrchestratorRow
-												action={row.action}
-												busy={busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id))}
-												workers={node.sessions.length}
-												active={Boolean(row.link?.id) && activeKey === sidebarSessionKey({ id: row.link!.id, hostId: node.project.hostId })}
-												colors={colors}
-												styles={styles}
-												onPress={() => launchOrchestrator(node)}
-												testID={`sidebar-orchestrator-row-${node.project.id}`}
-											/>
-										) : null}
-										{capped.listed.map((item) => sessionRow(item, true))}
-										{capped.hiddenCount > 0 ? (
-											<View style={{ paddingLeft: SESSION_INDENT + 2 }}>
-												<ShowMore
-													expanded={showAll[node.key] === true}
-													label={showAll[node.key] ? "Show fewer agents" : `Show ${capped.hiddenCount} more agent${capped.hiddenCount === 1 ? "" : "s"}`}
-													onPress={() => setShowAll((prev) => ({ ...prev, [node.key]: !prev[node.key] }))}
-													styles={styles}
-													colors={colors}
-												/>
-											</View>
-										) : null}
-									</View>
-								) : null}
-							</View>
-						);
-					})}
-					{listedProjects.hiddenCount > 0 ? (
-						<ShowMore
-							expanded={showAll.projects === true}
-							label={showAll.projects ? "Show fewer projects" : `Show ${listedProjects.hiddenCount} more project${listedProjects.hiddenCount === 1 ? "" : "s"}`}
-							onPress={() => setShowAll((prev) => ({ ...prev, projects: !prev.projects }))}
-							styles={styles}
-							colors={colors}
-						/>
-					) : null}
-				</Section>
-
-				{tree.standalone.length > 0 || !searching ? (
-					<Section
-						label="Sessions"
-						open={sectionOpen("standalone")}
-						onToggle={() => toggleIn("closedSections", "standalone")}
-						trailing={paired ? <SectionAction icon="plus" label="New standalone agent" onPress={() => newTask(STANDALONE_PROJECT)} colors={colors} /> : null}
-						styles={styles}
-						colors={colors}
-					>
-						{standalone.listed.map((row) => sessionRow(row, false))}
-						{standalone.hiddenCount > 0 ? (
-							<ShowMore
-								expanded={showAll.standalone === true}
-								label={showAll.standalone ? "Show less" : `Show ${standalone.hiddenCount} more`}
-								onPress={() => setShowAll((prev) => ({ ...prev, standalone: !prev.standalone }))}
-								styles={styles}
-								colors={colors}
-							/>
-						) : null}
-					</Section>
-				) : null}
-			</ScrollView>
+			<FlatList
+				data={homeItems}
+				keyExtractor={homeItemKey}
+				renderItem={renderHomeItem}
+				extraData={homeExtra}
+				onLayout={onListLayout}
+				style={styles.scroll}
+				contentContainerStyle={[styles.scrollContent, { paddingBottom: FAB_HEIGHT + 32 + insets.bottom }]}
+				keyboardShouldPersistTaps="handled"
+				showsVerticalScrollIndicator={false}
+				initialNumToRender={18}
+				maxToRenderPerBatch={12}
+				windowSize={9}
+				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
+				testID="sidebar-home-list"
+			/>
 
 			{/* New chat, floating at the bottom right over the list. */}
 			{paired ? (
@@ -578,6 +624,30 @@ function HeaderButton({ icon, label, onPress, colors, dot = false, testID }: { i
 
 const headerDot = { position: "absolute", top: 7, right: 7, width: 8, height: 8, borderRadius: 4, borderWidth: 1.5 } as const;
 const FAB_HEIGHT = 48;
+/** The home list's side padding (styles.scrollContent). */
+const LIST_PADDING = 8;
+
+/** One row of home's list, flattened from its sections so the list can be virtualized. */
+type HomeItem =
+	| { kind: "section"; id: "projects" | "standalone" }
+	| { kind: "unpaired" }
+	| { kind: "empty"; text: string }
+	| { kind: "project"; node: SidebarProjectNode; expanded: boolean }
+	| { kind: "orchestrator"; node: SidebarProjectNode; row: HostedProjectRow }
+	| { kind: "session"; row: SidebarSessionRow; indented: boolean }
+	| { kind: "more"; id: string; indented: boolean; label: string };
+
+function homeItemKey(item: HomeItem): string {
+	switch (item.kind) {
+		case "section": return `section:${item.id}`;
+		case "unpaired": return "unpaired";
+		case "empty": return "empty";
+		case "project": return `project:${item.node.key}`;
+		case "orchestrator": return `orchestrator:${item.node.key}`;
+		case "session": return `session:${item.row.key}`;
+		case "more": return `more:${item.id}`;
+	}
+}
 
 /**
  * The width a row's slot gives it. iOS's native menu host sizes what it wraps
@@ -634,22 +704,35 @@ function Section({ label, open, onToggle, trailing, children, styles, colors }: 
 }) {
 	return (
 		<View style={styles.section}>
-			<View style={styles.sectionHeader}>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel={label}
-					accessibilityState={{ expanded: open }}
-					onPress={onToggle}
-					style={styles.sectionToggle}
-				>
-					<Text style={styles.sectionLabel}>{label}</Text>
-					<View style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}>
-						<Feather name="chevron-right" size={12} color={colors.passive} />
-					</View>
-				</Pressable>
-				{trailing}
-			</View>
+			<SectionHeader label={label} open={open} onToggle={onToggle} trailing={trailing} styles={styles} colors={colors} />
 			{open ? children : null}
+		</View>
+	);
+}
+
+function SectionHeader({ label, open, onToggle, trailing, styles, colors }: {
+	label: string;
+	open: boolean;
+	onToggle(): void;
+	trailing?: ReactNode;
+	styles: Styles;
+	colors: Palette;
+}) {
+	return (
+		<View style={styles.sectionHeader}>
+			<Pressable
+				accessibilityRole="button"
+				accessibilityLabel={label}
+				accessibilityState={{ expanded: open }}
+				onPress={onToggle}
+				style={styles.sectionToggle}
+			>
+				<Text style={styles.sectionLabel}>{label}</Text>
+				<View style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}>
+					<Feather name="chevron-right" size={12} color={colors.passive} />
+				</View>
+			</Pressable>
+			{trailing}
 		</View>
 	);
 }
@@ -688,33 +771,62 @@ const PROJECT_MENU_SYMBOLS: Record<string, { icon: FeatherIconName; systemImage:
 
 type ProjectMenuId = "new-task" | "orchestrator" | "board" | "pin" | "unpin";
 
-const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, orchestrator, colors, styles, onToggle, onOrchestrator, onNewTask, onOpenProject, onTogglePin }: {
+type ProjectRowProps = {
 	node: SidebarProjectNode;
 	expanded: boolean;
 	pinned: boolean;
 	active: boolean;
-	orchestrator?: { action: "open" | "start" | "resume"; busy: boolean };
+	/** The project's orchestrator, when it has one: what pressing it does, and whether it is on its way. */
+	orchestratorAction?: "open" | "start" | "resume";
+	orchestratorBusy: boolean;
 	colors: Palette;
 	styles: Styles;
-	onToggle(): void;
-	onOrchestrator(): void;
-	onNewTask(): void;
-	onOpenProject(): void;
-	onTogglePin(): void;
-}) {
+	onToggle(node: SidebarProjectNode): void;
+	onOrchestrator(node: SidebarProjectNode): void;
+	onNewTask(node: SidebarProjectNode): void;
+	onOpenProject(node: SidebarProjectNode): void;
+	onTogglePin(node: SidebarProjectNode): void;
+};
+
+/** A project row redraws only when something it shows changes, not on every store update. */
+function sameProjectRow(a: ProjectRowProps, b: ProjectRowProps): boolean {
+	return a.node.key === b.node.key
+		&& a.node.project.name === b.node.project.name
+		&& a.node.project.id === b.node.project.id
+		&& a.node.project.hostId === b.node.project.hostId
+		&& a.node.hostLabel === b.node.hostLabel
+		&& a.node.cloud === b.node.cloud
+		&& a.node.activity === b.node.activity
+		&& a.expanded === b.expanded
+		&& a.pinned === b.pinned
+		&& a.active === b.active
+		&& a.orchestratorAction === b.orchestratorAction
+		&& a.orchestratorBusy === b.orchestratorBusy
+		&& a.colors === b.colors
+		&& a.styles === b.styles
+		&& a.onToggle === b.onToggle
+		&& a.onOrchestrator === b.onOrchestrator
+		&& a.onNewTask === b.onNewTask
+		&& a.onOpenProject === b.onOpenProject
+		&& a.onTogglePin === b.onTogglePin;
+}
+
+const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, orchestratorAction, orchestratorBusy, colors, styles, onToggle, onOrchestrator, onNewTask, onOpenProject, onTogglePin }: ProjectRowProps) {
+	const orchestrator = orchestratorAction ? { action: orchestratorAction, busy: orchestratorBusy } : undefined;
 	const name = node.project.name;
 	const orchestratorLabel = orchestrator?.action === "open" ? "Open orchestrator" : "Start orchestrator";
-	const actions: LongPressMenuAction<ProjectMenuId>[] = [
+	const hasHost = Boolean(node.project.hostId);
+	const actions = useMemo((): LongPressMenuAction<ProjectMenuId>[] => [
 		{ id: "new-task", title: "New task", ...PROJECT_MENU_SYMBOLS["new-task"] },
-		...(orchestrator ? [{ id: "orchestrator" as const, title: orchestratorLabel, ...PROJECT_MENU_SYMBOLS.orchestrator }] : []),
-		...(node.project.hostId ? [{ id: "board" as const, title: "Open dashboard", ...PROJECT_MENU_SYMBOLS.board }] : []),
+		...(orchestratorAction ? [{ id: "orchestrator" as const, title: orchestratorLabel, ...PROJECT_MENU_SYMBOLS.orchestrator }] : []),
+		...(hasHost ? [{ id: "board" as const, title: "Open dashboard", ...PROJECT_MENU_SYMBOLS.board }] : []),
 		pinned ? { id: "unpin", title: "Unpin project", ...PROJECT_MENU_SYMBOLS.unpin } : { id: "pin", title: "Pin project", ...PROJECT_MENU_SYMBOLS.pin },
-	];
+	], [hasHost, orchestratorAction, orchestratorLabel, pinned]);
 	const onAction = (id: ProjectMenuId) => {
-		if (id === "new-task") onNewTask();
-		else if (id === "orchestrator") onOrchestrator();
-		else if (id === "board") onOpenProject();
-		else onTogglePin();
+		if (id === "new-task") onNewTask(node);
+		else if (id === "orchestrator") onOrchestrator(node);
+		else if (id === "board") onOpenProject(node);
+		else onTogglePin(node);
 	};
 	const collapsedMark = !expanded ? node.activity : null;
 	const slot = useSlotWidth();
@@ -724,7 +836,7 @@ const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, or
 			<LongPressMenu
 				actions={actions}
 				onAction={onAction}
-				onPress={onToggle}
+				onPress={() => onToggle(node)}
 				accessibilityLabel={`${name}${node.hostLabel ? `, ${node.hostLabel}` : ""}`}
 				accessibilityHint={expanded ? "Collapses the project's sessions" : "Shows the project's sessions"}
 				style={[styles.projectButton, slot.width ? { width: slot.width } : null, active && { backgroundColor: colors.active }]}
@@ -749,7 +861,7 @@ const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, or
 			</View>
 			<View style={styles.rowActions}>
 				{pinned ? (
-					<Pressable accessibilityRole="button" accessibilityLabel="Unpin project" onPress={onTogglePin} style={actionStyle}>
+					<Pressable accessibilityRole="button" accessibilityLabel="Unpin project" onPress={() => onTogglePin(node)} style={actionStyle}>
 						<Feather name="pin" size={14} color={colors.muted} />
 					</Pressable>
 				) : null}
@@ -758,7 +870,7 @@ const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, or
 						accessibilityRole="button"
 						accessibilityLabel={`${orchestratorLabel} for ${name}`}
 						disabled={orchestrator.busy}
-						onPress={onOrchestrator}
+						onPress={() => onOrchestrator(node)}
 						style={({ pressed }) => [actionStyle, pressed && { backgroundColor: colors.hover }, orchestrator.busy && styles.disabled]}
 						testID={`sidebar-orchestrator-${node.project.id}`}
 					>
@@ -781,7 +893,7 @@ const ProjectRow = memo(function ProjectRow({ node, expanded, pinned, active, or
 			</View>
 		</View>
 	);
-});
+}, sameProjectRow);
 
 const SESSION_MENU_SYMBOLS: Record<WorkerActionId, { icon: FeatherIconName; systemImage: SFSymbol }> = {
 	open: { icon: "arrow-right", systemImage: "arrow.forward" },
@@ -794,30 +906,71 @@ const SESSION_MENU_SYMBOLS: Record<WorkerActionId, { icon: FeatherIconName; syst
 	delete: { icon: "archive", systemImage: "archivebox" },
 };
 
-const SessionRow = memo(function SessionRow({ row, indented, active, renaming, colors, styles, onOpen, onAction, onRename, onCancelRename }: {
+type SessionRowProps = {
 	row: SidebarSessionRow;
 	indented: boolean;
 	active: boolean;
 	renaming: boolean;
+	/** The row's width: iOS's menu host sizes what it wraps to its content, so it is given explicitly. */
+	width?: number;
 	colors: Palette;
 	styles: Styles;
 	onOpen(row: SidebarSessionRow): void;
 	onAction(row: SidebarSessionRow, id: WorkerActionId): void;
 	onRename(row: SidebarSessionRow, name: string): void;
 	onCancelRename(): void;
-}) {
+};
+
+/** What a session row's menu offers, which only a few of the session's fields decide. */
+function sessionMenuFlags(row: SidebarSessionRow) {
 	const session = row.session;
 	const terminated = session.isTerminated === true || session.status === "terminated";
-	const actions = workerContextActions({
+	return {
 		pinned: Boolean(session.isPinned),
 		terminated,
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
 		hasPr: Boolean(reviewRouteForSession(session, session.hostId)),
 		cloud: row.cloud,
-	}).map((action) => ({ id: action.id, title: action.title, ...SESSION_MENU_SYMBOLS[action.id] }));
+	};
+}
+
+/**
+ * A session row redraws only when something it shows changes. The rows are
+ * rebuilt on every store update, which ticks constantly while agents work;
+ * redrawing every row and its native menu each time is what made home's
+ * scroll stutter.
+ */
+function sameSessionRow(a: SessionRowProps, b: SessionRowProps): boolean {
+	if (a.row !== b.row) {
+		const x = a.row;
+		const y = b.row;
+		if (x.key !== y.key || x.title !== y.title || x.indicator !== y.indicator || x.unread !== y.unread || x.at !== y.at || x.hostLabel !== y.hostLabel || x.cloud !== y.cloud || x.session.id !== y.session.id || x.session.hostId !== y.session.hostId) return false;
+		const fx = sessionMenuFlags(x);
+		const fy = sessionMenuFlags(y);
+		if (fx.pinned !== fy.pinned || fx.terminated !== fy.terminated || fx.stopped !== fy.stopped || fx.hasPr !== fy.hasPr) return false;
+	}
+	return a.indented === b.indented
+		&& a.active === b.active
+		&& a.renaming === b.renaming
+		&& a.width === b.width
+		&& a.colors === b.colors
+		&& a.styles === b.styles
+		&& a.onOpen === b.onOpen
+		&& a.onAction === b.onAction
+		&& a.onRename === b.onRename
+		&& a.onCancelRename === b.onCancelRename;
+}
+
+const SessionRow = memo(function SessionRow({ row, indented, active, renaming, width, colors, styles, onOpen, onAction, onRename, onCancelRename }: SessionRowProps) {
+	const session = row.session;
+	const flags = sessionMenuFlags(row);
+	const actions = useMemo(
+		() => workerContextActions(flags).map((action) => ({ id: action.id, title: action.title, ...SESSION_MENU_SYMBOLS[action.id] })),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- the flags' values, not the object rebuilt each render
+		[flags.pinned, flags.terminated, flags.stopped, flags.hasPr, flags.cloud],
+	);
 	const theme = useTheme();
 	const [draft, setDraft] = useState(row.title);
-	const slot = useSlotWidth();
 	useEffect(() => { if (renaming) setDraft(row.title); }, [renaming, row.title]);
 	// Only a session that needs you, or the open one, reads at full brightness.
 	const bright = active || row.indicator === "attention";
@@ -851,14 +1004,14 @@ const SessionRow = memo(function SessionRow({ row, indented, active, renaming, c
 		return <View style={[styles.sessionRow, indented && styles.indented, { backgroundColor: colors.active }]}>{content}</View>;
 	}
 	return (
-		<View style={indented ? styles.indented : null} onLayout={slot.onLayout}>
+		<View style={indented ? styles.indented : null}>
 		<LongPressMenu
 			actions={actions.filter((action) => action.id !== "open")}
 			onAction={(id) => onAction(row, id)}
 			onPress={() => onOpen(row)}
 			accessibilityLabel={`${row.title}${indicatorLabel(row.indicator, row.unread)}${row.hostLabel ? `, ${row.hostLabel}` : ""}`}
 			accessibilityHint="Opens the session. Touch and hold for actions."
-			style={[styles.sessionRow, slot.width ? { width: slot.width } : null, active && { backgroundColor: colors.active }]}
+			style={[styles.sessionRow, width ? { width: indented ? width - SESSION_INDENT : width } : null, active && { backgroundColor: colors.active }]}
 			pressedStyle={{ backgroundColor: colors.hover }}
 			testID={`sidebar-session-${session.id}`}
 		>
@@ -866,7 +1019,7 @@ const SessionRow = memo(function SessionRow({ row, indented, active, renaming, c
 		</LongPressMenu>
 		</View>
 	);
-});
+}, sameSessionRow);
 
 function indicatorLabel(indicator: SidebarIndicator, unread: boolean): string {
 	switch (indicator) {
@@ -978,8 +1131,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 	searchInput: { flex: 1, fontFamily: font.regular, fontSize: LABEL_SIZE, color: c.text, paddingVertical: 0 },
 	disabled: { opacity: 0.45 },
 	scroll: { flex: 1 },
-	scrollContent: { paddingHorizontal: 8, paddingBottom: 12 },
+	scrollContent: { paddingHorizontal: LIST_PADDING, paddingBottom: 12 },
 	section: { marginBottom: 8 },
+	sectionGap: { marginTop: 8 },
 	sectionHeader: { height: 32, flexDirection: "row", alignItems: "center" },
 	sectionToggle: { flex: 1, height: 32, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: ROW_INSET },
 	sectionLabel: { fontFamily: font.medium, fontSize: LABEL_SIZE, color: c.muted },
