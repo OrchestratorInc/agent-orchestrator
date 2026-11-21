@@ -5519,6 +5519,7 @@
 	"approvals.category.submit": "Form gönderimi",
 	"approvals.category.credential": "Kayıtlı giriş",
 	"approvals.category.script": "Sayfa betiği",
+	"approvals.category.unknown": "Tanınmayan komut",
 	"approvals.decision.allow-once": "Bir kez izin verildi",
 	"approvals.decision.allow-site": "Her zaman izin verildi",
 	"approvals.decision.site-allowed": "Site kuralıyla izin verildi",

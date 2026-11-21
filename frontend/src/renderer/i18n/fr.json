@@ -5746,5 +5746,6 @@
 	"backgroundTasks.state.failed": "Échec",
 	"backgroundTasks.shells_many": "{{count}} shells sont toujours en cours",
 	"backgroundTasks.agents_many": "{{count}} agents en arrière-plan en cours",
-	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours"
+	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours",
+	"approvals.category.unknown": "Commande non reconnue"
 }

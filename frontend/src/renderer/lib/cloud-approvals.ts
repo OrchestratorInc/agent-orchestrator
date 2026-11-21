@@ -35,8 +35,9 @@ export const CLOUD_APPROVAL_POLL_MS = 15_000;
 /** Reread of the session on screen, which the person is watching. */
 export const CLOUD_APPROVAL_WATCHED_POLL_MS = 5_000;
 
-// Cloud categories in the local prompt's vocabulary. "unknown" is an action
-// whose effect cannot be read in advance, which locally is "script".
+// Cloud categories in the local prompt's vocabulary. "unknown" is a command
+// the gate does not judge, so the person decides; it keeps its own label
+// rather than passing for a page script.
 const CATEGORIES: Record<string, string> = {
 	pay: "payment",
 	send: "message",
@@ -44,7 +45,7 @@ const CATEGORIES: Record<string, string> = {
 	delete: "delete",
 	account: "account",
 	script: "script",
-	unknown: "script",
+	unknown: "unknown",
 };
 
 /** A cloud request in the local prompt's shape. */
@@ -53,7 +54,7 @@ export function toPendingApproval(request: CloudCpBrowserApproval, target: Omit<
 		id: request.id,
 		sessionId: request.sessionId,
 		kind: "browser-action",
-		category: CATEGORIES[request.category] ?? "script",
+		category: CATEGORIES[request.category] ?? "unknown",
 		site: request.site,
 		// The prompt's headline: what will happen, in one line.
 		action: request.summary,

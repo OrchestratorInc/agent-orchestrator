@@ -66,7 +66,7 @@ describe("cloud approvals", () => {
 		const names = ["pay", "send", "post", "delete", "account", "script", "unknown"].map(
 			(category) => toPendingApproval(cloudRequest({ category: category as CloudCpBrowserApproval["category"] }), TARGET).category,
 		);
-		expect(names).toEqual(["payment", "message", "publish", "delete", "account", "script", "script"]);
+		expect(names).toEqual(["payment", "message", "publish", "delete", "account", "script", "unknown"]);
 	});
 
 	it("reads a session's pending list", async () => {

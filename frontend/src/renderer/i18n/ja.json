@@ -5567,5 +5567,6 @@
 	"backgroundTasks.stale": "古い情報",
 	"backgroundTasks.kind.shell": "シェル",
 	"backgroundTasks.kind.other": "バックグラウンドタスク",
-	"backgroundTasks.state.failed": "失敗"
+	"backgroundTasks.state.failed": "失敗",
+	"approvals.category.unknown": "認識できないコマンド"
 }

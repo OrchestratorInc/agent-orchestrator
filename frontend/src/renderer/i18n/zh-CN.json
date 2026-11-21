@@ -5549,5 +5549,6 @@
 	"backgroundTasks.stale": "已过期",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "后台任务",
-	"backgroundTasks.state.failed": "失败"
+	"backgroundTasks.state.failed": "失败",
+	"approvals.category.unknown": "无法识别的命令"
 }

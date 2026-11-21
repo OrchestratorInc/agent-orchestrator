@@ -43,6 +43,11 @@ describe("ApprovalPrompt", () => {
 		expect(onDecide.mock.calls.map(([decision]) => decision)).toEqual(["allow-once", "allow-site", "deny"]);
 	});
 
+	it("labels a command AO does not judge as unrecognized, not as a page script", () => {
+		render(<ApprovalPrompt request={{ ...request, category: "unknown", site: "example.com" }} onDecide={vi.fn()} />);
+		expect(screen.getByText(/Approval needed · Unrecognized command · example\.com/)).toBeInTheDocument();
+	});
+
 	it("only says who it waits for when someone else decides it", () => {
 		const onDecide = vi.fn();
 		render(<ApprovalPrompt request={{ ...request, waitingFor: { name: "Priya Shah" } }} onDecide={onDecide} />);

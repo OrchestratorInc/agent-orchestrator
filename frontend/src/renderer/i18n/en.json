@@ -5547,5 +5547,6 @@
 	"backgroundTasks.stale": "stale",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Background task",
-	"backgroundTasks.state.failed": "Failed"
+	"backgroundTasks.state.failed": "Failed",
+	"approvals.category.unknown": "Unrecognized command"
 }

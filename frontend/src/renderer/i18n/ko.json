@@ -5567,5 +5567,6 @@
 	"backgroundTasks.stale": "오래된 정보",
 	"backgroundTasks.kind.shell": "셸",
 	"backgroundTasks.kind.other": "백그라운드 작업",
-	"backgroundTasks.state.failed": "실패"
+	"backgroundTasks.state.failed": "실패",
+	"approvals.category.unknown": "인식할 수 없는 명령"
 }
