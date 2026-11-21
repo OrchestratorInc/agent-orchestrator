@@ -32,6 +32,7 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "teams"
+	| "notifications"
 	| "billing"
 	| "remoteHosts"
 	| "coder"

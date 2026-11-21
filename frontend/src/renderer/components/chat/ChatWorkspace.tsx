@@ -57,6 +57,7 @@ import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, Notebook
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
+import { CommentMarkersContext, CommentTarget } from "./AsideMarker";
 import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
@@ -195,7 +196,8 @@ import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
-import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type ComposerMentionSource, type StoredComposerAttachment } from "./ChatComposer";
+import type { ComposerMention } from "../../lib/cloud-mentions";
 import { ContextMeter } from "./ContextMeter";
 import { nearQuotaWindow, QuotaSign, QuotaStatus } from "./QuotaReadout";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -499,6 +501,8 @@ export interface ChatWorkspaceProps {
 	/** The surface's onSend forwards transcript excerpts. Without it, "Add to
 	 * chat" is hidden so a selection cannot be cleared from the draft unsent. */
 	excerptsEnabled?: boolean;
+	/** Whether this person can prompt the agent: without it, a selection offers no way to ask the agent (only Comment, where there are comments). */
+	canAskAgent?: boolean;
 	fileReferencesEnabled?: boolean;
 	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
 	messageByteLimit?: number;
@@ -510,7 +514,20 @@ export interface ChatWorkspaceProps {
 		fileReferences?: ChatFileReference[],
 		/** With text delivery, the message as typed, before its file captures were inlined into `text`. */
 		displayText?: string,
+		/** The people and teams the message mentions. */
+		mentions?: ComposerMention[],
 	) => void | Promise<unknown>;
+	/** People and teams in the composer's @ menu (a shared Cloud session). */
+	composerMentions?: ComposerMentionSource;
+	/** Shown beside the conversation, under the tabs: a shared Cloud chat's open aside. */
+	sidePane?: ReactNode;
+	/**
+	 * Open the chat at this message: scroll to it and give it a brief glow
+	 * (opening a mention). A new key asks again; onFocusMessageDone reports
+	 * that it was shown, or could not be.
+	 */
+	focusMessage?: { messageId: string; key: string | number };
+	onFocusMessageDone?: (key: string | number) => void;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
 		requestId: string,
@@ -684,6 +701,8 @@ export interface ChatWorkspaceProps {
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		recoverOnly?: boolean,
+		/** The people and teams the steer mentions. */
+		mentions?: ComposerMention[],
 	) => Promise<ChatSteerOutcome | void>;
 	showSteerButton?: boolean;
 	sendPending?: boolean;
@@ -881,6 +900,7 @@ function ChatWorkspaceContent({
 	loadingOlder,
 	onLoadOlder,
 	excerptsEnabled = false,
+	canAskAgent = true,
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
 	messageByteLimit,
@@ -909,6 +929,10 @@ function ChatWorkspaceContent({
 	importBlock,
 	settingsLocked = false,
 	onComposerInput,
+	composerMentions,
+	sidePane,
+	focusMessage,
+	onFocusMessageDone,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1431,7 +1455,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string, mentions?: ComposerMention[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1454,6 +1478,7 @@ function ChatWorkspaceContent({
 					await onEditQueuedTurn(queueEdit.turnId, text, {
 						clientMessageId: prepared.draft.queuedEdit.clientMessageId,
 						...(attachments?.length ? { attachments } : {}),
+						...(mentions?.length ? { mentions } : {}),
 						retainedContent: queueEdit.attachments === undefined ? undefined : retainedContent,
 						expectedRevision: queueEdit.expectedRevision,
 					});
@@ -1486,7 +1511,7 @@ function ChatWorkspaceContent({
 			}
 			if (clientMessageId) tourAwaitedIds.current.add(clientMessageId);
 			// A refused send throws past the count.
-			const sent = await onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			const sent = await onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText, mentions);
 			if (sent !== SENT_OUTSIDE_TRANSCRIPT) setComposerSends((count) => count + 1);
 			return sent;
 		},
@@ -1551,6 +1576,7 @@ function ChatWorkspaceContent({
 			attachments?: { mimeType: string; data: string }[],
 			clientMessageId?: string,
 			recoverOnly?: boolean,
+			mentions?: ComposerMention[],
 		) => {
 			const id = clientMessageId ?? crypto.randomUUID();
 			tourAwaitedIds.current.add(id);
@@ -1564,7 +1590,7 @@ function ChatWorkspaceContent({
 			}
 			const dropEcho = () => setSteerEchoes((current) => current.filter((echo) => echo.clientMessageId !== id));
 			try {
-				const outcome = await stableSteer(text, attachments, id, recoverOnly);
+				const outcome = await stableSteer(text, attachments, id, recoverOnly, mentions);
 				// A refused steer stays in the composer, so its echo goes.
 				if (outcome?.status === "not-accepted") dropEcho();
 				else {
@@ -2248,10 +2274,12 @@ function ChatWorkspaceContent({
 						</div>
 					</div>
 				) : null}
+				{/* The conversation, and beside it the pane a shared Cloud chat opens an aside in. */}
+				<div className="flex min-h-0 min-w-0 flex-1" data-chat-conversation-row="" hidden={reviewerActive || shellActive}>
 				<div
 					aria-hidden={reviewerActive || shellActive}
 					aria-label="Chat conversation"
-					className="flex min-h-0 flex-1 flex-col"
+					className="flex min-h-0 min-w-0 flex-1 flex-col"
 					data-testid="chat-conversation-panel"
 					hidden={reviewerActive || shellActive}
 					inert={
@@ -2342,7 +2370,11 @@ function ChatWorkspaceContent({
 									hasOlder={hasOlder}
 									loadingOlder={loadingOlder}
 									onLoadOlder={onLoadOlder}
+									focusMessage={focusMessage}
+									onFocusMessageDone={onFocusMessageDone}
+									historyPending={historyPending}
 									excerptsEnabled={excerptsEnabled}
+									canAskAgent={canAskAgent}
 									onDecide={onDecide}
 									busy={busy}
 									onRollback={rollbackTarget}
@@ -2447,6 +2479,7 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+										mentions={composerMentions}
 						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
 						fileReferenceDelivery={fileReferenceDelivery}
 						messageByteLimit={messageByteLimit}
@@ -2575,6 +2608,8 @@ function ChatWorkspaceContent({
 						</div>
 					</div>
 				</HoldWhileHidden>
+				</div>
+				{reviewerActive || shellActive ? null : sidePane}
 				</div>
 			</div>
 
@@ -3290,6 +3325,8 @@ function ControllerBanner({
  * an unbounded history in every snapshot response.
  */
 const CHAT_VIRTUALIZE_THRESHOLD = 20;
+/** How long an opened mention's message glows. */
+const MENTION_FOCUS_GLOW_MS = 2000;
 /** How long the welcome heading takes to fade out on the first send. */
 const WELCOME_FADE_MS = 150;
 /** Opening a chat snaps to the end for this long while rows measure and history arrives. */
@@ -3371,7 +3408,11 @@ export function Timeline({
 	hasOlder,
 	loadingOlder,
 	onLoadOlder,
+	focusMessage,
+	onFocusMessageDone,
+	historyPending: timelineHistoryPending = false,
 	excerptsEnabled,
+	canAskAgent = true,
 	onDecide,
 	busy,
 	onRollback,
@@ -3430,7 +3471,13 @@ export function Timeline({
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
 	onLoadOlder?: () => void;
+	/** Scroll to this message and give it a brief glow (see ChatWorkspaceProps). */
+	focusMessage?: { messageId: string; key: string | number };
+	onFocusMessageDone?: (key: string | number) => void;
+	/** The history is still loading: a message not in it yet may still arrive. */
+	historyPending?: boolean;
 	excerptsEnabled?: boolean;
+	canAskAgent?: boolean;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	busy?: boolean;
 	onRollback?: (turnId: string) => void;
@@ -3521,6 +3568,8 @@ export function Timeline({
 		edgeFadeRef(node);
 	}, [edgeFadeRef]);
 	const scrollContent = useRef<HTMLDivElement>(null);
+	// A shared Cloud session with comments keeps a right margin for their icons.
+	const commentGutter = Boolean(useContext(CommentMarkersContext));
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
 	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
@@ -5441,6 +5490,74 @@ export function Timeline({
 		return () => observer.disconnect();
 	}, [groups.length, captureViewportResize, virtualizer, loadOlderToFill]);
 
+	// Opening a mention lands on its message, before the first paint when the
+	// message is already here (the cache its arrival filled), and gives it a
+	// brief glow. The view stops following the end there; it follows again once
+	// the reader scrolls back down. Each request key lands once; one the history
+	// can't reach (gone, or past the pages it reads) opens the chat as usual.
+	const focusRequest = useRef<{ key: string | number; landed: boolean; tries: number; olderAt?: number }>(undefined);
+	const focusGlow = useRef<{ element: HTMLElement; timer: number } | undefined>(undefined);
+	const [focusRetry, setFocusRetry] = useState(0);
+	useLayoutEffect(() => {
+		if (!focusMessage) return undefined;
+		if (focusRequest.current?.key !== focusMessage.key) focusRequest.current = { key: focusMessage.key, landed: false, tries: 0 };
+		const request = focusRequest.current;
+		if (request.landed) return undefined;
+		const done = () => {
+			request.landed = true;
+			onFocusMessageDone?.(focusMessage.key);
+		};
+		const index = groups.findIndex((group) => group.items.some((item) => item.id === focusMessage.messageId));
+		if (index < 0) {
+			if (timelineHistoryPending || loadingOlder) return undefined;
+			if (hasOlder && onLoadOlder && request.olderAt !== groups.length) {
+				request.olderAt = groups.length;
+				onLoadOlder();
+				return undefined;
+			}
+			done();
+			return undefined;
+		}
+		const node = scroller.current;
+		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-focus-id]") ?? [])
+			.find((element) => element.dataset.chatFocusId === focusMessage.messageId);
+		if (!source || !node) {
+			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+			if (request.tries++ >= 20) {
+				done();
+				return undefined;
+			}
+			const timer = window.setTimeout(() => setFocusRetry((value) => value + 1), 50);
+			return () => window.clearTimeout(timer);
+		}
+		pendingReading.current = undefined;
+		releaseFollow();
+		const sourceRect = source.getBoundingClientRect();
+		const viewport = node.getBoundingClientRect();
+		const inset = sourceRect.height > viewport.height - 24 ? 12 : (viewport.height - sourceRect.height) / 2;
+		node.scrollTop = Math.max(0, node.scrollTop + sourceRect.top - viewport.top - inset);
+		markWritten(node.scrollTop);
+		lastScrollTop.current = node.scrollTop;
+		if (focusGlow.current) {
+			window.clearTimeout(focusGlow.current.timer);
+			delete focusGlow.current.element.dataset.mentionFocus;
+		}
+		source.dataset.mentionFocus = "";
+		const glowing = source;
+		focusGlow.current = {
+			element: glowing,
+			timer: window.setTimeout(() => {
+				delete glowing.dataset.mentionFocus;
+				focusGlow.current = undefined;
+			}, MENTION_FOCUS_GLOW_MS),
+		};
+		done();
+		return undefined;
+	}, [focusMessage, focusRetry, groups, hasOlder, loadingOlder, onFocusMessageDone, onLoadOlder, releaseFollow, markWritten, timelineHistoryPending, virtualRows, virtualized, virtualizer]);
+	useEffect(() => () => {
+		if (focusGlow.current) window.clearTimeout(focusGlow.current.timer);
+	}, []);
+
 	// The pause-then-resume for a reader who only nudged up a little: armed by their
 	// scroll, re-armed by each further scroll, dropped once they go past the band or
 	// open something to read. Only the reader's own scrolling arms it, so streamed
@@ -5705,7 +5822,7 @@ export function Timeline({
 		>
 			{find.bar}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
-				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat} commentRef={selectionComment}
+				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat} commentRef={selectionComment} canAskAgent={canAskAgent}
 				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> :
 				editingAnnotation ? <ChatSelectionActions key={`edit-${editingAnnotation.excerpt.id}`} selection={editingAnnotation}
 					viewportRef={scroller} onInvalid={closeEditingAnnotation}
@@ -5739,7 +5856,7 @@ export function Timeline({
 				{/* Before the settle snapshot: its restore reads how far this one moved the view. */}
 				<HistoryAnchorSnapshot historyKey={`${oldestRow}:${hasOlder ? 1 : 0}`} capture={captureHistoryAnchor} restore={restoreHistoryAnchor} />
 				<TurnSettleSnapshot liveKey={groups.find((group) => group.live)?.key} capture={captureSettle} restore={restoreSettle} />
-				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", revealTranscript && "chat-transcript-reveal")}>
+				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", commentGutter && "max-w-[calc(48rem+2.5rem)] pr-10", revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
 					{hasOlder ? (
 						<div className="flex justify-center pb-1">
@@ -6646,13 +6763,15 @@ function TimelineItem({
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
 			return (
-				<AssistantMessage
-					message={item}
-					showCopy={showCopy}
-					live={live}
-					onRollback={onRollback}
-					rollbackDisabled={rollbackDisabled}
-				/>
+				<CommentTarget finished={!item.streaming && !live} kind="agent_message" sequence={item.sequence} text={item.text}>
+					<AssistantMessage
+						message={item}
+						showCopy={showCopy}
+						live={live}
+						onRollback={onRollback}
+						rollbackDisabled={rollbackDisabled}
+					/>
+				</CommentTarget>
 			);
 		}
 		// A continue after a stop reaches the agent as a message, but the user did
@@ -6667,6 +6786,14 @@ function TimelineItem({
 			);
 			const editing = Boolean(item.turnId && messageEdit?.turnId === item.turnId);
 			return (
+				<CommentTarget
+					asideId={item.asideId}
+					authorName={item.authorName}
+					finished={!queued && !editing && (item.delivery === undefined || item.delivery === "accepted")}
+					kind="user_message"
+					sequence={item.sequence}
+					text={item.text}
+				>
 				<HumanMessage
 					message={item}
 					sessionId={sessionId}
@@ -6694,6 +6821,7 @@ function TimelineItem({
 					onSelectAnnotation={onSelectAnnotation}
 					status={status}
 				/>
+				</CommentTarget>
 			);
 		}
 		return (
@@ -6727,7 +6855,9 @@ function TimelineItem({
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
 				) : (
-					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
+					<CommentTarget asideId={item.detail?.asideId} finished kind="steer" sequence={item.sequence} text={item.detail?.text ?? ""}>
+						<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
+					</CommentTarget>
 				)}
 			</FromAgent>
 		);

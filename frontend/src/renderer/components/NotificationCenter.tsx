@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
+	AtSign,
 	Bell,
 	BellRing,
 	CheckCheck,
@@ -16,6 +17,7 @@ import {
 	LoaderCircle,
 	MessageSquareDiff,
 	MessageSquareDot,
+	MessageSquare,
 	X,
 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -60,6 +62,9 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
+import { ASIDE_REPLY, MENTIONED, sessionRowMetadata } from "../lib/cloud-notifications";
+import { mentionOpenTarget } from "../lib/cloud-mention-open";
+import { CloudMentionRuntime, useOpenMention } from "./CloudMentionRuntime";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
 
@@ -288,6 +293,9 @@ export function NotificationRuntime() {
 			previous.add(notification.id);
 			if (previous.size > 512) previous.delete(previous.values().next().value!);
 			if (notification.status !== "unread" || notification.resolvedAt) continue;
+			// CloudMentionRuntime alerts mentions and aside replies, as the person's
+			// settings allow, and opens them at the message; one alert each.
+			if (notification.type === MENTIONED || notification.type === ASIDE_REPLY) continue;
 			const id = `${CLOUD_NOTIFICATION_PREFIX}${notification.id}`;
 			shownCloudNotifications.current.set(id, notification);
 			if (shownCloudNotifications.current.size > 256) {
@@ -339,7 +347,8 @@ export function NotificationRuntime() {
 		});
 	}, [navigateToSession, openPrimary, queryClient]);
 
-	return null;
+	// Cloud mentions: read into the cache as they arrive, and alerted on the desktop.
+	return <CloudMentionRuntime />;
 }
 
 export function NotificationCenter({ style }: NotificationCenterProps) {
@@ -619,10 +628,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
-	const openCloudSessionAndDismiss = useCallback((projectId: string, sessionId: string) => {
-		openCloudSession(projectId, sessionId);
+	// A mention or aside reply opens at its message, with the aside open, drawn
+	// from the cache its arrival filled.
+	const openMention = useOpenMention();
+	const openCloudSessionAndDismiss = useCallback((projectId: string, sessionId: string, notification: CloudCpNotification) => {
+		const mention = mentionOpenTarget(notification);
+		if (!mention || !openMention(mention, projectId)) openCloudSession(projectId, sessionId);
 		setPanelOpen(false);
-	}, [openCloudSession, setPanelOpen]);
+	}, [openCloudSession, openMention, setPanelOpen]);
 
 	const restoreCloudAndOpen = useCallback((projectId: string, sessionId: string) => {
 		void restoreThenOpen(sessionId, undefined, cloudRowKey(sessionId), () => openCloudSession(projectId, sessionId));
@@ -884,6 +897,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								const cloudTerminated = Boolean(cloudMeta) && Boolean(cloudSessionKey && terminatedIds.has(cloudSessionKey));
 								const cloudOfferRestore = cloudTerminated && cloud.type === "needs_input";
 								const clearingKey = cloudRowKey(cloud.id);
+								// A mention or aside reply names its own session and project, so it opens
+								// (and reads) before the session lists have it: a guest's session in another workspace.
+								const mention = sessionRowMetadata(cloud);
 								return (
 									<CloudNotificationItem
 										highlighted={highlightedIds.has(clearingKey) || cloud.status === "unread"}
@@ -896,10 +912,10 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 										clearDisabled={clearingNotificationIds.has(clearingKey) || clearingAll || clearAll.isPending}
 										restoring={Boolean(cloudSessionId) && restoringSessionId === cloudRowKey(cloudSessionId)}
 										restoreDisabled={restoringSessionId !== undefined}
-										projectId={cloudMeta?.projectId}
-										projectName={cloudMeta?.projectName}
-										sessionName={cloudMeta?.sessionName}
-										sessionsReady={sessionsReady}
+										projectId={cloudMeta?.projectId ?? (mention ? cloud.projectId : undefined)}
+										projectName={cloudMeta?.projectName ?? mention?.projectName}
+										sessionName={cloudMeta?.sessionName ?? mention?.sessionTitle}
+										sessionsReady={sessionsReady || Boolean(mention)}
 										terminated={cloudTerminated}
 										offerRestore={cloudOfferRestore}
 									/>
@@ -1222,7 +1238,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	highlighted: boolean;
 	notification: CloudCpNotification;
 	offerRestore: boolean;
-	onOpenSession: (projectId: string, sessionId: string) => void;
+	onOpenSession: (projectId: string, sessionId: string, notification: CloudCpNotification) => void;
 	onRestore: (projectId: string, sessionId: string) => void;
 	onClear: (notification: CloudCpNotification) => Promise<boolean>;
 	projectId?: string;
@@ -1241,7 +1257,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	const canOpenSession = Boolean(sessionId && projectId) && sessionsReady && (!terminated || !offerRestore);
 	const showSessionMeta = Boolean(sessionName) && !notificationMentions(notification, sessionName ?? "");
 	const openRow = () => {
-		if (canOpenSession && projectId) onOpenSession(projectId, sessionId);
+		if (canOpenSession && projectId) onOpenSession(projectId, sessionId, notification);
 	};
 	const rowRef = useRef<HTMLDivElement>(null);
 	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
@@ -1418,6 +1434,10 @@ function notificationMentions(notification: NotificationCopy, value: string): bo
 
 function notificationIcon(type: string) {
 	switch (type) {
+		case "mentioned":
+			return AtSign;
+		case "aside_reply":
+			return MessageSquare;
 		case "needs_input":
 			return MessageSquareDot;
 		case "review_feedback":
@@ -1445,6 +1465,10 @@ function notificationIcon(type: string) {
 // Match the semantic status colors used by the board and inspector.
 function notificationIconClass(type: string): string {
 	switch (type) {
+		case "mentioned":
+			return "text-status-needs-you";
+		case "aside_reply":
+			return "text-status-working";
 		case "needs_input":
 		case "review_feedback":
 		case "review_changes_requested":

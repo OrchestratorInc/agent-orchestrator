@@ -3185,6 +3185,30 @@ html.sidebar-reordering * {
 	border-top-right-radius: 0;
 }
 
+/* Opening a mention: its message glows briefly, so the eye lands on it. */
+[data-mention-focus] .cursor-chat-human-message,
+[data-mention-focus] [data-chat-focus-bubble] {
+	animation: mention-focus 2s ease-out;
+}
+
+@keyframes mention-focus {
+	0%,
+	35% {
+		box-shadow: 0 0 0 1px var(--color-accent), 0 0 0 5px var(--color-accent-weak);
+	}
+	100% {
+		box-shadow: 0 0 0 1px transparent, 0 0 0 5px transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-mention-focus] .cursor-chat-human-message,
+	[data-mention-focus] [data-chat-focus-bubble] {
+		animation: none;
+		box-shadow: 0 0 0 1px var(--color-accent);
+	}
+}
+
 /* Dragging remains visible without changing the composer's structural edge. */
 .cursor-chat-composer[data-dragging] {
 	background: color-mix(in oklch, var(--composer-bg) 94%, var(--color-logo-accent));
@@ -6311,6 +6335,33 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 [data-chat-find-surface] ::highlight(chat-annotation-draft) {
 	background-color: var(--color-term-selection-light);
 	color: inherit;
+}
+
+/*
+ * Comments on a shared Cloud session: a commented passage gets a soft tint
+ * (no underline, no border), a little stronger while its thread is open.
+ * --comment-quote-edge is the quote's edge in the comment pane and the
+ * "From a comment thread" card, the same hue.
+ */
+[data-chat-find-surface] ::highlight(ao-comment) {
+	background-color: color-mix(in srgb, #facc15 16%, transparent);
+	color: inherit;
+}
+
+[data-chat-find-surface] ::highlight(ao-comment-active) {
+	background-color: color-mix(in srgb, #facc15 32%, transparent);
+	color: inherit;
+}
+
+:root {
+	--comment-quote-edge: color-mix(in srgb, #facc15 60%, transparent);
+}
+
+/* "Jump to message" briefly marks the message it scrolled to. */
+[data-comment-anchor][data-comment-flash] {
+	border-radius: 10px;
+	box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 12%, transparent);
+	transition: box-shadow 0.3s ease-out;
 }
 
 /* Text selected in an artifact preview while its ask bar has focus. */

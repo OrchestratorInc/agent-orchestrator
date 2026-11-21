@@ -73,6 +73,20 @@ import type {
 	CloudCpGitHubRepositoriesPage,
 	CloudCpPutAgentConnectionRequest,
 	CloudCpSendMessageRequest,
+	CloudCpSteerTurnRequest,
+	CloudCpMentionCandidates,
+	CloudCpMentionCandidatesQuery,
+	CloudCpAside,
+	CloudCpAsideListResponse,
+	CloudCpAsideCreateRequest,
+	CloudCpAsideReply,
+	CloudCpAsideReplyRequest,
+	CloudCpAsideSentMessage,
+	CloudCpMentionToken,
+	CloudCpAsideThread,
+	CloudCpAsideThreadQuery,
+	CloudCpMyNotificationStateChange,
+	CloudCpNotificationPreferences,
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
 	CloudCpEditQueuedMessageRequest,
@@ -495,7 +509,7 @@ export interface CloudCpClient {
 		orgId: string,
 		sessionId: string,
 		turnId: string,
-		body: CloudCpSendMessageRequest,
+		body: CloudCpSteerTurnRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
 	/** Replace a queued message's text and files before the agent starts on it; 409 TURN_NOT_QUEUED once it has. */
@@ -603,6 +617,36 @@ export interface CloudCpClient {
 	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
 	markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
 	subscribeNotificationEvents(orgId: string, options: CloudCpNotificationEventsOptions): Promise<void>;
+	/** The caller's notifications from every organization, a mentioned guest's included. */
+	listMyNotifications(query?: CloudCpNotificationListQuery, options?: CloudCpRequestOptions): Promise<CloudCpNotificationListResponse>;
+	/** Marks some of the caller's notifications read, in any organization: ids, all, or one session's mentions. */
+	changeMyNotificationState(change: CloudCpMyNotificationStateChange, options?: CloudCpRequestOptions): Promise<{ updated: number }>;
+	/** Which notifications alert the caller on the desktop and the phone. */
+	getMyNotificationPreferences(options?: CloudCpRequestOptions): Promise<CloudCpNotificationPreferences>;
+	/** Changes some of them; answers every preference after the change. */
+	setMyNotificationPreferences(change: Partial<CloudCpNotificationPreferences>, options?: CloudCpRequestOptions): Promise<CloudCpNotificationPreferences>;
+	/** The people and teams a session's @ menu offers; names only, and only people who can open the session. */
+	listMentionCandidates(orgId: string, sessionId: string, query?: CloudCpMentionCandidatesQuery, options?: CloudCpRequestOptions): Promise<CloudCpMentionCandidates>;
+	/** The session's asides as the caller sees them: each tagged message's reply count, unread dot and mute. */
+	listSessionAsides(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpAsideListResponse>;
+	/** One aside: the message that started it and a page of its replies, oldest first. */
+	getSessionAside(orgId: string, sessionId: string, asideId: string, query?: CloudCpAsideThreadQuery, options?: CloudCpRequestOptions): Promise<CloudCpAsideThread>;
+	/** Replies in an aside; anyone who can open the session may, a viewer too. The agent never reads it. */
+	replyToSessionAside(orgId: string, sessionId: string, asideId: string, body: CloudCpAsideReplyRequest, options?: CloudCpRequestOptions): Promise<{ reply?: CloudCpAsideReply; aside?: CloudCpAside; sentMessage?: CloudCpAsideSentMessage }>;
+	/** Starts a comment thread on one message, with its first comment. Nothing reaches the agent. */
+	createSessionAside(orgId: string, sessionId: string, body: CloudCpAsideCreateRequest, options?: CloudCpRequestOptions): Promise<{ aside: CloudCpAside; reply: CloudCpAsideReply }>;
+	/** Resolves a comment thread without telling the agent. */
+	resolveSessionAside(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** Reopens a resolved comment thread. */
+	reopenSessionAside(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** Edits one of the caller's own comments. */
+	editSessionAsideReply(orgId: string, sessionId: string, asideId: string, replyId: string, body: { text: string; mentions?: CloudCpMentionToken[] }, options?: CloudCpRequestOptions): Promise<{ reply: CloudCpAsideReply }>;
+	/** Deletes one of the caller's own comments (the first one of a comment thread deletes the thread). */
+	deleteSessionAsideReply(orgId: string, sessionId: string, asideId: string, replyId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** Marks the aside read for the caller, with its reply notification. */
+	markSessionAsideRead(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** Mutes or unmutes the aside's replies for the caller. */
+	muteSessionAside(orgId: string, sessionId: string, asideId: string, muted: boolean, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -752,6 +796,7 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
 	let code: string | undefined;
 	let requestId: string | undefined;
+	let details: Record<string, unknown> | undefined;
 	try {
 		const body = (await response.json()) as Partial<CloudCpErrorEnvelope> | null;
 		if (typeof body?.message === "string" && body.message !== "") {
@@ -761,10 +806,12 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 		}
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+		const envelopeDetails = (body as { details?: unknown } | null)?.details;
+		if (envelopeDetails && typeof envelopeDetails === "object" && !Array.isArray(envelopeDetails)) details = envelopeDetails as Record<string, unknown>;
 	} catch {
 		// Non-JSON or empty body: keep the status-derived message.
 	}
-	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
+	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")), ...(details ? { details } : {}) };
 	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
 }
 
@@ -1329,6 +1376,32 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			? requestJson("POST", `/orgs/${seg(orgId)}/notifications/read-all`, { signal: o?.signal })
 			: Promise.all(notificationIds.map((id) => requestJson<{ updated: number }>("PATCH", `/orgs/${seg(orgId)}/notifications/${seg(id)}`, { body: { status: "read" }, signal: o?.signal }))).then((rows) => ({ updated: rows.reduce((total, row) => total + row.updated, 0) })),
 		subscribeNotificationEvents,
+		listMyNotifications: (query, o) => requestJson("GET", "/me/notifications", { query: { status: query?.status, limit: query?.limit, cursor: query?.cursor }, signal: o?.signal }),
+		changeMyNotificationState: (change, o) => requestJson("POST", "/me/notifications/state", { body: change, signal: o?.signal }),
+		getMyNotificationPreferences: (o) => requestJson("GET", "/me/notification-preferences", { signal: o?.signal }),
+		setMyNotificationPreferences: (change, o) => requestJson("PUT", "/me/notification-preferences", { body: change, signal: o?.signal }),
+		listMentionCandidates: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/mention-candidates`, { query: { q: query?.q, limit: query?.limit }, signal: o?.signal }),
+		listSessionAsides: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides`, { signal: o?.signal }),
+		getSessionAside: (orgId, sessionId, asideId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}`, { query: { cursor: query?.cursor, limit: query?.limit }, signal: o?.signal }),
+		replyToSessionAside: (orgId, sessionId, asideId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies`, { body, signal: o?.signal }),
+		markSessionAsideRead: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/read`, { signal: o?.signal }),
+		muteSessionAside: (orgId, sessionId, asideId, muted, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/mute`, { body: { muted }, signal: o?.signal }),
+		createSessionAside: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides`, { body, signal: o?.signal }),
+		resolveSessionAside: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/resolve`, { signal: o?.signal }),
+		reopenSessionAside: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/reopen`, { signal: o?.signal }),
+		editSessionAsideReply: (orgId, sessionId, asideId, replyId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { body, signal: o?.signal }),
+		deleteSessionAsideReply: (orgId, sessionId, asideId, replyId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

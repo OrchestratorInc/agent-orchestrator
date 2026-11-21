@@ -1,3 +1,4 @@
+import type { ComposerMention, TimelineMention } from "../lib/cloud-mentions";
 import type { ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
@@ -218,6 +219,8 @@ export interface ConversationContentSummary {
 
 export interface QueuedMessageEditOptions {
 	clientMessageId?: string;
+	/** The people and teams the edited message names, as its chips did. */
+	mentions?: ComposerMention[];
 	attachments?: { mimeType: string; data: string }[];
 	retainedContent?: number[];
 	expectedRevision?: number;
@@ -247,6 +250,20 @@ export interface ConversationMessage {
 	delivery?: DeliveryState;
 	/** Set on a human message another participant in a shared session sent. */
 	authorName?: string;
+	/** The people and teams a human message in a shared Cloud session named, drawn as chips in its text. */
+	mentions?: TimelineMention[];
+	/** The aside a shared Cloud message that names people started: it draws as a dashed box. */
+	asideId?: string;
+	/**
+	 * A shared Cloud message "Also send to agent" sent: the comment thread as it
+	 * was sent, drawn as a "From a comment thread" card instead of its text.
+	 */
+	fromAside?: {
+		asideId: string;
+		quote?: string;
+		anchorExcerpt?: string;
+		comments: Array<{ authorName: string; text: string }>;
+	};
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;
@@ -580,6 +597,10 @@ export interface SystemEventDetail {
 	clientMessageId?: string;
 	/** steer: the person deleted the queued message while the agent was taking it; it was delivered. */
 	deliveredBeforeDelete?: boolean;
+	/** steer: the people and teams it named in a shared Cloud session, drawn as chips. */
+	mentions?: TimelineMention[];
+	/** steer: the aside it started in a shared Cloud session, as on a message. */
+	asideId?: string;
 	/** steer: the queued turns whose messages this steer carried into the running turn. */
 	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */

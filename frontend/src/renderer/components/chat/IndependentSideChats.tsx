@@ -139,7 +139,7 @@ export function SideComposer({
 	useEffect(() => {
 		if (editor.current?.getSnapshot().text === draft.text) return;
 		// Loading a draft must not move keyboard focus out of the tab strip.
-		editor.current?.setText(draft.text, undefined, { preserveFocus: true });
+		editor.current?.setText(draft.text, undefined, undefined, { preserveFocus: true });
 	}, [draft.text]);
 	useEffect(() => {
 		if (focusKey && ready) editor.current?.focus();

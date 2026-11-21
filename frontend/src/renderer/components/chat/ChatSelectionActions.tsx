@@ -3,7 +3,7 @@ import { effectiveShortcutBindings, matchesAppShortcut, shortcutBindingLabel } f
 import { useKeybindingsStore } from "../../stores/keybindings-store";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useLatestCallback } from "../../hooks/useStable";
-import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { apiErrorMessage } from "../../lib/api-client";
@@ -13,7 +13,8 @@ import {
 	selectionToolbarClass,
 } from "../../lib/selection-toolbar";
 import { cn } from "../../lib/utils";
-import { Check, MessageSquarePlus, Trash2 } from "@/components/app-icons";
+import { Check, MessageSquare, MessageSquarePlus, Trash2, WandSparkles } from "@/components/app-icons";
+import { CommentMarkersContext, commentDraftForSelection } from "./AsideMarker";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
@@ -34,6 +35,7 @@ export function ChatSelectionActions({
 	checkingSide,
 	onRemove,
 	commentRef,
+	canAskAgent = true,
 }: {
 	selection: { excerpt: ChatDraftExcerptReference; range: Range };
 	viewportRef: RefObject<HTMLDivElement | null>;
@@ -43,6 +45,11 @@ export function ChatSelectionActions({
 	checkingSide?: boolean;
 	onRemove?: () => void | Promise<void>;
 	commentRef?: MutableRefObject<string>;
+	/**
+	 * Whether this person can prompt the agent. Someone who can't (a viewer, a
+	 * guest without prompt rights) is offered no way to ask it: only Comment.
+	 */
+	canAskAgent?: boolean;
 }) {
 	const { t } = useTranslation();
 	const overrides = useKeybindingsStore((state) => state.overrides);
@@ -50,6 +57,29 @@ export function ChatSelectionActions({
 		.map((binding) => shortcutBindingLabel(binding, isMacPlatform())).join(" / ");
 	const translateDraft = useChatDraftTranslation();
 	const editing = Boolean(onRemove);
+	// In a shared Cloud session with comments, a passage of one message can
+	// start a comment for people; the box below then asks the agent.
+	const commentMarkers = useContext(CommentMarkersContext);
+	const commentDraft = useMemo(
+		() => (commentMarkers?.canComment && !editing ? commentDraftForSelection(selection.range) : undefined),
+		[commentMarkers?.canComment, editing, selection.range],
+	);
+	// With comments, the toolbar asks which the person means: a comment for
+	// people, or the agent. Nothing reaches the agent until they choose "Ask
+	// the agent"; until then typing starts a comment (the agent's box and its
+	// add button are not there to type into).
+	const [askingAgent, setAskingAgent] = useState(false);
+	const choosing = Boolean(commentDraft) && !askingAgent;
+	// The agent's box: chosen with Ask the agent, or the only action without comments.
+	const agentBox = canAskAgent && !choosing;
+	const choosingRef = useRef(choosing);
+	choosingRef.current = choosing;
+	const startComment = useLatestCallback((initialText?: string) => {
+		if (!commentDraft) return;
+		commentMarkers?.startComment(initialText ? { ...commentDraft, initialText } : commentDraft);
+		onInvalid();
+		window.getSelection()?.removeAllRanges();
+	});
 	const buttonRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [comment, setComment] = useState(selection.excerpt.comment ?? "");
@@ -86,9 +116,9 @@ export function ChatSelectionActions({
 		};
 	}, [pinned, selection.range]);
 	useEffect(() => {
-		if (!editing || !position?.visible) return;
+		if (!(editing || askingAgent) || !position?.visible) return;
 		textareaRef.current?.focus({ preventScroll: true });
-	}, [editing, position?.visible]);
+	}, [askingAgent, editing, position?.visible]);
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string>();
 	const run = useLatestCallback(async (action: () => void | Promise<void>, dismiss = false) => {
@@ -129,6 +159,8 @@ export function ChatSelectionActions({
 			}, isMacPlatform(), useKeybindingsStore.getState().overrides);
 			const typing = event.key.length === 1 && event.key !== " " && !event.metaKey && !event.ctrlKey && !event.altKey;
 			if (!shortcut && !typing) return;
+			// Someone who can't prompt the agent has nothing to add to it.
+			if (shortcut && !canAskAgent) return;
 			const toolbar = buttonRef.current;
 			const origin = event.composedPath()[0];
 			const target =
@@ -154,7 +186,15 @@ export function ChatSelectionActions({
 			)
 				return;
 			if (typing && !shortcut) {
-				textareaRef.current?.focus({ preventScroll: true });
+				if (choosingRef.current) {
+					// Typing on a passage writes a comment for people, never the
+					// agent: the comment starts with the key just pressed.
+					event.preventDefault();
+					event.stopPropagation();
+					startComment(event.key);
+					return;
+				}
+				if (canAskAgent) textareaRef.current?.focus({ preventScroll: true });
 				return;
 			}
 			event.preventDefault();
@@ -163,28 +203,59 @@ export function ChatSelectionActions({
 		};
 		document.addEventListener("keydown", onKeyDown, true);
 		return () => document.removeEventListener("keydown", onKeyDown, true);
-	}, [position?.visible, selection, viewportRef, activate]);
+	}, [position?.visible, selection, viewportRef, activate, startComment, canAskAgent]);
 
 	const addLabel = editing ? t("chat.annotation.save") : t("sideChat.addToChat");
+	// Nothing to offer: no comments here, and no agent this person can prompt.
+	if (!commentDraft && !canAskAgent) return null;
 	return (
 		<TooltipProvider>
 			<div
 				ref={buttonRef}
 				data-chat-selection-actions=""
-				className={cn(selectionToolbarClass, "absolute w-80 max-w-[calc(100%-1rem)] items-end gap-1 rounded-xl p-1", !position?.visible && "invisible")}
+				className={cn(selectionToolbarClass, "absolute max-w-[calc(100%-1rem)] items-end gap-1 rounded-xl p-1", agentBox ? "w-80" : "w-auto", !position?.visible && "invisible")}
 				style={{ left: position?.left ?? 0, top: position?.top ?? 0 }}
 				onMouseDown={(event) => {
 					if (event.target !== textareaRef.current) event.preventDefault();
 				}}
 			>
+				{commentDraft ? (
+					<Button
+						type="button"
+						variant="quiet"
+						size="sm"
+						className="shrink-0 self-center"
+						disabled={pending}
+						data-selection-comment=""
+						onClick={() => startComment()}
+					>
+						<MessageSquare aria-hidden="true" className="size-3.5" />
+						{t("comment.action")}
+					</Button>
+				) : null}
+				{choosing && canAskAgent ? (
+					<Button
+						type="button"
+						variant="quiet"
+						size="sm"
+						className="shrink-0 self-center"
+						disabled={pending}
+						data-selection-ask-agent=""
+						onClick={() => setAskingAgent(true)}
+					>
+						<WandSparkles aria-hidden="true" className="size-3.5" />
+						{t("comment.askAgent")}
+					</Button>
+				) : null}
+				{!agentBox ? null : <>
 				<textarea
 					ref={textareaRef}
 					rows={1}
 					value={comment}
 					maxLength={ANNOTATION_COMMENT_MAX_LENGTH}
 					disabled={pending}
-					aria-label={t("chat.annotation.commentLabel")}
-					placeholder={t("chat.annotation.commentPlaceholder")}
+					aria-label={commentDraft ? t("comment.askAgentLabel") : t("chat.annotation.commentLabel")}
+					placeholder={commentDraft ? t("comment.askAgentPlaceholder") : t("chat.annotation.commentPlaceholder")}
 					className="board-scrollbar max-h-32 min-h-7 min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-1 font-sans text-[13px] leading-5 text-foreground outline-none [field-sizing:content] placeholder:text-muted-foreground disabled:opacity-60"
 					onFocus={() => setPinned(true)}
 					onChange={(event) => setComment(event.target.value)}
@@ -249,6 +320,7 @@ export function ChatSelectionActions({
 					</TooltipTrigger>
 					<TooltipContent side="top">{editing ? addLabel : `${addLabel}${shortcutHint ? ` (${shortcutHint})` : ""}`}</TooltipContent>
 				</Tooltip>
+				</>}
 				{error ? (
 					<span
 						role="alert"

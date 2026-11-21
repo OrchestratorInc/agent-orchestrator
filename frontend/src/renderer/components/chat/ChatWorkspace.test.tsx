@@ -2383,6 +2383,24 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
+	it("never offers someone who can't prompt the agent a way to add selected text to it", () => {
+		const count = () => readChatSessionDraft(chatFixtureSettled.sessionId).composer.excerpts?.length ?? 0;
+		render(<ChatWorkspace snapshot={chatFixtureSettled} excerptsEnabled canAskAgent={false} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
+		const range = document.createRange(); range.selectNodeContents(source);
+		window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([new DOMRect(40,150,100,20)] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40,150,100,20));
+		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0,0,600,500));
+		fireEvent.pointerUp(log);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Comment on the selected text" })).not.toBeInTheDocument();
+		expect(fireEvent.keyDown(log, { key: "l", ctrlKey: true })).toBe(true);
+		expect(count()).toBe(0);
+		window.getSelection()!.removeAllRanges();
+	});
+
 	it.each(["Win32", "Linux x86_64", "MacIntel"])("adds selected chat text with the platform shortcut on %s", (platform) => {
 		vi.mocked(isMacPlatform).mockReturnValue(platform === "MacIntel");
 		const count = () => readChatSessionDraft(chatFixtureSettled.sessionId).composer.excerpts?.length ?? 0;

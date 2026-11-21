@@ -51,7 +51,11 @@ vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navig
 vi.mock("../hooks/useCloudNotifications", () => ({
 	useCloudNotifications: () => ({ data: cloud.data, items: cloud.data?.items }),
 }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ userId: "user-1" }) }));
+// The whole shape: the runtime also mounts CloudMentionRuntime, which reads the
+// base URL and client. Not ready, so it loads no notification settings.
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ userId: "user-1", baseUrl: "https://cloud.test", ready: false, client: {} }),
+}));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: cloud.orgId } }) }));
 
 vi.mock("../hooks/useNotificationsQuery", () => ({
@@ -163,6 +167,33 @@ describe("NotificationRuntime Cloud notifications", () => {
 		} finally {
 			cloud.data = undefined;
 			cloud.orgId = "org-1";
+		}
+	});
+
+	it("leaves a new mention or aside reply to CloudMentionRuntime, so it alerts once and as the person's settings allow", () => {
+		show.mockClear();
+		cloud.data = { items: [cloudNotification("old")], unreadCount: 1 };
+		try {
+			const view = renderRuntimeOnly();
+			cloud.data = {
+				items: [
+					cloudNotification("mention", { type: "mentioned" }),
+					cloudNotification("reply", { type: "aside_reply" }),
+					cloudNotification("new"),
+					cloudNotification("old"),
+				],
+				unreadCount: 4,
+			};
+			view.rerender(
+				<QueryClientProvider client={new QueryClient()}>
+					<NotificationRuntime />
+				</QueryClientProvider>,
+			);
+			expect(show).toHaveBeenCalledTimes(1);
+			expect(show).toHaveBeenCalledWith(expect.objectContaining({ id: "cloud-notification:new" }));
+			view.unmount();
+		} finally {
+			cloud.data = undefined;
 		}
 	});
 });

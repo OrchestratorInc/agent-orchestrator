@@ -1001,6 +1001,33 @@ describe("CloudClient", () => {
     expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("steer-one");
   });
 
+  it("sends a steer's mentions as typed tokens", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event: {} }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.steerTurn("tenant", "session", "turn", {
+      text: "@Priya Shah check the backoff",
+      mentions: [
+        { kind: "person", userId: "00000000-0000-4000-8000-000000000001" },
+        { kind: "team", teamId: "00000000-0000-4000-8000-000000000002" },
+      ],
+    }, { idempotencyKey: "steer-two" });
+
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({
+      text: "@Priya Shah check the backoff",
+      mentions: [
+        { kind: "person", userId: "00000000-0000-4000-8000-000000000001" },
+        { kind: "team", teamId: "00000000-0000-4000-8000-000000000002" },
+      ],
+    }));
+  });
+
   it("edits a queued message through the public client", async () => {
     const event = {
       sessionId: "session", sequence: 3, type: "chat.user_message_edited",
