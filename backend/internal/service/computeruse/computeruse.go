@@ -155,11 +155,9 @@ type Service struct {
 	stop       context.CancelFunc
 	workers    sync.WaitGroup
 
-	// daemonStart admits one ensureDaemon at a time; holding it is sending on
-	// the channel.
-	daemonStart chan struct{}
-
 	mu         sync.Mutex
+	// daemonStart is the start of the background service in progress, if any.
+	daemonStart *daemonStart
 	granting   bool
 	grantError string
 	// sessionless are tools the driver refused a `session` argument for.
@@ -194,7 +192,6 @@ func New(driver Driver, dataDir string) *Service {
 		goos:        runtime.GOOS,
 		background:  background,
 		stop:        stop,
-		daemonStart: make(chan struct{}, 1),
 		sessionless: map[string]bool{},
 		snapshots:   snapshotWindows{windows: map[string]window{}},
 	}
@@ -532,17 +529,54 @@ func (s *Service) locate(ctx context.Context) (string, error) {
 	return binary, err
 }
 
+// daemonStart is one attempt to start the background service, shared by every
+// caller that asks while it runs.
+type daemonStart struct {
+	done chan struct{}
+	err  error
+	// joined counts the callers waiting on this attempt.
+	joined int
+}
+
 // ensureDaemon starts the service when it is not answering and waits for it.
-// Calls that arrive while it is down take turns: each later one finds the
-// service the first started and returns, instead of starting another copy
-// (macOS's `open -n` always launches a new instance).
+// Calls that arrive while a start is in progress wait for that start and get
+// its result rather than starting another copy: macOS's `open -n` launches a
+// new instance every time. The start runs on the service's own context, so a
+// caller that gives up does not cut it short for the others.
 func (s *Service) ensureDaemon(ctx context.Context, binary string) error {
+	s.mu.Lock()
+	if err := s.background.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	start := s.daemonStart
+	if start == nil {
+		start = &daemonStart{done: make(chan struct{})}
+		s.daemonStart = start
+		s.workers.Add(1)
+		go s.runDaemonStart(start, binary)
+	}
+	start.joined++
+	s.mu.Unlock()
 	select {
-	case s.daemonStart <- struct{}{}:
-		defer func() { <-s.daemonStart }()
+	case <-start.done:
+		return start.err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (s *Service) runDaemonStart(start *daemonStart, binary string) {
+	defer s.workers.Done()
+	err := s.startDaemon(s.background, binary)
+	s.mu.Lock()
+	s.daemonStart = nil
+	start.err = err
+	s.mu.Unlock()
+	close(start.done)
+}
+
+func (s *Service) startDaemon(ctx context.Context, binary string) error {
 	if s.daemonState(ctx, binary) == DaemonRunning {
 		return nil
 	}
