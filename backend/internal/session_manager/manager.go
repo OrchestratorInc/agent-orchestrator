@@ -7480,9 +7480,10 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
 	// A bound saved account must never send its credential to a custom
 	// endpoint, so the endpoint's base URL and key go on top again and both
-	// come from one source. A project value the account left alone stands.
+	// come from one source. A key the project sets gets its project value back.
 	for key, value := range endpointEnv {
-		if overridden(key) && env[key] == beforeAccount[key] {
+		if overridden(key) {
+			setProtectedEnv(env, key, beforeAccount[key], caseInsensitive)
 			continue
 		}
 		setProtectedEnv(env, key, value, caseInsensitive)
