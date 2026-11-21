@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -200,6 +201,22 @@ func (s *Store) Status(agentID string) (Status, bool, error) {
 	return status, true, nil
 }
 
+// pathLocks serializes writes to one endpoint file. Callers build a new Store
+// per request, so the lock is keyed by file path, not held on the Store.
+var pathLocks sync.Map // map[string]*sync.Mutex
+
+// lockPath locks path for a whole read-modify-write and returns its unlock.
+func lockPath(path string) func() {
+	key := filepath.Clean(path)
+	if abs, err := filepath.Abs(key); err == nil {
+		key = abs
+	}
+	mu, _ := pathLocks.LoadOrStore(key, &sync.Mutex{})
+	m := mu.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
+}
+
 // Save validates in and stores it for agentID, keeping the stored key when
 // in.APIKey is empty.
 func (s *Store) Save(agentID string, in Input, now time.Time) (Status, error) {
@@ -211,6 +228,9 @@ func (s *Store) Save(agentID string, in Input, now time.Time) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	// Hold the lock from reading the stored key to writing, so an update that
+	// keeps the key cannot write back one a concurrent save just rotated.
+	defer lockPath(path)()
 	existing, found, err := s.Load(agentID)
 	if err != nil {
 		return Status{}, err
@@ -247,6 +267,7 @@ func (s *Store) Delete(agentID string) error {
 	if err != nil {
 		return err
 	}
+	defer lockPath(path)()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete %s endpoint: %w", agentID, err)
 	}
