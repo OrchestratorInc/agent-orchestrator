@@ -81,7 +81,20 @@ describe("retained-stack host routes", () => {
 		expect(web).not.toContain("web.current?.reload()");
 		expect(artifact).not.toMatch(/<ArtifactWeb[^>]*source=/);
 		const file = source("../app/files/[sessionId]/file.tsx");
-		expect(file).toContain("if (!verified) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;");
+		expect(file).toContain("if (!verified || !shown) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;");
+	});
+
+	// The page's stored sides may have been read on the connection before an app
+	// switch, and carry the credential to that address.
+	it("draws a fresh image comparison from sides read again through the verified connection", () => {
+		const file = source("../app/files/[sessionId]/file.tsx");
+		const compare = between(file, "function ImageCompare(", "const makeStyles = ");
+		expectBefore(compare, "if (!verified || !rereads) return;", "sources.resolveSide(which, controller.signal)");
+		expect(compare).toContain("const shown = rereads ? drawn : sources;");
+		expect(compare).toContain("const rereads = Boolean(backend?.whenVerified);");
+		expect(compare).toContain("source: shown.before }");
+		expect(compare).toContain("source: shown.after }");
+		expect(compare).not.toMatch(/source: sources\.(before|after)/);
 	});
 
 	// A view mounted while connected but loading only later (off screen, a page
