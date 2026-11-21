@@ -873,42 +873,46 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		}
 	}
 
-	// A repository with no remote has no default branch to resolve, so set
-	// the checked-out one, as `ao project set-config --default-branch` does.
-	if project.Repo == "" && (project.DefaultBranch == "" || project.DefaultBranch == "auto") {
-		branch := c.setupNoRemoteBranch(ctx, project.Path)
-		switch {
-		case branch == "":
-			step.Status = setupNeedsHuman
-			step.Detail = fmt.Sprintf("project %s has no remote and no branch is checked out, so Orchestrator cannot pick a base branch", project.ID)
-			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch <branch>", shellQuote(project.ID))
-			res.Project = setupProjectFrom(project, reused)
-			return step
-		case opts.readOnly():
-			res.pending = true
-			step.Status = setupSkipped
-			step.Detail = fmt.Sprintf("project %s has no remote; `ao setup` would set its default branch to %s", project.ID, branch)
-			res.Project = setupProjectFrom(project, reused)
-			return step
+	// An "auto" default branch is resolved from origin's HEAD when a session
+	// starts. With no remote, or a remote whose HEAD cannot be resolved (never
+	// fetched, unreachable), that fails, so set the checked-out branch, as
+	// `ao project set-config --default-branch` does.
+	if project.DefaultBranch == "" || project.DefaultBranch == "auto" {
+		if why := c.setupUnresolvedBranch(ctx, project); why != "" {
+			branch := c.setupCurrentBranch(ctx, project.Path)
+			switch {
+			case branch == "":
+				step.Status = setupNeedsHuman
+				step.Detail = fmt.Sprintf("project %s: %s, and no branch is checked out, so Orchestrator cannot pick a base branch", project.ID, why)
+				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch <branch>", shellQuote(project.ID))
+				res.Project = setupProjectFrom(project, reused)
+				return step
+			case opts.readOnly():
+				res.pending = true
+				step.Status = setupSkipped
+				step.Detail = fmt.Sprintf("project %s: %s; `ao setup` would set its default branch to %s", project.ID, why, branch)
+				res.Project = setupProjectFrom(project, reused)
+				return step
+			}
+			cfg, err := c.currentProjectConfig(ctx, project.ID)
+			if err != nil {
+				step.Status, step.Detail = setupFailed, "could not read the project config: "+err.Error()
+				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
+				return step
+			}
+			cfg.DefaultBranch = branch
+			var updated projectResult
+			if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: cfg}, &updated); err != nil {
+				step.Status, step.Detail = setupFailed, "could not set the default branch: "+err.Error()
+				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
+				return step
+			}
+			project.DefaultBranch = branch
+			if updated.Project.ID != "" && updated.Project.DefaultBranch != "" {
+				project.DefaultBranch = updated.Project.DefaultBranch
+			}
+			actions = append(actions, fmt.Sprintf("set default branch to %s (%s)", branch, why))
 		}
-		cfg, err := c.currentProjectConfig(ctx, project.ID)
-		if err != nil {
-			step.Status, step.Detail = setupFailed, "could not read the project config: "+err.Error()
-			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
-			return step
-		}
-		cfg.DefaultBranch = branch
-		var updated projectResult
-		if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: cfg}, &updated); err != nil {
-			step.Status, step.Detail = setupFailed, "could not set the default branch: "+err.Error()
-			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
-			return step
-		}
-		project.DefaultBranch = branch
-		if updated.Project.ID != "" && updated.Project.DefaultBranch != "" {
-			project.DefaultBranch = updated.Project.DefaultBranch
-		}
-		actions = append(actions, fmt.Sprintf("set default branch to %s (the repository has no remote)", branch))
 	}
 
 	res.Project = setupProjectFrom(project, reused)
@@ -1099,11 +1103,40 @@ func (c *commandContext) setupNoRemoteBranch(ctx context.Context, path string) s
 	if err != nil || strings.TrimSpace(string(remotes)) != "" {
 		return ""
 	}
+	return c.setupCurrentBranch(ctx, path)
+}
+
+// setupCurrentBranch returns the checked-out branch, or "" when HEAD is
+// detached.
+func (c *commandContext) setupCurrentBranch(ctx context.Context, path string) string {
 	out, err := c.deps.CommandOutputInDir(ctx, path, "git", "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// setupRemoteHeadTimeout bounds the one network call setup makes to learn a
+// remote's default branch.
+var setupRemoteHeadTimeout = 15 * time.Second
+
+// setupUnresolvedBranch says why an "auto" default branch cannot be resolved
+// the way a session start resolves it (from origin's HEAD), or "" when it can.
+func (c *commandContext) setupUnresolvedBranch(ctx context.Context, project projectDetails) string {
+	if project.Repo == "" {
+		return "the repository has no remote"
+	}
+	if _, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD"); err == nil {
+		return ""
+	}
+	// Not cached locally: ask the remote, never prompting for credentials.
+	runCtx, cancel := context.WithTimeout(ctx, setupRemoteHeadTimeout)
+	defer cancel()
+	out, err := c.deps.CommandOutputInDir(runCtx, project.Path, "git", "-c", "core.askPass=true", "ls-remote", "--symref", "--", "origin", "HEAD")
+	if err == nil && strings.Contains(string(out), "ref: refs/heads/") {
+		return ""
+	}
+	return "origin's default branch could not be resolved (the remote was never fetched or is unreachable)"
 }
 
 // findProjectByPath returns the registered project whose path is the same

@@ -982,3 +982,77 @@ func TestSetupStartAuthRequiredGivesTheLoginCommand(t *testing.T) {
 		t.Fatalf("start step = %+v, next_actions = %q", start, res.NextActions)
 	}
 }
+
+// gitIn runs git in dir with a clean environment.
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(gitFreeEnv(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// registerAutoBranch makes POST /projects register path with a remote and an
+// "auto" default branch, as the daemon does when origin's HEAD is not cached.
+func registerAutoBranch(d *taskDaemon, path string) {
+	project := fmt.Sprintf(`{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"auto","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, path)
+	d.set("POST /api/v1/projects", 201, `{"project":`+project+`}`)
+	d.set("GET /api/v1/projects/calc", 200, `{"status":"ok","project":`+project+`}`)
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc","defaultBranch":"main"}}`)
+}
+
+func TestSetupRemoteWithUnresolvableHeadGetsCurrentBranch(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	registerAutoBranch(d, repo)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	var put setConfigRequest
+	if err := json.Unmarshal([]byte(d.bodies["PUT /api/v1/projects/calc/config"]), &put); err != nil || put.Config.DefaultBranch != "main" {
+		t.Fatalf("set-config body = %s", d.bodies["PUT /api/v1/projects/calc/config"])
+	}
+	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupFixed || !strings.Contains(project.Detail, "origin's default branch could not be resolved") {
+		t.Fatalf("project step = %+v", project)
+	}
+}
+
+func TestSetupRemoteWithCachedHeadKeepsAuto(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	gitIn(t, repo, "clone", "-q", "--bare", repo, remote)
+	gitIn(t, repo, "remote", "add", "origin", remote)
+	gitIn(t, repo, "fetch", "-q", "origin")
+	gitIn(t, repo, "remote", "set-head", "origin", "main")
+	registerAutoBranch(d, repo)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatal("setup overrode a default branch the remote resolves")
+	}
+}
+
+func TestSetupUnresolvableHeadOnDetachedHeadNeedsHuman(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	gitIn(t, repo, "checkout", "-q", "--detach")
+	registerAutoBranch(d, repo)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Fix != "ao project set-config calc --default-branch <branch>" {
+		t.Fatalf("project step = %+v", project)
+	}
+}
