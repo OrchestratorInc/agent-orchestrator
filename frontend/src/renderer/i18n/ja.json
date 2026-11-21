@@ -19,6 +19,7 @@
 	"issueArtifact.confirm": "Issue に追加",
 	"issueArtifact.confirmNumber": "Issue #{{number}} に追加",
 	"issueArtifact.adding": "追加中…",
+	"chat.archived.placeholder": "メッセージを送信するとこのセッションが復元されます",
 	"chat.draft.excerptTextLimit": "選択したテキストが24 KiBを超えています。短い範囲を選択してください。",
 	"chat.draft.excerptSourceLimit": "取得したソースが24 KiBを超えています。短い範囲を選択してください。",
 	"chat.draft.excerptMessageLimit": "メッセージと抜粋がサイズ上限を超えています。メッセージを短くするか、抜粋を削除してください。",

@@ -19,6 +19,7 @@
 	"issueArtifact.confirm": "Zum Issue hinzufügen",
 	"issueArtifact.confirmNumber": "Zu Issue #{{number}} hinzufügen",
 	"issueArtifact.adding": "Wird hinzugefügt…",
+	"chat.archived.placeholder": "Sende eine Nachricht, um diese Sitzung wiederherzustellen",
 	"chat.draft.excerptTextLimit": "Der ausgewählte Text überschreitet 24 KiB. Wähle einen kürzeren Auszug.",
 	"chat.draft.excerptSourceLimit": "Der erfasste Rohtext überschreitet 24 KiB. Wähle einen kürzeren Auszug.",
 	"chat.draft.excerptMessageLimit": "Nachricht und Auszüge überschreiten die maximale Nachrichtengröße. Kürze die Nachricht oder entferne einen Auszug.",

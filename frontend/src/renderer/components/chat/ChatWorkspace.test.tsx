@@ -3448,7 +3448,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
 		const composer = screen.getByRole("combobox", { name: "Message the agent" });
 		expect(composer).toHaveAttribute("contenteditable", "true");
-		expect(composer).toHaveAttribute("aria-placeholder", "Message the agent");
+		expect(composer).toHaveAttribute("aria-placeholder", "Send a message to restore this session");
 
 		// Typing is not sending: nothing restores yet.
 		await typeInLexicalEditor(composer, "pick this back up");
@@ -3456,14 +3456,14 @@ describe("ChatWorkspace timeline", () => {
 		expect(send).not.toHaveBeenCalled();
 	});
 
-	it("sends from an archived chat once, and keeps the composer usable while it restores", async () => {
+	it("sends from an archived chat once, and shows the restore in the composer while it runs", async () => {
 		const user = userEvent.setup();
 		const restore = vi.fn();
 		const send = vi.fn().mockResolvedValue(undefined);
-		const view = (resumingAgent: boolean) => (
+		const view = (resumingAgent: boolean, isTerminated = true) => (
 			<ChatWorkspace
 				snapshot={{ ...chatFixtureSettled, sessionId: "archived-send", controller: { state: "stopped" } }}
-				session={{ ...chatSession, id: "archived-send", isTerminated: true }}
+				session={{ ...chatSession, id: "archived-send", isTerminated }}
 				onResumeAgent={restore}
 				onSend={send}
 				resumingAgent={resumingAgent}
@@ -3478,10 +3478,17 @@ describe("ChatWorkspace timeline", () => {
 		// The surface's send restores; the chat itself never asks for one.
 		expect(restore).not.toHaveBeenCalled();
 
-		// While the send's restore runs, nothing announces it and typing goes on.
+		// While the send's restore runs the composer says so and shimmers, and typing goes on.
 		rerender(view(true));
-		expect(screen.queryByText("Restoring session")).not.toBeInTheDocument();
+		expect(composer).toHaveAttribute("aria-placeholder", "Restoring session");
+		expect(document.querySelector(".cursor-chat-composer")).toHaveAttribute("data-starting");
 		expect(composer).toHaveAttribute("contenteditable", "true");
+		// The session turns live before its agent is back: still one restore.
+		rerender(view(true, false));
+		expect(composer).toHaveAttribute("aria-placeholder", "Restoring session");
+		rerender(view(false, false));
+		expect(composer).toHaveAttribute("aria-placeholder", "Message the agent");
+		expect(document.querySelector(".cursor-chat-composer")).not.toHaveAttribute("data-starting");
 		expect(send).toHaveBeenCalledOnce();
 	});
 

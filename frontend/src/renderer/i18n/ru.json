@@ -19,6 +19,7 @@
 	"issueArtifact.confirm": "Добавить в задачу",
 	"issueArtifact.confirmNumber": "Добавить в задачу № {{number}}",
 	"issueArtifact.adding": "Добавление…",
+	"chat.archived.placeholder": "Отправьте сообщение, чтобы восстановить этот сеанс",
 	"chat.draft.excerptTextLimit": "Выбранный текст превышает 24 КиБ. Выберите более короткий фрагмент.",
 	"chat.draft.excerptSourceLimit": "Сохранённый исходный текст превышает 24 КиБ. Выберите более короткий фрагмент.",
 	"chat.draft.excerptMessageLimit": "Сообщение и фрагменты превышают допустимый размер. Сократите сообщение или удалите фрагмент.",

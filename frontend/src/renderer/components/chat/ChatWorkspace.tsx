@@ -1029,6 +1029,12 @@ function ChatWorkspaceContent({
 	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
 	// A terminated session has no agent to resume: only a restore brings it back.
 	const terminated = Boolean(session && !sessionIsActive(session));
+	// A message sent to an archived chat restores it first. The restore reads as one
+	// step until the agent is back, though the session turns live partway through it.
+	const restoringArchived = useRef(false);
+	if (terminated) restoringArchived.current = true;
+	else if (!resumingAgent) restoringArchived.current = false;
+	const restoring = Boolean(resumingAgent) && restoringArchived.current;
 	// After a restart the daemon is still verifying this session and reconnects
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
@@ -2480,9 +2486,10 @@ function ChatWorkspaceContent({
 											{/* Normally right of the model control; with no settings bar, beside the ring. */}
 											{composerSettings ? null : quotaSign}
 											<QuotaStatus quota={runningQuota} />
-											{composerSettings}
+											{/* Shown so the chat reads as itself, but nothing runs its picks until it is restored. */}
+											{terminated && composerSettings ? <div inert className="contents">{composerSettings}</div> : composerSettings}
 										</>}
-										addMenuItems={agentSwitch ? (
+										addMenuItems={agentSwitch && !terminated ? (
 											<ComposerModeItems
 												configOptions={configOptions ?? []}
 												settings={stableSettings}
@@ -2500,7 +2507,7 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
 										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
@@ -2520,6 +2527,10 @@ function ChatWorkspaceContent({
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
+												: restoring
+												? t("shell.restoringSession")
+												: terminated
+												? t("chat.archived.placeholder")
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting

@@ -19,6 +19,7 @@
 	"issueArtifact.confirm": "Kayda ekle",
 	"issueArtifact.confirmNumber": "#{{number}} numaralı kayda ekle",
 	"issueArtifact.adding": "Ekleniyor…",
+	"chat.archived.placeholder": "Bu oturumu geri yüklemek için bir mesaj gönderin",
 	"chat.draft.excerptTextLimit": "Seçilen metin 24 KiB sınırını aşıyor. Daha kısa bir alıntı seçin.",
 	"chat.draft.excerptSourceLimit": "Yakalanan ham kaynak 24 KiB sınırını aşıyor. Daha kısa bir alıntı seçin.",
 	"chat.draft.excerptMessageLimit": "Mesaj ve yakalanan alıntılar mesaj boyutu sınırını aşıyor. Mesajı kısaltın veya bir alıntıyı kaldırın.",

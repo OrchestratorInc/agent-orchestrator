@@ -19,6 +19,7 @@
 	"issueArtifact.confirm": "이슈에 추가",
 	"issueArtifact.confirmNumber": "이슈 #{{number}}에 추가",
 	"issueArtifact.adding": "추가 중…",
+	"chat.archived.placeholder": "메시지를 보내면 이 세션이 복원됩니다",
 	"chat.draft.excerptTextLimit": "선택한 텍스트가 24 KiB를 초과합니다. 더 짧은 부분을 선택하세요.",
 	"chat.draft.excerptSourceLimit": "캡처한 원문이 24 KiB를 초과합니다. 더 짧은 부분을 선택하세요.",
 	"chat.draft.excerptMessageLimit": "메시지와 발췌문이 크기 제한을 초과합니다. 메시지를 줄이거나 발췌문을 삭제하세요.",

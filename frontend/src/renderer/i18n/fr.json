@@ -19,6 +19,7 @@
 	"issueArtifact.confirm": "Ajouter au ticket",
 	"issueArtifact.confirmNumber": "Ajouter au ticket nº {{number}}",
 	"issueArtifact.adding": "Ajout en cours…",
+	"chat.archived.placeholder": "Envoyez un message pour restaurer cette session",
 	"chat.draft.excerptTextLimit": "Le texte sélectionné dépasse 24 Kio. Sélectionnez un extrait plus court.",
 	"chat.draft.excerptSourceLimit": "La source brute capturée dépasse 24 Kio. Sélectionnez un extrait plus court.",
 	"chat.draft.excerptMessageLimit": "Le message et les extraits dépassent la taille maximale. Raccourcissez le message ou retirez un extrait.",
