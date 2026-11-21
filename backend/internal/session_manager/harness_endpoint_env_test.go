@@ -92,6 +92,12 @@ func TestRuntimeEnvKeepsAccountKeyAwayFromCustomEndpoint(t *testing.T) {
 				t.Fatalf("%s: account key reached the endpoint via %s: %v", style, key, env)
 			}
 		}
+		// A key the project sets keeps its project value even after the
+		// account step changed it.
+		project, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{"ANTHROPIC_BASE_URL": "https://project.example.com"}, "", "claude-code")
+		if err != nil || project["ANTHROPIC_BASE_URL"] != "https://project.example.com" {
+			t.Fatalf("%s: project base URL = %q, err=%v", style, project["ANTHROPIC_BASE_URL"], err)
+		}
 		keyVar := map[harnessendpoint.AuthStyle]string{harnessendpoint.AuthBearer: "ANTHROPIC_AUTH_TOKEN", harnessendpoint.AuthAPIKey: "ANTHROPIC_API_KEY"}[style]
 		if env[keyVar] != "sk-endpoint" {
 			t.Fatalf("%s: %s = %q, want the endpoint key", style, keyVar, env[keyVar])
