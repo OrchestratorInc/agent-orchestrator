@@ -206,9 +206,14 @@ func (s *Service) Installed(ctx context.Context) (bool, error) {
 	return err == nil, err
 }
 
-// Close cancels a pending permission request and waits for it to stop.
+// Close cancels a pending permission request or daemon start and waits for it
+// to stop. Cancelling under s.mu orders it against ensureDaemon, which checks
+// the background context and adds its worker under the same lock, so no worker
+// is added once Wait may have begun.
 func (s *Service) Close(ctx context.Context) error {
+	s.mu.Lock()
 	s.stop()
+	s.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		s.workers.Wait()

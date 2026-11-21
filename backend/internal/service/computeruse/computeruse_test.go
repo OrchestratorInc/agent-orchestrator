@@ -546,6 +546,22 @@ func TestDaemonStartOutlivesCancelledCaller(t *testing.T) {
 	}
 }
 
+func TestEnsureDaemonAfterCloseStartsNothing(t *testing.T) {
+	driver := &fakeDriver{startsUp: true}
+	s := newTestService(t, driver, "linux")
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := s.ensureDaemon(context.Background(), "/opt/cua-driver"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensureDaemon() error = %v, want context.Canceled", err)
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.started != 0 {
+		t.Fatalf("StartDaemon ran %d times after Close, want 0", driver.started)
+	}
+}
+
 func TestCallReportsDaemonStartFailure(t *testing.T) {
 	driver := &fakeDriver{startErr: errors.New("no desktop session")}
 	driver.onCall = func([]string) ([]byte, []byte, error) {
