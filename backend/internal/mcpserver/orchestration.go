@@ -88,7 +88,11 @@ func callSessionRead(ctx context.Context, s *server, args map[string]any) (any, 
 				turn[key] = clip(text, perText)
 			}
 		}
-		if encoded, err := encodeResult(history); err != nil || len(encoded) <= maxToolResultChars || perText < 64 {
+		encoded, err := encodeResult(history)
+		if err != nil {
+			return nil, err
+		}
+		if len(encoded) <= maxToolResultChars || perText < 64 {
 			return history, nil
 		}
 	}
