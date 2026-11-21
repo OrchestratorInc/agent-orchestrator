@@ -384,6 +384,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	cloudActionsRef.current = {
 		client: cloudState.client, org: cloudState.org, projects: cloudState.projects, connections: cloudState.connections,
 		chatHarnesses: cloudState.chatHarnesses, sessions: cloudState.sessions, upsertSession: cloudState.upsertSession, refreshSessions: cloudState.refreshSessions,
+		upsertProject: cloudState.upsertProject,
 	};
 	const refreshCloudRef = useRef(cloudState.refresh);
 	refreshCloudRef.current = cloudState.refresh;
@@ -1241,7 +1242,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
-				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { projectId, prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+				// Standalone on Cloud starts a standalone agent, which brings its own project.
+				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { ...(projectId === STANDALONE_PROJECT ? { standalone: true } : { projectId }), prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
 					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
