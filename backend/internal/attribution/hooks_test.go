@@ -445,6 +445,28 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 	}
 }
 
+// An option's value is not read as an option: here the -F file is named
+// --clean=verbatim, which git consumes as the file, so --cleanup=strip holds,
+// the "#" message is empty and git aborts.
+func TestHookDoesNotReadAnOptionValueAsAnOption(t *testing.T) {
+	r := newRepo(t, testCoAuthor, nil)
+	if err := os.WriteFile(filepath.Join(r.worktree, "--clean=verbatim"), []byte("# placeholder\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := r.git(r.worktree, "rev-parse", "HEAD")
+	cmd := exec.Command("git", "commit", "--allow-empty", "--cleanup=strip", "-F", "--clean=verbatim")
+	cmd.Dir = r.worktree
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "empty commit message") {
+		t.Fatalf("want git's empty-message abort, got %v:\n%s\n%s", err, out, r.message("HEAD"))
+	}
+	if after := r.git(r.worktree, "rev-parse", "HEAD"); after != before {
+		t.Fatal("HEAD moved")
+	}
+}
+
 // A plain `git commit` (no options at all) with an edited template is
 // credited: no options is not the same as options that cannot be read.
 func TestHookCreditsAnEditedTemplateWithNoOptions(t *testing.T) {

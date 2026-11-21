@@ -88,10 +88,51 @@ commit_args() {
 	fi | awk '$0 == "commit" { seen = 1 } seen { print }'
 }
 
+# parse_args prints the exact arguments' options the way git reads them, one
+# per line as "name<TAB>value": long options by any prefix, short option
+# clusters up to a letter that takes a value, and a required value (attached
+# or the next word) consumed with its option, so a value is never read as an
+# option itself.
+parse_args() {
+	printf '%s\n' "$args" | awk '
+		BEGIN {
+			n = split("message file template cleanup author date trailer reuse-message reedit-message fixup squash pathspec-from-file", valued, " ")
+			short["m"] = "message"; short["F"] = "file"; short["t"] = "template"
+			short["c"] = "reedit-message"; short["C"] = "reuse-message"
+		}
+		want != "" { print want "\t" $0; want = ""; next }
+		$0 == "--" { exit }
+		/^--./ {
+			name = substr($0, 3)
+			eq = index(name, "=")
+			if (eq) name = substr(name, 1, eq - 1)
+			if (!eq && index("edit", name) == 1) { print "edit\t"; next }
+			for (i = 1; i <= n; i++) {
+				if (index(valued[i], name) != 1) continue
+				if (eq) print valued[i] "\t" substr($0, eq + 3)
+				else want = valued[i]
+				break
+			}
+			next
+		}
+		/^-./ {
+			for (i = 2; i <= length($0); i++) {
+				c = substr($0, i, 1)
+				if (c == "e") print "edit\t"
+				if (c in short) {
+					if (i < length($0)) print short[c] "\t" substr($0, i + 1)
+					else want = short[c]
+					break
+				}
+			}
+		}
+	'
+}
+
 # commit_option prints the value of `git commit` option $1 (cleanup or
-# template; -t is template too). Like git, a long option may be abbreviated
-# to any prefix and the last occurrence wins. Returns 0 with the value when
-# it was given, 1 when it certainly was not, and 2 when that cannot be told.
+# template), the last one given as git takes it. Returns 0 with the value
+# when it was given, 1 when it certainly was not, and 2 when that cannot be
+# told.
 commit_option() {
 	[ "$args_read" = 1 ] || return 2
 	# Split by ps, any value holding a space (a message, a path) can spell
@@ -104,19 +145,8 @@ commit_option() {
 		' && return 2
 		return 1
 	fi
-	printf '%s\n' "$args" | awk -v opt="$1" '
-		$0 == "--" { exit }
-		want { value = $0; found = 1; want = 0; next }
-		/^--./ {
-			name = substr($0, 3)
-			eq = index(name, "=")
-			if (eq) name = substr(name, 1, eq - 1)
-			if (index(opt, name) != 1) next
-			if (eq) { value = substr($0, eq + 3); found = 1 } else want = 1
-			next
-		}
-		opt == "template" && $0 == "-t" { want = 1; next }
-		opt == "template" && $0 ~ /^-t./ { value = substr($0, 3); found = 1; next }
+	parse_args | awk -F '\t' -v opt="$1" '
+		$1 == opt { value = $2; found = 1 }
 		END { if (found) print value; exit !found }
 	'
 }
@@ -145,31 +175,7 @@ editor_maybe() {
 		printf '%s\n' "$args" | grep -Eq -- '^--e(d(i(t)?)?)?$|^-[A-Za-z]*e'
 		return
 	fi
-	# Exact arguments are read like git reads them. A short option cluster
-	# runs up to a letter that takes a value (m, F, t, c, C), which is the
-	# rest of the word or the next one, so -em'...' asks for the editor and
-	# an "e" inside a value does not. A long option that takes a value and
-	# has no "=" takes the next word, whatever its abbreviation.
-	printf '%s\n' "$args" | awk '
-		BEGIN { n = split("message file template cleanup author date trailer reuse-message reedit-message fixup squash pathspec-from-file", valued, " ") }
-		skip { skip = 0; next }
-		$0 == "--" { exit }
-		/^--./ {
-			name = substr($0, 3)
-			if (index(name, "=")) next
-			if (index("edit", name) == 1) { found = 1; exit }
-			for (i = 1; i <= n; i++) if (index(valued[i], name) == 1) { skip = 1; break }
-			next
-		}
-		/^-./ {
-			for (i = 2; i <= length($0); i++) {
-				c = substr($0, i, 1)
-				if (c == "e") { found = 1; exit }
-				if (index("mFtcC", c)) { if (i == length($0)) skip = 1; break }
-			}
-		}
-		END { exit !found }
-	'
+	parse_args | grep -q '^edit	'
 }
 
 # strips_comments reports whether git drops comment lines from an edited
