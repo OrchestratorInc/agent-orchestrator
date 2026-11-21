@@ -1143,11 +1143,15 @@ func (m *Manager) preflightTerminalLaunch(
 		var resumable bool
 		restoreRec := rec
 		restoreRec.Metadata.AgentSessionID = nativeConversationID
+		metadata := nativeRestoreMetadata(restoreRec)
+		// Preflight runs before storage bridging. Let adapters validate the
+		// current interface's binding; actual launches get fresh restore metadata.
+		metadata[ports.MetadataKeySessionMode] = string(rec.Mode)
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 			Env: env,
 			Session: ports.SessionRef{
 				ID: string(rec.ID), WorkspacePath: launchPath,
-				Metadata: nativeRestoreMetadata(restoreRec),
+				Metadata: metadata,
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
 			Config: config, Permissions: config.Permissions,

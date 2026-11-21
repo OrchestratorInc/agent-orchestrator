@@ -169,7 +169,14 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		if err != nil {
 			return nil, false, err
 		}
-		ref := ports.NativeSessionRef{NativeSessionID: agentSessionID, ConfigDir: root, TranscriptPath: filepath.Join(root, CLIStorageDir, "conversations", agentSessionID+".db")}
+		store := CLIStorageDir
+		// A Chat-to-Terminal preflight validates the still-owning ACP copy.
+		// The manager supplies this source-mode hint only during preflight;
+		// actual terminal launches must validate the bridged CLI copy.
+		if cfg.Session.Metadata[ports.MetadataKeySessionMode] == string(domain.SessionModeChat) {
+			store = ACPStorageDir
+		}
+		ref := ports.NativeSessionRef{NativeSessionID: agentSessionID, ConfigDir: root, TranscriptPath: filepath.Join(root, store, "conversations", agentSessionID+".db")}
 		if err := validatePreparedImport(ctx, ref, launch, nil); err != nil {
 			return nil, false, err
 		}
