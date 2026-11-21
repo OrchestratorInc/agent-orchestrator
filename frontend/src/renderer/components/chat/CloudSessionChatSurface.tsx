@@ -1538,6 +1538,9 @@ export function CloudSessionChatSurface({
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser);
 	const { client, ready, userId, baseUrl } = useCloudCp();
 	const restoreSession = useRestoreSession();
+	// The archived session a sent message is restoring, so the composer shows the
+	// restore. Kept by id: this surface outlives the session it shows.
+	const [restoringId, setRestoringId] = useState<string>();
 	// A shared session's live state: who else has it open, who holds its
 	// composer (the lock on talking to the agent), and the model and settings
 	// its owner chose.
@@ -2553,17 +2556,19 @@ export function CloudSessionChatSurface({
 				// message goes once the control plane took the restore, and none goes if it
 				// refused. One shared from another organization is the sharer's to restore.
 				if (session.isTerminated !== true || readOnly || cloud?.shared) return deliver();
-				return restoreSession(session.id).then((restored) => {
+				const restoring = session.id;
+				setRestoringId(restoring);
+				return restoreSession(restoring).then((restored) => {
 					if (restored.status !== "success") {
 						throw Object.assign(new Error(restored.message), { code: "SESSION_RESTORE_FAILED" });
 					}
 					return deliver();
-				});
+				}).finally(() => setRestoringId((current) => current === restoring ? undefined : current));
 			}}
 			session={chatSession}
 			settingsReady={!startStopped}
 			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
-			resumingAgent={retryStart.isPending}
+			resumingAgent={retryStart.isPending || restoringId === session.id}
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}

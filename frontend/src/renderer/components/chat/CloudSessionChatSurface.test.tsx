@@ -2272,6 +2272,8 @@ describe("CloudSessionChatSurface", () => {
 		);
 		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
 		const sent = cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "message-1");
+		// The composer shows the restore while it runs.
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].resumingAgent).toBe(true));
 
 		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={other} /></QueryClientProvider>);
 		await act(async () => {
@@ -2280,6 +2282,8 @@ describe("CloudSessionChatSurface", () => {
 		});
 		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledOnce();
 		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ text: "hello" }), { idempotencyKey: "message-1" });
+		// Not the other session's restore.
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].resumingAgent).toBe(false);
 	});
 
 	it("leaves restoring a session shared from another organization to its owner", async () => {
