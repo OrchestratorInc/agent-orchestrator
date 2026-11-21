@@ -3506,7 +3506,21 @@ export function Timeline({
 	const [entranceGate] = useState(createChatEntranceGate);
 	// Shown again after a terminal or reviewer tab covered it: the reader watches from then.
 	if (shownAt !== undefined && shownAt > entranceGate.watchingSince) entranceGate.watchingSince = shownAt;
-	admitArrivals(entranceGate, sourceSnapshot);
+	// Kept hidden by KeepRecentAlive while another session was on screen. Hiding
+	// cleans up layout effects and showing runs them again, so this is set through
+	// any render while hidden and through the render that shows the chat again:
+	// rows it holds by then were not watched arriving. From the frame it shows,
+	// the reader watches again. The open read of what changed meanwhile lands just
+	// after, so rows written before this frame are catch-up (the gate's returnedAt).
+	const keptHidden = useRef(false);
+	useLayoutEffect(() => {
+		if (keptHidden.current) entranceGate.watchingSince = entranceGate.returnedAt = Date.now();
+		keptHidden.current = false;
+		return () => {
+			keptHidden.current = true;
+		};
+	}, [entranceGate]);
+	admitArrivals(entranceGate, sourceSnapshot, keptHidden.current);
 	useEffect(() => {
 		entranceGate.settled = true;
 	}, [entranceGate]);
@@ -5348,7 +5362,7 @@ export function Timeline({
 	// Read through a ref so streamed chunks (new layout callbacks) never re-register it.
 	const onPageShown = useRef(() => {});
 	onPageShown.current = () => {
-		entranceGate.watchingSince = Date.now();
+		entranceGate.watchingSince = entranceGate.returnedAt = Date.now();
 		entranceGate.catchUpAt = performance.now();
 		if (isFlying()) cancelScrollFollow();
 		const node = scroller.current;
@@ -6727,6 +6741,7 @@ function TimelineItem({
 					apiBaseUrl={apiBaseUrl}
 					queued={queued}
 					animateIn={newHumanMessageIds.has(itemKey(item))}
+					entranceKey={itemKey(item)}
 					onEdit={editAvailable ? (_turnID, text) => onSubmitMessageEdit(text) : undefined}
 					editing={editing}
 					editText={editing ? messageEdit?.text : undefined}
