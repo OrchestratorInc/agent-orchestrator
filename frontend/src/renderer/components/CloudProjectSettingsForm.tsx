@@ -162,7 +162,7 @@ export function CloudProjectSandboxSettings({ project, showDocker }: { project: 
 	// unknown, so the switches stay editable and the server's 403 answers. Read
 	// from the current project: a save or refetch puts the server's answer there.
 	const rowProps = { project, readOnly: canEditSandboxOf(project) === false };
-	return <SettingsGroup title={t("settings.project.sandbox.title")} grouped>
+	return <SettingsGroup title={t("settings.project.sandbox.title")} titleHidden grouped>
 		{showDocker ? <SandboxSwitchRow {...rowProps} configKey="sandboxDocker" id="project-sandbox-docker"
 			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}
 			checkedOf={(config) => config?.sandboxDocker !== false} /> : null}
