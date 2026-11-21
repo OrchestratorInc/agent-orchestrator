@@ -81,6 +81,36 @@ describe("authorized harness whose login the CLI could not confirm", () => {
 	});
 });
 
+// After an install succeeds, AO checks the harness again before the row can
+// say whether it is installed. Until that check answers, the row is verifying.
+describe("harness whose install AO is still verifying", () => {
+	function verifying(installCheckPending: boolean, installation: "installed" | "not_installed" = "not_installed") {
+		return describeHarness({
+			agentId: "gemini", readinessAgent: agentReadiness("gemini", "Gemini CLI", { installation }),
+			job: { target: "gemini", status: "succeeded" } as never,
+			t: ((key: string) => key) as TFunction, language: "en",
+			installed: installation === "installed", pending: false, readinessPending: false, readinessFailed: false,
+			authPlansPending: false, authPlansFailed: false, authWorkflow: null, installCheckPending,
+		});
+	}
+
+	it("says it is verifying instead of not installed", () => {
+		const details = verifying(true);
+		expect(details.isInstalled).toBe(false);
+		expect(details.busy).toBe(true);
+		expect(details.installationPending).toBe(true);
+		expect(details.progressLabel).toBe("settings.harness.verifying");
+		expect(details.statusLabel).toBe("settings.harness.verifying");
+	});
+
+	it("shows the check's answer once it arrives", () => {
+		const notInstalled = verifying(false);
+		expect(notInstalled.busy).toBe(false);
+		expect(notInstalled.installationPending).toBe(false);
+		expect(verifying(false, "installed").isInstalled).toBe(true);
+	});
+});
+
 function summary(agentId: AgentId, method?: string, code?: string) {
 	return describe_(agentId, method, code).authSummary;
 }

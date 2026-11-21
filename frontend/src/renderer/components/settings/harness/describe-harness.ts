@@ -52,6 +52,9 @@ export type HarnessDescribeInput = {
 	authWorkflow: AuthTerminalWorkflow | null;
 	/** The last login check for this harness failed. */
 	authCheckFailed?: boolean;
+	/** An install just succeeded and AO is checking the harness again; until
+	 * that check answers, whether it is installed is not known yet. */
+	installCheckPending?: boolean;
 	updatedAt?: string;
 };
 
@@ -79,7 +82,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	// action; the click-time probe still verifies target and ownership.
 	const updateAvailable = hasConfirmedHarnessUpdate(advisory);
 	const currentVersion = advisory?.currentVersion?.trim();
-	const busy = pending || isActiveInstallJob(job);
+	// Only while the readiness snapshot has not caught up with the install.
+	const installCheckPending = Boolean(input.installCheckPending && !isInstalled);
+	const busy = pending || isActiveInstallJob(job) || installCheckPending;
 	const currentOperation = attempt && (pending || actionError || attempt.startedAt === job?.startedAt) ? attempt.operation : undefined;
 	const jobFailed = isFailedInstallJob(job);
 	const failed = jobFailed || Boolean(actionError);
@@ -88,7 +93,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 		: undefined;
 	// Unknown inventory is not proof that installing is safe. Preserve the
 	// existing cached-readiness fallback when fetching the snapshot fails.
-	const installationPending = !input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown");
+	const installationPending = installCheckPending || (!input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown"));
 	const isSetupAction = authPlan?.action === "setup";
 	// Inline key methods replace the documentation card: the button opens the
 	// Account login panel instead of the setup docs.
@@ -146,7 +151,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const stage = installStage(job);
 	const percent = installPercent(job);
 	const progressLabel = job?.status === "waiting_for_idle" ? t("settings.harness.waitingForIdle")
-		: job?.status === "verifying" ? t("settings.harness.verifying")
+		: job?.status === "verifying" || installCheckPending ? t("settings.harness.verifying")
 		: stage === "downloading" ? (percent === undefined ? t("settings.harness.progress.downloadingNow") : t("settings.harness.progress.downloadingPercent", { percent }))
 		: stage === "installing" ? (percent === undefined ? t("settings.harness.installing") : t("settings.harness.progress.installingPercent", { percent }))
 		: currentOperation === "update" ? t("settings.harness.updating")
@@ -163,6 +168,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 		: job?.status === "interrupted" ? t("settings.harness.interrupted")
 		: installMethod && availableMethodsLabel ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : plan?.reason ?? t("settings.harness.manualRequired");
 	const statusLabel = isInstalled ? rowError ?? (authBusy ? authProgress : authSummary)
+		: installCheckPending ? t("settings.harness.verifying")
 		: installationPending ? t("settings.harness.installationUnknown")
 		: job?.status === "interrupted" ? t("settings.harness.interrupted")
 		: rowError ?? installNote;
@@ -173,7 +179,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
 		authPlan, authState, authStatus, authSummary, authTone, renewsOnRun, loginUnconfirmed, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, showSetup, isSetupAction, isDocumentationAction, canRelogin,
-		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
+		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installCheckPending, installNote, listTone, statusLabel,
 	};
 }
 

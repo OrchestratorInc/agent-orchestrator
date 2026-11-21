@@ -72,3 +72,47 @@ describe("HarnessAccountTab diagnostics", () => {
 		expect(button?.querySelector(".icon-copy")).toBeNull();
 	});
 });
+
+describe("HarnessAccountTab install finishing", () => {
+	const running = { target: "goose", status: "installing", startedAt: "2026-11-19T14:03:50Z" } as InstallJob;
+	const succeeded = { ...running, status: "succeeded", finishedAt: "2026-11-19T14:04:22Z" } as InstallJob;
+
+	function installedDetails(installed: boolean, installCheckPending: boolean, job: InstallJob) {
+		return describeHarness({
+			agentId: "goose", t: appI18n.t.bind(appI18n) as TFunction, language: "en", job,
+			readinessAgent: agentReadiness("goose", "goose", { installation: installed ? "installed" : "not_installed" }),
+			plan: { agentId: "goose", methods: [{ id: "npm", label: "npm", available: true, recommended: true }] } as never,
+			installed, installCheckPending, pending: false, readinessPending: false, readinessFailed: false,
+			authPlansPending: false, authPlansFailed: false, authWorkflow: null,
+		});
+	}
+
+	function finish(installed: boolean, installCheckPending: boolean) {
+		const view = renderTab({ details: installedDetails(false, false, running) });
+		view.rerender(<HarnessAccountTab details={installedDetails(installed, installCheckPending, succeeded)} authWorkflowActive={false} copied={false} diagnosticsExpanded={false}
+			onToggleDiagnostics={vi.fn()} onCopyDiagnostics={vi.fn()} onInstall={vi.fn()} onSelectMethod={vi.fn()} onCopyCommand={vi.fn()} onUpdate={vi.fn()}
+			onLogin={vi.fn()} onLogout={vi.fn()} onVerify={vi.fn()} onCloseAuth={vi.fn()} onRetryAuth={vi.fn()} onTerminalState={vi.fn()} />);
+		return view;
+	}
+
+	it("verifies the install instead of offering Install again", () => {
+		const view = finish(false, true);
+		expect(view.container.querySelector("[data-harness-install-progress='verifying']")).not.toBeNull();
+		expect(screen.getAllByText("Verifying…").length).toBeGreaterThan(0);
+		expect(screen.queryByRole("button", { name: "Install" })).toBeNull();
+		expect(screen.queryByText("Not installed")).toBeNull();
+		expect(screen.queryByText("Done")).toBeNull();
+	});
+
+	it("ends on Done once the check finds it installed", () => {
+		const view = finish(true, false);
+		expect(view.container.querySelector("[data-harness-install-progress='done']")).not.toBeNull();
+	});
+
+	it("never says Done next to Not installed", () => {
+		const view = finish(false, false);
+		expect(view.container.querySelector("[data-harness-install-progress='done']")).toBeNull();
+		expect(screen.getByText("Not installed")).toBeInTheDocument();
+		expect(screen.queryByText("Done")).toBeNull();
+	});
+});

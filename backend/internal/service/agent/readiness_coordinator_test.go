@@ -609,6 +609,32 @@ func TestReadinessCoordinatorAllowsOpenCodeVersionProbeBudget(t *testing.T) {
 	}
 }
 
+// Gemini's install check runs `gemini --version`, a Node CLI behind an npm
+// shim that takes several seconds to start on Windows. The check must get the
+// same budget the adapter gives that probe, or a working install times out.
+func TestReadinessCoordinatorAllowsGeminiVersionProbeBudget(t *testing.T) {
+	t.Parallel()
+	agent := &readinessTestAgent{resolve: func(ctx context.Context) (string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 9*time.Second {
+			return "", context.DeadlineExceeded
+		}
+		return "gemini", nil
+	}, auth: func(context.Context) (ports.AgentAuthStatus, error) {
+		return ports.AgentAuthStatusUnknown, nil
+	}}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{readinessHarness("gemini", "Gemini CLI", agent)},
+	})
+	items, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := items[0].Installation.State; got != domain.AgentInstallationInstalled {
+		t.Fatalf("installation = %#v, want installed", items[0].Installation)
+	}
+}
+
 func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

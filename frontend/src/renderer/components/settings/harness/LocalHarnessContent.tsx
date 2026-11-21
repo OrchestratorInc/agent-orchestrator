@@ -829,6 +829,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		authState: { error: authStates[agentId]?.error ?? null, pending: Boolean(authStates[agentId]?.pending || uiLoginAgent === agentId || pendingUILogins.has(agentLoginKey(agentId, hostId))) },
 		authWorkflow: authWorkflow?.agentId === agentId ? authWorkflow : null,
 		authCheckFailed: Boolean(authCheckErrors[agentId]),
+		// A succeeded install is checked again; describeHarness drops this once
+		// readiness reports the harness installed.
+		installCheckPending: jobMap.get(agentId)?.status === "succeeded" && checkingAuth.includes(agentId),
 		updatedAt: lastUpdatedAt[agentId],
 	});
 	const healthReport = (details: HarnessDetails) => healthText(details, { hostId, authCheckError: authCheckErrors[details.agentId], t });

@@ -25,6 +25,10 @@ const (
 	// Hermes is a Python CLI: a warm --version identity probe takes about two
 	// seconds, and the first run after an install compiles its bytecode.
 	hermesInstallCheckTimeout = 60 * time.Second
+	// Gemini's install check runs `gemini --version`, a Node CLI behind an npm
+	// shim that can take several seconds to start (3-4s on Windows). Match the
+	// 10s its adapter already allows that probe.
+	geminiInstallCheckTimeout = 10 * time.Second
 	// The Hermes auth check resolves the binary, then runs `hermes status`,
 	// which inspects every provider and takes several seconds even when warm.
 	hermesAuthCheckTimeout = 45 * time.Second
@@ -554,6 +558,8 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 			timeout = opencodeInstallCheckTimeout
 		case domain.HarnessHermes:
 			timeout = hermesInstallCheckTimeout
+		case domain.HarnessGemini:
+			timeout = geminiInstallCheckTimeout
 		}
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)

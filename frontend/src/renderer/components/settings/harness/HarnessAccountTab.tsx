@@ -70,9 +70,11 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	const updateBlocked = Boolean(blockedBy);
 	// Subscription accounts are for local Claude Code and Codex.
 	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
-	// The running job's steps stay in the Installation card until it finishes on Done.
-	const justFinished = useInstallJustFinished(job);
-	const stage = justFinished ? "done" : installStage(job);
+	// The running job's steps stay in the Installation card until it finishes on
+	// Done. Done waits for the check after the install to find it installed;
+	// until then the card says it is verifying.
+	const justFinished = useInstallJustFinished(job) && isInstalled;
+	const stage = justFinished ? "done" : details.installCheckPending ? "verifying" : installStage(job);
 	// Progress reads as a solid state, not a greyed-out action.
 	const progress = (label: string) => <span role="status"><Button type="button" size="default" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{label}</Button></span>;
 	const progressAction = progress(details.progressLabel);
@@ -144,7 +146,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 				{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t(details.advisory?.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 				{installationAction}
 			</HarnessDetailRow>
-			{job && (justFinished || showsInstallProgress(job)) ? <HarnessInstallProgress job={job} stage={stage} label={justFinished ? t("settings.harness.progress.done") : details.progressLabel} /> : null}
+			{job && (justFinished || details.installCheckPending || showsInstallProgress(job)) ? <HarnessInstallProgress job={job} stage={stage} label={justFinished ? t("settings.harness.progress.done") : details.progressLabel} /> : null}
 			{isInstalled && details.updatedAt ? <HarnessDetailRow label={t("settings.harness.lastUpdated")}>
 				<span className="text-xs text-settings-label"><HarnessTimestamp value={details.updatedAt} /></span>
 			</HarnessDetailRow> : null}
