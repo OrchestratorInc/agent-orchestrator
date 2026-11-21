@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -49,7 +50,7 @@ func ListenersWithEnv(_ context.Context, name, value, skipExecutable string) ([]
 		if err != nil {
 			continue
 		}
-		comm, _ := os.ReadFile(dir + "/comm")
+		command := processName(dir)
 		for _, fd := range fds {
 			link, err := os.Readlink(dir + "/fd/" + fd.Name())
 			inode, ok := strings.CutPrefix(link, "socket:[")
@@ -57,11 +58,21 @@ func ListenersWithEnv(_ context.Context, name, value, skipExecutable string) ([]
 				continue
 			}
 			if port, ok := ports[strings.TrimSuffix(inode, "]")]; ok {
-				listeners = append(listeners, Listener{Port: port, PID: pid, Command: strings.TrimSpace(string(comm))})
+				listeners = append(listeners, Listener{Port: port, PID: pid, Command: command})
 			}
 		}
 	}
 	return uniqueByPort(listeners), nil
+}
+
+func processName(dir string) string {
+	if cmdline, err := os.ReadFile(dir + "/cmdline"); err == nil {
+		if argv0, _, _ := strings.Cut(string(cmdline), "\x00"); argv0 != "" {
+			return filepath.Base(argv0)
+		}
+	}
+	comm, _ := os.ReadFile(dir + "/comm")
+	return strings.TrimSpace(string(comm))
 }
 
 func parseProcNetListeners(table string, ports map[string]int) {
