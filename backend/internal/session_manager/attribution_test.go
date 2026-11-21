@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attribution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func attributionWorktree(t *testing.T, root, name string) string {
@@ -258,7 +260,10 @@ func TestRetryWithAttributionOffForgetsTheRecordedTrailer(t *testing.T) {
 		t.Fatal("first attempt recorded no trailer")
 	}
 
+	// A retry decides again before writing its prompt, as
+	// retryFailedChatSpawn does, then sets the workspace up.
 	beta = false
+	m.recordSpawnAttributionFor(ctx, project, "s-1")
 	m.applyCommitAttribution(ctx, project, "s-1", wt, attributionFromSettings)
 	if got, _ := st.SessionCommitAttribution(ctx, "s-1"); got != "" {
 		t.Fatalf("recorded choice after the retry = %q, want none", got)
@@ -369,6 +374,53 @@ func TestPRFooterPromptKeepsTheSessionsChoiceAfterSettingsChange(t *testing.T) {
 			}
 			if got := strings.Contains(prompt, attribution.PRFooter); got != tc.betaAtRebuild {
 				t.Fatalf("footer for a new session = %v, want %v", got, tc.betaAtRebuild)
+			}
+		})
+	}
+}
+
+// The spawn decides attribution once, before the first prompt: a settings
+// change between the prompt and the workspace setup changes neither the
+// recorded choice nor the worktree's trailer.
+func TestSpawnAttributionIsDecidedOnceBeforeThePrompt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix git hook scripts")
+	}
+	ctx := context.Background()
+	for _, start := range []bool{true, false} {
+		t.Run(fmt.Sprintf("beta %v at spawn", start), func(t *testing.T) {
+			root := t.TempDir()
+			wt := filepath.Join(root, "session", "mer-1")
+			attributionRepo(t, filepath.Join(root, "repo"), wt, "orchestrator/mer-1/root")
+			beta := start
+			m, st := attributionManager(t, root, &beta)
+			project := st.projects["mer"]
+			project.RepoOriginURL = "https://github.com/o/r"
+			st.projects["mer"] = project
+
+			_, systemPrompt, err := m.buildSpawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(systemPrompt, attribution.PRFooter); got != start {
+				t.Fatalf("first prompt footer = %v, want %v", got, start)
+			}
+			// The setting flips while the workspace is still being set up.
+			beta = !start
+			m.applyCommitAttribution(ctx, project, "mer-1", wt, attributionFromSettings)
+
+			if footer, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); !recorded || footer != start {
+				t.Fatalf("recorded footer = %v (recorded %v), want %v", footer, recorded, start)
+			}
+			wantCoAuthor := ""
+			if start {
+				wantCoAuthor = attribution.Bot.CoAuthor()
+			}
+			if got, _ := st.SessionCommitAttribution(ctx, "mer-1"); got != wantCoAuthor {
+				t.Fatalf("recorded trailer = %q, want %q", got, wantCoAuthor)
+			}
+			if got := strings.Contains(commitMessage(t, wt), "Co-authored-by: "+attribution.Bot.CoAuthor()); got != start {
+				t.Fatalf("commit trailer = %v, want %v", got, start)
 			}
 		})
 	}

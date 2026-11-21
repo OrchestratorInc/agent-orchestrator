@@ -80,6 +80,50 @@ const (
 	attributionRecorded
 )
 
+// recordSpawnAttribution decides, once per spawn and before the session's
+// first prompt is written, whether its commits get the trailer and its PRs the
+// footer, and records both. The prompt, the database and the worktree's hook
+// config then all follow this one decision, whatever the settings say later.
+// A retry decides again, so a choice from an attempt made before the settings
+// changed is not kept.
+func (m *Manager) recordSpawnAttribution(ctx context.Context, projectID domain.ProjectID, sessionID domain.SessionID) {
+	if m.store == nil || projectID == "" || sessionID == "" {
+		return
+	}
+	project, err := m.loadProject(ctx, projectID)
+	if err != nil {
+		m.logger.Warn("attribution: load project", "project", projectID, "error", err)
+		return
+	}
+	m.recordSpawnAttributionFor(ctx, project, sessionID)
+}
+
+// recordSpawnAttributionFor records the trailer and footer choices for a
+// starting session from the current settings, and returns the trailer.
+func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID) string {
+	coAuthor := ""
+	if m.commitTrailerWanted(ctx, project) {
+		coAuthor = attribution.Bot.CoAuthor()
+		if err := m.store.SetSessionCommitAttribution(ctx, sessionID, coAuthor); err != nil {
+			m.logger.Warn("attribution: record session choice", "sessionID", sessionID, "error", err)
+		}
+	} else {
+		m.forgetSessionCommitAttribution(ctx, sessionID)
+	}
+	m.recordPRFooterChoice(ctx, project, sessionID)
+	return coAuthor
+}
+
+// spawnAttributionDecided reports whether this spawn already recorded its
+// choice: a footer choice is written only by a spawn-time decision.
+func (m *Manager) spawnAttributionDecided(ctx context.Context, sessionID domain.SessionID) bool {
+	if m.store == nil || sessionID == "" {
+		return false
+	}
+	_, recorded, err := m.store.SessionPRFooter(ctx, sessionID)
+	return err == nil && recorded
+}
+
 // recordPRFooterChoice keeps whether a starting session's agents sign PRs, so
 // its prompt says the same when it is rebuilt for a relaunch, a restore or a
 // switch between Chat and the terminal, whatever the settings say by then.
@@ -128,15 +172,19 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 	coAuthor := ""
 	switch choice {
 	case attributionFromSettings:
-		if m.commitTrailerWanted(ctx, project) {
-			coAuthor = attribution.Bot.CoAuthor()
-			if err := m.store.SetSessionCommitAttribution(ctx, sessionID, coAuthor); err != nil {
-				m.logger.Warn("attribution: record session choice", "sessionID", sessionID, "error", err)
+		// The spawn decided before writing the session's first prompt; use
+		// that, so a settings change since then cannot split the prompt from
+		// the commits. Without one (an import, or a spawn whose decision could
+		// not be saved) decide now.
+		if m.spawnAttributionDecided(ctx, sessionID) {
+			recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
+			if err != nil {
+				m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
 			}
+			coAuthor = recorded
 		} else {
-			m.forgetSessionCommitAttribution(ctx, sessionID)
+			coAuthor = m.recordSpawnAttributionFor(ctx, project, sessionID)
 		}
-		m.recordPRFooterChoice(ctx, project, sessionID)
 	case attributionRecorded:
 		recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
 		if err != nil {
