@@ -1,5 +1,5 @@
 import type { AppIcon } from "./icons";
-import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, Share2, TriangleAlert, Wrench } from "@/components/app-icons";
+import { Bot, Box, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, Share2, TriangleAlert, Wrench } from "@/components/app-icons";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -152,6 +152,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		const workspace = isCloudWorkspaceProject(cloudProjectRecord.data ?? cloudProject);
 		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
+		projectSections.push({ id: "sandbox", label: t("settings.project.sandbox.title"), icon: Box });
 	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 	if (!remoteHostId) {
@@ -309,7 +310,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			else if (!isProjectSettings) { globalHistory.forward(); setFocusAgentId(undefined); }
 		},
 	};
-	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" && activeProjectSection !== "sharing" &&
+	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" && activeProjectSection !== "sharing" && activeProjectSection !== "sandbox" &&
 		(projectSaveState.phase === "failed" ||
 			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
 			projectSaveState.phase === "saving" ||

@@ -45,7 +45,8 @@ type SettingsSaveResult = {
 	spawnError: unknown;
 };
 
-export type ProjectSettingsSection = "general" | "agents";
+/** "sandbox" exists only for Cloud projects. */
+export type ProjectSettingsSection = "general" | "agents" | "sandbox";
 export type ProjectSettingsSaveState = {
 	phase: "idle" | "pending" | "saving" | "saved" | "failed";
 	dirty?: boolean;

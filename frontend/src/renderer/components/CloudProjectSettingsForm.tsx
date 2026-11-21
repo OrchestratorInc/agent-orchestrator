@@ -26,6 +26,7 @@ import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettin
 import { AgentSelectMenuItem } from "./settings/AgentSelectMenuItem";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./settings/SettingsRow";
+import { Switch } from "./ui/switch";
 import { useUiStore } from "../stores/ui-store";
 
 export const cloudProjectSettingsQueryKey = (baseUrl: string, orgId: string, projectId: string) => ["cloud-project-settings", baseUrl, orgId, projectId] as const;
@@ -73,6 +74,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	// poller); a project without a repository has no issues.
 	const intakeVisible = !standalone;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	if (section === "sandbox") return <CloudProjectSandboxSettings project={project} showDocker={usesCoder} />;
 	const save = async (values: ProjectSettingsDraft) => {
 		const patch = cloudProjectSettingsPatch(saved.current, toCloudDraft(values));
 		let updated: CloudCpProject | undefined;
@@ -131,8 +133,73 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
  * setting, is a failure to save and is reported as one.
  */
 function coAuthorCommitsUnsupported(error: unknown): boolean {
+	return configKeyUnsupported(error, "coAuthorCommits");
+}
+
+/** A control plane's answer to a config key it does not know yet. */
+function configKeyUnsupported(error: unknown, key: string): boolean {
 	return error instanceof CloudCpError && error.status === 422 && error.code === "validation_error" &&
-		error.message === "unsupported or null config.coAuthorCommits";
+		error.message === `unsupported or null config.${key}`;
+}
+
+type SandboxConfigKey = "sandboxDocker" | "agentsCanUseSudo";
+
+/**
+ * Project settings > Sandbox: what an agent may do inside the project's
+ * sandboxes. Docker is on unless the project says false (projects from before
+ * the setting keep it); sudo is off unless the project says true. Docker is a
+ * Coder sandbox feature, so it shows only on a project that runs on Coder.
+ */
+export function CloudProjectSandboxSettings({ project, showDocker }: { project: CloudCpProject; showDocker: boolean }) {
+	const { t } = useTranslation();
+	return <SettingsGroup title={t("settings.project.sandbox.title")} grouped>
+		{showDocker ? <SandboxSwitchRow project={project} configKey="sandboxDocker" id="project-sandbox-docker"
+			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}
+			checkedOf={(config) => config?.sandboxDocker !== false} /> : null}
+		<SandboxSwitchRow project={project} configKey="agentsCanUseSudo" id="project-sandbox-sudo"
+			label={t("settings.project.sandbox.sudo")} description={t("settings.project.sandbox.sudoDescription")}
+			checkedOf={(config) => config?.agentsCanUseSudo === true} />
+	</SettingsGroup>;
+}
+
+/**
+ * One sandbox switch, saved on change with only its own key. A control plane
+ * from before the setting rejects the key; the switch then says so and stays
+ * disabled instead of flipping back on every try.
+ */
+function SandboxSwitchRow({ project, configKey, id, label, description, checkedOf }: {
+	project: CloudCpProject;
+	configKey: SandboxConfigKey;
+	id: string;
+	label: string;
+	description: string;
+	checkedOf: (config: CloudCpProject["config"]) => boolean;
+}) {
+	const { t } = useTranslation();
+	const { client, baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
+	const [saved, setSaved] = useState(() => checkedOf(project.config));
+	const [unsupported, setUnsupported] = useState(false);
+	const save = useMutation({
+		mutationFn: (value: boolean) => client.updateProjectSettings(project.orgId, project.id, { config: { [configKey]: value } }),
+		onSuccess: (response) => {
+			setSaved(checkedOf(response.project.config));
+			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
+			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+		},
+		onError: (error) => { if (configKeyUnsupported(error, configKey)) setUnsupported(true); },
+	});
+	// The value being saved shows until the save settles; a failed one goes back.
+	const shown = save.isPending && save.variables !== undefined ? save.variables : saved;
+	const shownDescription = unsupported ? t("settings.project.sandbox.unsupported") : save.isError ? (
+		<span className="text-error" role="alert">
+			{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
+		</span>
+	) : description;
+	return <SettingsRow label={label} description={shownDescription}>
+		<Switch id={id} aria-label={label} checked={shown} disabled={unsupported || save.isPending}
+			onCheckedChange={(checked) => save.mutate(checked)} />
+	</SettingsRow>;
 }
 
 /** The coder config the control plane stores on a project (config.coder). */

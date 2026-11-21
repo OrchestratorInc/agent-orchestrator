@@ -27,7 +27,7 @@ vi.mock("../lib/api-client", () => ({ apiClient: { GET: mocks.localGet }, apiErr
 
 let project: CloudCpProject;
 
-function mount(section: "general" | "agents" = "agents", onSaveState = vi.fn()) {
+function mount(section: "general" | "agents" | "sandbox" = "agents", onSaveState = vi.fn()) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	return render(<QueryClientProvider client={client}><TooltipProvider><ProjectSettingsForm projectId="project" cloudOrgId="org" section={section} onSaveState={onSaveState} /></TooltipProvider></QueryClientProvider>);
 }
@@ -723,5 +723,61 @@ describe("Cloud project Coder template options", () => {
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
 		expect(mocks.templateParameters).not.toHaveBeenCalled();
 		expect(screen.queryByText("Template options")).not.toBeInTheDocument();
+	});
+});
+
+describe("Cloud project sandbox settings", () => {
+	it("shows Docker on when the project has no sandboxDocker key, and sudo off", async () => {
+		mount("sandbox");
+		expect(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeChecked();
+		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).not.toBeChecked();
+		expect(screen.getByText(/Takes effect for new sandboxes/)).toBeInTheDocument();
+		expect(screen.getByText(/Saved logins are turned off in sandboxes where agents can use sudo/)).toBeInTheDocument();
+	});
+
+	it("shows Docker off when the project says false", async () => {
+		project.config.sandboxDocker = false;
+		mount("sandbox");
+		expect(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeChecked();
+	});
+
+	it("saves each switch with only its own key", async () => {
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { sandboxDocker: false } }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeChecked());
+		await userEvent.click(screen.getByRole("switch", { name: "Agents can use sudo" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { agentsCanUseSudo: true } }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeChecked());
+		expect(mocks.patch).toHaveBeenCalledTimes(2);
+	});
+
+	it("says so when the control plane does not know the key yet", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("unsupported or null config.agentsCanUseSudo", { status: 422, code: "validation_error" }));
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		await userEvent.click(sudo);
+		expect(await screen.findByText("Not supported by this Cloud server yet.")).toBeInTheDocument();
+		expect(sudo).not.toBeChecked();
+		expect(sudo).toBeDisabled();
+		expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeEnabled();
+	});
+
+	it("shows the server's error inline and puts the switch back", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("Only org admins can change sandbox settings", { status: 403, code: "forbidden" }));
+		mount("sandbox");
+		const docker = await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" });
+		await userEvent.click(docker);
+		expect(await screen.findByRole("alert")).toHaveTextContent("Only org admins can change sandbox settings");
+		expect(docker).toBeChecked();
+		expect(docker).toBeEnabled();
+	});
+
+	it("hides Docker but keeps sudo for a project that does not run on Coder", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle"], defaultProvider: "freestyle", billingMode: "self_serve", kind: "b2c", features: [] } });
+		mount("sandbox");
+		expect(await screen.findByRole("switch", { name: "Agents can use sudo" })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeInTheDocument();
 	});
 });
