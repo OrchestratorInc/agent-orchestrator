@@ -133,7 +133,7 @@ describe("loopback tunnels", () => {
 		tunnels.stop("h_box", echo);
 
 		await expect(tunnels.forward("h_same", echo)).rejects.toThrow(/runs on this computer/);
-		await expect(tunnels.forward("h_off", echo)).rejects.toThrow(/does not share/);
+		await expect(tunnels.forward("h_off", echo)).rejects.toThrow(/Share localhost/);
 		await expect(tunnels.forward("h_box", 0)).rejects.toThrow(/1 to 65535/);
 	});
 

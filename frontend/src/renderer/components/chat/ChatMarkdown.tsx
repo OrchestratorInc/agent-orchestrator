@@ -66,6 +66,7 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { aoBridge } from "../../lib/bridge";
 import { LinkFavicon } from "../LinkPreviewCard";
 import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
 import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
@@ -557,9 +558,12 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
+	const hostLocalOn = remoteHost && sessionLinkHostId && href && isHostLocalWebLink(href) ? sessionLinkHostId : undefined;
 	return (
 		<AppLink
 			href={href}
+			noHoverPreview={Boolean(hostLocalOn)}
+			externalUrl={hostLocalOn ? (url) => aoBridge.remotes.externalUrl(hostLocalOn, url).catch(() => url) : undefined}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={ownArtifact ?? (filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath)}

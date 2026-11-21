@@ -351,11 +351,19 @@ describe("ChatMarkdown", () => {
 		openExternal.mockRestore();
 	});
 
-	it("opens a remote host-local link in the Browser when the host shares its localhost", () => {
+	it("opens a remote host-local link in the Browser when the host shares its localhost", async () => {
 		const onLinkOpen = vi.fn();
-		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks><ChatMarkdown text="[preview](http://localhost:5173/app)" /></ChatLinkProvider>);
+		const externalUrl = vi.spyOn(aoBridge.remotes, "externalUrl").mockResolvedValue("http://localhost:51000/app");
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks sessionLinkHostId="box-a"><ChatMarkdown text="[preview](http://localhost:5173/app)" /></ChatLinkProvider>);
 		fireEvent.click(screen.getByRole("link", { name: "preview" }));
 		expect(onLinkOpen).toHaveBeenCalledWith("http://localhost:5173/app");
+
+		fireEvent.click(screen.getByRole("link", { name: "preview" }), { metaKey: true });
+		expect(externalUrl).toHaveBeenCalledWith("box-a", "http://localhost:5173/app");
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith("http://localhost:51000/app"));
+		externalUrl.mockRestore();
+		openExternal.mockRestore();
 	});
 
 	it("scopes a session preview to the chat source", async () => {

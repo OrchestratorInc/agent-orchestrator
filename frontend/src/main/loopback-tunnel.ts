@@ -146,7 +146,6 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		let settle: (same: boolean) => void = () => undefined;
 		const received = new Promise<boolean>((resolve) => {
 			settle = resolve;
-			timer = setTimeout(() => resolve(false), PROBE_TIMEOUT_MS);
 			probe.on("connection", (socket) => {
 				let data = Buffer.alloc(0);
 				socket.on("error", () => undefined);
@@ -166,6 +165,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 			if (tunnel === null) return "tunnel";
 			tunnel.on("error", () => settle(false));
 			tunnel.write(nonce);
+			timer = setTimeout(() => settle(false), PROBE_TIMEOUT_MS);
 			const same = await received;
 			tunnel.destroy();
 			return same ? "same" : "tunnel";
@@ -179,7 +179,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		const removal = removals.get(hostId);
 		const reached = await reach(hostId);
 		if (reached === "same") throw new Error("This host runs on this computer, so its ports are already on localhost here.");
-		if (reached === "off") throw new Error("This host does not share its localhost. Turn on Share this computer's localhost on the host, or update it.");
+		if (reached === "off") throw new Error("Can't reach this host's localhost. Check that the host is online, up to date, and has Share localhost on in Settings → Mobile.");
 		const clients = new Set<Socket>();
 		const server = createServer((client) => {
 			client.on("error", () => client.destroy());
