@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	FlatList,
 	Image,
@@ -135,15 +135,29 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
-const ReduceStreamingMotion = createContext(false);
+type StreamPlayback = { conversationId: string; playedThrough: number };
+const StreamMotion = createContext<{ reducedMotion: boolean; playback: StreamPlayback; latestReplyId?: string } | null>(null);
+
+function streamPlayback(snapshot: ConversationSnapshot): StreamPlayback {
+	// Existing replies may be mid-stream when the reader opens the chat.
+	return { conversationId: snapshot.conversationId, playedThrough: snapshot.latestSequence };
+}
 
 /** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
 export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
+	const { snapshot } = props;
 	const reducedMotion = useReducedMotion();
+	const [playback, setPlayback] = useState(() => streamPlayback(snapshot));
+	if (playback.conversationId !== snapshot.conversationId) setPlayback(streamPlayback(snapshot));
+	const latestReplyId = useMemo(
+		() => snapshot.items.filter((item) => item.kind === "message" && item.role === "assistant").at(-1)?.id,
+		[snapshot.items],
+	);
+	const motion = useMemo(() => ({ reducedMotion, playback, latestReplyId }), [reducedMotion, playback, latestReplyId]);
 	return (
-		<ReduceStreamingMotion.Provider value={reducedMotion}>
+		<StreamMotion.Provider value={motion}>
 			<KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>
-		</ReduceStreamingMotion.Provider>
+		</StreamMotion.Provider>
 	);
 });
 
@@ -727,8 +741,16 @@ function AssistantReply({ message, completed, conversationId }: {
 	completed: boolean;
 	conversationId: string;
 }) {
-	const reducedMotion = useContext(ReduceStreamingMotion);
-	const text = useBufferedStreamingText(message.text, message.streaming === true, reducedMotion);
+	const motion = useContext(StreamMotion);
+	const reducedMotion = motion?.reducedMotion ?? false;
+	const playback = motion?.playback;
+	const [playFromStart] = useState(() => Boolean(
+		playback && message.id === motion?.latestReplyId && message.sequence > playback.playedThrough,
+	));
+	useLayoutEffect(() => {
+		if (playback) playback.playedThrough = Math.max(playback.playedThrough, message.sequence);
+	}, [message.sequence, playback]);
+	const text = useBufferedStreamingText(message.text, message.streaming === true, reducedMotion, playFromStart);
 	const streaming = message.streaming === true || text !== message.text;
 	return (
 		<ChatMarkdown

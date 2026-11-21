@@ -8,14 +8,16 @@ vi.mock("react-native", () => ({ AppState: appState }));
 let root: ReactTestRenderer | undefined;
 let rendered: string;
 
-function Reply({ text, streaming, reducedMotion }: { text: string; streaming: boolean; reducedMotion: boolean }) {
-	rendered = useBufferedStreamingText(text, streaming, reducedMotion);
+function Reply({ text, streaming, reducedMotion, playFromStart }: {
+	text: string; streaming: boolean; reducedMotion: boolean; playFromStart: boolean;
+}) {
+	rendered = useBufferedStreamingText(text, streaming, reducedMotion, playFromStart);
 	return null;
 }
 
-async function show(text: string, streaming = true, reducedMotion = false) {
+async function show(text: string, streaming = true, reducedMotion = false, playFromStart = false) {
 	await act(async () => {
-		const element = <Reply text={text} streaming={streaming} reducedMotion={reducedMotion} />;
+		const element = <Reply text={text} streaming={streaming} reducedMotion={reducedMotion} playFromStart={playFromStart} />;
 		if (root) root.update(element);
 		else root = create(element);
 	});
@@ -50,8 +52,9 @@ it("shows the first snapshot immediately and reveals the next burst in whole gra
 	expect(rendered).toBe(first);
 	await advance(16);
 	expect(rendered.length).toBeGreaterThan(first.length);
-	expect(rendered).toBe(first + grapheme);
-	expect(rendered).toBe(first + grapheme.repeat((rendered.length - first.length) / grapheme.length));
+	const revealed = (rendered.length - first.length) / grapheme.length;
+	expect(Number.isInteger(revealed)).toBe(true);
+	expect(rendered).toBe(first + grapheme.repeat(revealed));
 	await advance(1200);
 	expect(rendered).toBe(latest);
 });
@@ -59,24 +62,81 @@ it("shows the first snapshot immediately and reveals the next burst in whole gra
 it("shows corrections immediately and drains a short final burst", async () => {
 	await show("First");
 	await show("First draft with a buffered burst");
-	await show("First correction");
-	expect(rendered).toBe("First correction");
-	await show("First correction with a last burst");
-	await show("First correction with a last burst", false);
-	expect(rendered).toBe("First correction");
-	await advance(500);
-	expect(rendered).toBe("First correction with a last burst");
+	await show("Provider correction");
+	expect(rendered).toBe("Provider correction");
+	await show("Provider correction with a last burst");
+	await show("Provider correction with a last burst", false);
+	expect(rendered).toBe("Provider correction");
+	await advance(800);
+	expect(rendered).toBe("Provider correction with a last burst");
 });
 
-it("shows long snapshots at the lower update rate used by desktop", async () => {
-	const first = "a".repeat(4001);
+it("spreads the next batch across the observed arrival gap", async () => {
+	const prefix = "Start.";
+	const first = prefix + "a".repeat(80);
+	const next = first + "b".repeat(80);
+	await show(prefix);
 	await show(first);
-	await show(first + "b");
-	await show(first + "bc");
-	await advance(99);
+	await advance(640);
 	expect(rendered).toBe(first);
-	await advance(1);
-	expect(rendered).toBe(first + "bc");
+	await show(next);
+
+	await advance(320);
+	expect(rendered.length - first.length).toBeGreaterThanOrEqual(38);
+	expect(rendered.length - first.length).toBeLessThanOrEqual(44);
+	await advance(336);
+	expect(rendered).toBe(next);
+});
+
+it("paces the first snapshot of a reply that arrived after the chat opened", async () => {
+	const first = "first word ".repeat(32);
+	await show(first, true, false, true);
+	expect(rendered).toBe("");
+	await advance(16);
+	expect(rendered.length).toBeGreaterThan(0);
+	expect(rendered.length).toBeLessThan(8);
+	await advance(100);
+	expect(rendered.length).toBeLessThan(24);
+	await advance(2800);
+	expect(rendered).toBe(first);
+});
+
+it("paces a large first snapshot even if it arrives completed", async () => {
+	const text = "finished ".repeat(64);
+	await show(text, false, false, true);
+	expect(rendered).toBe("");
+	await advance(16);
+	expect(rendered.length).toBeGreaterThan(0);
+	expect(rendered.length).toBeLessThan(9);
+	await advance(3200);
+	expect(rendered).toBe(text);
+});
+
+it("paces a large final append on a reply already in view", async () => {
+	const first = "First.";
+	const final = first + " Another sentence.".repeat(36);
+	await show(first);
+	await show(final, false);
+	expect(rendered).toBe(first);
+	await advance(16);
+	expect(rendered.length - first.length).toBeGreaterThan(0);
+	expect(rendered.length - first.length).toBeLessThan(9);
+	await advance(3200);
+	expect(rendered).toBe(final);
+});
+
+it("keeps draining in small batches across the long-reply threshold", async () => {
+	const first = "a".repeat(3998);
+	const latest = first + "b".repeat(100);
+	await show(first);
+	await show(latest);
+	await advance(16);
+	expect(rendered.length).toBeGreaterThan(4000);
+	expect(rendered.length - first.length).toBeLessThan(8);
+	await advance(16);
+	expect(rendered.length - first.length).toBeLessThan(8);
+	await advance(1600);
+	expect(rendered).toBe(latest);
 });
 
 it("flushes the buffer for reduced motion or when the app goes into the background", async () => {
