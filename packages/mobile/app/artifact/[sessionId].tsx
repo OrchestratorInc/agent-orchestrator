@@ -44,7 +44,7 @@ import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 import { ViewModeControl, type ViewMode } from "../../lib/view-mode-control";
-import { ARTIFACT_MEDIA_PLAYBACK } from "../../lib/artifactMediaPlayback";
+import { ARTIFACT_MEDIA_PLAYBACK, artifactPagePlaysMedia } from "../../lib/artifactMediaPlayback";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
 // would stall the JS thread.
@@ -500,7 +500,7 @@ function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }
 	const file = { sessionId, path: artifact.path };
 	switch (kind) {
 		case "html":
-			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} page={file} />;
+			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} page={file} active={active} />;
 		case "svg":
 			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} />;
 		case "video":
@@ -614,13 +614,15 @@ function LargeArtifact({ backend, sessionId, artifact }: { backend: ArtifactsBac
 	return <ArtifactWeb backend={backend} file={{ sessionId, path: artifact.path }} version={artifact.updatedAt} />;
 }
 
-function ArtifactWeb({ backend, file, version, page }: {
+function ArtifactWeb({ backend, file, version, page, active = true }: {
 	backend: ArtifactsBackend;
 	/** The file the web view loads by itself, from its source on the live connection. */
 	file: { sessionId: string; path: string };
 	version: string;
 	/** An HTML page, loaded with the files it links inlined. */
 	page?: { sessionId: string; path: string };
+	/** The pager's page on screen; a neighbour plays no media with sound. */
+	active?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -654,6 +656,8 @@ function ArtifactWeb({ backend, file, version, page }: {
 	useEffect(() => {
 		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [inlined.html, theme]);
+	// An HTML page on screen may play its media; read once, on creation, so the key carries it.
+	const playsMedia = Boolean(page) && artifactPagePlaysMedia(active, html || undefined);
 	// One fresh signed address per version: refused again with it, the page
 	// says so and offers Retry rather than renewing forever.
 	const renewed = useRef(false);
@@ -663,9 +667,10 @@ function ArtifactWeb({ backend, file, version, page }: {
 	return (
 		<View style={styles.screen}>
 			<WebView
-				{...ARTIFACT_MEDIA_PLAYBACK}
-				// A new version of the file reloads the page, and so does Retry.
-				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}`}
+				{...(playsMedia ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
+				// A new version of the file reloads the page, and so do Retry and a
+				// change of media policy (swiped to or away from a page with media).
+				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}|${playsMedia ? "media" : ""}`}
 				ref={web}
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.

@@ -77,7 +77,7 @@ describe("retained-stack host routes", () => {
 		expect(retry).toContain("setError(undefined);");
 		expect(retry).toContain("setAttempt((n) => n + 1);");
 		expect(between(web, "<Pressable onPress={() => {", "retryAfterVerified(() => {")).not.toContain("setError(undefined)");
-		expect(web).toContain("key={`${version}|${inlined.html ? \"inline\" : \"url\"}|${attempt}`}");
+		expect(web).toContain("key={`${version}|${inlined.html ? \"inline\" : \"url\"}|${attempt}|${playsMedia ? \"media\" : \"\"}`}");
 		expect(web).not.toContain("web.current?.reload()");
 		expect(artifact).not.toMatch(/<ArtifactWeb[^>]*source=/);
 		const file = source("../app/files/[sessionId]/file.tsx");
