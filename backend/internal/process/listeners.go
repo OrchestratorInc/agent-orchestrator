@@ -35,6 +35,7 @@ func reachableFromLoopback(host string) bool {
 }
 
 func sameExecutable(a, b string) bool {
+	a, b = strings.TrimSuffix(a, " (deleted)"), strings.TrimSuffix(b, " (deleted)")
 	if a == "" || b == "" {
 		return false
 	}

@@ -990,6 +990,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		},
 		openLoopbackTunnel: async (loopbackPort) => {
 			if (closing) throw new LoopbackTunnelError("unavailable", "the host is disconnected");
+			await verifyUpstream();
 			const socket = new WebSocket(`${secure ? "wss" : "ws"}://${upstream.host}${prefix}/api/v1/loopback-tunnel?port=${loopbackPort}`, {
 				headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
 				perMessageDeflate: false,

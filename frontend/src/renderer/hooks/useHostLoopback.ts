@@ -19,7 +19,7 @@ export function useLoopbackReach(hostId?: string): LoopbackReach | undefined {
 
 export function usePortForwards() {
 	const queryClient = useQueryClient();
-	const forwards = useQuery({ queryKey: FORWARDS_KEY, queryFn: () => aoBridge.remotes.portForwards() }).data ?? [];
+	const forwards = useQuery({ queryKey: FORWARDS_KEY, queryFn: () => aoBridge.remotes.portForwards(), refetchInterval: 5_000 }).data ?? [];
 	const settle = () => void queryClient.invalidateQueries({ queryKey: FORWARDS_KEY });
 	return {
 		forwards,

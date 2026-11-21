@@ -1231,7 +1231,8 @@ export function createBrowserViewHost(
       preload: options.annotatePreloadPath,
       sandbox: true,
     };
-    const partitionReady = Promise.resolve(options.prepareBrowserPartition?.(session.profilePartition, session.hostId));
+    const partitionReady = Promise.resolve(options.prepareBrowserPartition?.(session.profilePartition, session.hostId))
+      .catch((error) => console.warn("Unable to route the browser partition through its host", error));
     const view = new options.WebContentsView({
       webPreferences,
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),

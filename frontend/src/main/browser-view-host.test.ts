@@ -2686,6 +2686,16 @@ describe("browser profile partitions and replacement", () => {
 		expect(order.slice(0, 2)).toEqual([`prepare ${partition}`, `construct ${partition}`]);
 	});
 
+	it("still opens pages in a tab whose partition could not be routed", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const prepare = vi.fn(() => Promise.reject(new Error("no proxy")));
+		const { invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, undefined, prepare);
+		const state = (await invoke("browser:ensure", "worker-1")) as { viewId: string };
+		await expect(invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" })).resolves.not.toThrow();
+		expect(warn).toHaveBeenCalledWith("Unable to route the browser partition through its host", expect.any(Error));
+		warn.mockRestore();
+	});
+
 	it("clears temporary persisted partitions when their browser session is destroyed", async () => {
 		const { clearBrowserProfileData, constructorOptions, host, invoke } = setupTabHost();
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;

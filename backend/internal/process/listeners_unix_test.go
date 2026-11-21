@@ -71,3 +71,12 @@ func TestListenersWithEnvFindsTheMarkedProcessesPorts(t *testing.T) {
 		t.Fatalf("a skipped executable found %v", got)
 	}
 }
+
+func TestSameExecutableMatchesAReplacedBinary(t *testing.T) {
+	if !sameExecutable("/opt/ao/bin/ao (deleted)", "/opt/ao/bin/ao") {
+		t.Fatal("a process still running a replaced ao binary is not skipped")
+	}
+	if sameExecutable("/usr/bin/node", "/opt/ao/bin/ao") {
+		t.Fatal("another executable is skipped")
+	}
+}
