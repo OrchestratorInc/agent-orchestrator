@@ -213,13 +213,16 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
 		provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
-		err := m.provisionWorkspace(ctx, in.project, ws.Path)
+		err := m.provisionWorkspace(ctx, in.project, id, ws.Path)
 		provisioned(err)
 		if err != nil {
 			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceProvision, err))
 			return
 		}
+	} else {
+		// A reused workspace skips Setup but still credits Orchestrator.
+		m.applyCommitAttribution(ctx, in.project, id, ws.Path, attributionFromSettings)
 	}
 	if err := ctx.Err(); err != nil {
 		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
@@ -492,6 +495,8 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
+	// A retry decides attribution again, before its prompt is written.
+	m.recordSpawnAttributionFor(ctx, project, rec.ID)
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return RestoreResult{}, false, err

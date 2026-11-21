@@ -3,10 +3,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
+import { useUiStore } from "../../stores/ui-store";
 
-const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
+const { settingsMock, updateRetentionMock, updateCommitAttributionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
 	updateRetentionMock: vi.fn(),
+	updateCommitAttributionMock: vi.fn(),
 }));
 
 const idle = { update: vi.fn(), saving: false, error: undefined };
@@ -15,6 +17,7 @@ vi.mock("../../hooks/useSettings", () => ({
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
+	useUpdateCommitAttribution: () => ({ update: updateCommitAttributionMock, saving: false, error: undefined }),
 }));
 
 vi.mock("../../hooks/useEditorHandoff", () => ({
@@ -83,5 +86,25 @@ describe("archived session retention", () => {
 		renderSection();
 
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
+	});
+});
+
+describe("Orchestrator attribution beta switch", () => {
+	it("only appears in Developer Mode", () => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.setState({ developerMode: false });
+		renderSection();
+		expect(screen.queryByRole("switch", { name: "Orchestrator attribution (beta)" })).not.toBeInTheDocument();
+	});
+
+	it("reflects the daemon setting and saves a change to it", async () => {
+		updateCommitAttributionMock.mockReset();
+		settingsMock.mockReturnValue(settings({ commitAttribution: false }));
+		useUiStore.setState({ developerMode: true });
+		renderSection();
+		const toggle = screen.getByRole("switch", { name: "Orchestrator attribution (beta)" });
+		expect(toggle).not.toBeChecked();
+		await userEvent.click(toggle);
+		expect(updateCommitAttributionMock).toHaveBeenCalledWith(true);
 	});
 });
