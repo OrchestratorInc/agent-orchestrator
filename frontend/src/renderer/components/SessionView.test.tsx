@@ -129,7 +129,10 @@ vi.mock("../lib/platform", () => ({
 	isLinuxPlatform: () => false,
 }));
 // Each test sets the session's computer-use steps; undefined is a timeline not yet read.
-const computerUseTimelineState = vi.hoisted(() => ({ steps: undefined as { id: string }[] | undefined }));
+const computerUseTimelineState = vi.hoisted(() => ({ steps: undefined as { id: string; at: string }[] | undefined }));
+// A step made before the test's session came on screen, and one made after.
+const stepBefore = (id: string) => ({ id, at: "2020-01-01T00:00:00Z" });
+const stepNow = (id: string) => ({ id, at: new Date(Date.now() + 1_000).toISOString() });
 vi.mock("../hooks/useComputerUseTimeline", () => ({
 	useComputerUseTimeline: () => ({
 		data: computerUseTimelineState.steps,
@@ -6109,7 +6112,7 @@ describe("SessionView", () => {
 			const view = render(<SessionView sessionId="sess-1" />);
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
 
-			computerUseTimelineState.steps = [{ id: "1" }];
+			computerUseTimelineState.steps = [stepNow("1")];
 			view.rerender(<SessionView sessionId="sess-1" />);
 
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("computerUse");
@@ -6124,11 +6127,11 @@ describe("SessionView", () => {
 		computerUseTimelineState.steps = [];
 		try {
 			const view = render(<SessionView sessionId="sess-1" />);
-			computerUseTimelineState.steps = [{ id: "1" }];
+			computerUseTimelineState.steps = [stepNow("1")];
 			view.rerender(<SessionView sessionId="sess-1" />);
 			act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
 
-			computerUseTimelineState.steps = [{ id: "1" }, { id: "2" }];
+			computerUseTimelineState.steps = [stepNow("1"), stepNow("2")];
 			view.rerender(<SessionView sessionId="sess-1" />);
 
 			expect(inspectorOpen("sess-1")).toBe(false);
@@ -6143,14 +6146,39 @@ describe("SessionView", () => {
 	});
 
 	it("does not open Computer use for a session that already had steps when entered", () => {
-		computerUseTimelineState.steps = [{ id: "1" }];
+		computerUseTimelineState.steps = [stepBefore("1")];
 		try {
 			const view = render(<SessionView sessionId="sess-1" />);
-			computerUseTimelineState.steps = [{ id: "1" }, { id: "2" }];
+			computerUseTimelineState.steps = [stepBefore("1"), stepNow("2")];
 			view.rerender(<SessionView sessionId="sess-1" />);
 
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
+	it("opens Computer use for a first call made while the session's first read was pending", () => {
+		computerUseTimelineState.steps = undefined;
+		const view = render(<SessionView sessionId="sess-1" />);
+		try {
+			computerUseTimelineState.steps = [stepNow("1")];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("computerUse");
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
+	it("treats steps made while the session was off screen as history", () => {
+		computerUseTimelineState.steps = undefined;
+		const view = render(<SessionView sessionId="sess-1" />);
+		try {
+			computerUseTimelineState.steps = [stepBefore("1")];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBeFalsy();
 		} finally {
 			computerUseTimelineState.steps = undefined;
 		}
