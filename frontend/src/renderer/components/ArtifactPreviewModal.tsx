@@ -1,4 +1,4 @@
-import { ArrowUpRight, MessageSquarePlus } from "@/components/app-icons";
+import { ArrowUpRight, ExternalLink, MessageSquarePlus } from "@/components/app-icons";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
@@ -18,6 +18,7 @@ import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ShareArtifactButton, useArtifactShareFile } from "./ShareArtifactPopover";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
+import { SharedArtifactFrame } from "./SharedArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
@@ -65,9 +66,28 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 					<header className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-2">
 						<div className="flex min-w-0 flex-1 items-baseline gap-2">
 							<DialogTitle className="min-w-0 truncate text-control outline-none" ref={titleRef} tabIndex={-1}>{artifact.name}</DialogTitle>
-							<DialogDescription className="min-w-0 shrink-[2] truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
+							<DialogDescription className="min-w-0 shrink-[2] truncate text-caption">{artifact.shared ? projectName : `${projectName} · ${artifact.sessionTitle}`}</DialogDescription>
 						</div>
-						<div className="relative z-10 flex shrink-0 items-center gap-0.5">
+						{artifact.shared ? (
+							// Someone else's link: view only, with its viewer page a click away.
+							<div className="relative z-10 flex shrink-0 items-center gap-0.5">
+								{artifact.shared.viewerUrl ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button asChild aria-label={t("artifacts.openInBrowser")} className="shrink-0" size="icon-sm" variant="quiet">
+												<a href={artifact.shared.viewerUrl} rel="noreferrer" target="_blank">
+													<ExternalLink aria-hidden="true" className="size-icon-sm" />
+												</a>
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">{t("artifacts.openInBrowser")}</TooltipContent>
+									</Tooltip>
+								) : null}
+								<DialogClose asChild>
+									<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />
+								</DialogClose>
+							</div>
+						) : <div className="relative z-10 flex shrink-0 items-center gap-0.5">
 							{share ? <ShareArtifactButton className="transition-none" file={share} iconOnly name={artifact.name} published={Boolean(artifact.shareUrl)} revision={artifact.updatedAt} /> : null}
 							<ArtifactActionsMenu
 								artifact={artifact}
@@ -94,10 +114,12 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogClose asChild>
 								<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />
 							</DialogClose>
-						</div>
+						</div>}
 					</header>
 					<div className="min-h-0 flex-1 overflow-hidden">
-						<ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />
+						{artifact.shared
+							? <SharedArtifactFrame key={artifactKey(artifact)} linkId={artifact.shared.linkId} title={artifact.name} />
+							: <ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />}
 					</div>
 				</DialogContent>
 			) : null}

@@ -127,6 +127,13 @@ type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
 }
 
+// taskPreparationRenewer keeps a held task preparation alive while the new
+// chat page uses its worktree. Optional so focused service fakes need not
+// implement it.
+type taskPreparationRenewer interface {
+	RenewTaskPreparation(domain.TaskPreparationToken)
+}
+
 // agentAccountCommander keeps account moves optional for focused service fakes.
 type agentAccountCommander interface {
 	StartAccountTransition(context.Context, domain.SessionID, string, domain.SessionInterfaceTransitionPolicy) (domain.SessionInterfaceTransition, error)
@@ -294,6 +301,17 @@ type Service struct {
 	githubRepos ports.GitHubRepositoryResolver
 	// moveNotes renders the handoff note of a session moved to AO Cloud.
 	moveNotes MoveNoter
+}
+
+// renewTaskPreparation extends a hidden preparation's expiry when its files
+// are read or staged, which only the page holding it does.
+func (s *Service) renewTaskPreparation(rec domain.SessionRecord) {
+	if !rec.IsTaskPreparation {
+		return
+	}
+	if renewer, ok := s.manager.(taskPreparationRenewer); ok {
+		renewer.RenewTaskPreparation(domain.TaskPreparationToken(rec.ID))
+	}
 }
 
 // SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow
@@ -1964,9 +1982,13 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
+	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):
+		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
+			"Turn on Windows Developer Mode to use this account: search Windows Settings for Developer Mode (System > Advanced on Windows 11 25H2 and later).",
+			map[string]any{"windowsDeveloperMode": true})
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
-			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+			"Orchestrator cannot link this account's folder to this computer's history.", nil)
 	case errors.Is(err, sessionmanager.ErrSessionMoved):
 		return apierr.Conflict("SESSION_MOVED", "This session moved to Orchestrator Cloud. Open it there.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):

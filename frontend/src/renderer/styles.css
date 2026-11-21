@@ -663,7 +663,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 /* The last tab's trailing gap already spaces New terminal from it; the action
  * region starts one gap after it; and the reserve for the panel's trailing
  * controls drops the surface's 1px edge padding. */
-.center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
+.center-panel-shell--tab-pills [data-testid="session-tab-strip-action"] {
 	padding-inline-start: 0;
 }
 
@@ -757,11 +757,12 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
-/* Floating session tabs use the secondary control surface when selected and
- * an instant ghost hover fill when inactive. Tabs have no press effect. Every
- * strip built on the tab frame (the session's, the Browser panel's pages, side
- * chats) wears this look, the Browser's also while it is popped out. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame] {
+/* macOS session tabs (the windowed floating bar and native fullscreen) use the
+ * secondary control surface when selected and an instant ghost hover fill when
+ * inactive. Tabs have no press effect. Every strip built on the tab frame (the
+ * session's, the Browser panel's pages, side chats) wears this look, the
+ * Browser's also while it is popped out. The legacy underline never shows. */
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame] {
 	--floating-tab-gap: var(--space-1);
 	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
 	font-size: var(--font-size-md);
@@ -777,8 +778,14 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: none;
 }
 
+/* Native fullscreen puts the panel flush against the sidebar, so the strip
+ * starts one tab gap in, the same space its last tab leaves before New terminal. */
+.center-panel-shell--tab-pills.center-panel-shell--fullscreen [data-tab-scroll-region] > div {
+	padding-inline-start: var(--space-1);
+}
+
 /* The pill. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::before {
 	content: "";
 	position: absolute;
 	z-index: -1;
@@ -790,7 +797,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 /* The separator, centered in the trailing gap. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::after {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::after {
 	content: "";
 	position: absolute;
 	top: 50%;
@@ -804,9 +811,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 
 /* Leave both sides of the selected pill clear, including the fixed session
  * tab before the first tab in the reorder group. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::after,
-.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
-.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::after,
+.center-panel-shell--tab-pills [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+.center-panel-shell--tab-pills [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
 	content: none;
 }
 
@@ -814,40 +821,40 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * ends one gap before New terminal, the same space a tab leaves before a
  * separator. It is the reorder group's last tab, or the session tab when that
  * group is empty; its frame sits inside the tab's context-menu trigger. */
-.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+.center-panel-shell--tab-pills :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
 	margin-inline-end: var(--floating-tab-gap);
 }
 
-.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame]::after {
+.center-panel-shell--tab-pills :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame]::after {
 	content: none;
 }
 
 /* With nothing after the strip (orchestrators have no New terminal), the last
  * tab ends at its pill. */
-.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+.center-panel-shell--tab-pills [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
 	margin-inline-end: 0;
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:hover::before,
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(:focus-visible)::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]:hover::before,
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]:has(:focus-visible)::before {
 	inset: 0;
 	background-color: var(--color-interactive-hover);
 }
 
 .session-inspector__tab-button[aria-selected="true"],
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active] {
 	color: var(--secondary-foreground);
 }
 
 @supports (color: contrast-color(red)) {
 	.session-inspector__tab-button[aria-selected="true"],
-	:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
+	:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active] {
 		color: contrast-color(color-mix(in srgb-linear, var(--secondary) 49.796664%, black));
 	}
 }
 
 .session-inspector__tab-button[aria-selected="true"],
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	inset: 0;
 	border-color: color-mix(in oklab, var(--secondary), #000 5%);
 	background-color: var(--secondary);
@@ -855,17 +862,17 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .session-inspector__tab-button[aria-selected="true"]:hover,
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]:hover::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]:hover::before {
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
 
 /* Light: the selected tab's fill leans toward the panel's surface, keeps the
  * control edge, and does not darken on hover. */
-html[data-theme="light"] :is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
+html[data-theme="light"] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(> button:focus-visible)::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]:has(> button:focus-visible)::before {
 	outline: 2px solid var(--ring);
 	outline-offset: 2px;
 }
@@ -878,7 +885,7 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 	color: var(--color-foreground);
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-testid="active-terminal-tab-indicator"] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-testid="active-terminal-tab-indicator"] {
 	display: none;
 }
 
@@ -886,16 +893,16 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
  * lists its tabs flat: each child of [data-tab-strip] holds one frame. The
  * same divider rules as the session strip's above: none beside the selected
  * pill, none after the last tab, which ends one gap before New tab. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :has(+ * [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame]::after {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip] > :has(+ * [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip] > :last-child [data-terminal-tab-frame]::after {
 	content: none;
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip] > :last-child [data-terminal-tab-frame] {
 	margin-inline-end: var(--floating-tab-gap);
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip-action] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip-action] {
 	padding-inline-start: 0;
 }
 
@@ -1945,34 +1952,6 @@ textarea,
 	background-clip: padding-box;
 }
 
-/* Chromium uses the desktop theme's chunky native horizontal scrollbar on
-   Linux. Keep the board scroller compact and rounded there without changing
-   macOS overlay scrollbars or Windows behavior. */
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar {
-	height: 6px;
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-button {
-	display: none;
-	width: 0;
-	height: 0;
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-track,
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-corner {
-	background: transparent;
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-thumb {
-	min-width: 24px;
-	border-radius: 999px;
-	background-color: color-mix(in srgb, var(--color-scrollbar) 42%, transparent);
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-thumb:hover {
-	background-color: color-mix(in srgb, var(--color-scrollbar) 56%, transparent);
-}
-
 /* Thin project-list scrollbar: keeps a scroll affordance without the chunky
    system thumb. Linux also suppresses the end-cap buttons below. */
 .project-sidebar-scrollbar {
@@ -2165,7 +2144,9 @@ textarea,
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	color: var(--color-foreground);
+	/* Tinted toward the working blue at low strength, like the row's spinner, so a
+	   working title reads apart from an idle one without a row fill. */
+	color: color-mix(in oklab, var(--color-status-working) 40%, var(--color-foreground));
 }
 
 @keyframes sidebar-working-shimmer {
@@ -2188,6 +2169,67 @@ textarea,
    row changes what it is showing; the text inside then updates in place. */
 .chat-live-label {
 	animation: chat-live-label-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Usage-limit sign (right of the model) and its tooltip: the status hue on the icon and label only. */
+.quota-sign,
+.quota-tip-title {
+	--quota-tone: var(--color-status-in-review);
+}
+.quota-sign[data-severity="full"],
+.quota-tip-title[data-severity="full"] {
+	--quota-tone: var(--color-status-exited);
+}
+.quota-sign {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 999px;
+	color: var(--quota-tone);
+	cursor: default;
+	animation: quota-sign-in 280ms var(--ease-out);
+}
+.quota-sign:focus-visible {
+	outline: 2px solid var(--color-ring);
+	outline-offset: 1px;
+}
+.quota-sign > svg {
+	width: 14px;
+	height: 14px;
+}
+@keyframes quota-sign-in {
+	from { opacity: 0; transform: scale(0.5); }
+}
+.quota-tip {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	font-size: 12px;
+	line-height: 16px;
+}
+.quota-tip-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 500;
+	color: color-mix(in srgb, var(--quota-tone) 80%, var(--color-foreground));
+}
+.quota-tip-title > svg {
+	width: 13px;
+	height: 13px;
+	flex-shrink: 0;
+	color: var(--quota-tone);
+}
+.quota-tip-meta {
+	color: var(--color-muted-foreground);
+	font-size: 11.5px;
+	font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+	.quota-sign { animation: none; }
 }
 
 @keyframes chat-live-label-in {
@@ -2236,8 +2278,8 @@ textarea,
 	}
 }
 
-/* Streamed prose: each newly revealed character fades in once, on mount (see
-   lib/rehype-stream-fade.ts). No fill mode: with no delay it looks the same,
+/* Dictated text: each newly revealed character fades in once, on mount (see
+   ComposerEditor.tsx). No fill mode: with no delay it looks the same,
    and a filling animation never ends, so a long reply kept a thousand finished
    animations alive and re-layerized them on every frame. */
 .stream-char {
@@ -2247,6 +2289,35 @@ textarea,
 @keyframes stream-char-in {
 	from { opacity: 0; }
 }
+
+.chat-md-stream [data-markdown="h1"] { @apply mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0; }
+.chat-md-stream [data-markdown="h2"] { @apply mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0; }
+.chat-md-stream [data-markdown="h3"] { @apply mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0; }
+.chat-md-stream :is([data-markdown="h4"], [data-markdown="h5"], [data-markdown="h6"]) { @apply mb-1 mt-3 text-xs font-semibold text-muted-foreground first:mt-0; }
+.chat-md-stream [data-markdown="p"] { @apply my-2 first:mt-0 last:mb-0; }
+.chat-md-stream [data-markdown="ul"] { @apply my-2 ml-4 list-disc space-y-1 first:mt-0; }
+.chat-md-stream [data-markdown="ol"] { @apply my-2 ml-4 list-decimal space-y-1 first:mt-0; }
+.chat-md-stream [data-markdown="li"] { @apply marker:text-muted-foreground; }
+.chat-md-stream [data-markdown="li"]:has(> [data-markdown="input"][type="checkbox"]) { @apply list-none; }
+.chat-md-stream [data-markdown="input"][type="checkbox"] { @apply mr-1.5 -ml-4 size-3 translate-y-[1px] accent-accent; }
+.chat-md-stream [data-markdown="strong"] { @apply font-semibold text-foreground; }
+.chat-md-stream [data-markdown="del"] { @apply text-muted-foreground; }
+.chat-md-stream [data-markdown="a"] { @apply text-markdown-link underline decoration-markdown-link/45 underline-offset-2; }
+.chat-md-stream [data-markdown="blockquote"] { @apply my-2.5 border-l-2 border-border-strong pl-3 text-muted-foreground; }
+.chat-md-stream [data-markdown="hr"] { @apply my-3 border-border; }
+.chat-md-stream [data-markdown="table"] { @apply my-2.5 block w-full overflow-x-auto rounded-lg border border-border text-xs; border-collapse: collapse; }
+.chat-md-stream [data-markdown="thead"] { @apply bg-raised/40; }
+.chat-md-stream [data-markdown="th"] { @apply border-b border-border px-2.5 py-1.5 text-left font-medium text-muted-foreground; }
+.chat-md-stream [data-markdown="td"] { @apply border-b border-border/60 px-2.5 py-1.5 align-top; }
+.chat-md-stream :not(pre) > [data-markdown="code"] { @apply rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code; }
+.chat-md-stream [data-markdown="code-block"] { @apply my-2.5 overflow-hidden rounded-lg border border-border bg-surface; }
+.chat-md-stream [data-markdown="code-header"] { @apply flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1 text-caption text-muted-foreground; min-height: calc(var(--size-control-md) + 0.5rem + 1px); }
+.chat-md-stream [data-markdown="code-block"] pre { @apply scrollbar-none m-0 overflow-x-auto px-3 py-2.5; }
+.chat-md-stream [data-markdown="code-header"] > span:last-child { @apply ml-auto flex items-center opacity-0 transition-opacity duration-150; }
+.chat-md-stream [data-markdown="code-block"]:is(:hover, :focus-within) [data-markdown="code-header"] > span:last-child { @apply opacity-100; }
+.chat-md-stream pre > [data-markdown="code"] { @apply font-mono text-xs leading-[1.6] text-foreground; }
+.chat-md-stream [data-animated="true"] { animation: stream-char-in 300ms ease backwards; }
+.chat-md-stream :is(pre, [data-markdown="code"]) [data-animated="true"] { animation: none; }
 
 @keyframes chat-working-shimmer {
 	from { background-position: -10% center, 0 0; }
@@ -2972,19 +3043,23 @@ html.sidebar-reordering * {
 	line-height: 1.58;
 }
 
-.cursor-chat-timeline .chat-md h3 {
+.cursor-chat-timeline .chat-md h3,
+.cursor-chat-timeline .chat-md [data-markdown="h1"] {
 	font-size: calc(var(--chat-readable-font-size) + 1px);
 }
 
-.cursor-chat-timeline .chat-md h4 {
+.cursor-chat-timeline .chat-md h4,
+.cursor-chat-timeline .chat-md [data-markdown="h2"] {
 	font-size: var(--chat-readable-font-size);
 }
 
-.cursor-chat-timeline .chat-md h5 {
+.cursor-chat-timeline .chat-md h5,
+.cursor-chat-timeline .chat-md [data-markdown="h3"] {
 	font-size: var(--chat-readable-font-size);
 }
 
 .cursor-chat-timeline .chat-md h6,
+.cursor-chat-timeline .chat-md [data-markdown="h4"],
 .cursor-chat-timeline .chat-md table {
 	font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 }
@@ -6379,6 +6454,19 @@ html:root[data-theme="light"][data-window-translucent="true"] {
 	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 72%, transparent);
 }
 
+/* A named color theme is recognized by its canvas color, which the sidebar
+ * tint washes out. Named themes tint the shell with the canvas color instead,
+ * at the same 70%, so the theme reads at a glance and the blurred desktop
+ * still shows through. Light named themes skip the push toward white above,
+ * which would bleach their sidebar. The default theme keeps the looks above. */
+html:root[data-style-theme][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--background) 70%, transparent);
+}
+
+html:root[data-style-theme][data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
 /* Chrome: clear canvases, overlay fills. Declared on body so the theme's
  * :root values stay intact for the solid copies above. */
 html[data-window-translucent="true"] body {
@@ -6793,7 +6881,7 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 /* The preview board never scrolls; letting its lanes overflow means a card
  * moving between lanes stays visible for the whole trip instead of being
  * clipped at its lane's edge. */
-.onboarding-preview-board :is(.board-horizontal-scrollbar, .board-horizontal-scrollbar > .grid > *, .board-scrollbar) {
+.onboarding-preview-board :is(.board-horizontal-scrollbar, .board-horizontal-scrollbar > .grid > *, .board-horizontal-scrollbar .scrollbar-none) {
 	overflow: visible;
 }
 
@@ -6938,15 +7026,15 @@ body.is-pane-dragging webview {
 
 /* On the floating top bar a tab is a pill: round the ghost to match and
    drop the trailing gap and separator, which sit outside the measured box. */
-.pane-drag-ghost.center-panel-shell--floating-topbar {
+.pane-drag-ghost.center-panel-shell--tab-pills {
 	border-radius: var(--radius-topbar-control);
 }
 
-.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
+.pane-drag-ghost.center-panel-shell--tab-pills > [data-terminal-tab-frame] {
 	margin-inline-end: 0;
 }
 
-.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame]::after {
+.pane-drag-ghost.center-panel-shell--tab-pills > [data-terminal-tab-frame]::after {
 	content: none;
 }
 

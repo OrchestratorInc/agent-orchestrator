@@ -995,6 +995,65 @@ paths:
       summary: Sign an account out and remove it
       tags:
       - agents
+  /api/v1/agents/accounts/{accountId}/api-key:
+    put:
+      operationId: replaceAgentAccountAPIKey
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersReplaceAgentAccountAPIKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Save a new key for an API key account, once the provider accepts it
+      tags:
+      - agents
   /api/v1/agents/accounts/{accountId}/default:
     post:
       operationId: setDefaultAgentAccount
@@ -1043,6 +1102,11 @@ paths:
           description: Agent account identifier; device-claude and device-codex are
             this computer's own logins.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersSignInAgentAccountAgainRequest'
       responses:
         "202":
           content:
@@ -1050,6 +1114,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/StartAgentAccountLoginResponse'
           description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "404":
           content:
             application/json:
@@ -1068,6 +1138,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Sign a saved account in again, in its own folder
       tags:
       - agents
@@ -1118,6 +1194,50 @@ paths:
       summary: Spend one Codex usage-limit reset of an account
       tags:
       - agents
+  /api/v1/agents/accounts/api-keys:
+    post:
+      operationId: addAgentAccountAPIKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersAddAgentAccountAPIKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Add an account that runs the provider's CLI with an API key, once the
+        provider accepts the key
+      tags:
+      - agents
   /api/v1/agents/accounts/login:
     post:
       operationId: startAgentAccountLogin
@@ -1140,13 +1260,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "501":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Add an account by running the provider's own sign-in in a terminal
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Add an account by running the provider's own sign-in, in the background
+        or in a terminal
       tags:
       - agents
   /api/v1/agents/accounts/login/{operationId}/cancel:
@@ -16142,10 +16275,21 @@ components:
           type: string
         id:
           type: string
+        keyHint:
+          type: string
+        kind:
+          enum:
+          - subscription
+          - setup_token
+          - api_key
+          - metered
+          type: string
         limits:
           $ref: '#/components/schemas/AgentAccountLimits'
         loggedIn:
           type: boolean
+        name:
+          type: string
         orgId:
           type: string
         orgName:
@@ -16176,6 +16320,7 @@ components:
       - id
       - provider
       - device
+      - kind
       - default
       - signedIn
       - loggedIn
@@ -18776,6 +18921,20 @@ components:
         disabled:
           type: boolean
       type: object
+    ControllersAddAgentAccountAPIKeyRequest:
+      properties:
+        apiKey:
+          type: string
+        name:
+          type: string
+        provider:
+          enum:
+          - claude
+          type: string
+      required:
+      - provider
+      - apiKey
+      type: object
     ControllersBrowserChromeChannel:
       properties:
         available:
@@ -19280,6 +19439,13 @@ components:
       - token
       - hostKey
       type: object
+    ControllersReplaceAgentAccountAPIKeyRequest:
+      properties:
+        apiKey:
+          type: string
+      required:
+      - apiKey
+      type: object
     ControllersRequestRereviewRequest:
       properties:
         pullRequestUrl:
@@ -19726,6 +19892,21 @@ components:
           type: boolean
       required:
       - enabled
+      type: object
+    ControllersSignInAgentAccountAgainRequest:
+      properties:
+        method:
+          enum:
+          - browser
+          - console
+          - sso
+          - setup_token
+          - device_code
+          - api_key
+          - access_token
+          type: string
+        secret:
+          type: string
       type: object
     ConversationAccountPayload:
       properties:
@@ -20898,6 +21079,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -21685,6 +21867,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -21714,6 +21897,14 @@ components:
         detail:
           description: The installer's latest output line.
           type: string
+        downloadAttempt:
+          description: Current installer download attempt, before it runs.
+          minimum: 1
+          type: integer
+        downloadAttempts:
+          description: Maximum installer download attempts.
+          minimum: 1
+          type: integer
         percent:
           description: Progress through the current phase, present only when the installer's
             output states sizes or counts.
@@ -21729,6 +21920,10 @@ components:
           - downloading
           - installing
           type: string
+        retryInSeconds:
+          description: Seconds until the next installer download attempt.
+          minimum: 1
+          type: integer
       type: object
     InvokeCueRequest:
       properties:
@@ -26265,6 +26460,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - docker-agent
           - memcode
           - hermes
@@ -26340,16 +26536,34 @@ components:
       type: object
     StartAgentAccountLoginRequest:
       properties:
+        method:
+          enum:
+          - browser
+          - console
+          - sso
+          - setup_token
+          - device_code
+          - api_key
+          - access_token
+          type: string
+        name:
+          type: string
         provider:
           enum:
           - claude
           - codex
+          type: string
+        secret:
           type: string
       required:
       - provider
       type: object
     StartAgentAccountLoginResponse:
       properties:
+        account:
+          $ref: '#/components/schemas/AgentAccountResponse'
+        authOperationId:
+          type: string
         operationId:
           type: string
         provider:
@@ -26360,9 +26574,7 @@ components:
         shellTerminal:
           $ref: '#/components/schemas/CodexAccountLoginTerminalResponse'
       required:
-      - operationId
       - provider
-      - shellTerminal
       type: object
     StartAgentAuthResponse:
       properties:

@@ -44,7 +44,8 @@ import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
-import { ElicitationAction } from "./elicitation-native-controls";
+import { ElicitationAction, ElicitationActionRow } from "./elicitation-native-controls";
+import { primaryDecisionId } from "./approvalDecisions";
 import { ElicitationInputField } from "./ElicitationInputField";
 import {
 	elicitationPromptCopy,
@@ -64,7 +65,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, openingRow } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -265,6 +266,8 @@ function Timeline({
 	const latestFollow = useRef<() => void>(() => {});
 	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
+	// Where the person's last drag let go (see `followsAfterRest`).
+	const releasedAt = useRef<Release | undefined>(undefined);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
@@ -354,7 +357,11 @@ function Timeline({
 		else listRef.current?.scrollToEnd({ animated });
 	};
 	// The follow to the newest message that output and measuring rows ask for.
+	// It runs a frame after it was asked for, so it checks again: a drag that
+	// began in between has stopped the follow, and scrolling to the end then
+	// carried the person back mid-fling.
 	const followTail = () => {
+		if (!followsTail.current || dragging.current) return;
 		if (keyboardOffset !== undefined && keyboardMoving.value) {
 			followAfterKeyboard.current = true;
 			return;
@@ -482,7 +489,7 @@ function Timeline({
 	}
 	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
 	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
-	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>, released = false) => {
 		scrollOffset.current = event.nativeEvent.contentOffset.y;
 		// iOS reports the end of the list's own scrolls (the opening one, each
 		// follow) as momentum ending too. Only a drag decides whether to follow;
@@ -492,8 +499,13 @@ function Timeline({
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent, keyboardInset.current);
+		const offset = event.nativeEvent.contentOffset.y;
+		const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+		followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);
+		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
 		setShowJump(!followsTail.current);
+		// A follow that resumes catches up on output that arrived meanwhile.
+		if (followsTail.current) requestAnimationFrame(followTail);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
@@ -546,17 +558,19 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
-							onScrollEndDrag={settle}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
 								// passing the end without a drag, as a jump does, resumes it.
 								scrollOffset.current = event.nativeEvent.contentOffset.y;
-								const tail = atTail(event.nativeEvent, keyboardInset.current);
-								if (tail && !dragging.current) followsTail.current = true;
-								setShowJump(!followsTail.current && !tail);
+								// Whenever the list is not following, the jump to the newest message
+								// is offered, on this path and in `settle`.
+								const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+								if (!dragging.current && resting) followsTail.current = true;
+								setShowJump(!followsTail.current && !resting);
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
@@ -576,7 +590,8 @@ function Timeline({
 								contentHeight.current = height;
 								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(followTail);
+								// Not while the person scrolls: a drag or its fling owns the list.
+								if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
@@ -1394,6 +1409,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 	const pending = activity.status === "pending";
 	const presentation = requestPresentation("approval", pending);
 	const command = activity.detail?.command ?? activity.summary;
+	const primaryId = primaryDecisionId(activity.decisions);
 	if (pending && handledBelow) return <RequestEcho title={presentation.title} detail={command} />;
 	if (!pending) return <View style={styles.approvalResolved}>
 		<Feather name={presentation.icon} size={iconSize.xs} color={t.textFaint} />
@@ -1408,10 +1424,13 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 			<Text selectable style={styles.requestCommand}>{command}</Text>
 		</View>
 		{activity.detail?.cwd ? <LabelValue label="cwd" value={activity.detail.cwd} /> : null}
-		{activity.decisions?.length ? <View style={styles.approvalActions}>{activity.decisions.map((decision, index) => {
-			const label = submitting === decision.id ? "Sending…" : decision.label;
+		{activity.decisions?.length ? <View style={styles.approvalActions}><ElicitationActionRow reportsOutcome actions={activity.decisions.map((decision) => ({
+			key: decision.id,
+			label: submitting === decision.id ? "Sending…" : decision.label,
+			primary: decision.id === primaryId,
+			disabled: busy || Boolean(submitting) || !activity.requestId,
 			// One haptic per decision, when it lands: the press itself only starts the work.
-			return <ElicitationAction key={decision.id} label={label} primary={index === 0} reportsOutcome disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
+			onPress: () => {
 				setSubmitting(decision.id);
 				setSubmitError(undefined);
 				void onDecide(activity.requestId ?? "", decision.id)
@@ -1421,8 +1440,8 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 						haptics.error();
 					})
 					.finally(() => setSubmitting(undefined));
-			}} />;
-		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
+			},
+		}))} /></View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
 	</View>;
 }
@@ -1706,7 +1725,7 @@ const makeStyles = (t: Theme) => {
 		approvalDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: t.amber },
 		approvalStatusText: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalCommandSurface: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md },
-		approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.xxs, paddingTop: space.none },
+		approvalActions: { minHeight: 36, paddingTop: space.none },
 		approvalResolved: { minHeight: 38, marginVertical: space.sm, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.hair },
 		approvalResolvedLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
