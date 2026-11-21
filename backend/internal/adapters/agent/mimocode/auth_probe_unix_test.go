@@ -4,7 +4,10 @@ package mimocode
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -61,13 +64,48 @@ wait`)
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for syscall.Kill(pid, 0) == nil {
+	for {
+		running, err := processRunning(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !running {
+			break
+		}
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatalf("wrapped binary %d outlived the probe", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// processRunning reports whether pid is alive and not a zombie. An orphan's
+// zombie can linger where PID 1 does not reap, and kill(pid, 0) still succeeds
+// for it. A failed inspection is an error, never proof the process stopped.
+func processRunning(pid int) (bool, error) {
+	if processGone(pid) {
+		return false, nil
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		// ps exits non-zero when pid has gone since the kill check.
+		if processGone(pid) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect process %d: %w", pid, err)
+	}
+	state := strings.TrimSpace(string(out))
+	if state == "" {
+		return false, fmt.Errorf("inspect process %d: ps printed no state", pid)
+	}
+	return !strings.HasPrefix(state, "Z"), nil
+}
+
+// processGone reports whether kill(pid, 0) finds no process. Only ESRCH says
+// so: EPERM means a process exists that we may not signal.
+func processGone(pid int) bool {
+	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
 }
 
 func TestNativeConversationExistsDisablesClaudeImport(t *testing.T) {
