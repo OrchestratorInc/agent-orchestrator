@@ -1,4 +1,6 @@
 import type { AgentCatalog, AgentModelCatalog, ProjectDetail } from "../api";
+import { STANDALONE_PROJECT } from "../projectFilter";
+import type { SpawnComposerOption } from "../spawn-composer-controls.types";
 import { CLOUD_AGENT_LABELS, CLOUD_AGENTS, isAgentConnected } from "./agents";
 import type { CloudChatModels, CloudProject, CloudProviderConnection } from "./types";
 
@@ -55,3 +57,16 @@ export function cloudModelCatalog(agentId: string, catalog: CloudChatModels, now
 
 /** Picker value for "create a cloud project", which leaves the sheet for the project form. */
 export const NEW_CLOUD_PROJECT = "__new_cloud_project__";
+
+/**
+ * The spawn sheet's project menu on Cloud: its projects, then a standalone
+ * agent where the control plane offers them (the same entry a machine's menu
+ * ends with), then a new cloud project.
+ */
+export function cloudSpawnProjectOptions(projects: readonly SpawnComposerOption[], standaloneOffered: boolean): SpawnComposerOption[] {
+	return [
+		...projects,
+		...(standaloneOffered ? [{ id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: projects.length > 0 }] : []),
+		{ id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: !standaloneOffered && projects.length > 0 },
+	];
+}

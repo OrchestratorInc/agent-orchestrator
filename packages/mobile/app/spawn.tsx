@@ -32,7 +32,8 @@ import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mappin
 import { cloudPlanBlock, cloudSessionBilled, planBlocksCloudSetup } from "../lib/cloud/plan";
 import { useCloudPlan } from "../lib/cloud/planStore";
 import { agentModelCatalog } from "../lib/cloud/modelCatalog";
-import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
+import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, cloudSpawnProjectOptions, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
+import { standaloneAgentsOffered } from "../lib/cloud/standaloneAgents";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -94,6 +95,8 @@ export default function SpawnScreen() {
 	// before that, an empty list would ask to create a project that exists.
 	const projectsKnown = cloudSelected ? Boolean(cloud) && cloudState.projectsLoaded : selectedHost?.projectsKnown ?? false;
 	const connection = cloudSelected ? (cloud ? "open" : "closed") : selectedHost?.connection ?? "closed";
+	// Cloud starts a standalone agent (no project) where its control plane offers them.
+	const cloudStandaloneOffered = cloudSelected && standaloneAgentsOffered(cloudState.org?.offering ?? cloudState.me?.offering);
 	const cloudAgentsKey = connectedAgents(cloudState.connections).join(",");
 	// Known before anything is typed: a Free organization runs no cloud agents,
 	// and a spent session-hour window starts none until it resets. The control
@@ -359,16 +362,19 @@ export default function SpawnScreen() {
 	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
 		if (!lastProject.loaded) return;
-		const nextProjectId = resolveSpawnProject(
-			projectId,
+		const resolved = resolveSpawnProject(
+			// Standalone holds only where it is offered: a machine always, Cloud when its control plane says so.
+			projectId === STANDALONE_PROJECT && cloudSelected && !cloudStandaloneOffered ? null : projectId,
 			routeHostId === selectedHostId ? routeProjectId : undefined,
 			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
 			lastProject.projectId,
 		);
+		// A Cloud with no projects yet still starts a standalone agent.
+		const nextProjectId = resolved ?? (cloudStandaloneOffered && projectsKnown && projects.length === 0 ? STANDALONE_PROJECT : null);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+	}, [activeProjectId, cloudSelected, cloudStandaloneOffered, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
 
 	// Orchestrator Cloud's catalog: every cloud agent, the connected ones usable.
 	useEffect(() => {
@@ -460,7 +466,7 @@ export default function SpawnScreen() {
 	const setupBlocked = planBlocksCloudSetup(planBlock);
 	const cloudNotices = [
 		...(planBlock ? [planBlock.message] : []),
-		...(!setupBlocked && cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
+		...(!setupBlocked && cloudSelected && !cloudStandaloneOffered && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
 	];
 	const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({
 		// One line for a machine that is gone or refused this phone, in place of
@@ -946,8 +952,12 @@ export default function SpawnScreen() {
 					hostId={selectedHostId}
 					onSelectHost={edited(chooseHost)}
 					projects={cloudSelected
-						// Cloud sessions always run in a project; a new one is created from here.
-						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
+						// A cloud project is created from here; a standalone agent, where
+						// offered, needs none.
+						? cloudSpawnProjectOptions(
+							[...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const }))],
+							cloudStandaloneOffered,
+						)
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={edited(changeProject)}
