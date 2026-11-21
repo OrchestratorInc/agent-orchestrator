@@ -801,6 +801,63 @@ func TestCursorRejectedLoginUpdateExplainsRecovery(t *testing.T) {
 	}
 }
 
+// exitCodeError is an *exec.ExitError stand-in: the install runner returns
+// the command's exit code through ExitCode().
+type exitCodeError struct {
+	code    int
+	message string
+}
+
+func (e exitCodeError) Error() string { return e.message }
+func (e exitCodeError) ExitCode() int { return e.code }
+
+func TestWingetPackageNotFoundExplainsRecovery(t *testing.T) {
+	// winget exits APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND (0x8A150014)
+	// for an ID the catalog no longer has, e.g. SST.opencode since November 2026.
+	// Go reports the code unsigned; PowerShell's $LASTEXITCODE shows it signed.
+	const notFound = "No package found matching input criteria.\n"
+	for _, tc := range []struct {
+		name     string
+		method   string
+		err      error
+		wantHint bool
+	}{
+		{name: "missing package", method: "winget", err: exitCodeError{code: 0x8A150014, message: "exit status 0x8a150014"}, wantHint: true},
+		{name: "missing package, signed code", method: "winget", err: exitCodeError{code: -1978335212, message: "exit status 0x8a150014"}, wantHint: true},
+		{name: "other winget failure", method: "winget", err: exitCodeError{code: 1, message: "exit status 1"}},
+		{name: "same code from another method", method: "npm", err: exitCodeError{code: 0x8A150014, message: "exit status 0x8a150014"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService("windows", "winget")
+			t.Cleanup(s.stop)
+			s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+				_, _ = io.WriteString(stdout, notFound)
+				return tc.err
+			})
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				t.Fatal("a failed install must not be verified")
+				return VerifyResult{}, nil
+			})
+			plan := Plan{Target: TargetOpencode, Method: tc.method, Package: "SST.opencode", Command: []string{"winget", "install", "-e", "--id", "SST.opencode"}}
+			job := &Job{Target: TargetOpencode, Status: StatusInstalling}
+			s.jobs[TargetOpencode] = job
+			s.runAgentOperation(t.Context(), plan, AgentOperationInstall, job, nil)
+			if job.Status != StatusFailed || job.Output != notFound {
+				t.Fatalf("job = %+v, want failure with original diagnostics", job)
+			}
+			if tc.wantHint {
+				for _, want := range []string{"SST.opencode", "no longer in the winget catalog", "Install it another way", "Verify again", "exit status 0x8a150014"} {
+					if !strings.Contains(job.Error, want) {
+						t.Fatalf("error = %q, want %q", job.Error, want)
+					}
+				}
+			} else if job.Error != tc.err.Error() {
+				t.Fatalf("unrelated error was rewritten: %q", job.Error)
+			}
+		})
+	}
+}
+
 func TestAgentVendorScriptInstallPreservesPlanEnvironment(t *testing.T) {
 	s := newTestService("windows", "pwsh.exe")
 	captured := make(chan ports.InstallScriptCommand, 1)

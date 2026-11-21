@@ -1501,6 +1501,11 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
 			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
 		}
+		// A package ID the winget catalog dropped fails the same way every
+		// time; retrying cannot help, so say what to do instead.
+		if plan.Method == "winget" && wingetPackageNotFound(runErr) {
+			message = fmt.Sprintf("winget package %s is no longer in the winget catalog, so it cannot be installed this way. Install it another way, then choose Verify again. (%v)", plan.Package, runErr)
+		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
@@ -1517,6 +1522,18 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		updaterReport = lastOutputLine(out.String())
 	}
 	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
+}
+
+// wingetNoApplicationsFound is APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND,
+// winget's exit code for an ID its catalog does not have. Matching the code,
+// not winget's "No package found" text, keeps this working in every locale.
+const wingetNoApplicationsFound uint32 = 0x8A150014
+
+func wingetPackageNotFound(err error) bool {
+	var exited interface{ ExitCode() int }
+	// Go reports Windows exit codes unsigned; compare the low 32 bits so a
+	// signed report of the same code matches too.
+	return errors.As(err, &exited) && uint32(exited.ExitCode()) == wingetNoApplicationsFound //nolint:gosec // exit codes are 32-bit
 }
 
 // maxUpdaterReportRunes keeps the updater line quoted in a failed update
