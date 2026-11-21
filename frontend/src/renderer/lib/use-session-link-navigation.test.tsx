@@ -23,8 +23,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ ready: true, org: { id: "org-1" } }) }));
 
 describe("useSessionLinkNavigation", () => {
-	beforeEach(async () => {
-		await new Promise((resolve) => setTimeout(resolve, 0));
+	let queryClient: QueryClient;
+	const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	beforeEach(() => {
+		queryClient = new QueryClient();
 		mocks.navigate.mockReset();
 		mocks.restore.mockReset();
 		mocks.restore.mockResolvedValue({ status: "success" });
@@ -38,13 +40,13 @@ describe("useSessionLinkNavigation", () => {
 			isSuccess: true,
 			data: [
 				{ id: "other-project", sessions: [{ id: "other-session", isTerminated: false }] },
-				{ id: "project", sessions: [{ id: "session", title: "renamed", isTerminated: false }, { id: "terminated", isTerminated: true }, { id: "terminated-2", isTerminated: true }] },
+				{ id: "project", sessions: [{ id: "session", title: "renamed", isTerminated: false }, { id: "terminated", isTerminated: true }] },
 			],
 		});
 	});
 
 	it("selects the exact cross-project session by stable ID", () => {
-		const { result } = renderHook(() => useSessionLinkNavigation());
+		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
 		act(() => expect(result.current("ao://sessions/other-project/other-session")).toBe(true));
 		expect(mocks.navigate).toHaveBeenCalledWith("other-project", "other-session");
 		expect(useUiStore.getState().globalToasts).toEqual([]);
@@ -52,10 +54,8 @@ describe("useSessionLinkNavigation", () => {
 
 	it("resolves a remote chat link on its source host without querying local or Cloud", () => {
 		mocks.workspace.mockReturnValue({ isSuccess: true, data: [{ id: "project", sessions: [{ id: "session", isTerminated: true }] }] });
-		const queryClient = new QueryClient();
 		queryClient.setQueryData(["remote-workspaces", "box-a"], [{ id: "project", sessions: [{ id: "session", isTerminated: false }] }]);
 		queryClient.setQueryData(["remote-workspaces", "box-b"], [{ id: "project", sessions: [{ id: "session", isTerminated: true }] }]);
-		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 		const { result } = renderHook(() => useSessionLinkNavigation("box-a"), { wrapper });
 		act(() => expect(result.current("ao://sessions/project/session")).toBe(true));
 		expect(mocks.navigate).toHaveBeenCalledWith("project", "session", "box-a");
@@ -68,91 +68,35 @@ describe("useSessionLinkNavigation", () => {
 			mocks.workspace.mockReturnValue({ isSuccess: false, data: undefined });
 			mocks.cloudProjects.mockReturnValue({ isSuccess: true, data: [{ id: "project" }] });
 			mocks.cloudSessions.mockReturnValue({ isSuccess: true, data: [{ id: "session", projectId: "project", isTerminated: false }] });
-			const { result } = renderHook(() => useSessionLinkNavigation(undefined, "cloud"));
+			const { result } = renderHook(() => useSessionLinkNavigation(undefined, "cloud"), { wrapper });
 			act(() => expect(result.current("ao://sessions/project/session")).toBe(true));
 			expect(mocks.navigate).toHaveBeenCalledWith("project", "session");
 			expect(useUiStore.getState().globalToasts).toEqual([]);
 			expect(mocks.workspace).not.toHaveBeenCalled();
 	});
 
-	it("resumes a terminated session once, then opens it", async () => {
+	it("opens a terminated session right away and restores it once in the background", async () => {
 		let finish!: (result: { status: "success" }) => void;
 		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-		const { result } = renderHook(() => useSessionLinkNavigation());
+		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
 		act(() => expect(result.current("ao://sessions/project/terminated")).toBe(true));
 		act(() => expect(result.current("ao://sessions/project/terminated")).toBe(true));
+		expect(mocks.navigate).toHaveBeenCalledTimes(2);
+		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+		await act(async () => {});
 		expect(mocks.restore).toHaveBeenCalledTimes(1);
 		expect(mocks.restore).toHaveBeenCalledWith("terminated", undefined);
-		expect(mocks.navigate).not.toHaveBeenCalled();
-		expect(useUiStore.getState().globalToasts).toEqual([
-			expect.objectContaining({ title: "Resuming session terminated…", durationMs: 0, dedupeKey: "session-link:project:terminated" }),
-		]);
+		expect(queryClient.isMutating({ mutationKey: ["resume-agent", "local", "terminated"] })).toBe(1);
 		await act(async () => finish({ status: "success" }));
-		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+		expect(queryClient.isMutating()).toBe(0);
 		expect(useUiStore.getState().globalToasts).toEqual([]);
 	});
 
-	it("opens from the latest page when the pending link is clicked again", async () => {
-		let finish!: (result: { status: "success" }) => void;
-		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-		window.location.hash = "#/projects/project/sessions/session";
-		const { result } = renderHook(() => useSessionLinkNavigation());
-		act(() => { result.current("ao://sessions/project/terminated"); });
-		window.location.hash = "#/projects/other-project/sessions/other-session";
-		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-		act(() => { result.current("ao://sessions/project/terminated"); });
-		await act(async () => finish({ status: "success" }));
-		expect(mocks.restore).toHaveBeenCalledTimes(1);
-		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
-	});
-
-	it("opens only the most recently clicked terminated session", async () => {
-		const finishes: Array<(result: { status: "success" }) => void> = [];
-		mocks.restore.mockImplementation(() => new Promise((resolve) => { finishes.push(resolve); }));
-		window.location.hash = "#/projects/project/sessions/session";
-		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-		const { result } = renderHook(() => useSessionLinkNavigation());
-		act(() => { result.current("ao://sessions/project/terminated"); });
-		act(() => { result.current("ao://sessions/project/terminated-2"); });
-		await act(async () => finishes[0]!({ status: "success" }));
-		expect(mocks.navigate).not.toHaveBeenCalled();
-		await act(async () => finishes[1]!({ status: "success" }));
-		expect(mocks.navigate).toHaveBeenCalledTimes(1);
-		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated-2");
-	});
-
-	it("does not open after the user left and came back before the resume finished", async () => {
-		let finish!: (result: { status: "success" }) => void;
-		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-		window.location.hash = "#/projects/project/sessions/session";
-		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-		const { result } = renderHook(() => useSessionLinkNavigation());
-		act(() => { result.current("ao://sessions/project/terminated"); });
-		window.location.hash = "#/projects/other-project/sessions/other-session";
-		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-		window.location.hash = "#/projects/project/sessions/session";
-		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-		await act(async () => finish({ status: "success" }));
-		expect(mocks.navigate).not.toHaveBeenCalled();
-	});
-
-	it("does not pull the user away when they moved on before the resume finished", async () => {
-		let finish!: (result: { status: "success" }) => void;
-		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-		window.location.hash = "#/projects/project/sessions/session";
-		const { result } = renderHook(() => useSessionLinkNavigation());
-		act(() => { result.current("ao://sessions/project/terminated"); });
-		window.location.hash = "#/projects/other-project/sessions/other-session";
-		await act(async () => finish({ status: "success" }));
-		expect(mocks.navigate).not.toHaveBeenCalled();
-		expect(useUiStore.getState().globalToasts).toEqual([]);
-	});
-
-	it("shows why a terminated session could not resume and stays put", async () => {
+	it("shows why a terminated session could not restore", async () => {
 		mocks.restore.mockResolvedValue({ status: "not_resumable", message: "No saved session is available." });
-		const { result } = renderHook(() => useSessionLinkNavigation());
+		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
 		await act(async () => { result.current("ao://sessions/project/terminated"); });
-		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
 		expect(useUiStore.getState().globalToasts).toEqual([
 			expect.objectContaining({ title: "No saved session is available.", tone: "error", dedupeKey: "session-link:project:terminated" }),
 		]);
@@ -160,7 +104,7 @@ describe("useSessionLinkNavigation", () => {
 
 	it("navigates to the session and requests the artifact open, even after termination", () => {
 		useUiStore.setState({ workspaceFileOpenRequest: null });
-		const { result } = renderHook(() => useSessionLinkNavigation());
+		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
 		act(() => expect(result.current("ao://sessions/project/terminated/artifacts/plans/my%20plan.md")).toBe(true));
 		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
 		expect(useUiStore.getState().workspaceFileOpenRequest).toEqual(expect.objectContaining({
@@ -175,7 +119,7 @@ describe("useSessionLinkNavigation", () => {
 		["ao://sessions/project/missing", "missing or is not accessible"],
 		["ao://sessions/project/session/kill", "malformed or unsupported"],
 	])("rejects %s with actionable feedback", (url, message) => {
-		const { result } = renderHook(() => useSessionLinkNavigation());
+		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
 		act(() => expect(result.current(url)).toBe(false));
 		expect(mocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToasts.at(-1)).toEqual(expect.objectContaining({
@@ -189,7 +133,7 @@ describe("useSessionLinkNavigation", () => {
 
 	it("does not navigate when the workspace cannot be verified", () => {
 		mocks.workspace.mockReturnValue({ isSuccess: false, data: undefined });
-		const { result } = renderHook(() => useSessionLinkNavigation());
+		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
 		act(() => expect(result.current("ao://sessions/project/session")).toBe(false));
 		expect(useUiStore.getState().globalToasts.at(-1)?.title).toContain("daemon connection");
 	});
