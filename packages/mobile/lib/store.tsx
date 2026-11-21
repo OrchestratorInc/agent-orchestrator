@@ -32,13 +32,13 @@ import {
 import { hostMachineIdentity, isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
-import { fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
+import { endpointStillAnswers, fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts, sameHostConnections, setActiveHost, updateHostEndpoints, type Host } from "./hosts";
 import { knowsRemoteAddress, learnRemoteAddress, LEARN_REMOTE_EVERY_MS, LEARN_REMOTE_FOR_MS } from "./learnRemoteAddress";
 import { loadAccount } from "./account";
 import { cancelAccountHostSync, syncAccountHosts } from "./accountHosts";
-import { shouldReRace } from "./reRace";
+import { recoveryDelayMs, shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
@@ -460,6 +460,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// an OS that wrongly says there is no network (#8282).
 	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
 	const phoneNetworkReportedAtRef = useRef(0);
+	// Set while the offline reconnect loop runs: restarts its short retry steps
+	// after a network change the listener does not race for itself.
+	const wakeRecoveryRef = useRef<(() => void) | null>(null);
 	const trustedNetwork = useCallback(
 		() => trustedPhoneNetwork(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now()),
 		[],
@@ -582,8 +585,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const hosts = await loadHosts().catch(() => null);
 			if (resolution !== configResolution.current) return null;
 			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
-			const c = await resolveActiveConfig(runtimeResolveDeps(options));
+			let c = await resolveActiveConfig(runtimeResolveDeps(options), (stale) => {
+				// The machine refused the token this config carries and the kept
+				// password now stands in for it: connect again while the refused
+				// token is still in use, whichever resolution kept it (one that
+				// found nothing keeps the working config, see endpointStillAnswers),
+				// or while this resolution's config was dropped for it.
+				if (!mountedRef.current) return;
+				const live = cfgRef.current;
+				const refusedInUse = live !== null && live.hostId === stale.hostId && live.password === stale.password;
+				if (refusedInUse || (live === null && resolution === configResolution.current)) void reloadConfig(options);
+			});
 			if (resolution !== configResolution.current) return null;
+			// A re-check (a network change, the look for a better address) that
+			// found nothing must not cost a connection that still works: the one in
+			// use is asked once more, with the slow-link limit, before it goes.
+			const working = cfgRef.current;
+			if (!(c && isConfigured(c)) && working?.hostId && working.hostId === selected?.id) {
+				const stillAnswers = await endpointStillAnswers(working);
+				// Superseded while the probe ran, whatever it found: a newer
+				// resolution (another machine above all) owns the config now.
+				if (resolution !== configResolution.current) return null;
+				if (stillAnswers) c = working;
+			}
 			// Every endpoint was tried and none answered. The poll stops without a
 			// config, so this race (and the reconnect timer's next ones) is what
 			// moves the link from "reconnecting" to "unreachable".
@@ -769,12 +793,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// Pointless while the phone has no network at all: the network listener
 		// races the moment it comes back. On a network the OS wrongly calls
 		// offline, its report never changes, so this probe is the only way back.
-		const timer = setInterval(() => {
-			if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
-				void reloadConfig();
+		// Soon at first, then less often (see recoveryDelayMs), one attempt at a
+		// time: a race on a slow link can take 15 s, and starting another would
+		// throw that one away. Only tries that ran use up a step, and any change
+		// in the phone's network report starts the steps again: otherwise the
+		// short ones were spent while the phone had no network at all, and the
+		// network that finally came up waited the full 15 s.
+		let stopped = false;
+		let running = false;
+		let attempt = 0;
+		let reportedAt = phoneNetworkReportedAtRef.current;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const schedule = () => {
+			if (phoneNetworkReportedAtRef.current !== reportedAt) {
+				reportedAt = phoneNetworkReportedAtRef.current;
+				attempt = 0;
 			}
-		}, 15_000);
-		return () => clearInterval(timer);
+			timer = setTimeout(async () => {
+				if (stopped) return;
+				if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
+					running = true;
+					await reloadConfig().catch(() => null);
+					running = false;
+					attempt += 1;
+				}
+				if (!stopped) schedule();
+			}, recoveryDelayMs(attempt));
+		};
+		// A try in flight reschedules from the new report once it settles.
+		const wake = () => {
+			if (stopped || running) return;
+			clearTimeout(timer);
+			schedule();
+		};
+		wakeRecoveryRef.current = wake;
+		schedule();
+		return () => {
+			stopped = true;
+			clearTimeout(timer);
+			if (wakeRecoveryRef.current === wake) wakeRecoveryRef.current = null;
+		};
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
 
 	// Nothing re-picks a path while the current one answers, so once the app
@@ -1086,11 +1144,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			phoneNetworkRef.current = next;
 			// Only a change resets the clock: Android repeats an unchanged report,
 			// and each repeat would otherwise discard the answers that overrule it.
-			if (previous.connected !== next.connected || previous.internet !== next.internet || previous.type !== next.type) {
-				phoneNetworkReportedAtRef.current = Date.now();
-			}
+			const changed = previous.connected !== next.connected || previous.internet !== next.internet || previous.type !== next.type;
+			if (changed) phoneNetworkReportedAtRef.current = Date.now();
 			publishLink();
-			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
+			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) {
+				// A network the OS never calls connected (an unvalidated Wi-Fi after
+				// airplane mode) races nothing here; the reconnect loop's short
+				// first step is its quickest way back.
+				if (changed) wakeRecoveryRef.current?.();
+				return;
+			}
 			// reloadConfig keeps the same config object when the winning endpoint
 			// is unchanged, which would leave the poll waiting out its interval, or
 			// on a request still hanging on the network the phone left. Start a
