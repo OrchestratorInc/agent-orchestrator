@@ -113,16 +113,22 @@ The native terminal list also contains foreground commands. A shell is reported
 and stoppable only when a read begun after its launching call or turn completed
 still lists it. Unconfirmed calls and their failures stay out of the reading.
 An overlapping read cannot use a completion that arrived after it began. Settled
-history can recover missing launch evidence after attachment; otherwise unknown
-shells stay hidden in the partial reading. Short-lived jobs may end before a
+history can recover missing launch evidence after attachment. On live host
+reconnect, the first background read fetches `thread/read` once solely to seed
+settled launch evidence before listing terminals. It does not replay the transcript
+or resume a turn. Active-turn launch IDs remain unconfirmed until a later
+completion and subsequent inventory read. Failed or malformed history reads
+remain retryable; unknown shells stay hidden until their lifecycle is confirmed. Short-lived jobs may end before a
 qualifying read. Confirmed shells retain outcomes even if a later list omits them
 before completion arrives. Unconfirmed command metadata is bounded to 256
 sanitized labels per conversation.
 Provider labels are one line, capped at 240 characters, and redact obvious
-credential assignments, common credential flags, authorization values, and
-`user:password` URL or `-u`/`--user` values. Ordinary `-u` arguments, query-string
-email addresses, and flags such as `--sort-key` remain readable; this is not
-general secret detection.
+credential assignments, credential flags with arbitrary prefixes,
+authorization values, and URL userinfo (including token-only userinfo). Query and
+fragment email addresses stay readable. `--sort-key` and `--primary-key` are exempt
+in space and `=` forms. Plain `-u` arguments stay readable; colon-separated
+`-u`/`--user` pairs remain conservatively redacted, including numeric UID:GID
+values, since these can also be credentials. This is not general secret detection.
 
 Claude stop acknowledgments do not establish completion. After an SDK rejection,
 wait up to one second for native reconciliation. An observed completion maps to

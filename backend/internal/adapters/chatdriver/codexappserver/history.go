@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -127,35 +126,7 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 		}
 	}
 
-	// Reconnects may have missed command events. A settled turn is evidence
-	// that its launching calls ended; a later list must still confirm each job.
-	// Do not invent a start time or introduce a task from history alone.
-	c.mu.Lock()
-	boundary := time.Now()
-	for _, turn := range resp.Thread.Turns {
-		// The display normalizer maps unknown statuses to failed; that fallback
-		// is not evidence that a launching call has actually finished.
-		switch turn.Status {
-		case codexproto.TurnStatusCompleted, codexproto.TurnStatusFailed, codexproto.TurnStatusInterrupted:
-		default:
-			continue
-		}
-		for _, item := range turn.Items {
-			if item.Type != codexproto.ThreadItemTypeCommandExecution || item.ExitCode != nil {
-				continue
-			}
-			id := deref(item.ID)
-			command := c.backgroundCommands[id]
-			if command.CallCompletedAt.IsZero() {
-				command.CallCompletedAt = boundary
-			}
-			if command.TurnID == "" {
-				command.TurnID = turn.ID
-			}
-			c.rememberBackgroundCommand(id, command)
-		}
-	}
-	c.mu.Unlock()
+	c.rememberBackgroundLaunchHistory(resp.Thread.Turns)
 
 	events := make([]ports.ChatEvent, 0, len(resp.Thread.Turns)*4)
 	citations := newCitationFormatter()

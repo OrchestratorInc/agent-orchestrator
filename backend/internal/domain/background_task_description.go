@@ -10,11 +10,11 @@ const taskRedactedNamePattern = `(?:[A-Z_][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD
 const taskRedactedValuePattern = `(?:"[^"]*"|'[^']*'|[^\s;&|"']+)`
 
 var taskWindowsSetCredential = regexp.MustCompile(`(?i)(\bset\s+")(` + taskRedactedNamePattern + `)\s*=\s*[^"]*(")`)
-var taskCredentialAssignment = regexp.MustCompile(`(?i)\b(` + taskRedactedNamePattern + `)\s*=\s*(?:(?:Bearer|Basic|token)\s+)?` + taskRedactedValuePattern)
-var taskCredentialFlag = regexp.MustCompile(`(?i)(--(?:(?:api|access|auth|client|private|secret|encryption|signing|refresh|bearer)[-_])?(?:key|token|secret|password|passwd|pass|pwd|credential)\b(?:(?:\s*=\s*)|\s+))` + taskRedactedValuePattern)
+var taskCredentialAssignment = regexp.MustCompile(`(?i)(--[a-z0-9_-]+|\b` + taskRedactedNamePattern + `)\s*=\s*(?:(?:Bearer|Basic|token)\s+)?` + taskRedactedValuePattern)
+var taskCredentialFlag = regexp.MustCompile(`(?i)(--[a-z0-9_-]*(?:key|token|secret|password|passwd|pass|pwd|credential)\b)(\s*=\s*|\s+)` + taskRedactedValuePattern)
 var taskBasicOrTokenCredential = regexp.MustCompile(`(?i)(\bAuthorization\s*:\s*(?:Basic|token)\s+)[A-Za-z0-9._~+/=-]+`)
 var taskBearerCredential = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
-var taskURLCredential = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s@?#:]*:[^/\s@?#]*@`)
+var taskURLCredential = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s@?#]+@`)
 var taskUserCredential = regexp.MustCompile(`(?i)((?:^|\s)(?:-u|--user)(?:\s+|=))(?:"[^"]*:[^"]*"|'[^']*:[^']*'|[^\s;&|"']*:[^\s;&|"']*)`)
 
 // SanitizeTaskDescription bounds untrusted provider labels for compact UI and
@@ -31,8 +31,23 @@ func SanitizeTaskDescription(text string) string {
 	}, text)
 	text = strings.Join(strings.Fields(text), " ")
 	text = taskWindowsSetCredential.ReplaceAllString(text, "$1$2=[redacted]$3")
-	text = taskCredentialAssignment.ReplaceAllString(text, "$1=[redacted]")
-	text = taskCredentialFlag.ReplaceAllString(text, "${1}[redacted]")
+	text = taskCredentialFlag.ReplaceAllStringFunc(text, func(match string) string {
+		parts := taskCredentialFlag.FindStringSubmatch(match)
+		switch strings.ToLower(parts[1]) {
+		case "--sort-key", "--primary-key", "--bypass", "--monkey":
+			return match
+		}
+		return parts[1] + parts[2] + "[redacted]"
+	})
+	text = taskCredentialAssignment.ReplaceAllStringFunc(text, func(match string) string {
+		name := taskCredentialAssignment.FindStringSubmatch(match)[1]
+		// Flags were handled above. Match their whole assignment here so an
+		// exempt --sort-key=name cannot be mistaken for the variable KEY=name.
+		if strings.HasPrefix(name, "--") && !strings.EqualFold(name, "--authorization") {
+			return match
+		}
+		return name + "=[redacted]"
+	})
 	text = taskBasicOrTokenCredential.ReplaceAllString(text, "${1}[redacted]")
 	text = taskBearerCredential.ReplaceAllString(text, "Bearer [redacted]")
 	text = taskURLCredential.ReplaceAllString(text, "${1}[redacted]@")

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -504,6 +505,105 @@ func TestBackgroundTasksCodexHistoryRequiresExplicitCompletion(t *testing.T) {
 			}
 			if len(tasks) != expected {
 				t.Fatalf("status %s tasks=%+v", status, tasks)
+			}
+		})
+	}
+}
+
+func TestBackgroundTasksCodexLiveReconnectRecoversSettledLaunches(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.replyError("initialize", -32600, "Already initialized")
+	workspace := t.TempDir()
+	proc, err := d.spawn(t.Context(), "codex", workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.persistent = true
+	d.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+		return &persistenthost.Transport{Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41}, nil
+	}
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","turns":[{"id":"previous","status":"completed","items":[{"id":"server","type":"commandExecution","exitCode":null}]},{"id":"current","status":"inProgress","items":[{"id":"build","type":"commandExecution","exitCode":null}]}]}}`)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"old-shell","itemId":"server","command":"npm run dev"},{"processId":"foreground","itemId":"build","command":"build"}]}`)
+	srv.reply("thread/backgroundTerminals/terminate", `{"terminated":true}`)
+	opened, err := d.Reconnect(t.Context(), ports.ChatResumeConfig{SessionID: "reconnect", ProviderConversationID: "thread-1", WorkspacePath: workspace, DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c := opened.(*conversation)
+	for range 2 {
+		tasks, err := c.BackgroundTasks(t.Context())
+		if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || tasks[0].ID != "old-shell" || !tasks[0].Stoppable || tasks[0].StartedAt != nil {
+			t.Fatalf("reconnected tasks=%+v err=%v", tasks, err)
+		}
+	}
+	if err := c.StopBackgroundTask(t.Context(), "foreground"); !errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
+		t.Fatal(err)
+	}
+	if err := c.StopBackgroundTask(t.Context(), "old-shell"); err != nil {
+		t.Fatal(err)
+	}
+	// An active launch was retained but could not qualify until a later boundary.
+	c.observeBackgroundNotification(notification{Method: "turn/completed", Params: []byte(`{"threadId":"thread-1","turn":{"id":"current","status":"completed"}}`)})
+	tasks, err := c.BackgroundTasks(t.Context())
+	if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 2 {
+		t.Fatalf("post-boundary tasks=%+v err=%v", tasks, err)
+	}
+	foundLive := false
+	for _, task := range tasks {
+		if task.ID == "foreground" {
+			foundLive = task.State == "running" && task.Stoppable
+		}
+	}
+	if !foundLive {
+		t.Fatalf("surviving active launch missing after completion: %+v", tasks)
+	}
+	if srv.sentMethod("thread/resume") {
+		t.Fatal("background history read resumed the thread")
+	}
+	srv.mu.Lock()
+	historyReads := 0
+	for _, request := range srv.seen {
+		if request.Method == "thread/read" {
+			historyReads++
+		}
+	}
+	srv.mu.Unlock()
+	if historyReads != 1 {
+		t.Fatalf("background history read %d times; want once", historyReads)
+	}
+	select {
+	case event := <-c.events:
+		t.Fatalf("background history replayed transcript: %+v", event)
+	default:
+	}
+}
+
+func TestBackgroundTasksCodexReconnectHistoryFailureCanRetry(t *testing.T) {
+	for _, bad := range []string{`{"thread":{"id":"other","turns":[]}}`, `{"thread":{"id":"thread-1"}}`} {
+		t.Run(bad, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			c.mu.Lock()
+			c.backgroundHistoryPending = true
+			c.mu.Unlock()
+			srv.reply("thread/read", bad)
+			if _, err := c.BackgroundTasks(t.Context()); err == nil || errors.Is(err, ports.ErrBackgroundTasksPartial) {
+				t.Fatalf("invalid history accepted: %v", err)
+			}
+			if srv.sentMethod("thread/backgroundTerminals/list") {
+				t.Fatal("listed before history was validated")
+			}
+			srv.reply("thread/read", `{"thread":{"id":"thread-1","turns":[{"id":"past","status":"completed","items":[{"id":"cmd","type":"commandExecution","exitCode":null}]}]}}`)
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"itemId":"cmd","processId":"p","command":"server"}]}`)
+			tasks, err := c.BackgroundTasks(t.Context())
+			if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || !tasks[0].Stoppable {
+				t.Fatalf("retry tasks=%+v err=%v", tasks, err)
 			}
 		})
 	}

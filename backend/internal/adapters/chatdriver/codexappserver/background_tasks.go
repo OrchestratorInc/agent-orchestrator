@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -37,6 +38,32 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 	defer cancel()
 	c.mu.Lock()
 	closed := c.closed
+	needHistory := c.backgroundHistoryPending
+	c.mu.Unlock()
+	if closed {
+		return nil, errConversationClosed
+	}
+	if needHistory {
+		// Live reconnect skips transcript replay. Recover only settled launch
+		// evidence, including while another turn is running, before inventory.
+		var response codexproto.ThreadReadResponse
+		includeTurns := true
+		if err := c.conn.request(ctx, codexproto.MethodThreadRead, codexproto.ThreadReadParams{ThreadID: c.threadID, IncludeTurns: &includeTurns}, &response); err != nil {
+			return nil, fmt.Errorf("background launch history: %w", err)
+		}
+		if response.Thread.ID != c.threadID {
+			return nil, fmt.Errorf("background history returned %q, requested %q", response.Thread.ID, c.threadID)
+		}
+		if response.Thread.Turns == nil {
+			return nil, errors.New("background history is missing turns")
+		}
+		c.rememberBackgroundLaunchHistory(response.Thread.Turns)
+		c.mu.Lock()
+		c.backgroundHistoryPending = false
+		c.mu.Unlock()
+	}
+	c.mu.Lock()
+	closed = c.closed
 	// Completion observed during this RPC cannot qualify its earlier snapshot.
 	eligible := make(map[string]bool)
 	for id, command := range c.backgroundCommands {
@@ -330,4 +357,42 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			}
 		}
 	}
+}
+
+// rememberBackgroundLaunchHistory seeds launch metadata, never tasks or transcript events.
+func (c *conversation) rememberBackgroundLaunchHistory(turns []codexproto.Turn) {
+	// Reconnects may have missed command events. A settled turn is evidence
+	// that its launching calls ended; a later list must still confirm each job.
+	// Do not invent a start time or introduce a task from history alone.
+	c.mu.Lock()
+	boundary := time.Now()
+	for _, turn := range turns {
+		// The display normalizer maps unknown statuses to failed; that fallback
+		// is not evidence that a launching call has actually finished.
+		settled := false
+		switch turn.Status {
+		case codexproto.TurnStatusCompleted, codexproto.TurnStatusFailed, codexproto.TurnStatusInterrupted:
+			settled = true
+		case codexproto.TurnStatusInProgress:
+			// Retain identity only: a later turn completion can qualify a job,
+			// but this snapshot supplies no background evidence for a live call.
+		default:
+			continue
+		}
+		for _, item := range turn.Items {
+			if item.Type != codexproto.ThreadItemTypeCommandExecution || item.ExitCode != nil {
+				continue
+			}
+			id := deref(item.ID)
+			command := c.backgroundCommands[id]
+			if settled && command.CallCompletedAt.IsZero() {
+				command.CallCompletedAt = boundary
+			}
+			if command.TurnID == "" {
+				command.TurnID = turn.ID
+			}
+			c.rememberBackgroundCommand(id, command)
+		}
+	}
+	c.mu.Unlock()
 }

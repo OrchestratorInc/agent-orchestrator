@@ -77,6 +77,8 @@ type conversation struct {
 	backgroundStopping map[string]bool
 	// Command starts are observational; only the native inventory confirms background work.
 	backgroundCommands map[string]backgroundCommand
+	// A surviving host reconnect needs launch evidence without transcript replay.
+	backgroundHistoryPending bool
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.
