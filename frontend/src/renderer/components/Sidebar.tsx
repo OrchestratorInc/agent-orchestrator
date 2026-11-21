@@ -2896,6 +2896,8 @@ const SessionRow = memo(function SessionRow({
 						active && "text-foreground",
 					)}
 					data-session-row=""
+					// Keep a nested row's indent while its name is edited.
+					style={stack && stack.depth > 0 ? { paddingLeft: `${Math.min(stack.depth, 3) * 14 + 6}px` } : undefined}
 				>
 					<NavRowHighlight active={active} />
 					<SessionStatusDot indicator={indicator} session={session} />

@@ -17,11 +17,30 @@ describe("nestStackedSessions", () => {
 			session("base", [pr(1)]),
 			session("mid", [pr(2, 1)]),
 		]);
-		expect(ids(ordered)).toEqual(["other", "base", "mid", "top"]);
+		// "top" came first, so its whole stack takes that place.
+		expect(ids(ordered)).toEqual(["base", "mid", "top", "other"]);
 		expect(placement.get("base")).toEqual({ depth: 0, base: true, onNumber: undefined });
 		expect(placement.get("mid")).toEqual({ depth: 1, base: false, onNumber: 1 });
 		expect(placement.get("top")).toEqual({ depth: 2, base: false, onNumber: 2 });
 		expect(placement.has("other")).toBe(false);
+	});
+
+	it("lifts a whole stack to where its highest layer was, so a floated layer stays near the top", () => {
+		const { ordered } = nestStackedSessions([
+			session("needs-you", [pr(2, 1)]),
+			session("other"),
+			session("base", [pr(1)]),
+		]);
+		expect(ids(ordered)).toEqual(["base", "needs-you", "other"]);
+	});
+
+	it("nests under a session that owns several layers, by any of its PRs", () => {
+		const { ordered, placement } = nestStackedSessions([
+			session("top", [pr(3, 2)]),
+			session("owner", [pr(1), pr(2, 1)]),
+		]);
+		expect(ids(ordered)).toEqual(["owner", "top"]);
+		expect(placement.get("top")).toEqual({ depth: 1, base: false, onNumber: 2 });
 	});
 
 	it("leaves the list alone when no PR is stacked on another listed session's PR", () => {
