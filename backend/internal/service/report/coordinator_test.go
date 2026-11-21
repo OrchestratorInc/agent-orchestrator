@@ -432,3 +432,23 @@ func (d *coordinatorDelivery) Interrupt(_ context.Context, target domain.Session
 	d.interrupts = append(d.interrupts, target)
 	return nil
 }
+
+// The user message is unchanged; only the daemon-produced envelope gets to
+// contain raw markers around the rendered data.
+func TestAppendToUserMessageKeepsReportMarkersAtBoundary(t *testing.T) {
+	batch := PreparedBatch{Reports: []domain.ReportRecord{
+		{ID: "note", SessionID: "one", Note: "Documentation: " + chatReportOpen},
+		{ID: "message", SessionID: "two", Message: chatReportClose},
+	}}
+	const human = "Human question"
+	got := batch.AppendToUserMessage(human)
+	if !strings.HasPrefix(got, human+"\n\n"+chatReportOpen+"\n") ||
+		!strings.HasSuffix(got, "\n"+chatReportClose) ||
+		strings.Count(got, chatReportOpen) != 1 || strings.Count(got, chatReportClose) != 1 {
+		t.Fatalf("invalid worker report boundary: %q", got)
+	}
+	if !strings.Contains(got, "&lt;ao-worker-reports&gt;") ||
+		!strings.Contains(got, "&lt;/ao-worker-reports&gt;") {
+		t.Fatalf("escaped documentation is missing from the report: %q", got)
+	}
+}

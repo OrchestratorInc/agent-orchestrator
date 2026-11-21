@@ -13,7 +13,7 @@ import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
 import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
-import { ApprovalCard, humanVisibleText } from "./ChatTimelineItems";
+import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
 import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
 import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
@@ -1940,7 +1940,7 @@ export function useIndependentSideChats(
 												if (!operationCurrent(activeId)()) return;
 												const turn = (snapshot.turns ?? []).find(turn => turn.id === turnId && turn.state === "queued");
 												if (!turn) return;
-												setQueuedEditors(current => ({ ...current, [activeId]: { turnId, text: humanVisibleText(turn.text) } }));
+												setQueuedEditors(current => ({ ...current, [activeId]: { turnId, text: turn.text } }));
 											}}
 										/>
 										{editingTurnId ? (
