@@ -159,9 +159,9 @@ type SandboxConfigKey = "sandboxDocker" | "agentsCanUseSudo";
 export function CloudProjectSandboxSettings({ project, showDocker }: { project: CloudCpProject; showDocker: boolean }) {
 	const { t } = useTranslation();
 	// false means this user may not change them; absent (an older server) means
-	// unknown, so the switches stay editable and the server's 403 answers.
-	const [canEdit, setCanEdit] = useState(() => canEditSandboxOf(project));
-	const rowProps = { project, readOnly: canEdit === false, onSaved: (updated: CloudCpProject) => setCanEdit(canEditSandboxOf(updated)) };
+	// unknown, so the switches stay editable and the server's 403 answers. Read
+	// from the current project: a save or refetch puts the server's answer there.
+	const rowProps = { project, readOnly: canEditSandboxOf(project) === false };
 	return <SettingsGroup title={t("settings.project.sandbox.title")} grouped>
 		{showDocker ? <SandboxSwitchRow {...rowProps} configKey="sandboxDocker" id="project-sandbox-docker"
 			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}
@@ -177,10 +177,9 @@ export function CloudProjectSandboxSettings({ project, showDocker }: { project: 
  * from before the setting rejects the key; the switch then says so and stays
  * disabled instead of flipping back on every try.
  */
-function SandboxSwitchRow({ project, readOnly, onSaved, configKey, id, label, description, checkedOf }: {
+function SandboxSwitchRow({ project, readOnly, configKey, id, label, description, checkedOf }: {
 	project: CloudCpProject;
 	readOnly: boolean;
-	onSaved: (project: CloudCpProject) => void;
 	configKey: SandboxConfigKey;
 	id: string;
 	label: string;
@@ -196,7 +195,6 @@ function SandboxSwitchRow({ project, readOnly, onSaved, configKey, id, label, de
 		mutationFn: (value: boolean) => client.updateProjectSettings(project.orgId, project.id, { config: { [configKey]: value } }),
 		onSuccess: (response) => {
 			setSaved(checkedOf(response.project.config));
-			onSaved(response.project);
 			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
 			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		},
