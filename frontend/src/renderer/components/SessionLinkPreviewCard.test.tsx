@@ -177,7 +177,7 @@ describe("SessionLinkPreviewCard", () => {
 		expect(mocks.dismiss.mock.invocationCallOrder[0]).toBeLessThan(onOpen.mock.invocationCallOrder[0]!);
 	});
 
-	it("keeps the card inert without a handler and keeps a terminated card's Resume button separate", async () => {
+	it("keeps the card inert without a handler and opens a terminated session through the link path", async () => {
 		const worker = session();
 		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
 		const view = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
@@ -186,10 +186,11 @@ describe("SessionLinkPreviewCard", () => {
 		const onOpen = vi.fn();
 		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ isTerminated: true, status: "terminated" }))] }));
 		view.rerender(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
-		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
+		expect(view.container.firstElementChild).toHaveClass("cursor-pointer");
 		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
-		expect(onOpen).not.toHaveBeenCalled();
-		expect(mocks.dismiss).not.toHaveBeenCalled();
+		expect(onOpen).toHaveBeenCalledTimes(1);
+		expect(mocks.dismiss).toHaveBeenCalledTimes(1);
+		expect(mocks.restore).not.toHaveBeenCalled();
 	});
 
 	it("localizes the PR count instead of adding an English suffix", () => {

@@ -150,7 +150,7 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 	);
 }
 
-function TerminatedCard({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
+function TerminatedCard({ session, hostId, opensOnClick }: { session: WorkspaceSession; hostId?: string; opensOnClick: boolean }) {
 	const { t } = useTranslation();
 	const restoreSession = useRestoreSession();
 	const [restoring, setRestoring] = useState(false);
@@ -175,6 +175,7 @@ function TerminatedCard({ session, hostId }: { session: WorkspaceSession; hostId
 				className="w-full"
 				disabled={restoring}
 				onClick={(event) => {
+					if (opensOnClick) return;
 					event.preventDefault();
 					event.stopPropagation();
 					void resumeAgent();
@@ -212,9 +213,8 @@ export function SessionLinkPreviewCard({
 	const dismiss = useHoverCardDismiss();
 	if (session) {
 		const terminated = session.isTerminated === true || session.status === "terminated";
-		// A terminated card already holds its own Resume button, so only a live one opens on click.
 		// Pointer only: the card is portaled and closes when the link blurs, so the link is the keyboard path.
-		const openable = onOpen && !terminated;
+		const openable = Boolean(onOpen);
 		return (
 			<HoverCardContent
 				collisionPadding={8}
@@ -222,10 +222,10 @@ export function SessionLinkPreviewCard({
 				className={cn(SESSION_CARD_CLASS, openable && "cursor-pointer transition-colors hover:bg-accent")}
 				onClick={openable ? () => {
 					dismiss();
-					onOpen();
+					onOpen?.();
 				} : undefined}
 			>
-				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
+				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} opensOnClick={openable} /> : <SessionCardBody session={session} />}
 			</HoverCardContent>
 		);
 	}

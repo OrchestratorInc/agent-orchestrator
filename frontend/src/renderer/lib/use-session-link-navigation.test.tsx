@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { useSessionLinkNavigation } from "./use-session-link-navigation";
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), workspace: vi.fn(), cloudProjects: vi.fn(), cloudSessions: vi.fn() }));
+const mocks = vi.hoisted(() => ({ navigate: vi.fn(), restore: vi.fn(), workspace: vi.fn(), cloudProjects: vi.fn(), cloudSessions: vi.fn() }));
 vi.mock("./navigate-to-session", () => ({ useNavigateToSession: () => mocks.navigate }));
+vi.mock("../hooks/useRestoreSession", () => ({ useRestoreSession: () => mocks.restore }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => mocks.workspace(),
 	useCloudProjectsQuery: () => mocks.cloudProjects(),
@@ -24,6 +25,8 @@ vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ ready: true, org:
 describe("useSessionLinkNavigation", () => {
 	beforeEach(() => {
 		mocks.navigate.mockReset();
+		mocks.restore.mockReset();
+		mocks.restore.mockResolvedValue({ status: "success" });
 		mocks.workspace.mockClear();
 		mocks.cloudProjects.mockClear();
 		mocks.cloudSessions.mockClear();
@@ -71,20 +74,29 @@ describe("useSessionLinkNavigation", () => {
 			expect(mocks.workspace).not.toHaveBeenCalled();
 	});
 
-	it("shows feedback instead of navigating to a terminated session", () => {
+	it("resumes a terminated session once, then opens it", async () => {
+		let finish!: (result: { status: "success" }) => void;
+		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
 		const { result } = renderHook(() => useSessionLinkNavigation());
-		act(() => expect(result.current("ao://sessions/project/terminated")).toBe(false));
-		act(() => expect(result.current("ao://sessions/project/terminated")).toBe(false));
+		act(() => expect(result.current("ao://sessions/project/terminated")).toBe(true));
+		act(() => expect(result.current("ao://sessions/project/terminated")).toBe(true));
+		expect(mocks.restore).toHaveBeenCalledTimes(1);
+		expect(mocks.restore).toHaveBeenCalledWith("terminated", undefined);
 		expect(mocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToasts).toEqual([
-			expect.objectContaining({
-				title: "Session terminated is terminated",
-				nonce: 2,
-				placement: "top-center",
-				dismissible: true,
-				durationMs: 5_000,
-				dedupeKey: "session-link:project:terminated",
-			}),
+			expect.objectContaining({ title: "Resuming session terminated…", dedupeKey: "session-link:project:terminated" }),
+		]);
+		await act(async () => finish({ status: "success" }));
+		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+	});
+
+	it("shows why a terminated session could not resume and stays put", async () => {
+		mocks.restore.mockResolvedValue({ status: "not_resumable", message: "No saved session is available." });
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		await act(async () => { result.current("ao://sessions/project/terminated"); });
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToasts).toEqual([
+			expect.objectContaining({ title: "No saved session is available.", tone: "error", dedupeKey: "session-link:project:terminated" }),
 		]);
 	});
 
