@@ -1284,6 +1284,10 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 		}
 	case taskStatusNeedsInput:
 		step.Status, step.Detail, step.Fix = setupNeedsHuman, "the task is waiting on you: "+task.Reason, task.Fix
+		if step.Fix == "" && len(task.SessionIDs) > 0 {
+			// The task already exists: starting it again would run it twice.
+			step.Fix = fmt.Sprintf("answer the agent in Orchestrator (session %s); do not start the task again", task.SessionIDs[0])
+		}
 	default:
 		step.Status = setupFixed
 		step.Detail = fmt.Sprintf("started task %s on %s (%s)", task.TaskID, target, task.Status)

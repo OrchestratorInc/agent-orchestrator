@@ -388,12 +388,11 @@ func TestSetupReusesRegisteredProject(t *testing.T) {
 func TestSetupPathAlreadyRegisteredReusesProject(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, true)
-	calls := 0
 	project := fmt.Sprintf(`{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, repo)
-	// The first listing misses it (registered by a racing caller).
+	// Listings miss it until the registration POST (a racing caller
+	// registered it in between), so setup must recover from the conflict.
 	d.setFunc("GET /api/v1/projects", func() (int, string) {
-		calls++
-		if calls == 1 {
+		if !d.saw("POST /api/v1/projects") {
 			return 200, `{"projects":[]}`
 		}
 		return 200, `{"projects":[{"id":"calc"}]}`
@@ -404,6 +403,9 @@ func TestSetupPathAlreadyRegisteredReusesProject(t *testing.T) {
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
 	if err != nil {
 		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if !d.saw("POST /api/v1/projects") {
+		t.Fatal("setup never tried to register, so the conflict path was not exercised")
 	}
 	if res := decodeSetup(t, out); !res.Project.Reused || res.Project.ID != "calc" {
 		t.Fatalf("project = %+v", res.Project)
@@ -605,8 +607,12 @@ func TestSetupStartWaitingOnUserExits3(t *testing.T) {
 	if got := ExitCode(err); got != taskExitNeedsInput {
 		t.Fatalf("exit = %d (%v), want 3", got, err)
 	}
-	if res := decodeSetup(t, out); res.Task == nil || res.Task.Status != taskStatusNeedsInput {
+	res := decodeSetup(t, out)
+	if res.Task == nil || res.Task.Status != taskStatusNeedsInput {
 		t.Fatalf("task = %+v", res.Task)
+	}
+	if want := []string{"answer the agent in Orchestrator (session calc-1); do not start the task again"}; !reflect.DeepEqual(res.NextActions, want) {
+		t.Fatalf("next_actions = %q, want %q", res.NextActions, want)
 	}
 }
 
