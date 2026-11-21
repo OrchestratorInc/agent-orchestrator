@@ -145,6 +145,9 @@ type RemoteCallResult struct {
 	Tool   string        `json:"tool"`
 	Result any           `json:"result"`
 	Images []RemoteImage `json:"images"`
+	// StepError is the failed step of a run_steps batch whose report Result
+	// still carries, so the calling computer's timeline records it as failed.
+	StepError string `json:"stepError,omitempty" description:"Which run_steps step failed and why; the batch's report is still in result."`
 }
 
 // remoteState is the file's content.
@@ -440,7 +443,7 @@ func (s *Service) ServeRemoteCall(ctx context.Context, request RemoteCallRequest
 			arguments[key] = value
 		}
 	}
-	result, err := s.callHereAdmitted(ctx, CallRequest{
+	result, stepErr, err := s.callHereAdmitted(ctx, CallRequest{
 		Tool:      request.Tool,
 		Arguments: arguments,
 		SessionID: remoteScope(request.Caller, request.SessionID),
@@ -448,7 +451,11 @@ func (s *Service) ServeRemoteCall(ctx context.Context, request RemoteCallRequest
 	if err != nil {
 		return RemoteCallResult{}, err
 	}
-	return remoteResult(result), nil
+	answer := remoteResult(result)
+	if stepErr != nil {
+		answer.StepError = stepErr.Error()
+	}
+	return answer, nil
 }
 
 // remoteResult inlines a call's screenshots, newest last, within
@@ -597,7 +604,11 @@ func (s *Service) callRemote(ctx context.Context, target RemoteTarget, credentia
 		}
 	}
 	s.images.prune(scope)
-	s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, started, saved.images, nil)
+	var stepErr error
+	if response.StepError != "" {
+		stepErr = errors.New(response.StepError)
+	}
+	s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, started, saved.images, stepErr)
 	return CallResult{Tool: body.Tool, Result: replacePaths(response.Result, local), Images: saved.images}, nil
 }
 
@@ -786,7 +797,10 @@ func (s *Service) remoteClientFor(target RemoteTarget) *http.Client {
 			}
 			config.NextProtos = []string{"http/1.1"}
 			conn := tls.Client(raw, config)
-			if err := conn.HandshakeContext(ctx); err != nil {
+			handshake, cancel := context.WithTimeout(ctx, identityTimeout)
+			err = conn.HandshakeContext(handshake)
+			cancel()
+			if err != nil {
 				_ = raw.Close()
 				return nil, err
 			}

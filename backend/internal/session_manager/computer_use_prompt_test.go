@@ -101,7 +101,7 @@ func TestAOMCPServerFollowsComputerUseSetting(t *testing.T) {
 	}
 	// A session started with computer use on another computer is bound to it.
 	m.SetComputerUseRemote(func(context.Context) (string, string) { return "host-mac", "Studio Mac" })
-	if servers := m.aoMCPServers(context.Background(), domain.HarnessClaudeCode, env); servers[0].Env[config.EnvComputerUseTarget] != "host-mac" {
+	if servers := m.aoMCPServers(context.Background(), domain.HarnessClaudeCode, map[string]string{EnvSessionID: "mer-2"}); servers[0].Env[config.EnvComputerUseTarget] != "host-mac" {
 		t.Fatalf("remote target env = %v", servers[0].Env)
 	}
 }
@@ -181,7 +181,7 @@ func TestBuildSystemPromptNamesTheRemoteComputer(t *testing.T) {
 	}
 
 	label = "Studio Mac"
-	sp, err = m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", true)
+	sp, err = m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-2", "", true)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -192,5 +192,35 @@ func TestBuildSystemPromptNamesTheRemoteComputer(t *testing.T) {
 	}
 	if strings.Contains(sp, "this computer has Cua Driver") {
 		t.Fatal("remote prompt still says this computer has Cua Driver")
+	}
+}
+
+// A starting session's prompt and tool server name the same computer, even
+// if the user changes "Run computer use on" between building the two.
+func TestStartingSessionSeesOneComputerUseTarget(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(),
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+	m.SetComputerUseEnabled(func(context.Context) bool { return true })
+	hostID, label := "host-mac", "Studio Mac"
+	m.SetComputerUseRemote(func(context.Context) (string, string) { return hostID, label })
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-9", "", true)
+	if err != nil || !strings.Contains(sp, `"Studio Mac"`) {
+		t.Fatalf("prompt = %v, %q", err, sp)
+	}
+	hostID, label = "", ""
+	servers := m.aoMCPServers(ctx, domain.HarnessClaudeCode, map[string]string{EnvSessionID: "mer-9"})
+	if got := servers[0].Env[config.EnvComputerUseTarget]; got != "host-mac" {
+		t.Fatalf("tool server target = %q, want the computer the prompt names", got)
+	}
+	// Another session starting now reads the new setting.
+	servers = m.aoMCPServers(ctx, domain.HarnessClaudeCode, map[string]string{EnvSessionID: "mer-10"})
+	if got := servers[0].Env[config.EnvComputerUseTarget]; got != "local" {
+		t.Fatalf("new session target = %q, want local", got)
 	}
 }

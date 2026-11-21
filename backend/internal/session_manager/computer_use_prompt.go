@@ -7,8 +7,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // envComputerUse on a chat session's `ao mcp` server makes it offer the
@@ -56,8 +58,51 @@ func (m *Manager) computerUseTarget(ctx context.Context) (hostID, label string) 
 	return strings.TrimSpace(hostID), strings.TrimSpace(label)
 }
 
-func (m *Manager) computerUseRemoteLabel(ctx context.Context) string {
-	_, label := m.computerUseTarget(ctx)
+// computerUseSnapshotTTL is how long a starting session keeps the target it
+// first saw: long enough to build its prompt and its tool server, short
+// enough that a later restart reads the setting again.
+const computerUseSnapshotTTL = 2 * time.Minute
+
+type computerUseSnapshot struct {
+	hostID, label string
+	at            time.Time
+}
+
+// computerUseTargetFor is computerUseTarget read once per starting session:
+// its prompt and its tool server see the same computer even if the user
+// changes the setting between the two.
+func (m *Manager) computerUseTargetFor(ctx context.Context, sessionID domain.SessionID) (hostID, label string) {
+	if sessionID == "" {
+		return m.computerUseTarget(ctx)
+	}
+	now := time.Now()
+	m.computerUseMu.Lock()
+	for id, snapshot := range m.computerUseSpawns {
+		if now.Sub(snapshot.at) > computerUseSnapshotTTL {
+			delete(m.computerUseSpawns, id)
+		}
+	}
+	snapshot, ok := m.computerUseSpawns[sessionID]
+	m.computerUseMu.Unlock()
+	if ok {
+		return snapshot.hostID, snapshot.label
+	}
+	hostID, label = m.computerUseTarget(ctx)
+	m.computerUseMu.Lock()
+	if m.computerUseSpawns == nil {
+		m.computerUseSpawns = map[domain.SessionID]computerUseSnapshot{}
+	}
+	if existing, raced := m.computerUseSpawns[sessionID]; raced {
+		hostID, label = existing.hostID, existing.label
+	} else {
+		m.computerUseSpawns[sessionID] = computerUseSnapshot{hostID: hostID, label: label, at: now}
+	}
+	m.computerUseMu.Unlock()
+	return hostID, label
+}
+
+func (m *Manager) computerUseRemoteLabel(ctx context.Context, sessionID domain.SessionID) string {
+	_, label := m.computerUseTargetFor(ctx, sessionID)
 	return label
 }
 

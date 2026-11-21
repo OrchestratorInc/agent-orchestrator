@@ -22,6 +22,8 @@ export function useRemoteComputerUseAlerts(): void {
 		queryKey: computerUseRemoteQueryKey,
 		queryFn: fetchComputerUseRemote,
 		refetchInterval: (query) => (query.state.data?.allowRemote ? REMOTE_ACTIVITY_POLL_MS : IDLE_POLL_MS),
+		// The OS notification matters most while Orchestrator's window is hidden.
+		refetchIntervalInBackground: true,
 		retry: false,
 	});
 	const announced = useRef(new Set<string>());

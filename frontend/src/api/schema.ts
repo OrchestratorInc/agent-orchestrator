@@ -8251,6 +8251,8 @@ export interface components {
         RemoteComputerUseCallResult: {
             images: components["schemas"]["RemoteComputerUseImage"][];
             result: unknown;
+            /** @description Which run_steps step failed and why; the batch's report is still in result. */
+            stepError?: string;
             tool: string;
         };
         RemoteComputerUseImage: {

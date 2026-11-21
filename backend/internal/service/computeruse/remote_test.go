@@ -588,18 +588,68 @@ func TestDamagedRemoteSettingsCanBeReset(t *testing.T) {
 	}
 }
 
-// A tool list read with a cancelled context is not cached.
-func TestCancelledToolReadIsNotCached(t *testing.T) {
-	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+// A caller that gives up on a slow first read of the tools (another
+// computer's request deadline, say) does not stop it: the read completes and
+// fills the cache, so the next caller gets the full list at once.
+func TestToolReadOutlivesTheCallerThatStartedIt(t *testing.T) {
+	release := make(chan struct{})
+	driver := &fakeDriver{daemonUp: true}
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		if args[0] != "describe" {
+			return []byte(`{}`), nil, nil
+		}
+		<-release
+		if args[1] == "click" {
+			return []byte("name: click\n\ndescription:\nClick.\n\ninput_schema:\n" + `{"type":"object","properties":{}}` + "\n"), nil, nil
+		}
+		return nil, []byte("no such tool"), errors.New("exit status 1")
+	}
+	s := newTestService(t, driver, "darwin")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := s.AgentTools(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("AgentTools(cancelled) error = %v, want context.Canceled", err)
 	}
+	close(release)
+	tools, err := s.AgentTools(context.Background())
+	if err != nil || len(tools) != 1 || tools[0].Name != "click" {
+		t.Fatalf("AgentTools() after the read = %+v, %v", tools, err)
+	}
 	s.mu.Lock()
-	cached := s.agentTools.tools
+	cached := len(s.agentTools.tools)
 	s.mu.Unlock()
-	if cached != nil {
-		t.Fatalf("cached %d tools from a cancelled read", len(cached))
+	if cached != 1 {
+		t.Fatalf("cached %d tools, want the completed read's 1", cached)
+	}
+}
+
+// A batch whose step failed on the other computer returns its report to the
+// agent and shows as failed, with the step, in this computer's timeline.
+func TestRemoteFailedBatchShowsAsFailedHere(t *testing.T) {
+	ctx := context.Background()
+	driver := &fakeDriver{daemonUp: true}
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		if args[1] == "run_steps" {
+			return []byte(`{"ok":false,"steps":[{"index":0,"tool":"click","ok":false,"message":"no button"}]}`), nil, errors.New("exit status 1")
+		}
+		return []byte(`{}`), nil, nil
+	}
+	remote := newTestService(t, driver, "darwin")
+	if _, err := remote.SetAllowRemote(ctx, true); err != nil {
+		t.Fatalf("SetAllowRemote() error = %v", err)
+	}
+	server, _ := serveRemote(t, remote)
+	local := newTestService(t, &fakeDriver{missing: true}, "linux")
+	setTarget(t, local, server.URL)
+	result, err := local.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{map[string]any{"tool": "click", "args": map[string]any{}}}}, SessionID: "ao-3"})
+	if err != nil {
+		t.Fatalf("Call() error = %v, want the report", err)
+	}
+	if _, ok := result.Result.(map[string]any)["steps"]; !ok {
+		t.Fatalf("result = %+v, want the step report", result.Result)
+	}
+	entries, err := local.Timeline(ctx, "ao-3")
+	if err != nil || len(entries) != 1 || entries[0].OK || !strings.Contains(entries[0].Error, "step 1 (click): no button") || entries[0].RanOn != "Studio Mac" {
+		t.Fatalf("Timeline() = %+v, %v", entries, err)
 	}
 }

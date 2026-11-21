@@ -23591,6 +23591,10 @@ components:
             $ref: '#/components/schemas/RemoteComputerUseImage'
           type: array
         result: {}
+        stepError:
+          description: Which run_steps step failed and why; the batch's report is
+            still in result.
+          type: string
         tool:
           type: string
       required:

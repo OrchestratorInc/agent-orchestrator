@@ -605,6 +605,9 @@ type Manager struct {
 	computerUseMu     sync.Mutex
 	computerUse       func(context.Context) bool
 	computerUseRemote func(context.Context) (hostID, label string)
+	// computerUseSpawns holds the target each starting session saw, so its
+	// prompt and its tool server are bound to the same computer.
+	computerUseSpawns map[domain.SessionID]computerUseSnapshot
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -6841,7 +6844,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
 	if chat && m.computerUseEnabled(ctx) {
-		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir), m.computerUseRemoteLabel(ctx)))
+		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir), m.computerUseRemoteLabel(ctx, sessionID)))
 	}
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)

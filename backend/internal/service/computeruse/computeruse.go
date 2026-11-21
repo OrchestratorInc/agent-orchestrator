@@ -170,6 +170,8 @@ type Service struct {
 	sessionless map[string]bool
 	snapshots   snapshotWindows
 	agentTools  agentToolCache
+	// agentToolScans are the tool reads running now, by driver key.
+	agentToolScans map[string]*agentToolScan
 	// enabled reports "Let agents use this computer"; nil is off.
 	enabled func(context.Context) bool
 	// remote holds the remote computer-use settings (remote.go), guarded by mu.
@@ -381,24 +383,26 @@ func checkTarget(expected string, target *RemoteTarget) error {
 
 // callHere runs one driver tool on this computer.
 func (s *Service) callHere(ctx context.Context, request CallRequest) (CallResult, error) {
-	return s.callHereAdmitted(ctx, request, nil)
+	result, _, err := s.callHereAdmitted(ctx, request, nil)
+	return result, err
 }
 
 // callHereAdmitted is callHere with admitted run once the call has passed
-// every check, just before the driver runs it.
-func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, admitted func()) (CallResult, error) {
+// every check, just before the driver runs it. Its middle result is a
+// run_steps step's failure that the returned report already describes.
+func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, admitted func()) (CallResult, error, error) {
 	tool := strings.TrimSpace(request.Tool)
 	if !toolNamePattern.MatchString(tool) {
-		return CallResult{}, invalidTool(tool)
+		return CallResult{}, nil, invalidTool(tool)
 	}
 	if !s.computerUseEnabled(ctx) {
-		return CallResult{}, errDisabled
+		return CallResult{}, nil, errDisabled
 	}
 	if !offeredTool(tool) {
-		return CallResult{}, toolNotOffered(tool)
+		return CallResult{}, nil, toolNotOffered(tool)
 	}
 	if err := checkActions(tool, request.Arguments); err != nil {
-		return CallResult{}, err
+		return CallResult{}, nil, err
 	}
 	arguments := make(map[string]any, len(request.Arguments)+1)
 	for key, value := range request.Arguments {
@@ -406,11 +410,11 @@ func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, adm
 	}
 	scope, err := s.images.scope(request.SessionID)
 	if err != nil {
-		return CallResult{}, err
+		return CallResult{}, nil, err
 	}
 	binary, err := s.locate(ctx)
 	if err != nil {
-		return CallResult{}, err
+		return CallResult{}, nil, err
 	}
 	if admitted != nil {
 		admitted()
@@ -424,7 +428,7 @@ func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, adm
 		recorded = stepErr
 	}
 	s.recordCall(scope, tool, request.Arguments, started, result.Images, recorded)
-	return result, err
+	return result, stepErr, err
 }
 
 // run makes one driver call for Call, which has checked the request. stepErr

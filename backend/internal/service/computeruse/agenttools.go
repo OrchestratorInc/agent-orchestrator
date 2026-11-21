@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 )
 
 // AgentTool is one driver tool AO offers agents as an MCP tool.
@@ -55,6 +56,18 @@ type agentToolCache struct {
 	tools []AgentTool
 }
 
+// agentToolScan is one read of the driver's tools, shared by every caller
+// that asks while it runs.
+type agentToolScan struct {
+	done  chan struct{}
+	tools []AgentTool
+}
+
+// agentToolScanTimeout bounds one read of every tool's description. It runs
+// apart from any one request, whose deadline (another computer's, say) can be
+// shorter than a first read takes.
+const agentToolScanTimeout = 2 * time.Minute
+
 // AgentTools returns the MCP tools AO offers agents, with each tool's
 // description and input schema read from the installed driver, so they match
 // its release. They are read once per driver version. With "Run computer use
@@ -70,7 +83,9 @@ func (s *Service) AgentTools(ctx context.Context) ([]AgentTool, error) {
 	return s.localAgentTools(ctx)
 }
 
-// localAgentTools reads the tools from this computer's driver.
+// localAgentTools reads the tools from this computer's driver. The read runs
+// on its own, so a caller that gives up does not stop it: it still completes
+// and fills the cache for the next caller. Only a completed read is cached.
 func (s *Service) localAgentTools(ctx context.Context) ([]AgentTool, error) {
 	binary, err := s.locate(ctx)
 	if err != nil {
@@ -78,11 +93,34 @@ func (s *Service) localAgentTools(ctx context.Context) ([]AgentTool, error) {
 	}
 	key := binary + "@" + s.version(ctx, binary)
 	s.mu.Lock()
-	cached := s.agentTools
-	s.mu.Unlock()
-	if cached.key == key && cached.tools != nil {
-		return cached.tools, nil
+	if s.agentTools.key == key && s.agentTools.tools != nil {
+		tools := s.agentTools.tools
+		s.mu.Unlock()
+		return tools, nil
 	}
+	if s.agentToolScans == nil {
+		s.agentToolScans = map[string]*agentToolScan{}
+	}
+	scan := s.agentToolScans[key]
+	if scan == nil {
+		scan = &agentToolScan{done: make(chan struct{})}
+		s.agentToolScans[key] = scan
+		s.workers.Add(1)
+		go s.scanAgentTools(key, binary, scan)
+	}
+	s.mu.Unlock()
+	select {
+	case <-scan.done:
+		return scan.tools, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Service) scanAgentTools(key, binary string, scan *agentToolScan) {
+	defer s.workers.Done()
+	ctx, cancel := context.WithTimeout(s.background, agentToolScanTimeout)
+	defer cancel()
 	tools := make([]AgentTool, 0, len(agentToolNames))
 	for _, name := range agentToolNames {
 		tool, ok := s.describeAgentTool(ctx, binary, name)
@@ -97,18 +135,16 @@ func (s *Service) localAgentTools(ctx context.Context) ([]AgentTool, error) {
 		}
 		tools = append(tools, tool)
 	}
-	// A cancelled read leaves out the tools it did not reach; it must not
-	// stand in for the driver's list until the next version.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(tools) == 0 {
-		return tools, nil
-	}
 	s.mu.Lock()
-	s.agentTools = agentToolCache{key: key, tools: tools}
-	s.mu.Unlock()
-	return tools, nil
+	defer s.mu.Unlock()
+	delete(s.agentToolScans, key)
+	// A read that was cut off leaves out the tools it did not reach; it must
+	// not stand in for the driver's list until the next version.
+	if ctx.Err() == nil && len(tools) > 0 {
+		s.agentTools = agentToolCache{key: key, tools: tools}
+	}
+	scan.tools = tools
+	close(scan.done)
 }
 
 // describeAgentTool reads one tool from `cua-driver describe`:
