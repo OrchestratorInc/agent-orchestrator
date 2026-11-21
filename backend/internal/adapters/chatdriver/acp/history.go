@@ -547,6 +547,9 @@ func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
 // only the block, or cut off inside it, is no title and the rename is skipped.
 func providerTitle(title string) (string, bool) {
 	trimmed := strings.TrimSpace(title)
+	if strings.HasPrefix(trimmed, "<ao-") && strings.HasPrefix(standingOpen, trimmed) {
+		return "", false // the opening tag itself, cut short
+	}
 	if !strings.HasPrefix(trimmed, standingOpen) {
 		return title, true
 	}

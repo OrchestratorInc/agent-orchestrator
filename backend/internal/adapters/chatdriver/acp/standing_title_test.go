@@ -12,6 +12,9 @@ func TestProviderTitleDropsStandingInstructions(t *testing.T) {
 		{"<ao-standing-instructions>\n## Worker Role\nYou are a worker", "", false},
 		{"<ao-standing-instructions>\nrules\n</ao-standing-instructions>\n\nSLOW task", "SLOW task", true},
 		{"<ao-standing-instructions>\nrules\n</ao-standing-instructions>", "", false},
+		{"<ao-standing-instructions", "", false},
+		{"<ao-stand", "", false},
+		{"<ao", "<ao", true},
 		{"Explain <ao-standing-instructions>", "Explain <ao-standing-instructions>", true},
 	}
 	for _, c := range cases {
