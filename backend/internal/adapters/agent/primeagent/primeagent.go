@@ -124,7 +124,15 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 		return nil, err
 	}
 
-	cmd := []string{binary, "--session-dir", sessions, "--daemon-socket", filepath.Join(filepath.Dir(sessions), "daemon.sock")}
+	cmd := []string{binary, "--session-dir", sessions}
+	// Older CLIs accept the environment fallback set by AugmentRuntimeEnv but
+	// reject this option. Imports still require verified flag support.
+	if p.requireDaemonSocket(ctx, binary) == nil {
+		cmd = append(cmd, "--daemon-socket", filepath.Join(filepath.Dir(sessions), "daemon.sock"))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if p.acceptsExtension(ctx, binary) {
 		cmd = append(cmd, "--extension", extensionPath)
 	}

@@ -79,12 +79,16 @@ func TestPrimeNativePreparationAdoptsBeforeLaunchAndLaterResumesExactID(t *testi
 	calls := 0
 	plugin.runCommand = func(_ context.Context, binary, cwd string, env map[string]string, args ...string) ([]byte, error) {
 		calls++
-		want := []string{"--mode", "rpc", "--offline", "--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"), "--session-dir", targetRoot, "--cwd", workspace, "--fork", source}
-		if binary != "/synthetic/prime-agent" || cwd != workspace || !slices.Equal(args, want) || env["PRIME_AGENT_SESSION_DIR"] != targetRoot || env["SYNTHETIC_CLEAR"] != "" {
+		attemptRoot := env["PRIME_AGENT_SESSION_DIR"]
+		if filepath.Dir(attemptRoot) != targetRoot || !strings.HasPrefix(filepath.Base(attemptRoot), ".ao-import-attempt-") {
+			t.Fatalf("fork output is not preparation-owned: %q", attemptRoot)
+		}
+		want := []string{"--mode", "rpc", "--offline", "--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"), "--session-dir", attemptRoot, "--cwd", workspace, "--fork", source}
+		if binary != "/synthetic/prime-agent" || cwd != workspace || !slices.Equal(args, want) || env["SYNTHETIC_CLEAR"] != "" {
 			t.Fatalf("native preparation invocation = %q %q %v", binary, cwd, args)
 		}
 		env["SYNTHETIC_SECRET"] = "changed-by-runner"
-		writePrimeNativeFixture(t, targetRoot, primeForkID, workspace, source, primeForkFixtureRows()...)
+		writePrimeNativeFixture(t, env["PRIME_AGENT_SESSION_DIR"], primeForkID, workspace, source, primeForkFixtureRows()...)
 		return nil, nil
 	}
 	env := map[string]string{"SYNTHETIC_SECRET": "original", "SYNTHETIC_CLEAR": ""}
@@ -131,12 +135,8 @@ func TestPrimePreparationRefusesMissingWrongAmbiguousOrFailedFork(t *testing.T) 
 			root, sourceCWD, workspace := t.TempDir(), t.TempDir(), t.TempDir()
 			source := writePrimeNativeFixture(t, root, primeSourceID, sourceCWD, "", primeNativeFixtureRows()...)
 			dataDir := t.TempDir()
-			targetRoot, err := sessionDir(dataDir)
-			if err != nil {
-				t.Fatal(err)
-			}
 			plugin := primeTestPlugin()
-			plugin.runCommand = func(context.Context, string, string, map[string]string, ...string) ([]byte, error) {
+			plugin.runCommand = func(_ context.Context, _, _ string, env map[string]string, _ ...string) ([]byte, error) {
 				if scenario == "command failed" {
 					return nil, errors.New("synthetic provider failure")
 				}
@@ -156,9 +156,9 @@ func TestPrimePreparationRefusesMissingWrongAmbiguousOrFailedFork(t *testing.T) 
 				case "source changed":
 					writePrimeNativeFixture(t, root, primeSourceID, sourceCWD, "", rows[0])
 				}
-				writePrimeNativeFixture(t, targetRoot, primeForkID, cwd, parent, rows...)
+				writePrimeNativeFixture(t, env["PRIME_AGENT_SESSION_DIR"], primeForkID, cwd, parent, rows...)
 				if scenario == "multiple forks" {
-					writePrimeNativeFixture(t, targetRoot, "51381da5-ea93-465a-9506-97868d30cc43", cwd, parent, rows...)
+					writePrimeNativeFixture(t, env["PRIME_AGENT_SESSION_DIR"], "51381da5-ea93-465a-9506-97868d30cc43", cwd, parent, rows...)
 				}
 				return nil, nil
 			}
@@ -193,13 +193,9 @@ func TestPrimePreparedProofRefusesChangedNativeCopy(t *testing.T) {
 	request := ports.ImportedSessionRelocation{NativeSessionID: primeSourceID, ConfigDir: root, TranscriptPath: source, SourceCWD: cwd, LaunchCWD: workspace, DataDir: t.TempDir()}
 	plugin := primeTestPlugin()
 	calls := 0
-	plugin.runCommand = func(context.Context, string, string, map[string]string, ...string) ([]byte, error) {
+	plugin.runCommand = func(_ context.Context, _, _ string, env map[string]string, _ ...string) ([]byte, error) {
 		calls++
-		targetRoot, err := sessionDir(request.DataDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writePrimeNativeFixture(t, targetRoot, primeForkID, workspace, source, primeForkFixtureRows()...)
+		writePrimeNativeFixture(t, env["PRIME_AGENT_SESSION_DIR"], primeForkID, workspace, source, primeForkFixtureRows()...)
 		return nil, nil
 	}
 	ref, err := plugin.PrepareImportedSession(context.Background(), request)
@@ -297,16 +293,12 @@ func TestPrimePreparationMatchesProviderDecimalRoundTrip(t *testing.T) {
 			request := ports.ImportedSessionRelocation{NativeSessionID: primeSourceID, ConfigDir: root, TranscriptPath: source, SourceCWD: cwd, LaunchCWD: workspace, DataDir: t.TempDir()}
 			plugin := primeTestPlugin()
 			const forkID = "01a1f34e-2789-7342-8012-f8817604abb0"
-			plugin.runCommand = func(context.Context, string, string, map[string]string, ...string) ([]byte, error) {
-				target, err := sessionDir(request.DataDir)
-				if err != nil {
-					t.Fatal(err)
-				}
+			plugin.runCommand = func(_ context.Context, _, _ string, env map[string]string, _ ...string) ([]byte, error) {
 				forkRow := strings.ReplaceAll(strings.ReplaceAll(row, "0.0036488000000000002", "0.0036488"), "0.0038856000000000003", "0.0038856")
 				if changedCost {
 					forkRow = strings.ReplaceAll(forkRow, "0.0036488", "0.004")
 				}
-				writePrimeNativeFixture(t, target, forkID, workspace, source, forkRow)
+				writePrimeNativeFixture(t, env["PRIME_AGENT_SESSION_DIR"], forkID, workspace, source, forkRow)
 				return nil, nil
 			}
 			ref, err := plugin.PrepareImportedSession(context.Background(), request)
@@ -342,11 +334,7 @@ func TestPrimePreparationPreservesProviderOverrides(t *testing.T) {
 					if value, present := env[provider.endpoint]; !present || value != endpoint {
 						t.Fatalf("preparation replaced endpoint: %q, present=%v", value, present)
 					}
-					target, err := sessionDir(request.DataDir)
-					if err != nil {
-						t.Fatal(err)
-					}
-					writePrimeNativeFixture(t, target, primeForkID, workspace, source, append([]string{model}, primeForkFixtureRows()...)...)
+					writePrimeNativeFixture(t, env["PRIME_AGENT_SESSION_DIR"], primeForkID, workspace, source, append([]string{model}, primeForkFixtureRows()...)...)
 					return nil, nil
 				}
 				if _, err := plugin.PrepareImportedSession(context.Background(), request); err != nil {
