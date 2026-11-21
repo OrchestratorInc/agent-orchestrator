@@ -100,6 +100,34 @@ func TestOrdinaryCodeWhaleRestoreDoesNotUseImportEligibility(t *testing.T) {
 	}
 }
 
+func TestCodeWhaleImportMarkerRemainsStrictAfterUnsupportedMetadata(t *testing.T) {
+	root, workspace, fresh := t.TempDir(), t.TempDir(), t.TempDir()
+	path := writeRestoreSnapshot(t, root, workspace, restoreTestID, "")
+	metadata, err := json.Marshal(map[string]any{"id": restoreTestID, "workspace": workspace, "runtime_store": 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, imported := range []bool{false, true} {
+		body := `{"metadata":` + string(metadata) + `,"messages":[]`
+		if imported {
+			body += `,"ao_import":{"source_id":"source","digest":"invalid"}`
+		}
+		body += `}`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := ports.WorkspaceHookConfig{WorkspacePath: workspace, Env: map[string]string{codewhaleHomeEnv: root}}
+		got, err := New().nativeRestoreRuntimeDir(t.Context(), cfg, restoreTestID, "", fresh)
+		if imported {
+			if err == nil {
+				t.Fatal("metadata type error hid the later import marker")
+			}
+		} else if err != nil || got != fresh {
+			t.Fatalf("ordinary fallback=%q err=%v", got, err)
+		}
+	}
+}
+
 func writeRestoreSnapshot(t *testing.T, root, workspace, id, runtimeDir string) string {
 	t.Helper()
 	metadata := map[string]any{"id": id, "workspace": workspace, "title": "Synthetic restart", "model": "synthetic-model", "created_at": "2026-11-03T00:00:00Z", "updated_at": "2026-11-03T00:00:00Z", "message_count": 1, "total_tokens": 0}

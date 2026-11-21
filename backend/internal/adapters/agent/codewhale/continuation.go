@@ -259,6 +259,7 @@ func readOrdinaryRestoreBinding(ctx context.Context, root, id string) (codewhale
 	}
 	defer func() { _ = f.Close() }()
 	dec := json.NewDecoder(f)
+	var metadataErr error
 	first, err := dec.Token()
 	if err != nil || first != json.Delim('{') {
 		return archive, errors.New("invalid native CodeWhale snapshot")
@@ -272,6 +273,10 @@ func readOrdinaryRestoreBinding(ctx context.Context, root, id string) (codewhale
 			return archive, err
 		}
 		if key == "metadata" {
+			var raw json.RawMessage
+			if err := dec.Decode(&raw); err != nil {
+				return archive, err
+			}
 			var meta struct {
 				ID        string `json:"id"`
 				Workspace string `json:"workspace"`
@@ -280,8 +285,11 @@ func readOrdinaryRestoreBinding(ctx context.Context, root, id string) (codewhale
 					Scope string `json:"execution_scope"`
 				} `json:"runtime_store"`
 			}
-			if err := dec.Decode(&meta); err != nil {
-				return archive, err
+			if err := json.Unmarshal(raw, &meta); err != nil {
+				// Keep scanning valid JSON so an import marker later in the
+				// object cannot be hidden by an unsupported native field type.
+				metadataErr = err
+				continue
 			}
 			archive.ID, archive.CWD = meta.ID, meta.Workspace
 			if meta.Runtime != nil {
@@ -297,7 +305,7 @@ func readOrdinaryRestoreBinding(ctx context.Context, root, id string) (codewhale
 		}
 	}
 	_, err = dec.Token()
-	return archive, err
+	return archive, errors.Join(err, metadataErr)
 }
 
 func skipNativeRestoreValue(ctx context.Context, dec *json.Decoder) error {
