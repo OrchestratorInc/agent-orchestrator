@@ -188,6 +188,7 @@ import {
 } from "./WorkerUpdates";
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
+import { markdownFilePreviewSource } from "../../lib/markdown-file-preview";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
 import { pageHidden } from "../../lib/page-hidden";
@@ -2155,6 +2156,11 @@ function ChatWorkspaceContent({
 		return () => window.clearTimeout(timer);
 	}, [conversationEmpty]);
 
+	const markdownFileSource = useMemo(
+		() => markdownFilePreviewSource(snapshot.sessionId, activeRemoteHostId, session?.cloud?.orgId),
+		[snapshot.sessionId, activeRemoteHostId, session?.cloud?.orgId],
+	);
+
 	return (
  <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
 		<section
@@ -2313,6 +2319,7 @@ function ChatWorkspaceContent({
 							remoteHost={Boolean(activeRemoteHostId)}
 							sessionLinkHostId={activeRemoteHostId}
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
+							markdownFileSource={markdownFileSource}
 							workspacePaths={filePaths}
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
