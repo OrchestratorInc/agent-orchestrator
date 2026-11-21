@@ -23,7 +23,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
@@ -1330,6 +1330,15 @@ export function useConversationCommands(
 	 * so a success has to be followed by a refetch rather than an optimistic edit —
 	 * how much was discarded is the daemon's answer, not the client's guess.
 	 */
+	// A steer refusal is about the turn that was running when it came back. Once
+	// another turn is current it would go stale, so it is shown only while that
+	// turn is. A refusal that lands after the turn ended belongs to "no turn" and
+	// still shows. The error itself is kept, so steerUnsupported stays sticky.
+	const currentTurnIdRef = useRef(activeTurnId);
+	useLayoutEffect(() => {
+		currentTurnIdRef.current = activeTurnId;
+	});
+	const [steerRefusedOn, setSteerRefusedOn] = useState<{ turnId?: string }>();
 	/**
 	 * Guidance delivered INTO the running turn.
 	 *
@@ -1343,6 +1352,8 @@ export function useConversationCommands(
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
 	const steer = useMutation({
+		onMutate: () => setSteerRefusedOn(undefined),
+		onError: () => setSteerRefusedOn({ turnId: currentTurnIdRef.current }),
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/steer",
@@ -1605,16 +1616,6 @@ export function useConversationCommands(
 		const timer = setTimeout(() => releaseStop(stopRequestedKey), STOP_RETRY_AFTER_MS);
 		return () => clearTimeout(timer);
 	}, [releaseStop, stopRequestedKey]);
-	// A steer refusal is about the turn it was aimed at. Once that turn is gone the
-	// composer keeps its own notice beside the kept draft; this copy would go stale.
-	const steeredTurnRef = useRef(activeTurnId);
-	useEffect(() => {
-		if (steeredTurnRef.current === activeTurnId) return;
-		steeredTurnRef.current = activeTurnId;
-		// Only a refusal goes stale. Resetting a steer still in flight would drop its
-		// pending state before the daemon answers.
-		if (steer.isError) steer.reset();
-	}, [activeTurnId, steer]);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
 	const sendCode = apiErrorCode(send.error);
@@ -1645,8 +1646,6 @@ export function useConversationCommands(
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
-			// Sending the draft as a message answers any "send it as a message" refusal.
-			if (steer.isError) steer.reset();
 			return send.mutateAsync({
 				targetSessionId: sessionId,
 				clientMessageId,
@@ -1862,7 +1861,7 @@ export function useConversationCommands(
 		 * send-instead cases produce copy: `CHAT_STEER_UNSUPPORTED` is answered by
 		 * hiding the control entirely, since the harness will never accept one.
 		 */
-		steerRefusal: steerRefusal(steer.error),
+		steerRefusal: steerRefusedOn && steerRefusedOn.turnId === activeTurnId ? steerRefusal(steer.error) : undefined,
 		/**
 		 * A harness that cannot steer at all. Learned from the daemon's typed refusal
 		 * rather than from the harness name, and sticky for the life of the surface: the
