@@ -68,7 +68,8 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-webview": "13.16.1",
-    "react-native-worklets": "0.10.1"
+    "react-native-worklets": "0.10.1",
+    "unicode-segmenter": "0.17.3"
   },
   "expo": {
     "autolinking": {

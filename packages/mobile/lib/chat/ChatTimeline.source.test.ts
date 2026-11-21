@@ -64,7 +64,7 @@ describe("chat under the clear header", () => {
 
 describe("streaming response layout", () => {
 	it("keeps the live cursor inside the response instead of adding a new block", () => {
-		expect(source).toContain('showCursor ? `${item.text || ""} ▍`');
+		expect(source).toContain('showCursor ? `${text} ▍`');
 		expect(source).not.toContain("styles.streamingDot");
 	});
 

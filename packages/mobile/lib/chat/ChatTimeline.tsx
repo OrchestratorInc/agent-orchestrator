@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	FlatList,
 	Image,
@@ -33,6 +33,8 @@ import { FoldBody, FoldChevron } from "./TurnFoldMotion";
 import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { useReducedMotion } from "../useReducedMotion";
+import { useBufferedStreamingText } from "./useBufferedStreamingText";
 import { FirstLineMarker } from "./FirstLineMarker";
 import { ProviderSwitchMarker } from "./ProviderSwitchMarker";
 import { RenderFrame } from "./RenderFrame";
@@ -134,9 +136,16 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
+const ReduceStreamingMotion = createContext(false);
+
 /** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
 export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
-	return <KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>;
+	const reducedMotion = useReducedMotion();
+	return (
+		<ReduceStreamingMotion.Provider value={reducedMotion}>
+			<KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>
+		</ReduceStreamingMotion.Provider>
+	);
 });
 
 function Timeline({
@@ -700,6 +709,24 @@ function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: numbe
 	</Animated.View>;
 }
 
+function AssistantReply({ message, showCursor, completed, conversationId }: {
+	message: ConversationMessage;
+	showCursor: boolean;
+	completed: boolean;
+	conversationId: string;
+}) {
+	const reducedMotion = useContext(ReduceStreamingMotion);
+	const text = useBufferedStreamingText(message.text, message.streaming === true, reducedMotion);
+	return (
+		<ChatMarkdown
+			text={showCursor ? `${text} ▍` : text}
+			streaming={message.streaming}
+			continuousSelection
+			selectionSource={completed && !message.streaming ? { conversationId, messageId: message.id, revision: message.revision } : undefined}
+		/>
+	);
+}
+
 const TimelineItem = memo(function TimelineItem({
 	item,
 	sessionId,
@@ -774,7 +801,7 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				<AssistantReply message={item} showCursor={showCursor} completed={completed} conversationId={conversationId} />
 			</View>
 		);
 	}

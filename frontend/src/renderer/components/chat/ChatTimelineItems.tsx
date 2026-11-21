@@ -27,6 +27,18 @@ import { ArtifactThumbnail } from "../ArtifactThumbnail";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
 import { useChatEntrance } from "./chat-entrance";
+import {
+	reconciledStreamPrefix,
+	streamGapMs,
+	streamRevealCount,
+	streamSettleMs,
+	STREAM_LONG_UPDATE_MS,
+	STREAM_MAX_FRAME_DELTA_MS,
+	STREAM_MIN_FRAME_MS,
+	STREAM_SETTLE_MS,
+	STREAM_SMOOTH_MAX_CHARS,
+	STREAM_STALL_MS,
+} from "../../../../../packages/shared/chat/streamPacing";
 import { pageHidden } from "../../lib/page-hidden";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -205,30 +217,6 @@ function originReportPreview(text: string): string {
 	return `${preview.trimEnd()}…`;
 }
 
-/**
- * Each update reveals the share of the backlog that decays over the settle time, so
- * bursts of provider text spread across the gap before the next one instead of landing
- * at once. The settle time follows how far apart the bursts arrive: a stream that
- * lands every ~50ms settles in STREAM_SETTLE_MS, while one that lands a second at a
- * time (a slow link, a polled transcript) is spread over most of that second rather
- * than revealed in a fraction of it and then left still. Updates are capped at ~30 Hz:
- * every one re-parses the message's markdown.
- */
-const STREAM_SETTLE_MS = 140;
-const STREAM_MAX_SETTLE_MS = 700;
-// The share of the gap between bursts the reveal is spread over; less than all of it,
-// so text stays close behind the stream instead of trailing a whole burst.
-const STREAM_SETTLE_GAP_SHARE = 0.6;
-const STREAM_MAX_GAP_MS = 1_500;
-const STREAM_MIN_FRAME_MS = 32;
-const STREAM_MAX_FRAME_DELTA_MS = 100;
-// Long open Markdown blocks are reparsed on each reveal. Beyond this size,
-// coalesce provider snapshots rather than adding intermediate renders.
-const STREAM_SMOOTH_MAX_CHARS = 4000;
-const STREAM_LONG_UPDATE_MS = 100;
-// No frame for this long means the tab was occluded or throttled: nobody watched the
-// animation, so show the current text instead of replaying it.
-const STREAM_STALL_MS = 1000;
 // Once the reply is done, what is still unrevealed plays out quickly rather than
 // landing at once; a backlog beyond this is shown whole.
 const STREAM_FINISH_SETTLE_MS = 90;
@@ -237,18 +225,6 @@ const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "
 
 function streamGraphemes(text: string): string[] {
 	return Array.from(STREAM_GRAPHEME_SEGMENTER.segment(text), ({ segment }) => segment);
-}
-
-function reconciledStreamPrefix(visibleText: string, targetGraphemes: string[]) {
-	let boundary = 0;
-	let count = 0;
-	for (const grapheme of targetGraphemes) {
-		const nextBoundary = boundary + grapheme.length;
-		if (nextBoundary > visibleText.length) break;
-		boundary = nextBoundary;
-		count++;
-	}
-	return { text: visibleText.slice(0, boundary), count };
 }
 
 /**
@@ -343,7 +319,7 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			lastFrameAtRef.current = now;
 			const elapsedMs = Math.min(STREAM_MAX_FRAME_DELTA_MS, previousFrameAt === undefined ? STREAM_MIN_FRAME_MS : now - previousFrameAt);
 			const settleMs = finishingRef.current ? STREAM_FINISH_SETTLE_MS : settleMsRef.current;
-			const count = Math.ceil(backlog * (1 - Math.exp(-elapsedMs / settleMs)));
+			const count = streamRevealCount(backlog, elapsedMs, settleMs);
 			const nextCount = Math.min(target.length, currentCount + count);
 			const next = visibleRef.current + target.slice(currentCount, nextCount).join("");
 			visibleRef.current = next;
@@ -411,11 +387,8 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			// Spread each burst over most of the gap since the last one.
 			const now = performance.now();
 			if (lastGrowthAtRef.current !== undefined) {
-				// A pause (the agent running a tool) is not a burst rhythm; past a
-				// second and a half it counts as no longer than that.
-				const gap = Math.min(now - lastGrowthAtRef.current, STREAM_MAX_GAP_MS);
-				gapMsRef.current = gapMsRef.current === undefined ? gap : gapMsRef.current * 0.6 + gap * 0.4;
-				settleMsRef.current = Math.min(STREAM_MAX_SETTLE_MS, Math.max(STREAM_SETTLE_MS, gapMsRef.current * STREAM_SETTLE_GAP_SHARE));
+				gapMsRef.current = streamGapMs(gapMsRef.current, now - lastGrowthAtRef.current);
+				settleMsRef.current = streamSettleMs(gapMsRef.current);
 			}
 			lastGrowthAtRef.current = now;
 		}
