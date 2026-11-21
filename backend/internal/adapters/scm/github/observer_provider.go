@@ -62,15 +62,14 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 	return ports.SCMGuardResult{ETag: firstNonEmptyHeader(resp.ETag, etag), NotModified: resp.NotModified}, nil
 }
 
-// ListPRsByRepo lists the repository's open pull requests. It paginates the
-// REST pulls endpoint using state=open and sort=updated.
-//
-// updatedAfter is ignored. GitHub's pulls endpoint has no since filter and
-// returns every open PR regardless, and the observer relies on that full
-// listing to notice tracked PRs that closed. Sending since anyway only gave
-// every poll a new query string, so each page landed in the client's response
-// cache under a new key and the cache filled with stale copies of the listing.
-func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, _ time.Time) ([]ports.SCMPRObservation, error) {
+// ListPRsByRepo lists open pull requests in the repository, optionally only
+// those updated at or after updatedAfter (zero = full listing). The REST pulls
+// endpoint has no server-side update filter, so it pages newest-updated first
+// and stops at the first PR updated before updatedAfter. A PR whose updated_at
+// is missing or unparseable is kept, since it cannot be placed before the cursor.
+// The cutoff is never sent as a query parameter: a query string that changed
+// every poll gave each page a new key in the client's response cache.
+func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
 	const perPage = 100
 	out := []ports.SCMPRObservation{}
 	for page := 1; ; page++ {
@@ -89,7 +88,11 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, _ time
 			return nil, fmt.Errorf("github scm: decode open PR list: %w", err)
 		}
 		for _, pull := range pulls {
-			out = append(out, restListPullToSCM(pull))
+			pr := restListPullToSCM(pull)
+			if !pr.UpdatedAtProvider.IsZero() && pr.UpdatedAtProvider.Before(updatedAfter) {
+				return out, nil
+			}
+			out = append(out, pr)
 		}
 		if len(pulls) < perPage {
 			return out, nil
