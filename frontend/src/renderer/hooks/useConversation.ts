@@ -1323,7 +1323,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const steer = useMutation({
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/conversation/steer",
+				"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 				{
 					params: { path: { sessionId: sessionId as string } },
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -1333,7 +1333,20 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (error) throw error;
 			return data;
 		},
-		onSuccess: invalidate,
+		onSuccess: (data) => {
+			const turnId = data?.outcome === "sent" && data.state !== "queued" && (!data.duplicate || data.state === "running")
+				? data.turnId
+				: undefined;
+			if (turnId && stateSessionId) {
+				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
+					conversationDispatchTrackingQueryKey,
+					(current = {}) => current[stateSessionId]
+						? current
+						: { ...current, [stateSessionId]: { operation: "send", requestId: turnId, state: "accepted", turnId } },
+				);
+			}
+			invalidate();
+		},
 	});
 
 	const promoteQueuedTurn = useMutation({
