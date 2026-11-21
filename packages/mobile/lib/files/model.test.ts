@@ -18,8 +18,7 @@ import {
 	selectionLabel,
 	splitPath,
 	withInlineComments,
-	type DisplayRow,
-} from "./model";
+	type DisplayRow, previewLines } from "./model";
 
 const file = (path: string, extra: Partial<WorkspaceFileSummary> = {}): WorkspaceFileSummary => ({
 	path, status: "modified", additions: 1, deletions: 1, binary: false, size: 10, ...extra,
@@ -252,5 +251,16 @@ describe("scopedFileDetail", () => {
 		const image = scopedFileDetail("a.png", { groups: [{ patch: "", deferred: [{ path: "a.png", reason: "binary" }] }] }, { exists: true, binary: true });
 		expect(image).toMatchObject({ binary: true, content: "", diffTruncated: false });
 		expect(scopedFileDetail("a.ts", { groups: [{ patch: "", truncated: false, deferred: [{ path: "a.ts", reason: "oversized" }] }] }, { exists: true, content: "x" }).diffTruncated).toBe(true);
+	});
+});
+
+describe("previewLines", () => {
+	it("keeps what arrived of a file cut short, less the line the cut may have split", () => {
+		expect(previewLines("one\ntwo\nthr")).toEqual(["one", "two"]);
+		expect(previewLines("one\r\ntwo\r\n")).toEqual(["one", "two"]);
+	});
+
+	it("keeps a minified file's only line rather than show nothing", () => {
+		expect(previewLines("{\"a\":1,\"b\":2")).toEqual(["{\"a\":1,\"b\":2"]);
 	});
 });
