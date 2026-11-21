@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
+	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -40,7 +41,7 @@ type droidImportReceipt struct {
 // in the existing Factory profile. It never opens/copies settings or auth. The
 // receipt lets S2 recover publication after a lost identity checkpoint without
 // replacing later turns or consulting the original source again.
-func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (_ ports.NativeSessionRef, prepareErr error) {
 	id, err := canonicalDroidNativeSessionID(r.NativeSessionID)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
@@ -64,6 +65,18 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	}
 	target := uuid.NewSHA1(uuid.NameSpaceOID, []byte(config+"\x00"+id+"\x00"+launch+"\x00"+r.SourceFingerprint)).String()
 	receiptPath := droidReceiptPath(r.DataDir, target)
+	if err := os.MkdirAll(filepath.Dir(receiptPath), 0o700); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	// A failed publisher must not race a second preparer adopting its receipt
+	// and marking the same native copy verified. Kernel locks survive neither
+	// crashes nor exec, so interrupted preparation remains recoverable. Contenders
+	// retry rather than waiting while a source snapshot is being prepared.
+	guard, err := datadirlock.Acquire(ctx, filepath.Join(filepath.Dir(receiptPath), ".locks", target), 0)
+	if err != nil {
+		return ports.NativeSessionRef{}, fmt.Errorf("droid: guard native publication: %w", err)
+	}
+	defer func() { _ = guard.Release() }()
 	var planned *droidImportReceipt
 	var published *droidImportReceipt
 	if _, err := os.Lstat(receiptPath); err == nil {
@@ -188,9 +201,26 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		}
 	}
 	if published == nil {
-		if err := importcopy.WriteOnce(ctx, root, rel, copyBody); err != nil {
+		// Retain a private staging link until source verification completes. Its
+		// inode is the ownership anchor for rollback; WriteOnce success followed
+		// by Stat(target) alone could mistake a replacement for our own copy.
+		stage := filepath.Join(filepath.Dir(rel), ".ao-import-"+uuid.NewString())
+		if err := importcopy.WriteOnce(ctx, root, stage, copyBody); err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		defer func() { _ = root.Remove(stage) }()
+		owned, err := root.Lstat(stage)
+		if err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		if err := root.Link(stage, rel); err != nil {
 			return ports.NativeSessionRef{}, fmt.Errorf("droid: publish native copy: %w", err)
 		}
+		defer func() {
+			if prepareErr != nil {
+				prepareErr = errors.Join(prepareErr, removeUnverifiedDroidCopy(root, receipts, rel, filepath.Base(receiptPath), owned, encoded, copyBody))
+			}
+		}()
 	}
 	// Refuse concurrent source changes before permitting any native launch.
 	after, err := ReadNativeHistory(ctx, config, src)
@@ -207,6 +237,51 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, err
 	}
 	return ports.NativeSessionRef{NativeSessionID: target, ConfigDir: config, TranscriptPath: receipt.Path}, nil
+}
+
+// Roll back only this call's newly linked, byte-unchanged copy while its target
+// guard is still held. Existing copies never enter this path. Any completion
+// marker, changed receipt, replacement inode or later native turn disqualifies
+// cleanup. Keep the reservation so an interrupted attempt can retry safely.
+func removeUnverifiedDroidCopy(root, receipts *os.Root, path, receiptName string, owned os.FileInfo, receiptBody, nativeBody []byte) error {
+	if _, err := receipts.Lstat(receiptName + ".verified"); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	info, err := receipts.Lstat(receiptName)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(receiptBody)) {
+		return err
+	}
+	recorded, err := receipts.ReadFile(receiptName)
+	if err != nil || !bytes.Equal(recorded, receiptBody) {
+		return err
+	}
+	info, err = root.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(info, owned) {
+		return err
+	}
+	f, err := root.Open(path)
+	if err != nil {
+		return err
+	}
+	opened, statErr := f.Stat()
+	body, readErr := io.ReadAll(io.LimitReader(f, int64(len(nativeBody))+1))
+	closeErr := f.Close()
+	if err := errors.Join(statErr, readErr, closeErr); err != nil {
+		return err
+	}
+	if !os.SameFile(opened, owned) || !bytes.Equal(body, nativeBody) {
+		return nil
+	}
+	// Recheck the name after reading; a replaced/extended conversation belongs
+	// to the native writer, even when it started as our imported snapshot.
+	info, err = root.Lstat(path)
+	if err != nil || !os.SameFile(info, owned) || info.Size() != int64(len(nativeBody)) {
+		return err
+	}
+	return root.Remove(path)
 }
 
 func droidReceiptPath(dataDir, id string) string {
