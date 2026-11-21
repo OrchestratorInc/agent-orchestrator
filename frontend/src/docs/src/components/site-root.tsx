@@ -9,6 +9,7 @@ import { docsTree } from "@/lib/docs-tree";
 import { OG_IMAGE_SIZE, ogImagePath, SITE_NAME } from "@/lib/seo";
 import { source } from "@/lib/source";
 import { translations } from "@/lib/translations";
+import { BinaryMatrix } from "./binary-matrix";
 import { LocalizedDocsLayout } from "./docs-layout";
 import { Providers } from "./providers";
 import "../app/global.css";
@@ -46,6 +47,8 @@ export function siteLayout(locale: SupportedLocale) {
           {isEnglish && <script dangerouslySetInnerHTML={{ __html: savedLocaleScript(translated) }} />}
         </head>
         <body className="min-h-screen bg-background text-foreground antialiased">
+          {/* Behind the whole layout, as on the marketing site's home page. */}
+          <BinaryMatrix className="docs-matrix" />
           <Providers urlLocale={isEnglish ? undefined : locale} translations={translated}>
             <LocalizedDocsLayout tree={docsTree(locale)} homeUrl={source.getPage([], locale) ? localePath("/", locale) : "/"}>
               {children}
