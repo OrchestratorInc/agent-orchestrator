@@ -11,6 +11,7 @@ import {
 	koMessages,
 	ptBRMessages,
 	ruMessages,
+	trMessages,
 	zhCNMessages,
 } from "./all-messages";
 
@@ -24,6 +25,7 @@ const allCatalogs = {
 	de: deMessages,
 	"pt-BR": ptBRMessages,
 	ru: ruMessages,
+	tr: trMessages,
 } as const;
 
 function emptyCatalogs(): TranslationCatalogs {
@@ -41,6 +43,7 @@ describe("coerceLocale", () => {
 		expect(coerceLocale("de")).toBe("de");
 		expect(coerceLocale("pt-BR")).toBe("pt-BR");
 		expect(coerceLocale("ru")).toBe("ru");
+		expect(coerceLocale("tr")).toBe("tr");
 	});
 
 	it("defaults unknown values to en", () => {
@@ -87,6 +90,7 @@ describe("app i18next instance", () => {
 			de: "settings.language.de",
 			"pt-BR": "settings.language.ptBR",
 			ru: "settings.language.ru",
+			tr: "settings.language.tr",
 		} as const;
 		const expected = {
 			en: "English",
@@ -98,6 +102,7 @@ describe("app i18next instance", () => {
 			de: "Deutsch",
 			"pt-BR": "Português (Brasil)",
 			ru: "Русский",
+			tr: "Türkçe",
 		} as const;
 		for (const locale of APP_LOCALES) {
 			expect(createAppI18n(locale).t(labels[locale])).toBe(expected[locale]);
@@ -278,6 +283,20 @@ describe("app i18next instance", () => {
 });
 
 describe("lazy locale catalogs", () => {
+	it("loads Turkish on demand with the exact English key set and Turkish plural forms", async () => {
+		expect(Object.keys(trMessages).sort()).toEqual(Object.keys(enMessages).sort());
+		const instance = createLazyAppI18n();
+		expect(instance.getResource("tr", "translation", "settings.general")).toBeUndefined();
+		await instance.changeLanguage("tr");
+		expect(instance.language).toBe("tr");
+		expect(instance.t("settings.general")).toBe("Genel");
+		expect(instance.t("settings.language.tr")).toBe("Türkçe");
+		for (const count of [0, 1, 2, 21]) {
+			expect(instance.t("firstRun.importFound", { count, agents: "Codex" }))
+				.toBe(`Bu bilgisayarda Codex ile yapılmış ${count} sohbet bulundu.`);
+		}
+	});
+
 	it("loads a locale's catalog when the app instance changes language", async () => {
 		const instance = createLazyAppI18n();
 		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();

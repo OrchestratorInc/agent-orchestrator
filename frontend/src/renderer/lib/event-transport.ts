@@ -4,8 +4,9 @@ import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBa
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversationOnce } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, forgetRemoteConversationRereads, refreshLocalConversationTail, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -151,12 +152,50 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				};
 				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
 			};
+			// An open local chat with nothing loading reads only the rows that can still
+			// change, as a remote chat does, so a streaming turn stops refetching the
+			// whole history on every event. A closed chat, one still loading, and every
+			// tail that cannot be merged take the full invalidation above. Both share the
+			// one-in-flight, one-catch-up bookkeeping.
+			const refreshLocalChat = (sessionId: string) => {
+				if (disposed) return;
+				const queryKey = conversationQueryKey(sessionId);
+				const key = JSON.stringify(queryKey);
+				const running = refreshes.get(key);
+				if (running) {
+					running.dirty = true;
+					return;
+				}
+				if (!queryClient.getQueryCache().find({ queryKey, type: "active" }) || queryClient.isFetching({ queryKey }) > 0) {
+					invalidate(queryKey);
+					return;
+				}
+				const state = { dirty: false };
+				refreshes.set(key, state);
+				const settled = () => {
+					refreshes.delete(key);
+					if (state.dirty && !disposed) refreshLocalChat(sessionId);
+				};
+				void refreshLocalConversationTail(queryClient, sessionId)
+					.then((merged) => {
+						if (disposed) return undefined;
+						// A query fetch that started during the tail read (an older page, a
+						// mount) may predate this event, or write back the live page it
+						// captured before the merge. Catch up once it has finished.
+						if (queryClient.isFetching({ queryKey }) > 0) state.dirty = true;
+						if (merged) return undefined;
+						return queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+					})
+					.then(settled, settled);
+			};
 			const refreshRemote = (hostId: string, reconnect = false) => {
 				const connection = remoteSources.get(hostId);
 				if (connection) connection.lastRefreshAt = Date.now();
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
+				// A reconnect may follow a host restart, which settles stranded rows.
+				if (reconnect) forgetRemoteConversationRereads(queryClient, hostId);
 				if (reconnect) invalidate(["remote-conversation", hostId]);
 				if (reconnect) invalidate(["reviewer-conversation", hostId]);
 				invalidate(["session-scm-summary", hostId]);
@@ -283,6 +322,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
+					// A deleted session or removed project changes what is kept.
+					invalidate(keptArtifactsQueryKey);
 					invalidate(sessionScmSummaryQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
@@ -306,7 +347,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					pendingEditorHandoffSessions.clear();
 				}
 				for (const sessionId of pendingConversationSessions) {
-					invalidate(conversationQueryKey(sessionId));
+					refreshLocalChat(sessionId);
 				}
 				pendingConversationSessions.clear();
 				for (const sessionId of pendingReviewSessions) {

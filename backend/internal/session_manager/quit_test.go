@@ -20,8 +20,14 @@ func TestStopAgentsForQuitPreservesResumableSession(t *testing.T) {
 				},
 			}
 			runtime.aliveByHandle = map[string]bool{"tmux-mer-1": true}
+			shells := &fakeShellTerminalCloser{}
+			manager.SetShellTerminalCloser(shells)
 			if err := manager.StopAgentsForQuit(context.Background()); err != nil {
 				t.Fatal(err)
+			}
+			if len(shells.began) != 0 || len(shells.suspended) != 1 || len(shells.ended) != 1 {
+				t.Fatalf("quit must keep the session's shells to restore: began=%v suspended=%v released=%v",
+					shells.began, shells.suspended, shells.ended)
 			}
 			got := store.sessions["mer-1"]
 			if runtime.destroyed != 1 || got.IsTerminated || got.Activity.State != domain.ActivityExited {

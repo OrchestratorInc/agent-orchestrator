@@ -12,21 +12,33 @@ import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
 import { deleteSessionArtifactFile } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey, useKeptArtifacts } from "../hooks/useKeptArtifacts";
+import { useStartSessionFromArtifact } from "../hooks/useStartSessionFromArtifact";
+import { useSharedArtifacts } from "../hooks/useSharedArtifacts";
 import {
+	ARTIFACT_OWNERS,
 	ARTIFACT_SHARINGS,
+	SHARED_WITH_ME_GROUP_ID,
 	ARTIFACT_TYPES,
 	artifactChangeError,
+	artifactContext,
 	artifactCount,
 	artifactKey,
 	artifactLocation,
+	artifactLocationCounts,
+	artifactOwner,
 	canChangeSessionArtifacts,
 	filterArtifactGroups,
 	groupArtifactsByProject,
 	hostArtifactLocation,
+	sharedArtifactGroup,
+	sharedArtifactRow,
 	withHostShareLinks,
+	withKeptArtifacts,
 	withShareAccess,
 	type ArtifactGroup,
 	type ArtifactLocation,
+	type ArtifactOwner,
 	type ArtifactRow,
 	type ArtifactSharing,
 	type ArtifactType,
@@ -36,11 +48,13 @@ import { LOCAL_HOST } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { cn } from "../lib/utils";
-import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
+import { useArtifactsViewStore, type ArtifactSort, type ArtifactViewMode } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { useArtifactShareFile, useHostShareLinks, useReconciledShareLinks } from "./ShareArtifactPopover";
+import { useArtifactShareFile, useHostShareLinks, useReconciledShareLinks, useShareAccess } from "./ShareArtifactPopover";
+import { combinePublishedChecks, deleteTargets, prepareUnpublish, publishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -55,7 +69,12 @@ import {
 	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuCheckboxItem,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
 	DropdownMenuSeparator,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Pressable } from "./ui/pressable";
@@ -107,18 +126,35 @@ export function ArtifactsView() {
 	// the publish records behind it up to date first.
 	const shareAccess = useReconciledShareLinks();
 	const hostShareLinks = useHostShareLinks();
-	const groups = useMemo(
-		() => withShareAccess(withHostShareLinks(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), hostShareLinks), shareAccess),
-		[workspaces, remoteWorkspaces, orchestratorTitle, hostShareLinks, shareAccess],
-	);
+	// Artifacts kept after their session was deleted or their project removed.
+	const kept = useKeptArtifacts().data;
+	const noProjectName = t("artifacts.noProject");
+	// Links other people published that open for this person, listed under Cloud.
+	const sharedQuery = useSharedArtifacts();
+	const sharedWithMe = sharedQuery.data;
+	const sharedGroupName = t("artifacts.owner.shared");
+	const groups = useMemo(() => {
+		const own = withShareAccess(withHostShareLinks(withKeptArtifacts(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), kept, workspaces ?? [], noProjectName), hostShareLinks), shareAccess);
+		const shared = sharedArtifactGroup(sharedWithMe, sharedGroupName);
+		return shared ? [...own, shared] : own;
+	}, [workspaces, remoteWorkspaces, orchestratorTitle, kept, noProjectName, hostShareLinks, shareAccess, sharedWithMe, sharedGroupName]);
 	const [query, setQuery] = useState("");
 	// Each filter keeps several values at once; an empty list shows every artifact.
 	const [projectIds, setProjectIds] = useState<readonly string[]>([]);
 	const [location, setLocation] = useState<ArtifactLocation | undefined>();
 	const [types, setTypes] = useState<readonly ArtifactType[]>([]);
 	const [sharings, setSharings] = useState<readonly ArtifactSharing[]>([]);
+	const [owner, setOwner] = useState<ArtifactOwner | undefined>();
+	const [pinnedOnly, setPinnedOnly] = useState(false);
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = useCallback((row: ArtifactRow, projectName: string) => setPreview({ row, projectName }), []);
+	// A shared link opened from outside the app (ao-app://shared-artifact) opens here once.
+	const openSharedArtifact = useArtifactsViewStore((state) => state.openSharedArtifact);
+	useEffect(() => {
+		if (!openSharedArtifact) return;
+		setPreview({ row: sharedArtifactRow(openSharedArtifact), projectName: t("artifacts.owner.shared") });
+		useArtifactsViewStore.getState().requestOpenSharedArtifact(null);
+	}, [openSharedArtifact, t]);
 	// The open preview follows its row as the list refreshes, so a file an
 	// agent rewrites shows its new content.
 	const previewRow = useMemo(() => {
@@ -129,25 +165,42 @@ export function ArtifactsView() {
 	const view = useArtifactsViewStore((state) => state.view);
 	const setView = useArtifactsViewStore((state) => state.setView);
 	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
+	const sort = useArtifactsViewStore((state) => state.sort);
+	const setSort = useArtifactsViewStore((state) => state.setSort);
 	const scratchpadName = t("standalone.workspaceName");
-	const visibleGroups = useMemo(
-		() => filterArtifactGroups(groups, { query, projectIds, location, types, sharings }, scratchpadName),
-		[groups, query, projectIds, location, types, sharings, scratchpadName],
+	const { client: cloudClient } = useCloudCp(cloudArtifacts);
+	const cloudUserId = useCloudMeUserId(cloudArtifacts);
+	const pinnedKeys = useMemo(() => pinnedOnly ? new Set(pinnedArtifactIds) : undefined, [pinnedOnly, pinnedArtifactIds]);
+	const filters = useMemo(
+		() => ({ query, projectIds, location, types, sharings, owner, cloudUserId, onlyKeys: pinnedKeys }),
+		[query, projectIds, location, types, sharings, owner, cloudUserId, pinnedKeys],
 	);
+	const visibleGroups = useMemo(() => filterArtifactGroups(groups, filters, scratchpadName), [groups, filters, scratchpadName]);
+	// Each location chip counts what choosing it would show under the other filters.
+	const locationCounts = useMemo(() => artifactLocationCounts(groups, filters, scratchpadName), [groups, filters, scratchpadName]);
 	const hasArtifacts = artifactCount(groups) > 0;
-	// One list, newest change first, with pinned artifacts kept at the top. The
-	// filters narrow it; nothing splits it into sections.
+	// One list, newest change (or name) first, with pinned artifacts kept at the
+	// top. The filters narrow it; nothing splits it into sections.
 	const cards = useMemo(() => {
 		const pinned = new Set(pinnedArtifactIds);
 		return visibleGroups
-			.flatMap((group) => group.rows.map((row) => ({
-				row,
-				projectName: withHostLabel(group.isScratchpad ? t("standalone.workspaceName") : group.name, group.hostId && hostLabels.get(group.hostId)),
-				pinned: pinned.has(artifactKey(row)),
-			})))
+			.flatMap((group) => group.rows.map((row) => {
+				const place = artifactLocation(row, group);
+				return {
+					row,
+					projectName: withHostLabel(group.isScratchpad ? t("standalone.workspaceName") : group.name, group.hostId && hostLabels.get(group.hostId)),
+					placeName: place === "cloud" ? t("artifacts.locationCloud")
+						: place === "local" ? t("artifacts.locationLocal")
+						: (row.hostId && hostLabels.get(row.hostId)) || t("artifacts.locationRemote"),
+					owner: artifactOwner(row, cloudUserId),
+					pinned: pinned.has(artifactKey(row)),
+				};
+			}))
 			.sort((left, right) => Number(right.pinned) - Number(left.pinned)
-				|| (Date.parse(right.row.updatedAt) || 0) - (Date.parse(left.row.updatedAt) || 0));
-	}, [visibleGroups, pinnedArtifactIds, hostLabels, t]);
+				|| (sort === "name"
+					? left.row.name.localeCompare(right.row.name)
+					: (Date.parse(right.row.updatedAt) || 0) - (Date.parse(left.row.updatedAt) || 0)));
+	}, [visibleGroups, pinnedArtifactIds, hostLabels, cloudUserId, sort, t]);
 	// Only the cards on screen and near it are built; a long list would otherwise build every card at once.
 	const grid = useVirtualGridRows(cards.length, scrollElement);
 	// Only the first few pages and PDFs render live; the rest show their thumbnail.
@@ -169,14 +222,16 @@ export function ArtifactsView() {
 		setLocation(undefined);
 		setTypes([]);
 		setSharings([]);
+		setOwner(undefined);
+		setPinnedOnly(false);
 	};
 	const locationOptions: { value: ArtifactLocation | undefined; label: string }[] = [
 		{ value: undefined, label: t("artifacts.locationAll") },
 		{ value: "local", label: t("artifacts.locationLocal") },
 		// One per saved remote host, under the name the host is listed by.
 		...(remoteHosts ?? []).map((host) => ({ value: hostArtifactLocation(host.hostId), label: host.label })),
-		// Cloud artifacts show only where the control plane keeps them.
-		...(cloudArtifacts ? [{ value: "cloud" as const, label: t("artifacts.locationCloud") }] : []),
+		// Cloud artifacts show only where the control plane keeps them, or where links are shared with this person.
+		...(cloudArtifacts || groups.some((group) => group.id === SHARED_WITH_ME_GROUP_ID) ? [{ value: "cloud" as const, label: t("artifacts.locationCloud") }] : []),
 	];
 	// Machines whose list did not load, among those shown: said so, with a retry, instead of
 	// leaving their artifacts silently missing.
@@ -184,16 +239,19 @@ export function ArtifactsView() {
 		&& (location === undefined || location === hostArtifactLocation(host.hostId)));
 	const projectName = (group: ArtifactGroup) => withHostLabel(group.isScratchpad ? scratchpadName : group.name, group.hostId && hostLabels.get(group.hostId));
 	const selectedProjects = groups.filter((group) => projectIds.includes(group.id));
-	const filtering = projectIds.length > 0 || types.length > 0 || sharings.length > 0;
+	const filtering = projectIds.length > 0 || types.length > 0 || sharings.length > 0 || owner !== undefined || pinnedOnly;
+	// A submenu row's current value: "Any" for none, the values when few, else their count.
+	const chosen = (values: readonly string[], none: string) => values.length === 0
+		? none
+		: values.length <= 2 ? values.join(", ") : t("artifacts.selectedCount", { count: values.length });
+	const ownerLabel = (value: ArtifactOwner) => t(`artifacts.ownerFilter.${value}`);
 	const queryClient = useQueryClient();
-	const { client: cloudClient } = useCloudCp(cloudArtifacts);
-	const cloudUserId = useCloudMeUserId(cloudArtifacts);
 	// Another member's cloud session files are view only, so they cannot be selected.
 	// A bundle row stands for one of its files, so deleting it would leave the
 	// rest of the bundle behind; it has no Delete in its menu either.
 	const deleteBlockedReason = (row: ArtifactRow) => row.bundle
 		? t("artifacts.bundleNotDeletable")
-		: canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
+		: row.shared ? t("artifacts.viewOnly") : canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
 	const [selecting, setSelecting] = useState(false);
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
@@ -233,11 +291,24 @@ export function ArtifactsView() {
 	};
 	// Each file is deleted on its own; the ones that fail stay selected so
 	// the person can retry them.
+	// A published file's link is looked up before its delete and unpublished
+	// once that file is gone; a file that failed to delete keeps its link.
+	const { baseUrl: shareBaseUrl } = useShareAccess();
+	const selectedPublished = usePublishedLinkCount(
+		shareBaseUrl,
+		combinePublishedChecks(selectedRows.map((row) => publishedCheck(rowSession(row), [row]))),
+		confirmingBulkDelete,
+	);
 	const bulkDelete = useMutation({
 		mutationFn: async (rows: readonly ArtifactRow[]) => {
+			const links = await Promise.all(rows.map(async (row) => prepareUnpublish(shareBaseUrl, await deleteTargets(shareBaseUrl, rowSession(row), [row]), {
+				deleting: [{ hostId: row.hostId, sessionId: row.sessionId, path: row.path }],
+			})));
 			const results = await Promise.allSettled(rows.map((row) => row.cloud
 				? cloudClient.deleteSessionArtifact(row.cloud.orgId, row.sessionId, row.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
 				: deleteSessionArtifactFile({ path: row.path, sessionId: row.sessionId, hostId: row.hostId })));
+			const linksLive = await Promise.all(links.map((link, index) => results[index]?.status === "fulfilled" ? link.unpublish() : 0));
+			warnLinksStillLive(t, linksLive.reduce((sum, count) => sum + count, 0));
 			const deleted = rows.filter((_, index) => results[index]?.status === "fulfilled").map(artifactKey);
 			const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
 			const { unpinArtifact } = useArtifactsViewStore.getState();
@@ -246,6 +317,7 @@ export function ArtifactsView() {
 			const hostIds = new Set(rows.flatMap((row) => row.hostId && !row.cloud ? [row.hostId] : []));
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }),
+				...(rows.some((row) => row.kept) ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
 				...[...hostIds].map((hostId) => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) })),
 				...(rows.some((row) => row.cloud) ? [queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey })] : []),
 			]);
@@ -307,6 +379,7 @@ export function ArtifactsView() {
 									onClick={() => setLocation(option.value)}
 								>
 									{option.label}
+									<span aria-hidden="true" className="tabular-nums text-passive">{locationCounts.get(option.value ?? "all") ?? 0}</span>
 								</Button>
 							))}
 						</div>
@@ -326,28 +399,71 @@ export function ArtifactsView() {
 										</TooltipTrigger>
 										<TooltipContent side="bottom">{t("artifacts.filter")}</TooltipContent>
 									</Tooltip>
-									<DropdownMenuContent align="end" className="max-h-[min(36rem,80vh)] min-w-52 overflow-y-auto" data-browser-native-overlay="true">
-										<DropdownMenuLabel>{t("artifacts.filterProject")}</DropdownMenuLabel>
-										<FilterOption checked={projectIds.length === 0} onToggle={() => setProjectIds([])}>{t("artifacts.allProjects")}</FilterOption>
-										{groups
-											.filter((group) => !location || group.rows.some((row) => artifactLocation(row, group) === location))
-											.map((group) => (
-												<FilterOption key={group.id} checked={projectIds.includes(group.id)} onToggle={() => setProjectIds(toggled(projectIds, group.id))}>
-													<span className="truncate">{projectName(group)}</span>
-												</FilterOption>
-											))}
+									<DropdownMenuContent align="end" className="min-w-64" data-browser-native-overlay="true">
+										<DropdownMenuSub>
+											<FilterMenuRow label={t("artifacts.sortBy")} value={t(`artifacts.sort.${sort}`)} />
+											<DropdownMenuSubContent className="min-w-44" data-browser-native-overlay="true">
+												<DropdownMenuRadioGroup value={sort} onValueChange={(value) => setSort(value as ArtifactSort)}>
+													{(["updated", "name"] as const).map((value) => (
+														<DropdownMenuRadioItem key={value} value={value}>{t(`artifacts.sort.${value}`)}</DropdownMenuRadioItem>
+													))}
+												</DropdownMenuRadioGroup>
+											</DropdownMenuSubContent>
+										</DropdownMenuSub>
 										<DropdownMenuSeparator />
-										<DropdownMenuLabel>{t("artifacts.filterType")}</DropdownMenuLabel>
-										<FilterOption checked={types.length === 0} onToggle={() => setTypes([])}>{t("artifacts.allTypes")}</FilterOption>
-										{ARTIFACT_TYPES.map((value) => (
-											<FilterOption key={value} checked={types.includes(value)} onToggle={() => setTypes(toggled(types, value))}>{t(`artifacts.type.${value}`)}</FilterOption>
-										))}
+										<DropdownMenuSub>
+											<FilterMenuRow label={t("artifacts.filterOwner")} value={owner ? ownerLabel(owner) : t("artifacts.ownerAny")} />
+											<DropdownMenuSubContent className="min-w-44" data-browser-native-overlay="true">
+												<DropdownMenuRadioGroup value={owner ?? "any"} onValueChange={(value) => setOwner(value === "any" ? undefined : value as ArtifactOwner)}>
+													<DropdownMenuRadioItem value="any">{t("artifacts.ownerAny")}</DropdownMenuRadioItem>
+													{ARTIFACT_OWNERS.map((value) => (
+														<DropdownMenuRadioItem key={value} value={value}>{ownerLabel(value)}</DropdownMenuRadioItem>
+													))}
+												</DropdownMenuRadioGroup>
+											</DropdownMenuSubContent>
+										</DropdownMenuSub>
+										<DropdownMenuSub>
+											<FilterMenuRow label={t("artifacts.filterProject")} value={chosen(selectedProjects.map(projectName), t("artifacts.allProjects"))} />
+											<DropdownMenuSubContent className="max-h-[min(30rem,70vh)] min-w-52 overflow-y-auto" data-browser-native-overlay="true">
+												<FilterOption checked={projectIds.length === 0} onToggle={() => setProjectIds([])}>{t("artifacts.allProjects")}</FilterOption>
+												<DropdownMenuSeparator />
+												{groups
+													.filter((group) => !location || group.rows.some((row) => artifactLocation(row, group) === location))
+													.map((group) => (
+														<FilterOption key={group.id} checked={projectIds.includes(group.id)} onToggle={() => setProjectIds(toggled(projectIds, group.id))}>
+															<span className="truncate">{projectName(group)}</span>
+														</FilterOption>
+													))}
+											</DropdownMenuSubContent>
+										</DropdownMenuSub>
+										<DropdownMenuSub>
+											<FilterMenuRow label={t("artifacts.filterType")} value={chosen(types.map((value) => t(`artifacts.type.${value}`)), t("artifacts.allTypes"))} />
+											<DropdownMenuSubContent className="min-w-48" data-browser-native-overlay="true">
+												<FilterOption checked={types.length === 0} onToggle={() => setTypes([])}>{t("artifacts.allTypes")}</FilterOption>
+												<DropdownMenuSeparator />
+												{ARTIFACT_TYPES.map((value) => (
+													<FilterOption key={value} checked={types.includes(value)} onToggle={() => setTypes(toggled(types, value))}>{t(`artifacts.type.${value}`)}</FilterOption>
+												))}
+											</DropdownMenuSubContent>
+										</DropdownMenuSub>
+										<DropdownMenuSub>
+											<FilterMenuRow label={t("artifacts.filterSharing")} value={chosen(sharings.map((value) => t(`artifacts.sharing.${value}`)), t("artifacts.allSharing"))} />
+											<DropdownMenuSubContent className="min-w-48" data-browser-native-overlay="true">
+												<FilterOption checked={sharings.length === 0} onToggle={() => setSharings([])}>{t("artifacts.allSharing")}</FilterOption>
+												<DropdownMenuSeparator />
+												{ARTIFACT_SHARINGS.map((value) => (
+													<FilterOption key={value} checked={sharings.includes(value)} onToggle={() => setSharings(toggled(sharings, value))}>{t(`artifacts.sharing.${value}`)}</FilterOption>
+												))}
+											</DropdownMenuSubContent>
+										</DropdownMenuSub>
 										<DropdownMenuSeparator />
-										<DropdownMenuLabel>{t("artifacts.filterSharing")}</DropdownMenuLabel>
-										{ARTIFACT_SHARINGS.map((value) => (
-											<FilterOption key={value} checked={sharings.includes(value)} onToggle={() => setSharings(toggled(sharings, value))}>{t(`artifacts.sharing.${value}`)}</FilterOption>
-										))}
-										<FilterOption checked={sharings.length === 0} onToggle={() => setSharings([])}>{t("artifacts.allSharing")}</FilterOption>
+										<FilterOption checked={pinnedOnly} onToggle={() => setPinnedOnly(!pinnedOnly)}>{t("artifacts.pinned")}</FilterOption>
+										{filtering ? (
+											<>
+												<DropdownMenuSeparator />
+												<DropdownMenuItem onSelect={clearFilters}>{t("artifacts.clearFilters")}</DropdownMenuItem>
+											</>
+										) : null}
 									</DropdownMenuContent>
 								</DropdownMenu>
 								{selecting ? null : (
@@ -412,9 +528,17 @@ export function ArtifactsView() {
 						<Button type="button" size="sm" variant="quiet" onClick={() => void remote.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
 					</div>
 				))}
+				{/* A failed shared list is said so, with a retry; the rest still shows. */}
+				{sharedQuery.isError && (location === undefined || location === "cloud") ? (
+					<div role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
+						<span className="min-w-0 truncate">{t("artifacts.sharedLoadFailed")}</span>
+						<Button type="button" size="sm" variant="quiet" onClick={() => void sharedQuery.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
+					</div>
+				) : null}
 				{hasArtifacts && filtering ? (
 					<div className="mt-2 flex flex-wrap items-center gap-1.5">
 						{([
+							[t("artifacts.filterOwner"), owner ? [ownerLabel(owner)] : [], () => setOwner(undefined)],
 							[t("artifacts.filterProject"), selectedProjects.map(projectName), () => setProjectIds([])],
 							[t("artifacts.filterType"), types.map((value) => t(`artifacts.type.${value}`)), () => setTypes([])],
 							[t("artifacts.filterSharing"), sharings.map((value) => t(`artifacts.sharing.${value}`)), () => setSharings([])],
@@ -427,6 +551,13 @@ export function ArtifactsView() {
 								onRemove={clear}
 							/>
 						) : null)}
+						{pinnedOnly ? (
+							<FilterChip
+								label={t("artifacts.pinned")}
+								removeLabel={t("artifacts.removeFilter", { filter: t("artifacts.pinned") })}
+								onRemove={() => setPinnedOnly(false)}
+							/>
+						) : null}
 					</div>
 				) : null}
 			</div>
@@ -453,8 +584,8 @@ export function ArtifactsView() {
 							) : (
 								<ul ref={grid.listRef} aria-label={t("artifacts.title")} className={view === "gallery" ? ARTIFACT_GRID_CLASS : "grid grid-cols-[minmax(0,1fr)] gap-1.5"}>
 									<GridSpacer height={grid.before} />
-									{cards.slice(grid.start, grid.end).map(({ row, projectName, pinned }) => (
-										<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} pinned={pinned} view={view} previewLive={livePreviews.has(artifactKey(row))} onPreview={openPreview} selection={selectionFor(row, projectName)} />
+									{cards.slice(grid.start, grid.end).map(({ row, projectName, placeName, owner: rowOwner, pinned }) => (
+										<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} placeName={placeName} owner={rowOwner} pinned={pinned} view={view} previewLive={livePreviews.has(artifactKey(row))} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 									))}
 									<GridSpacer height={grid.after} />
 								</ul>
@@ -470,7 +601,9 @@ export function ArtifactsView() {
 			<ConfirmDialog
 				busy={bulkDelete.isPending}
 				confirmLabel={t("artifacts.bulkDeleteConfirm", { count: selectedRows.length })}
-				description={t("artifacts.bulkDeleteDescription")}
+				description={selectedPublished > 0
+					? `${t("artifacts.bulkDeleteDescription")} ${t("artifacts.bulkDeletePublished", { count: selectedPublished })}`
+					: t("artifacts.bulkDeleteDescription")}
 				destructive
 				error={bulkDelete.error?.message ?? null}
 				onConfirm={() => bulkDelete.mutate(selectedRows)}
@@ -492,6 +625,16 @@ export function ArtifactsView() {
 /** A remote host's project name with the host's, so equal names on two machines tell apart. */
 function withHostLabel(name: string, hostLabel: string | false | undefined): string {
 	return hostLabel ? `${name} · ${hostLabel}` : name;
+}
+
+/** A filter-menu row that opens its options to the side, showing the current value. */
+function FilterMenuRow({ label, value }: { label: string; value: string }) {
+	return (
+		<DropdownMenuSubTrigger>
+			<span className="flex-1 text-foreground">{label}</span>
+			<span className="max-w-36 truncate ps-4">{value}</span>
+		</DropdownMenuSubTrigger>
+	);
 }
 
 /** `values` with `value` added, or removed when it is already there. */
@@ -517,21 +660,27 @@ function FilterOption({ checked, onToggle, children }: { checked: boolean; onTog
  * Opening it previews the file on this page; while selecting it toggles.
  */
 // Memoized: a row scrolling into view re-renders the list, and only the new cards need to render.
-const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
+const ArtifactCard = memo(function ArtifactCard({ row, projectName, placeName, owner, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; placeName: string; owner: ArtifactOwner; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
 	const { t } = useTranslation();
 	const id = artifactKey(row);
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
 	const share = useArtifactShareFile(row);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
+	const startSession = useStartSessionFromArtifact();
 	const KindIcon = artifactFileIcon(row);
 	const selectionDescriptionId = useId();
-	const context = `${projectName} · ${row.sessionTitle}`;
+	const context = artifactContext(t, row, placeName, owner);
 
 	const open = () => {
 		onPreview(row, projectName);
 	};
+	// A kept file has no session to open; a new one can start from it.
 	const openInSession = () => {
+		if (row.kept) {
+			void startSession(row);
+			return;
+		}
 		requestWorkspaceFileOpen(row.sessionId, row.path, row.hostId, "artifact");
 		navigateToSession(row.projectId, row.sessionId, row.hostId ?? LOCAL_HOST);
 	};
@@ -570,7 +719,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 							selection?.disabledReason && "cursor-not-allowed",
 						)}
 						onClick={selection ? toggle : open}
-						title={selection?.disabledReason ?? `${context} · ${row.path}`}
+						title={selection?.disabledReason ?? `${projectName} · ${row.sessionTitle} · ${row.path}`}
 						{...(selection ? { tabIndex: -1, "aria-hidden": true } : {})}
 					>
 						<KindIcon aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0 text-muted-foreground" />
@@ -599,13 +748,14 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 						</time>
 					</div>
 					{selection ? null : <div className="relative z-[2] flex shrink-0 items-center gap-1 @max-lg:[&>button]:hidden">
-						{row.bundle ? null : <DeferredArtifactActionsMenu
+						{row.bundle || row.shared ? null : <DeferredArtifactActionsMenu
 							artifact={row}
 							hostId={row.hostId}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
 							share={share}
 							onOpenInSession={openInSession}
+							startsSession={Boolean(row.kept)}
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
@@ -623,7 +773,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 			context={context}
 			onPreview={open}
 			selection={selection}
-			actions={selection || row.bundle ? null : (
+			actions={selection || row.bundle || row.shared ? null : (
 				<DeferredArtifactActionsMenu
 					artifact={row}
 					hostId={row.hostId}
@@ -631,6 +781,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 					iconOnly
 					share={share}
 					onOpenInSession={openInSession}
+					startsSession={Boolean(row.kept)}
 					pinned={pinned}
 					onTogglePin={() => togglePinnedArtifact(id)}
 					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
@@ -776,4 +927,9 @@ function CreateArtifactMenu({
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
+}
+
+/** The session of a row, as unpublishing names it. */
+function rowSession(row: ArtifactRow) {
+	return { id: row.sessionId, cloud: row.cloud, hostId: row.hostId, workspaceId: row.projectId };
 }

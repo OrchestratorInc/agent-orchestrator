@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ type sessionListOptions struct {
 	sessionOptions
 	all               bool
 	includeTerminated bool
+	agent             string
+	quiet             bool
 }
 
 type sessionCleanupOptions struct {
@@ -43,6 +46,10 @@ type sessionDeleteOptions struct {
 	project string
 	yes     bool
 	cleanup bool
+	// keepArtifacts is the old opt-in, accepted for scripts that still pass
+	// it; keeping is now the default.
+	keepArtifacts   bool
+	deleteArtifacts bool
 }
 
 type sessionClaimPROptions struct {
@@ -79,6 +86,10 @@ type sessionDTO struct {
 	// WorkspaceCleanup is the recorded teardown outcome of a terminated
 	// session's workspace, empty when none has been recorded.
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
+	// ProvisionState is "failed" when the session never started;
+	// ProvisionError is the reason.
+	ProvisionState string `json:"provisionState,omitempty"`
+	ProvisionError string `json:"provisionError,omitempty"`
 }
 
 type sessionArtifactDTO struct {
@@ -217,6 +228,9 @@ type sessionListEntry struct {
 	LastActivityAt *time.Time      `json:"lastActivityAt,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
 	UpdatedAt      time.Time       `json:"updatedAt"`
+	// ProvisionState is "failed" when the session never started.
+	ProvisionState string `json:"provisionState,omitempty"`
+	ProvisionError string `json:"provisionError,omitempty"`
 }
 
 type sessionListPR struct {
@@ -243,6 +257,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionTopCommand(ctx))
 	cmd.AddCommand(newSessionGetCommand(ctx))
 	cmd.AddCommand(newSessionKillCommand(ctx))
+	cmd.AddCommand(newSessionInterruptCommand(ctx))
 	cmd.AddCommand(newSessionRestoreCommand(ctx))
 	cmd.AddCommand(newSessionExitAgentCommand(ctx))
 	cmd.AddCommand(newSessionResumeAgentCommand(ctx))
@@ -252,6 +267,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	cmd.AddCommand(newSessionForkCommand(ctx))
+	cmd.AddCommand(newSessionSwitchCommand(ctx))
 	return cmd
 }
 
@@ -270,6 +286,8 @@ func newSessionListCommand(ctx *commandContext) *cobra.Command {
 	f.BoolVarP(&opts.all, "all", "a", false, "Include orchestrator sessions")
 	f.BoolVar(&opts.includeTerminated, "include-terminated", false, "Include terminated sessions")
 	f.BoolVar(&opts.json, "json", false, "Output as JSON")
+	f.StringVar(&opts.agent, "agent", "", "Only sessions running this agent, for example claude-code")
+	f.BoolVarP(&opts.quiet, "quiet", "q", false, "Print only session ids, one per line")
 	return cmd
 }
 
@@ -332,11 +350,29 @@ func newSessionKillCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
+func newSessionInterruptCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionOptions
+	cmd := &cobra.Command{
+		Use:   "interrupt <id>",
+		Short: "Interrupt an active turn without terminating the session",
+		Args:  oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.interruptSession(cmd.Context(), cmd, id, opts)
+		},
+	}
+	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	return cmd
+}
+
 func newSessionRestoreCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "restore <id>",
-		Short: "Restore a terminated session or resume an exited agent",
+		Short: "Restore a terminated session, resume an exited agent, or retry a failed start",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -428,7 +464,8 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Permanently delete a terminated session",
-		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts, attachments and artifacts). " +
+		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts and attachments). " +
+			"Its artifact files are kept, view only, on the Artifacts page, the way the desktop app keeps them; pass --delete-artifacts to delete them too. " +
 			"The session must be terminated and its worktree cleaned up first (ao session cleanup, or --cleanup). Git branches, pull requests and agent account usage totals are kept.",
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -442,6 +479,10 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&opts.cleanup, "cleanup", false, "Clean up a worktree still on disk first (never forced; a dirty or locked one refuses the delete)")
+	cmd.Flags().BoolVar(&opts.deleteArtifacts, "delete-artifacts", false, "Also delete the session's artifact files instead of keeping them, view only, on the Artifacts page")
+	cmd.Flags().BoolVar(&opts.keepArtifacts, "keep-artifacts", false, "Keep the session's artifact files (the default)")
+	_ = cmd.Flags().MarkHidden("keep-artifacts")
+	cmd.MarkFlagsMutuallyExclusive("keep-artifacts", "delete-artifacts")
 	return cmd
 }
 
@@ -689,6 +730,10 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse, review *bool) e
 }
 
 func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, opts sessionListOptions) error {
+	agent, err := knownAgentFlag(opts.agent)
+	if err != nil {
+		return err
+	}
 	params := url.Values{}
 	if opts.project != "" {
 		params.Set("project", opts.project)
@@ -709,6 +754,17 @@ func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, o
 		}
 	}
 	sessions := filterAndSortSessions(res.Sessions, opts.all)
+	if agent != "" {
+		sessions = slices.DeleteFunc(sessions, func(sess sessionDTO) bool { return sess.Harness != agent })
+	}
+	if opts.quiet {
+		for _, sess := range sessions {
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), sess.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	hiddenTerminatedCount := 0
 	if !opts.includeTerminated {
 		terminatedCount, terminatedOrchestratorCount, err := c.countHiddenTerminated(ctx, opts.project, opts.all)
@@ -859,6 +915,19 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	return err
 }
 
+func (c *commandContext) interruptSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	if opts.project != "" {
+		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
+			return err
+		}
+	}
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/stop-turn", struct{}{}, nil); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "interrupt requested for session %s\n", id)
+	return err
+}
+
 func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionDeleteOptions) error {
 	// Look the session up before asking, so an unknown id fails without a
 	// prompt; with --yes the delete itself reports it.
@@ -869,7 +938,11 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 	}
 	out := cmd.OutOrStdout()
 	if !opts.yes {
-		confirmed, err := confirmTyped(cmd, fmt.Sprintf("Permanently delete session %s and its history? Type yes to confirm: ", id))
+		what := " and its history"
+		if opts.deleteArtifacts {
+			what = ", its history and its artifact files"
+		}
+		confirmed, err := confirmTyped(cmd, fmt.Sprintf("Permanently delete session %s%s? Type yes to confirm: ", id, what))
 		if err != nil {
 			return err
 		}
@@ -881,6 +954,11 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 	params := url.Values{}
 	if opts.cleanup {
 		params.Set("cleanup", "true")
+	}
+	// Artifacts outlive their session unless the caller asks otherwise, so an
+	// agent deleting a session it spawned never throws away its deliverables.
+	if !opts.deleteArtifacts {
+		params.Set("keepArtifacts", "true")
 	}
 	var res deleteSessionResponse
 	if err := c.deleteJSON(ctx, apiPath("sessions/"+url.PathEscape(id), params), &res); err != nil {
@@ -895,7 +973,8 @@ func (c *commandContext) restoreSession(ctx context.Context, cmd *cobra.Command,
 	if err != nil {
 		return err
 	}
-	if !sess.IsTerminated && sess.Activity.State == "exited" {
+	// A failed start is retried through the same route as an exited agent.
+	if !sess.IsTerminated && (sess.Activity.State == "exited" || sess.ProvisionState == "failed") {
 		return c.resumeSessionAgent(ctx, cmd, id, sessionOptions{})
 	}
 	var res restoreSessionResponse
@@ -940,6 +1019,19 @@ func (c *commandContext) resumeSessionAgent(ctx context.Context, cmd *cobra.Comm
 	var res resumeAgentResponse
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/resume-agent", struct{}{}, &res); err != nil {
 		return err
+	}
+	// A retried failed start runs in the background, as a new spawn does. Wait
+	// for it so a second failure reaches the caller, then report the session as
+	// it is after the start, not as the retry request left it.
+	if res.Session.ProvisionState == "provisioning" {
+		if _, err := c.awaitSpawnStart(ctx, spawnedSession{ID: res.SessionID, ProvisionState: res.Session.ProvisionState}); err != nil {
+			return err
+		}
+		settled, err := c.fetchScopedSession(ctx, id, "")
+		if err != nil {
+			return err
+		}
+		res.Session = settled
 	}
 	if opts.json {
 		return writeJSON(cmd.OutOrStdout(), res)
@@ -1136,6 +1228,8 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 			LastActivityAt: last,
 			CreatedAt:      sess.CreatedAt,
 			UpdatedAt:      sess.UpdatedAt,
+			ProvisionState: sess.ProvisionState,
+			ProvisionError: sess.ProvisionError,
 		})
 	}
 	return entries
@@ -1210,7 +1304,7 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 				}
 			}
 			pr, ci, review, threads := sessionPRColumns(sess, summaries[sess.ID])
-			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
+			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, sessionActivityLabel(sess), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
 				return err
 			}
 		}
@@ -1264,6 +1358,16 @@ func emptyDash(value string) string {
 	return value
 }
 
+// sessionActivityLabel is the list's ACTIVITY cell. A session that never
+// started reports an idle activity state, which would read as a session
+// waiting for input.
+func sessionActivityLabel(sess sessionDTO) string {
+	if sess.ProvisionState == "failed" {
+		return "start failed"
+	}
+	return emptyDash(sess.Activity.State)
+}
+
 func sessionAge(now, at time.Time) string {
 	if at.IsZero() {
 		return "-"
@@ -1273,6 +1377,13 @@ func sessionAge(now, at time.Time) string {
 
 func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	out := cmd.OutOrStdout()
+	startFailure := ""
+	if sess.ProvisionState == "failed" {
+		startFailure = strings.TrimSpace(sess.ProvisionError)
+		if startFailure == "" {
+			startFailure = "unknown error"
+		}
+	}
 	fields := [][2]string{
 		{"id", sess.ID},
 		{"project", sess.ProjectID},
@@ -1280,6 +1391,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"role", sessionRole(sess)},
 		{"status", sess.Status},
 		{"activity", sess.Activity.State},
+		{"start failed", startFailure},
 		{"harness", sess.Harness},
 		{"issue", sess.IssueID},
 		{"branch", formatBranchState(sess)},

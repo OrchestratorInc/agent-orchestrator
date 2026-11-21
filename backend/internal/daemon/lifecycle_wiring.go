@@ -64,6 +64,7 @@ type lifecycleStack struct {
 	turnFailureDone  <-chan struct{}
 	artifactsDone    <-chan struct{}
 	autoReviewDone   <-chan struct{}
+	reviewDoneDone   <-chan struct{}
 	scmDone          <-chan struct{}
 	trackerDone      <-chan struct{}
 	herdr            *herdr.Server
@@ -80,7 +81,11 @@ type lifecycleStack struct {
 // reaper. The goroutine stops when ctx is cancelled; Stop waits for it to drain.
 // The messenger is the per-daemon agent messenger the LCM uses to nudge agents
 // in response to SCM observations (CI failure, review feedback, merge conflict).
-func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
+// turnFailureIdleTick is how often the turn-failure observer looks while no
+// turn is running; a session change brings it back to its 2 s tick at once.
+const turnFailureIdleTick = 30 * time.Second
+
+func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger, sessionChanges <-chan struct{}) *lifecycleStack {
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
@@ -97,7 +102,11 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
 	activityStart := make(chan struct{})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart})
-	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
+	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{
+		Logger:   logger,
+		Wake:     sessionChanges,
+		IdleTick: turnFailureIdleTick,
+	})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
 		// fx treats reporting as best effort; an occupied or unavailable socket
@@ -229,6 +238,9 @@ func (l *lifecycleStack) Stop() {
 	if l.autoReviewDone != nil {
 		<-l.autoReviewDone
 	}
+	if l.reviewDoneDone != nil {
+		<-l.reviewDoneDone
+	}
 	if l.scmDone != nil {
 		<-l.scmDone
 	}
@@ -277,7 +289,9 @@ type sessionLifecycle interface {
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	StopTUITurn(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	SendWithClientMessageID(ctx context.Context, id domain.SessionID, message, clientMessageID string) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
 	// is built after Session Manager during boot (see startShellTerminals), so
@@ -316,6 +330,9 @@ type sessionLifecycleMessenger struct {
 }
 
 func (m sessionLifecycleMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
+	if clientMessageID := ports.ClientMessageIDFromContext(ctx); clientMessageID != "" {
+		return m.SendWithClientMessageID(ctx, id, message, clientMessageID)
+	}
 	return m.sessionLifecycle.Send(ctx, id, message, nil)
 }
 
@@ -446,11 +463,16 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 
 		ChatRecoveryDone: reviewerRecoveryDone,
+		// The reaper's first pass settles runs a previous daemon left active.
+		AwaitBootPass: true,
 	})
 	reviewOpts := []reviewsvc.Option{
 		reviewsvc.WithTelemetry(telemetry),
 		reviewsvc.WithNotificationSink(notifications),
 		reviewsvc.WithCodexAccountOperationGate(codexOperationGate),
+	}
+	if lcm != nil {
+		reviewOpts = append(reviewOpts, reviewsvc.WithReviewDoneNotifier(lcm))
 	}
 	if scmProvider != nil {
 		reviewOpts = append(reviewOpts,
@@ -538,7 +560,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				}
 				admission.pending = ""
 			}
-			if err := policy.ValidateTerminalMessage(message, screen); err != nil {
+			if err := policy.ValidateTerminalMessage(screen, message); err != nil {
 				return err
 			}
 			current, exists, err := m.store.GetSession(ctx, id)
@@ -811,8 +833,8 @@ func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
-func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness) error {
-	return c.svc.PreflightChat(ctx, harness, ports.PermissionModeAuto)
+func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness, workspacePath string) error {
+	return c.svc.PreflightReviewChat(ctx, harness, workspacePath)
 }
 
 func (c chatLauncher) StartReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart) (string, error) {
