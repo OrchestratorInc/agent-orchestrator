@@ -1,5 +1,6 @@
 import { DEFAULT_LOCALE } from "@/i18n/locales";
 import { COMPANY } from "./constants";
+import { expandComponents } from "./markdown-components";
 import { source } from "./source";
 import { articlePath } from "./translations";
 
@@ -24,7 +25,7 @@ export function sourceUrl(page: Page): string {
 export async function pageMarkdown(page: Page): Promise<string> {
   const header = [`# ${page.data.title}`, "", `URL: ${COMPANY.DOCS_URL}${articlePath(page.slugs)}`];
   if (page.data.description) header.push("", `> ${page.data.description}`);
-  const body = (await page.data.getText("processed")).trim();
+  const body = expandComponents((await page.data.getText("processed")).trim());
   return `${header.join("\n")}\n\n${body}\n`;
 }
 
