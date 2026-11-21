@@ -615,10 +615,17 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 }
 
 // checkModelSwitch refuses a switch to a model the binding knows the agent
-// cannot use. Only a change is checked: a session already on such a model must
-// still open, so the user can pick another one.
+// cannot use. An acknowledged current model is not rechecked, but a restored
+// model may only be stored in AO and must be checked before reapplication.
 func (c *conversation) checkModelSwitch(ctx context.Context, model string) error {
-	if c.validateModel == nil || model == "" || model == c.configOptionCurrent("model") {
+	if c.validateModel == nil || model == "" {
+		return nil
+	}
+	c.mu.Lock()
+	current := c.configOptionCurrentLocked("model")
+	_, restored := c.restoredFrom["model"]
+	c.mu.Unlock()
+	if model == current && !restored {
 		return nil
 	}
 	if err := c.validateModel(ctx, model); err != nil {
@@ -643,6 +650,7 @@ func (c *conversation) checkModelSwitch(ctx context.Context, model string) error
 func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 	c.mu.Lock()
 	modeFor, optionsFor := c.modeFor, c.optionsFor
+	legacyModel := c.legacyModel && !c.modelConfigOption
 	c.reapplySettings = true
 	c.mu.Unlock()
 	if modeFor != nil && settings.Approval != "" {
@@ -655,7 +663,11 @@ func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 	if optionsFor == nil {
 		return
 	}
-	for _, option := range optionsFor(settings) {
+	options := optionsFor(settings)
+	if !legacyModel {
+		options = c.expandModelVariant(options)
+	}
+	for _, option := range options {
 		value := option.Value
 		offered, known := c.configOptionOffers(option.ID, value)
 		if known && !offered && option.Name != "" {
@@ -668,6 +680,31 @@ func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 			c.markRestored(option.ID, value)
 		}
 	}
+}
+
+// expandModelVariant maps a composite model onto the base model and separate
+// variant option when that is how the live catalog offers it.
+func (c *conversation) expandModelVariant(options []SessionOption) []SessionOption {
+	if c.splitModelVariant == nil {
+		return options
+	}
+	for i, option := range options {
+		if option.ID != "model" || option.Value == "" {
+			continue
+		}
+		if offered, known := c.configOptionOffers("model", option.Value); !known || offered {
+			break
+		}
+		if base, variant, split := c.splitModelVariant(option.Value); split {
+			if offered, _ := c.configOptionOffers("model", base); offered {
+				options[i].Value = base
+				options[i].Name = ""
+				options = append(options, variant)
+			}
+		}
+		break
+	}
+	return options
 }
 
 // markRestored names value current for option id and remembers the snapshot's
@@ -777,26 +814,8 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 		}
 	}
-	if !legacyModel && c.splitModelVariant != nil {
-		// The modern selector may offer only the base model, with the variant as
-		// its own option (Antigravity server 1.4 lists gemini-3.8-flash plus a
-		// thinking level rather than gemini-3.8-flash-high).
-		for i, option := range options {
-			if option.ID != "model" || option.Value == "" {
-				continue
-			}
-			if offered, known := c.configOptionOffers("model", option.Value); !known || offered {
-				break
-			}
-			if base, variant, split := c.splitModelVariant(option.Value); split {
-				if offered, _ := c.configOptionOffers("model", base); offered {
-					options[i].Value = base
-					options[i].Name = ""
-					options = append(options, variant)
-				}
-			}
-			break
-		}
+	if !legacyModel {
+		options = c.expandModelVariant(options)
 	}
 	applyOption := func(option SessionOption) error {
 		if option.ID == "" || option.Value == "" {

@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -15,6 +16,68 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestPersistentACPReconnectRestoresSplitModelVariant(t *testing.T) {
+	conv := &conversation{
+		configOptions: []ports.ChatConfigOption{
+			{
+				ID: "model", Type: ports.ChatConfigOptionSelect,
+				Current: ports.ChatConfigOptionValue{Select: "default"},
+				Choices: []ports.ChatConfigOptionChoice{{Value: "default"}, {Value: "gemini-3.8-flash"}},
+			},
+			{
+				ID: "thinking_level", Type: ports.ChatConfigOptionSelect,
+				Current: ports.ChatConfigOptionValue{Select: "default"},
+				Choices: []ports.ChatConfigOptionChoice{{Value: "default"}, {Value: "high"}},
+			},
+		},
+		optionsFor: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+		splitModelVariant: func(model string) (string, SessionOption, bool) {
+			if model != "gemini-3.8-flash-high" {
+				return "", SessionOption{}, false
+			}
+			return "gemini-3.8-flash", SessionOption{ID: "thinking_level", Value: "high", Optional: true}, true
+		},
+	}
+	conv.markSettingsApplied(ports.ChatTurnSettings{Model: "gemini-3.8-flash-high"})
+	for id, want := range map[string]string{"model": "gemini-3.8-flash", "thinking_level": "high"} {
+		if got := conv.configOptionCurrent(id); got != want {
+			t.Errorf("%s current = %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestPersistentACPReconnectValidatesUnacknowledgedRestoredModel(t *testing.T) {
+	rejected := errors.New("model unavailable")
+	checks := 0
+	conv := &conversation{
+		configOptions: []ports.ChatConfigOption{{
+			ID: "model", Type: ports.ChatConfigOptionSelect,
+			Current: ports.ChatConfigOptionValue{Select: "default"},
+			Choices: []ports.ChatConfigOptionChoice{{Value: "default"}, {Value: "opus"}},
+		}},
+		optionsFor: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+		validateModel: func(context.Context, string) error {
+			checks++
+			return rejected
+		},
+	}
+	conv.markSettingsApplied(ports.ChatTurnSettings{Model: "opus"})
+	if err := conv.checkModelSwitch(context.Background(), "opus"); !errors.Is(err, rejected) {
+		t.Fatalf("unacknowledged restored model error = %v, want %v", err, rejected)
+	}
+	conv.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: "opus"})
+	if err := conv.checkModelSwitch(context.Background(), "opus"); err != nil {
+		t.Fatalf("acknowledged current model error = %v", err)
+	}
+	if checks != 1 {
+		t.Fatalf("validator called %d times, want once before acknowledgement", checks)
+	}
+}
 
 // A live reconnect rebuilds the catalog from the host's session/new snapshot,
 // which predates initial_settings and every change since. Left as is, the
