@@ -2824,9 +2824,8 @@ describe("Sidebar", () => {
 			}],
 		});
 		const rows = within(screen.getByTestId("session-list-proj-1")).getAllByRole("button", { name: /^Open / });
-		expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual(["Open fix login", "Open settings page"]);
-		expect(rows[0]).toHaveTextContent("Bottom of a PR stack");
-		expect(rows[1]).toHaveTextContent("Stacked on #7");
+		expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual(["Open fix login · Bottom of a PR stack", "Open settings page · Stacked on #7"]);
+		expect(screen.getByRole("button", { name: "Open settings page · Stacked on #7" })).toBeInTheDocument();
 		expect(screen.getAllByTestId("sidebar-stack-elbow")).toHaveLength(1);
 	});
 

@@ -2815,6 +2815,8 @@ const SessionRow = memo(function SessionRow({
 	stack?: SidebarStackPlacement;
 }) {
 	const { t } = useTranslation();
+	// The button's aria-label replaces its content, so the stack wording goes in the label.
+	const stackLabel = stack?.base ? t("shell.stackBase") : stack?.onNumber ? t("shell.stackedOn", { number: stack.onNumber }) : undefined;
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	// The open row keeps a full-contrast title, so it gets the spinner without
@@ -2976,7 +2978,7 @@ const SessionRow = memo(function SessionRow({
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
-							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
+							aria-label={t("shell.openSession", { title: [session.title, stackLabel, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
@@ -3047,10 +3049,8 @@ const SessionRow = memo(function SessionRow({
 								{stack?.base ? (
 									<span className="flex shrink-0 text-muted-foreground" title={t("shell.stackBase")}>
 										<Layers aria-hidden="true" className="size-3" />
-										<span className="sr-only">{t("shell.stackBase")}</span>
 									</span>
 								) : null}
-								{stack?.onNumber ? <span className="sr-only">{t("shell.stackedOn", { number: stack.onNumber })}</span> : null}
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 								{cloud ? <CloudMark /> : null}
 							</span>

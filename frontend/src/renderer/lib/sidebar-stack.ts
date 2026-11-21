@@ -43,15 +43,20 @@ export function nestStackedSessions(sessions: WorkspaceSession[]): {
 			}
 		}
 	}
-	// A cycle (two PRs based on each other) has no bottom: leave its sessions flat.
+	// A cycle (PRs stacked on each other) has no bottom: leave its members flat.
+	// A session that only leads into one keeps its link.
 	for (const session of sessions) {
-		const seen = new Set<string>([session.id]);
+		const path: string[] = [session.id];
 		for (let p = parentOf.get(session.id); p; p = parentOf.get(p.id)) {
-			if (seen.has(p.id)) {
-				for (const id of seen) parentOf.delete(id);
+			const at = path.indexOf(p.id);
+			if (at >= 0) {
+				for (const id of path.slice(at)) {
+					parentOf.delete(id);
+					onNumberOf.delete(id);
+				}
 				break;
 			}
-			seen.add(p.id);
+			path.push(p.id);
 		}
 	}
 	if (parentOf.size === 0) return { ordered: sessions, placement: new Map() };

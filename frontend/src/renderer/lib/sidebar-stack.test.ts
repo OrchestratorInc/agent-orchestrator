@@ -56,4 +56,15 @@ describe("nestStackedSessions", () => {
 		expect(ids(cycle.ordered)).toEqual(["x", "y"]);
 		expect(cycle.placement.size).toBe(0);
 	});
+
+	it("keeps a session that leads into a cycle nested, whatever the order", () => {
+		// C is on A; A and B are stacked on each other.
+		for (const order of [["c", "a", "b"], ["a", "b", "c"]]) {
+			const all = { a: session("a", [pr(1, 2)]), b: session("b", [pr(2, 1)]), c: session("c", [pr(3, 1)]) } as Record<string, WorkspaceSession>;
+			const { placement } = nestStackedSessions(order.map((id) => all[id]));
+			expect(placement.get("c")).toEqual({ depth: 1, base: false, onNumber: 1 });
+			expect(placement.get("a")).toEqual({ depth: 0, base: true, onNumber: undefined });
+			expect(placement.has("b")).toBe(false);
+		}
+	});
 });
