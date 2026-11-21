@@ -68,7 +68,12 @@ describe("retained-stack host routes", () => {
 		expectBefore(body, "if (!verified) return", "backend.webSource(");
 		const web = between(artifact, "function ArtifactWeb(", "function ArtifactImage(");
 		// Built from the live connection where it is gated, never handed down from a parent's render.
-		expectBefore(web, "const source = backend.webSource(file.sessionId, file.path);", "const verified = useVerifiedFor(backend, source ? sourceKey(source) : \"unresolved\");");
+		const gate = "const verified = useVerifiedFor(backend, source ? `${sourceKey(source)}${fromAddress && playsMedia ? \"|media\" : \"\"}` : \"unresolved\");";
+		expectBefore(web, "const source = backend.webSource(file.sessionId, file.path);", gate);
+		// A page loaded from its address that the media policy remounts is a new
+		// load: the flag is in the gate's key, so it waits for a verified connection.
+		expectBefore(web, "const playsMedia = ", gate);
+		expectBefore(web, "const fromAddress = !(inline && !inlined.failed);", gate);
 		expect(web).toContain("if (!source || !verified ||");
 		// Retry is a fresh view built once verified, not a reload of the address on screen.
 		// Bound to the file on screen, and the error with its Retry stays until the reload starts.
