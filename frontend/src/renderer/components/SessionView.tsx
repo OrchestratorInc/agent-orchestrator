@@ -2787,27 +2787,29 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		open: isInspectorOpen && inspectorView === "computerUse",
 	});
 	const latestComputerUseStep = computerUseTimeline.data?.at(-1)?.id ?? null;
-	const computerUseBaselineRef = useRef<{ sessionId: string; latest: string | null; settled: boolean } | null>(null);
+	// One visit to this session: steps made before it came on screen are
+	// history; steps made after are news, even when they land in the visit's
+	// first read. Reset on every session switch, before any read is checked.
+	const computerUseVisitRef = useRef<{ sessionId: string; enteredAt: number; seen: string | null; revealed: boolean } | null>(null);
+	useEffect(() => {
+		computerUseVisitRef.current = { sessionId: uiSessionId, enteredAt: Date.now(), seen: null, revealed: false };
+	}, [uiSessionId]);
 	useEffect(() => {
 		if (!hasInspector || !computerUseTimeline.isSuccess) return;
-		const baseline = computerUseBaselineRef.current;
-		// Cached steps from an earlier visit are not news: the baseline keeps
-		// absorbing until this visit's own read lands.
-		if (!baseline || baseline.sessionId !== uiSessionId) {
-			computerUseBaselineRef.current = { sessionId: uiSessionId, latest: latestComputerUseStep, settled: computerUseTimeline.isFetchedAfterMount };
-			return;
-		}
-		if (!baseline.settled) {
-			baseline.latest = latestComputerUseStep;
-			baseline.settled = computerUseTimeline.isFetchedAfterMount;
-			return;
-		}
-		if (latestComputerUseStep === baseline.latest) return;
-		const first = baseline.latest === null;
-		baseline.latest = latestComputerUseStep;
-		if (latestComputerUseStep === null || terminated) return;
+		const visit = computerUseVisitRef.current;
+		if (!visit || visit.sessionId !== uiSessionId || latestComputerUseStep === visit.seen) return;
+		visit.seen = latestComputerUseStep;
+		const entries = computerUseTimeline.data ?? [];
+		const latest = entries.at(-1);
+		if (!latest || Date.parse(latest.at) < visit.enteredAt || terminated) return;
+		// The session's first step ever, made while it is on screen, opens the tab.
+		const first = !visit.revealed && entries.every((entry) => Date.parse(entry.at) >= visit.enteredAt);
 		if (first) {
+			visit.revealed = true;
 			setComputerUseUnseen(uiSessionId, false);
+			// A maximized Browser or Files would hide the tab it opens.
+			setBrowserPopOutState({ sessionId, phase: "docked" });
+			setFilesPoppedOut(false);
 			transitionInspectorView("computerUse");
 			setInspectorOpenForSession(uiSessionId, true);
 			return;
@@ -2817,10 +2819,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			setComputerUseUnseen(uiSessionId, true);
 		}
 	}, [
-		computerUseTimeline.isFetchedAfterMount,
+		computerUseTimeline.data,
 		computerUseTimeline.isSuccess,
 		hasInspector,
 		latestComputerUseStep,
+		sessionId,
 		setComputerUseUnseen,
 		setInspectorOpenForSession,
 		terminated,

@@ -187,3 +187,35 @@ func TestPruneKeepsTheTimeline(t *testing.T) {
 		t.Fatalf("kept %d files", len(entries))
 	}
 }
+
+// A batch whose step failed still hands the agent its report, but the
+// timeline shows the step as failed, with which step and why.
+func TestTimelineRecordsAFailedBatchAsFailed(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	report := `{"ok":false,"executed":1,"failed_step":1,"total":2,"steps":[{"index":0,"tool":"click","ok":true},{"index":1,"tool":"type_text","ok":false,"phase":"find","message":"no text field"}]}`
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		if args[1] == "run_steps" {
+			return []byte(report), []byte("step 2 failed"), errors.New("exit status 1")
+		}
+		return []byte(`{"elements":[]}`), nil, nil
+	}
+	s := newTestService(t, driver, "darwin")
+	result, err := s.Call(context.Background(), CallRequest{
+		Tool:      "run_steps",
+		Arguments: map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"tool": "click", "args": map[string]any{}}}},
+		SessionID: "ao-12",
+	})
+	if err != nil {
+		t.Fatalf("Call() error = %v, want the report", err)
+	}
+	if _, ok := result.Result.(map[string]any)["steps"]; !ok {
+		t.Fatalf("result = %+v, want the step report", result.Result)
+	}
+	entries, err := s.Timeline(context.Background(), "ao-12")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("Timeline() = %+v, %v", entries, err)
+	}
+	if entries[0].OK || !strings.Contains(entries[0].Error, "step 2 (type_text): no text field") {
+		t.Fatalf("entry = %+v, want a failed step with its reason", entries[0])
+	}
+}
