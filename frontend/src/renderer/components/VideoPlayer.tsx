@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Maximize2, Minimize2, Pause, Play, Repeat, Volume2, VolumeX } from "@/components/app-icons";
+import { useMainViewVisible } from "../lib/main-view-visibility";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from "./ui/option-menu";
@@ -90,19 +91,22 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 		video.playbackRate = speed;
 	}, [speed, src]);
 
-	// Hidden panes stay mounted, so only the visible one may play: pause when the
-	// pane is hidden, and give a video that has never played its autoplay the
-	// first time its pane is shown. One the person paused stays paused.
-	const wasActive = useRef(active);
+	// Hidden panes, and the main view behind global Settings, stay mounted, so
+	// only a visible player may play: pause when it is hidden, and give a video
+	// that has never played its autoplay the first time it is shown. One the
+	// person paused stays paused.
+	const mainViewVisible = useMainViewVisible();
+	const visible = active && mainViewVisible;
+	const wasVisible = useRef(visible);
 	useEffect(() => {
-		const shown = active && !wasActive.current;
-		wasActive.current = active;
+		const shown = visible && !wasVisible.current;
+		wasVisible.current = visible;
 		const video = videoRef.current;
 		if (!video) return;
-		if (!active) {
+		if (!visible) {
 			if (!video.paused) video.pause();
 		} else if (shown && video.paused && (video.played?.length ?? 0) === 0) void Promise.resolve(video.play()).catch(() => {});
-	}, [active]);
+	}, [visible]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -209,7 +213,7 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 			<video
 				ref={videoRef}
 				aria-label={label}
-				autoPlay={active}
+				autoPlay={visible}
 				className="min-h-0 w-full flex-1 cursor-pointer rounded-md object-contain outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 				crossOrigin={crossOrigin}
 				key={src}

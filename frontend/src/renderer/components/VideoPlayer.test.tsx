@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Profiler } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MainViewVisibleContext } from "../lib/main-view-visibility";
 import { formatMediaTime, VideoPlayer } from "./VideoPlayer";
 
 function renderPlayer(props: Partial<Parameters<typeof VideoPlayer>[0]> = {}) {
@@ -270,6 +271,40 @@ describe("VideoPlayer", () => {
 		Object.defineProperty(video, "paused", { configurable: true, value: true });
 		Object.defineProperty(video, "played", { configurable: true, value: { length: 1 } });
 		view.rerender(<VideoPlayer active label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
+		expect(play).toHaveBeenCalledTimes(1);
+	});
+
+	it("pauses while global Settings covers the main view", () => {
+		const player = (mainViewVisible: boolean) => (
+			<MainViewVisibleContext.Provider value={mainViewVisible}>
+				<VideoPlayer label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />
+			</MainViewVisibleContext.Provider>
+		);
+		const view = render(player(true));
+		const video = screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
+		expect(video).toHaveAttribute("autoplay");
+		// Settings opens while it plays: it pauses even though its own pane is active.
+		Object.defineProperty(video, "paused", { configurable: true, value: false });
+		view.rerender(player(false));
+		expect(pause).toHaveBeenCalledTimes(1);
+		expect(video).not.toHaveAttribute("autoplay");
+		// Settings closes: it stays paused where it was for the person to resume.
+		Object.defineProperty(video, "paused", { configurable: true, value: true });
+		Object.defineProperty(video, "played", { configurable: true, value: { length: 1 } });
+		view.rerender(player(true));
+		expect(play).not.toHaveBeenCalled();
+	});
+
+	it("waits for the main view before autoplaying a video that opened behind Settings", () => {
+		const player = (mainViewVisible: boolean) => (
+			<MainViewVisibleContext.Provider value={mainViewVisible}>
+				<VideoPlayer label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />
+			</MainViewVisibleContext.Provider>
+		);
+		const view = render(player(false));
+		const video = screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
+		expect(video).not.toHaveAttribute("autoplay");
+		view.rerender(player(true));
 		expect(play).toHaveBeenCalledTimes(1);
 	});
 
