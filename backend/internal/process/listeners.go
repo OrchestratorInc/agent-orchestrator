@@ -16,7 +16,7 @@ type Listener struct {
 	Command string
 }
 
-func hasEnv(environ []byte, entry []byte) bool {
+func hasEnv(environ, entry []byte) bool {
 	for field := range bytes.SplitSeq(environ, []byte{0}) {
 		if bytes.Equal(field, entry) {
 			return true

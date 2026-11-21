@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -139,7 +140,7 @@ func TestLoopbackTunnelClosesWhenTurnedOffOrRevoked(t *testing.T) {
 			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			if _, err := conn.Read(make([]byte, 1)); err == nil {
 				t.Fatal("tunnel still open")
-			} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			} else if ne := net.Error(nil); errors.As(err, &ne) && ne.Timeout() {
 				t.Fatal("tunnel still open after 5 s")
 			}
 		})

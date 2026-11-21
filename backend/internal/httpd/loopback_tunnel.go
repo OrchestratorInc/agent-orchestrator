@@ -40,7 +40,7 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 		refuseLoopback(w, loopbackRefusedHeader, fmt.Sprintf("Nothing accepted a connection on loopback port %d.", port))
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	if !m.trackLoopback(upstream) {
 		refuseLoopback(w, loopbackDisabledHeader, "The localhost tunnel is turned off on this host.")
 		return
@@ -51,7 +51,7 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	client := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(client, upstream); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(upstream, client); done <- struct{}{} }()
