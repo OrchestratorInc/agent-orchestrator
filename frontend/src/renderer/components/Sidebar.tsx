@@ -848,9 +848,18 @@ export const Sidebar = memo(function Sidebar({
 	// while staying on a session is left alone.
 	const activeSessionKey = selection.activeSessionId ?? selection.activeRemoteSessionId;
 	const activeProjectKey = selection.activeProjectId;
+	// A project row's Orchestrator button opens its chat without touching the
+	// project's disclosure, so the reveal below must not expand the project for
+	// the chat that button opened. Cleared by the next session change either way.
+	const orchestratorButtonSessionId = useRef<string | null>(null);
+	const noteOrchestratorButtonOpen = useLatestCallback((sessionId: string) => {
+		orchestratorButtonSessionId.current = sessionId;
+	});
 	useEffect(() => {
+		const openedFromOrchestratorButton = orchestratorButtonSessionId.current === activeSessionKey;
+		orchestratorButtonSessionId.current = null;
 		if (!activeSessionKey || isCollapsed) return;
-		if (activeProjectKey) {
+		if (activeProjectKey && !openedFromOrchestratorButton) {
 			setExpandedIds((prev) => {
 				if (prev.has(activeProjectKey)) return prev;
 				const next = new Set(prev);
@@ -1302,6 +1311,7 @@ export const Sidebar = memo(function Sidebar({
 													projectDragInProgress={draggingProjectId !== null}
 													consumeDragClick={projectDragClickGuard.consumeClick}
 													onToggle={toggleProjectDisclosure}
+													onOrchestratorButtonOpen={noteOrchestratorButtonOpen}
 													onRemoveProject={onRemoveProject}
 													onProjectDragStart={handleProjectDragStart}
 													onProjectDragEnd={handleProjectDragEnd}
@@ -1516,6 +1526,8 @@ type ProjectItemProps = {
 	avatarUrl?: string;
 	hostLabel?: string;
 	onOpenOrchestrator?: () => void;
+	/** Called with the orchestrator chat the row's Orchestrator button is about to open. */
+	onOrchestratorButtonOpen?: (sessionId: string) => void;
 	expanded: boolean;
 	selection: Selection;
 	isDragged: boolean;
@@ -1564,6 +1576,7 @@ const ProjectItem = memo(function ProjectItem({
 	avatarUrl,
 	hostLabel,
 	onOpenOrchestrator,
+	onOrchestratorButtonOpen,
 	expanded,
 	selection,
 	isDragged,
@@ -1742,11 +1755,14 @@ const ProjectItem = memo(function ProjectItem({
 
 	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
-	// Expand a collapsed project so opening the orchestrator also reveals its
-	// session list — otherwise the tree stays shut while you're inside it.
+	// Opening the orchestrator leaves the project's session list as it was:
+	// only the row and folder toggle change disclosure.
+	const goOrchestrator = (sessionId: string) => {
+		onOrchestratorButtonOpen?.(sessionId);
+		selection.goSession(workspace.id, sessionId);
+	};
 	const openOrchestrator = async () => {
 		if (isSpawning || isProjectProvisioning || isProjectRestarting) return;
-		if (!expanded) toggleDisclosure();
 		if (onOpenOrchestrator) {
 			onOpenOrchestrator();
 			return;
@@ -1759,7 +1775,7 @@ const ProjectItem = memo(function ProjectItem({
 					// Start the resume, then open the chat while it runs; its
 					// composer shows the startup shimmer in the meantime.
 					const resume = resumeOrchestrator(orchestrator.id);
-					selection.goSession(workspace.id, orchestrator.id);
+					goOrchestrator(orchestrator.id);
 					await resume;
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					return;
@@ -1775,7 +1791,7 @@ const ProjectItem = memo(function ProjectItem({
 					setIsSpawning(false);
 				}
 			}
-			selection.goSession(workspace.id, orchestrator.id);
+			goOrchestrator(orchestrator.id);
 			return;
 		}
 		// A guest cannot start an orchestrator in someone else's project.
@@ -1788,7 +1804,7 @@ const ProjectItem = memo(function ProjectItem({
 			try {
 				const sessionId = await spawnCloudOrchestrator(queryClient, workspace.id);
 				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				selection.goSession(workspace.id, sessionId);
+				goOrchestrator(sessionId);
 			} catch (err) {
 				console.error("Failed to spawn cloud orchestrator:", err);
 				void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
@@ -1805,7 +1821,7 @@ const ProjectItem = memo(function ProjectItem({
 		try {
 			const sessionId = await spawnOrchestrator(workspace.id, "sidebar");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			selection.goSession(workspace.id, sessionId);
+			goOrchestrator(sessionId);
 		} catch (err) {
 			console.error("Failed to spawn orchestrator:", err);
 			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
