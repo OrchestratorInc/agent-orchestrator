@@ -57,6 +57,9 @@ type taskResult struct {
 	SessionIDs []string `json:"sessionIds"`
 	Reason     string   `json:"reason"`
 	Fix        string   `json:"fix"`
+	// phase is the reading behind Status (not printed), so `start --wait`
+	// carries what the start already saw into the wait.
+	phase string
 }
 
 // taskExitError carries a task outcome's exit code to the process entrypoint.
@@ -697,6 +700,7 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	case "provider_key_missing":
 		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
 	}
+	res.phase = eval.phase
 	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID, phase: eval.phase}
 }
 
@@ -862,7 +866,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 	deadline := c.deps.Now().Add(timeout)
 	last := res
 	harness, phase := "", ""
-	sawTerminalWork := false
+	sawTerminalWork := res.phase == taskPhaseTerminalActive
 	var runningTurn string
 	var runningSince time.Time
 	for {

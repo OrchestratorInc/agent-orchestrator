@@ -814,3 +814,29 @@ func TestTaskStartTerminalDeliveryUnconfirmedPointsAtTheTerminal(t *testing.T) {
 		t.Fatalf("result = %v", res)
 	}
 }
+
+func TestTaskStartWaitKeepsTheTerminalWorkSeenAtStart(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
+	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", 409, `{"error":"conflict","code":"SESSION_MODE_MISMATCH","message":"no chat conversation"}`)
+	d.set("POST /api/v1/sessions/repo-orchestrator/send", 200, `{"ok":true,"sessionId":"repo-orchestrator","message":"fix calc"}`)
+	reads := 0
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator", func() (int, string) {
+		reads++
+		// Reads 1 (preflight) and 2 (the start's status) see the agent working;
+		// it is back at its prompt by the first wait poll.
+		state := "waiting_input"
+		if reads <= 2 {
+			state = "active"
+		}
+		return 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"` + state + `"}}}`
+	})
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--wait", "--timeout", "10s", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d: %v\n%s", ExitCode(err), err, out)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "done" {
+		t.Fatalf("result = %v", res)
+	}
+}
