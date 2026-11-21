@@ -5,6 +5,8 @@ description: Step-by-step instructions a coding agent can follow to install Orch
 
 This page is for a coding agent asked to "set up Orchestrator" or "install orchestrator.inc", and for the person working with it. Every step uses a command that exists today. Run them in order, and stop at a step only a human can do.
 
+If the desktop app is already installed, [Set up with your coding agent](/guides/agent-setup) also shows how to ask an agent inside Orchestrator to do the setup.
+
 <Callout type="info" title="Coming soon">
 	A one-line installer and an `ao setup` command are coming. Until then, follow the steps below. The same steps are at [orchestrator.inc/install.md](https://orchestrator.inc/install.md).
 </Callout>
@@ -37,7 +39,7 @@ If `ao` isn't on your `PATH`, call the bundled copy by its full path:
 | Windows | `resources\daemon\ao.exe` inside the app's install folder |
 | Linux `.deb` / `.rpm` | `resources/daemon/ao` inside the app's install folder |
 
-Use the bundled `ao`, not the legacy npm package `@aoagents/ao`, which is frozen at `0.10.3`.
+Use the bundled `ao`, not the legacy npm package `@aoagents/ao`, which is frozen at `0.10.3`. To put the bundled `ao` on the `PATH` on macOS or Linux, a person can turn on **Developer mode** in **Settings → General** and choose **Link** beside **Global ao command**. See [Run the CLI](/cli#run-the-cli).
 
 ## 3. Start the app and check the daemon
 
@@ -83,15 +85,21 @@ ao project set-config <project-id> --default-branch main
 
 You can also pass `--default-branch` to `ao project add` directly.
 
-## 6. Start a worker
+## 6. Start the orchestrator or a worker
 
-Start a worker session in the project with a task:
+Start the project's orchestrator, as the app does when a person adds a project there. It plans the work and starts workers:
+
+```bash
+ao spawn --project <project-id> --kind orchestrator --name "Orchestrator"
+```
+
+Or start a single worker session with a task:
 
 ```bash
 ao spawn --project <project-id> --name "Fix flaky login test" --agent <agent-id> --prompt "Fix the flaky login test and open a pull request."
 ```
 
-`--name` is required and is what the sidebar shows. The worker gets its own worktree and branch. Follow it in the desktop app, or with `ao session ls`.
+`--name` is required and is what the sidebar shows. Each worker gets its own worktree and branch. Follow the sessions in the desktop app, or with `ao session ls`.
 
 ## Steps only a human can do
 

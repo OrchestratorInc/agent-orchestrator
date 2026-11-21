@@ -1,7 +1,7 @@
 ---
 title: 安装
 description: 下载 Orchestrator 桌面应用，并连接你的编程工具。
-translatedFrom: 37cc4347a49c
+translatedFrom: 499f205295f4
 ---
 
 如需最新的稳定版桌面构建，请从 [Orchestrator 官方下载页面](https://orchestrator.inc/download/)开始。该页面还列出了每夜构建和移动应用。如果你想直接获取桌面安装包，请从下面选择：
@@ -65,6 +65,8 @@ brew install --cask agent-orchestrator
 ```bash
 alias ao="/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
 ```
+
+在 macOS 或 Linux 上不使用 cask 也想用简短的 `ao` 命令，请在 **Settings → General** 中打开 **Developer mode**，然后选择 **Global ao command** 旁边的 **Link**。请参阅[运行 CLI](/cli#run-the-cli)。
 
 运行 `ao status` 确认它可以使用。操作项目和会话的命令需要桌面应用处于打开状态，因为这些命令连接的守护进程由应用运行。要从编程代理操作 Orchestrator，请参阅[从你的编程代理使用 Orchestrator](/agent-setup)。
 
