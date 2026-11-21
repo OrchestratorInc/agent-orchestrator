@@ -66,7 +66,7 @@ export function formulaHtml(engine: Katex | undefined, tex: string, display: boo
 		? `<span>${html}</span>`
 		: `<span class="whitespace-pre-wrap">${escapeHtml(display ? `$$\n${source}\n$$` : `$${source}$`)}</span>`;
 	return display
-		? `<div class="my-2.5 overflow-x-auto overflow-y-hidden py-1 [&_.katex-display]:m-0" data-math="display" data-tex="${escapeHtml(source)}">${content}</div>`
+		? `<div data-no-swipe-nav="" class="my-2.5 overflow-x-auto overflow-y-hidden py-1 [&_.katex-display]:m-0" data-math="display" data-tex="${escapeHtml(source)}">${content}</div>`
 		: `<span data-math="inline" data-tex="${escapeHtml(source)}">${content}</span>`;
 }
 

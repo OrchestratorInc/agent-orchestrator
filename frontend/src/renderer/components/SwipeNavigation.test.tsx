@@ -2,6 +2,7 @@ import { act, render } from "@testing-library/react";
 import { useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeNavigation } from "./SwipeNavigation";
+import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { useUiStore } from "../stores/ui-store";
 import { useCanGoForward } from "./TitlebarNav";
 import { claimSwipe } from "../lib/swipe-ownership";
@@ -409,6 +410,28 @@ describe("SwipeNavigation", () => {
 			swipe(pane, drag(-20, 10), 0);
 			fingers("up");
 			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("ignores an edge swipe that starts over a streamed code block, table or display formula", () => {
+			useUiStore.setState({ renderMath: true });
+			try {
+				const { container, getByTestId } = render(
+					<Harness>
+						<ChatMarkdown streaming text={"```ts\nconst a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n$$\nx^2\n$$\n\nmore"} />
+					</Harness>,
+				);
+				const targets = ["pre code", "td", '[data-math="display"]'].map((selector) => container.querySelector(selector));
+				for (const target of targets) {
+					expect(target).not.toBeNull();
+					fingers("down");
+					swipe(target!, drag(-20, 4), 0);
+					swipe(getByTestId("pane"), drag(-20, 10), 0);
+					fingers("up");
+				}
+				expect(history.back).not.toHaveBeenCalled();
+			} finally {
+				useUiStore.setState({ renderMath: false });
+			}
 		});
 
 		it("stops once a handler inside the pane claims the swipe", () => {
