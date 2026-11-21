@@ -248,10 +248,10 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 				return undefined;
 			}
 			const host = parsed.hostname.toLowerCase();
-			if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !isLoopbackName(host) || host.endsWith(".localhost")) return undefined;
+			if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !isLoopbackName(host) || /^ao-preview-.*\.localhost\.?$/.test(host)) return undefined;
 			const forward = await this.forward(hostId, Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80))).catch(() => undefined);
 			if (!forward) return undefined;
-			parsed.hostname = "localhost";
+			if (!/\.localhost\.?$/.test(host)) parsed.hostname = "localhost";
 			parsed.port = String(forward.localPort);
 			return parsed.href;
 		},

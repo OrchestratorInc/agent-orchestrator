@@ -127,6 +127,7 @@ describe("loopback tunnels", () => {
 
 		const opened = await tunnels.localUrl("h_box", `http://0.0.0.0:${echo}/app?x=1#y`);
 		expect(opened).toBe(`http://localhost:${tunnels.list()[0]!.localPort}/app?x=1#y`);
+		expect(await tunnels.localUrl("h_box", `http://app.localhost:${echo}/x`)).toBe(`http://app.localhost:${tunnels.list()[0]!.localPort}/x`);
 		expect(await tunnels.localUrl("h_box", `http://ao-preview-${"0".repeat(32)}.localhost:${echo}/`)).toBeUndefined();
 		expect(await tunnels.localUrl("h_same", `http://localhost:${echo}/`)).toBeUndefined();
 		expect(await tunnels.localUrl("h_box", "https://example.com/")).toBeUndefined();
