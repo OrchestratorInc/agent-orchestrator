@@ -5,12 +5,13 @@ import {
   chmod,
   mkdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
-import type { CloudAccount } from "../shared/cloud-account";
+import { isWebDistinctId, type CloudAccount, type CloudSignInContext } from "../shared/cloud-account";
 // Static import (not dynamic): the dynamic import created a static+dynamic
 // import cycle with cloud-auth-local that made the bundler split chunks
 // incorrectly and panic. Both modules only use each other's exports inside
@@ -21,7 +22,9 @@ import { providerAuthFlow } from "./provider-auth-flow";
 // persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
 // data dir so local claude sessions can authenticate with the SAME credential
 // pushed to the cloud (read back by the daemon's claudecode adapter). Scoped to
-// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir.
+// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir. This is not the
+// token chosen in AO's Claude login menu (harnesses/claude-code/setup-token):
+// that one outranks a native login, this one never does.
 async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Promise<void> {
   const dir = path.join(dataDir, "harnesses", "claude-code");
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -53,27 +56,50 @@ function isLoopbackRedirect(redirectUri: string): boolean {
   }
 }
 
-// The packaged app returns from WorkOS via an HTTPS bounce page on our own domain
-// (served by the control plane at /app/auth/return), which re-emits the result to
-// the ao-app:// deep link the installed app handles. Routing through that page —
-// rather than setting ao-app:// as the WorkOS redirect_uri directly — matters for
-// two reasons: the browser lands on a real HTTPS page instead of hanging forever
-// on an unloadable custom-scheme navigation (no stuck "loading" tab), and the OS
-// "open Agent Orchestrator?" prompt is attributed to our own domain (aoagents.dev)
-// instead of the opaque WorkOS AuthKit subdomain.
+// The packaged app returns from WorkOS via an HTTPS bounce page on our own domain,
+// which re-emits the result to the ao-app:// deep link the installed app handles.
+// Routing through that page (rather than setting ao-app:// as the WorkOS
+// redirect_uri directly) matters for two reasons: the browser lands on a real
+// HTTPS page instead of hanging forever on an unloadable custom-scheme navigation
+// (no stuck "loading" tab), and the OS "open Agent Orchestrator?" prompt is
+// attributed to our own domain instead of the opaque WorkOS AuthKit subdomain.
+//
+// A build signing in with the production AuthKit client returns through the
+// website's page, orchestrator.inc/app/auth/return/ (the trailing slash is part
+// of the URL WorkOS has registered). Only the production WorkOS environment lists
+// that page, so any other client, such as the baked default, which belongs to
+// the staging environment, keeps the control plane's page at api.aoagents.dev.
 //
 // A development build doesn't claim ao-app:// by default (see
 // registerCloudProtocol): owning it would take the scheme away from the
 // installed app. It signs in through a loopback callback server instead, the
 // standard desktop-OAuth pattern, with zero setup. AO_CLOUD_AUTH_REDIRECT
-// overrides either default (e.g. to point a packaged build at a staging bounce
+// overrides every default (e.g. to point a packaged build at a staging bounce
 // page).
-const DEFAULT_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
-const REDIRECT_URI =
-  process.env.AO_CLOUD_AUTH_REDIRECT?.trim() ||
-  (app.isPackaged
+//
+// The production AuthKit client (auth.orchestrator.inc). Release builds (stable,
+// nightly and preview, all made by build-artifacts.yml) get it from the
+// VITE_WORKOS_CLIENT_ID repository variable.
+const PRODUCTION_WORKOS_CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
+const DEFAULT_PACKAGED_REDIRECT_URI = "https://orchestrator.inc/app/auth/return/";
+const CONTROL_PLANE_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
+const LOOPBACK_REDIRECT_URI = "http://127.0.0.1:3000/callback";
+
+/** The redirect_uri a build sends to WorkOS when it starts a sign-in. */
+export function resolveCloudAuthRedirect(
+  env: Record<string, string | undefined>,
+  isPackaged: boolean,
+  clientId: string,
+): string {
+  const override = env.AO_CLOUD_AUTH_REDIRECT?.trim();
+  if (override) return override;
+  if (!isPackaged) return LOOPBACK_REDIRECT_URI;
+  return clientId === PRODUCTION_WORKOS_CLIENT_ID
     ? DEFAULT_PACKAGED_REDIRECT_URI
-    : "http://127.0.0.1:3000/callback");
+    : CONTROL_PLANE_PACKAGED_REDIRECT_URI;
+}
+
+const REDIRECT_URI = resolveCloudAuthRedirect(process.env, app.isPackaged, CLIENT_ID);
 const useLoopbackRedirect = isLoopbackRedirect(REDIRECT_URI);
 const AUTH_STORE_FILE = "cloud-auth.bin";
 const LEGACY_SESSION_FILE = "cloud-session.json";
@@ -118,10 +144,57 @@ export function isLocalSession(
 }
 
 const emptyStore = (): AuthStore => ({ session: null, pkce: null });
-const memoryStores = new Map<string, AuthStore>();
+
+// A store written while protected storage was unavailable, kept in this process
+// until it can be saved. One holding a credential (a sign-in or a rotated token)
+// replaces the file, which was deleted then. One without only adds a pending
+// sign-in on top of the file, which stays for when storage is back.
+interface MemoryStore {
+  store: AuthStore;
+  replacesFile: boolean;
+}
+const memoryStores = new Map<string, MemoryStore>();
+// Data dirs whose file could not be read during an outage, so the signed-out
+// store handed out then is not a sign-out.
+const unreadFiles = new Set<string>();
+// Data dirs whose file did not decrypt this run: the keychain was locked, its
+// access prompt was denied, or the key is not the one the file was saved
+// with. The file is kept for the next launch and not decrypted again in this
+// one, so a denied prompt does not come back on every read.
+const undecryptable = new Set<string>();
+// The session the file held when this run last read or wrote it, so a store
+// written during an outage that only carries that session on (a sign-in
+// started, an expired one cleared) is not taken for a new credential.
+const fileSessions = new Map<string, StoredSession | null>();
+
+// Whether two sessions are the same credential, not just the same account.
+function sameCredential(a: StoredSession | null | undefined, b: StoredSession | null | undefined): boolean {
+  return !!a && !!b && a.accessToken === b.accessToken && a.refreshToken === b.refreshToken;
+}
+const storeOps = new Map<string, Promise<void>>();
 const refreshes = new Map<string, Promise<CloudAccount | null>>();
 const authGenerations = new Map<string, number>();
 const authMutations = new Map<string, Promise<void>>();
+
+// Runs one operation per data dir at a time, in call order.
+async function serialize<T>(
+  queue: Map<string, Promise<void>>,
+  dataDir: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = queue.get(dataDir) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  queue.set(dataDir, settled);
+  try {
+    return await result;
+  } finally {
+    if (queue.get(dataDir) === settled) queue.delete(dataDir);
+  }
+}
 
 function authGeneration(dataDir: string): number {
   return authGenerations.get(dataDir) ?? 0;
@@ -133,24 +206,11 @@ export function invalidateAuthOperations(dataDir: string): number {
   return generation;
 }
 
-export async function withAuthMutation<T>(
+export function withAuthMutation<T>(
   dataDir: string,
   mutation: () => Promise<T>,
 ): Promise<T> {
-  const previous = authMutations.get(dataDir) ?? Promise.resolve();
-  const result = previous.catch(() => undefined).then(mutation);
-  const settled = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  authMutations.set(dataDir, settled);
-  try {
-    return await result;
-  } finally {
-    if (authMutations.get(dataDir) === settled) {
-      authMutations.delete(dataDir);
-    }
-  }
+  return serialize(authMutations, dataDir, mutation);
 }
 
 /**
@@ -174,7 +234,8 @@ function storePath(dataDir: string): string {
   return path.join(dataDir, AUTH_STORE_FILE);
 }
 
-function protectedStorageAvailable(): boolean {
+/** Whether safeStorage protects what it encrypts (not Linux's basic_text backend). */
+export function protectedStorageAvailable(): boolean {
   if (!safeStorage.isEncryptionAvailable()) return false;
   if (process.platform !== "linux") return true;
   const backend = safeStorage.getSelectedStorageBackend();
@@ -185,50 +246,254 @@ function encodeStore(store: AuthStore): Buffer {
   return safeStorage.encryptString(JSON.stringify(store));
 }
 
-function decodeStore(value: Buffer): AuthStore {
-  return JSON.parse(safeStorage.decryptString(value)) as AuthStore;
+/**
+ * The saved login exists but could not be read just now (too many open files,
+ * a busy disk, no permission). It is not a sign-out: the file is left as it
+ * is, and the next read can find the login again. Carries only the error code,
+ * never the path or the file's contents.
+ */
+export class AuthStoreUnreadableError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(`The saved Orchestrator Cloud login could not be read (${code}).`);
+    this.name = "AuthStoreUnreadableError";
+    this.code = code;
+  }
 }
 
-export async function readAuthStore(dataDir: string): Promise<AuthStore> {
-  const memoryStore = memoryStores.get(dataDir);
-  if (memoryStore) return memoryStore;
-  if (!protectedStorageAvailable()) {
-    await rm(storePath(dataDir), { force: true });
-    return emptyStore();
+// Read errors that usually clear within moments, so the read tries again
+// before giving up: the process is out of file handles (EMFILE, ENFILE), or
+// the file is briefly locked (EAGAIN, EBUSY).
+const TRANSIENT_READ_CODES = new Set(["EMFILE", "ENFILE", "EAGAIN", "EBUSY"]);
+const TRANSIENT_READ_RETRY_MS = [25, 100, 250];
+
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code !== "" ? code : "UNKNOWN";
+}
+
+// The encrypted store file's bytes, or null when there is no file. Any other
+// failure throws AuthStoreUnreadableError and leaves the file in place.
+async function readStoreBytes(file: string): Promise<Buffer | null> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await readFile(file);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "ENOENT") return null;
+      const retryMs = TRANSIENT_READ_CODES.has(code) ? TRANSIENT_READ_RETRY_MS[attempt] : undefined;
+      if (retryMs === undefined) throw new AuthStoreUnreadableError(code);
+      await new Promise((resolve) => setTimeout(resolve, retryMs));
+    }
+  }
+}
+
+// The file's store, or null when the file is there but did not decrypt. No
+// file is the only read that means "no saved login". A read that failed
+// throws AuthStoreUnreadableError instead, so nothing downstream takes it for
+// a sign-out or writes an empty store over the login.
+async function readStoreFile(dataDir: string): Promise<AuthStore | null> {
+  const value = await readStoreBytes(storePath(dataDir));
+  if (value === null) return emptyStore();
+  let text: string;
+  try {
+    text = safeStorage.decryptString(value);
+  } catch {
+    return null;
   }
   try {
-    return decodeStore(await readFile(storePath(dataDir)));
+    const store: unknown = JSON.parse(text);
+    if (!store || typeof store !== "object") throw new Error("Not an auth store.");
+    return store as AuthStore;
   } catch {
+    // The file decrypts but holds no store this app can use, so no later
+    // read can recover a login from it.
     await rm(storePath(dataDir), { force: true });
     return emptyStore();
   }
 }
 
-export async function writeAuthStore(
+// The file did not decrypt. Keep it, and read as signed out until a restart
+// tries again or a new sign-in is saved over it.
+function noteUndecryptable(dataDir: string): void {
+  if (!undecryptable.has(dataDir)) {
+    console.warn(
+      "Orchestrator Cloud sign-in could not be decrypted. It is kept, and the next launch tries again.",
+    );
+  }
+  undecryptable.add(dataDir);
+  unreadFiles.add(dataDir);
+}
+
+// Writes a temporary file and renames it over the store, so a write that fails
+// partway leaves the saved sign-in as it was.
+async function writeStoreFile(dataDir: string, store: AuthStore): Promise<void> {
+  await mkdir(dataDir, { recursive: true });
+  const target = storePath(dataDir);
+  const staging = `${target}.${process.pid}.tmp`;
+  try {
+    await writeFile(staging, encodeStore(store), { mode: 0o600 });
+    await chmod(staging, 0o600);
+    await rename(staging, target);
+  } catch (error) {
+    await rm(staging, { force: true });
+    throw error;
+  }
+}
+
+// A pending sign-in written during an outage goes onto the session the file
+// still holds, so a sign-in that was started but never finished keeps it.
+// Null when the file did not decrypt, so there is nothing to merge onto.
+async function onFileSession(dataDir: string, store: AuthStore): Promise<AuthStore | null> {
+  const file = await readStoreFile(dataDir);
+  if (file === null) {
+    noteUndecryptable(dataDir);
+    return null;
+  }
+  return { ...file, pkce: store.pkce };
+}
+
+// The file was read for the first time since an outage hid it: show its
+// account again in every renderer.
+function noteFileRead(dataDir: string, store: AuthStore): void {
+  if (unreadFiles.delete(dataDir) && store.session) {
+    notifyRenderersFn?.(publicAccount(store.session));
+  }
+}
+
+/**
+ * Whether the saved sign-in is hidden right now (secure storage is out, or
+ * the file did not decrypt), so the signed-out store read from it is not a
+ * sign-out. Callers that would clear account data on a signed-out read wait.
+ */
+export function isSavedSignInHidden(dataDir: string): boolean {
+  return unreadFiles.has(dataDir);
+}
+
+/**
+ * Reads the store again when a sign-in is waiting on secure storage and it is
+ * available now. Nothing announces that storage is back, so the app calls
+ * this when it is focused or the screen is unlocked: the read saves a sign-in
+ * kept in memory and shows a hidden one again in every renderer.
+ */
+export function recheckSavedSignIn(dataDir: string): void {
+  if (!unreadFiles.has(dataDir) && !memoryStores.has(dataDir)) return;
+  if (!protectedStorageAvailable() || undecryptable.has(dataDir)) return;
+  void readAuthStore(dataDir).catch(() => undefined);
+}
+
+export function readAuthStore(dataDir: string): Promise<AuthStore> {
+  return serialize(storeOps, dataDir, async () => {
+    const memory = memoryStores.get(dataDir);
+    if (!protectedStorageAvailable() || undecryptable.has(dataDir)) {
+      // An outage, such as a locked keychain or a keyring that has not started
+      // yet, is often temporary. The file stays for when storage is back and
+      // reads as signed out until then, unless this run signed in since.
+      if (!memory?.replacesFile) unreadFiles.add(dataDir);
+      return memory?.store ?? emptyStore();
+    }
+    if (memory) {
+      // Storage is back: save what was kept in memory.
+      const store = memory.replacesFile
+        ? memory.store
+        : await onFileSession(dataDir, memory.store);
+      if (store === null) return memory.store;
+      try {
+        await writeStoreFile(dataDir, store);
+      } catch {
+        // Keep what was recovered, so a later write that carries the file's
+        // session on is not taken for a new credential and the next read
+        // tries the save again. It is still shown again in every renderer.
+        memoryStores.set(dataDir, { ...memory, store });
+        noteFileRead(dataDir, store);
+        return store;
+      }
+      memoryStores.delete(dataDir);
+      fileSessions.set(dataDir, store.session);
+      noteFileRead(dataDir, store);
+      return store;
+    }
+    const store = await readStoreFile(dataDir);
+    if (store === null) {
+      noteUndecryptable(dataDir);
+      return emptyStore();
+    }
+    fileSessions.set(dataDir, store.session);
+    noteFileRead(dataDir, store);
+    return store;
+  });
+}
+
+export function writeAuthStore(
   dataDir: string,
   store: AuthStore,
 ): Promise<void> {
-  if (!protectedStorageAvailable()) {
-    // A rotating refresh token must never fall back to plaintext persistence.
-    // Linux's basic_text backend also reports encryption as available despite
-    // using an unprotected hardcoded password, so keep that process-local too.
-    memoryStores.set(dataDir, store);
-    await rm(storePath(dataDir), { force: true });
-    return;
-  }
-  memoryStores.delete(dataDir);
-  await mkdir(dataDir, { recursive: true });
-  const target = storePath(dataDir);
-  await writeFile(target, encodeStore(store), { mode: 0o600 });
-  await chmod(target, 0o600);
+  return serialize(storeOps, dataDir, async () => {
+    if (!protectedStorageAvailable()) {
+      // A rotating refresh token must never fall back to plaintext persistence.
+      // Linux's basic_text backend also reports encryption as available despite
+      // using an unprotected hardcoded password, so keep that process-local too.
+      const memory = memoryStores.get(dataDir);
+      const wasReplacing = memory?.replacesFile === true;
+      // A store that only carries the session already held (in memory, or in
+      // the file when it was last read) on, with a sign-in started or cleared,
+      // keeps the file.
+      const held = memory ? memory.store.session : fileSessions.get(dataDir);
+      const newCredential = store.session !== null && !sameCredential(store.session, held);
+      memoryStores.set(dataDir, { store, replacesFile: wasReplacing || newCredential });
+      if (newCredential) {
+        // This credential is newer than the file's. Delete the file so the
+        // account it replaced can never come back.
+        unreadFiles.delete(dataDir);
+        undecryptable.delete(dataDir);
+        fileSessions.delete(dataDir);
+        await rm(storePath(dataDir), { force: true });
+        if (!wasReplacing) {
+          console.warn(
+            "Orchestrator Cloud sign-in is kept in memory only: secure storage is unavailable, so it will not survive a restart until storage is available again.",
+          );
+        }
+      }
+      return;
+    }
+    // What is kept in memory is dropped only once the file is saved, so a
+    // failed write cannot lose a sign-in held nowhere else.
+    if (store.session === null && unreadFiles.has(dataDir)) {
+      // Read during the outage, this store never saw the file's session.
+      const next = undecryptable.has(dataDir) ? null : await onFileSession(dataDir, store);
+      if (next === null) {
+        // The file did not decrypt, so its session cannot be kept in a new
+        // one. Hold this store (a pending sign-in) in memory and leave the
+        // file for the next launch; a sign-in it completes is saved over it.
+        memoryStores.set(dataDir, { store, replacesFile: false });
+        return;
+      }
+      await writeStoreFile(dataDir, next);
+      memoryStores.delete(dataDir);
+      fileSessions.set(dataDir, next.session);
+      noteFileRead(dataDir, next);
+      return;
+    }
+    await writeStoreFile(dataDir, store);
+    memoryStores.delete(dataDir);
+    fileSessions.set(dataDir, store.session);
+    unreadFiles.delete(dataDir);
+    undecryptable.delete(dataDir);
+  });
 }
 
-export async function removeAuthStore(dataDir: string): Promise<void> {
-  memoryStores.delete(dataDir);
-  await Promise.all([
-    rm(storePath(dataDir), { force: true }),
-    rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
-  ]);
+export function removeAuthStore(dataDir: string): Promise<void> {
+  return serialize(storeOps, dataDir, async () => {
+    memoryStores.delete(dataDir);
+    unreadFiles.delete(dataDir);
+    undecryptable.delete(dataDir);
+    fileSessions.delete(dataDir);
+    await Promise.all([
+      rm(storePath(dataDir), { force: true }),
+      rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
+    ]);
+  });
 }
 
 function displayName(user: User): string {
@@ -387,8 +652,10 @@ export async function getCloudAccessToken(
   if (account === null) {
     // The auth store may also have been cleared by another dev-app process.
     // A proxied request is authoritative evidence that this renderer can no
-    // longer use AO Cloud, so retire any cached signed-in UI.
-    notifyRenderersFn?.(null);
+    // longer use AO Cloud, so retire any cached signed-in UI. A sign-in hidden
+    // by a secure storage outage is not gone: a signed-out notice would clear
+    // the account's share links and previews, which do not come back with it.
+    if (!isSavedSignInHidden(dataDir)) notifyRenderersFn?.(null);
     return null;
   }
   const refreshed = await readAuthStore(dataDir);
@@ -415,7 +682,25 @@ async function refreshCloudSession(
     );
     return withAuthMutation(dataDir, async () => {
       if (authGeneration(dataDir) !== generation) return null;
-      const currentStore = await readAuthStore(dataDir);
+      // WorkOS has already used up the old refresh token, so the rotated one
+      // is the only login that still works. When the store cannot be read, or
+      // reads empty only because the saved sign-in is hidden (secure storage
+      // is out, or the file did not decrypt), save it without the file's other
+      // contents: at worst a pending sign-in is dropped.
+      const keepRotated = async () => {
+        await writeAuthStore(dataDir, { session, pkce: null });
+        return publicAccount(session);
+      };
+      let currentStore: AuthStore;
+      try {
+        currentStore = await readAuthStore(dataDir);
+      } catch (error) {
+        if (!(error instanceof AuthStoreUnreadableError)) throw error;
+        return keepRotated();
+      }
+      if (currentStore.session === null && isSavedSignInHidden(dataDir)) {
+        return keepRotated();
+      }
       if (
         currentStore.session?.refreshToken !== storedSession.refreshToken
       ) {
@@ -476,13 +761,21 @@ export async function beginCloudSignIn(dataDir: string): Promise<void> {
   await shell.openExternal(url);
 }
 
+// What a verified callback produced: the signed-in account, and whether this
+// callback exchanged its code (a new sign-in) rather than returning the account
+// an earlier callback had already signed in.
+interface CompletedCloudSignIn {
+  account: CloudAccount;
+  exchanged: boolean;
+}
+
 // completeCloudSignIn validates the pending PKCE state and exchanges the code
 // for a session. Shared by the deep-link path and the loopback callback server.
 async function completeCloudSignIn(
   code: string | null,
   callbackState: string | null,
   dataDir: string,
-): Promise<CloudAccount> {
+): Promise<CompletedCloudSignIn> {
   if (!workos) throw new Error("WorkOS is not configured.");
   if (!code || !callbackState) throw new Error("WorkOS callback is incomplete.");
 
@@ -498,7 +791,7 @@ async function completeCloudSignIn(
     ) {
       // With no login pending, returning to an already signed-in app cannot
       // change its account. This also covers sessions saved before deduping.
-      return publicAccount(store.session);
+      return { account: publicAccount(store.session), exchanged: false };
     }
     if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
     if (store.pkce.expiresAt < Date.now()) {
@@ -524,14 +817,24 @@ async function completeCloudSignIn(
       pkce: null,
       completedCallback: callbackDigest,
     });
-    return publicAccount(session);
+    return { account: publicAccount(session), exchanged: true };
   });
+}
+
+export interface CloudDeepLinkSignIn {
+  account: CloudAccount;
+  // Present only when this link completed a new sign-in, so a repeated return
+  // link never hands it over twice. It holds what the orchestrator.inc return
+  // page adds: the website visitor id (web_distinct_id) for visitors who
+  // accepted analytics there, when it is well formed. Analytics only: it
+  // plays no part in signing in, and nothing stores or logs it.
+  signIn?: CloudSignInContext;
 }
 
 export async function handleCloudDeepLink(
   rawURL: string,
   dataDir: string,
-): Promise<CloudAccount | null> {
+): Promise<CloudDeepLinkSignIn | null> {
   if (!workos) throw new Error("WorkOS is not configured.");
   const url = new URL(rawURL);
   if (url.protocol !== "ao-app:" || url.hostname !== "callback") return null;
@@ -541,11 +844,18 @@ export async function handleCloudDeepLink(
       url.searchParams.get("error_description") || `WorkOS sign-in failed: ${error}`,
     );
   }
-  return completeCloudSignIn(
+  const { account, exchanged } = await completeCloudSignIn(
     url.searchParams.get("code"),
     url.searchParams.get("state"),
     dataDir,
   );
+  if (!exchanged) return { account };
+  // Read only once signing in has finished, so it cannot change how that went.
+  // A sign-in without the website's id still hands over an empty context: it
+  // tells the renderer a sign-in completed, even for the account already
+  // signed in, which the session notification alone does not.
+  const webDistinctId = url.searchParams.get("web_distinct_id");
+  return { account, signIn: isWebDistinctId(webDistinctId) ? { webDistinctId } : {} };
 }
 
 const CALLBACK_HTML = (title: string, body: string): string =>
@@ -583,7 +893,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
               `WorkOS sign-in failed: ${error}`,
           );
         }
-        const account = await completeCloudSignIn(
+        const { account } = await completeCloudSignIn(
           requestURL.searchParams.get("code"),
           requestURL.searchParams.get("state"),
           dataDir,
@@ -592,8 +902,8 @@ function startLoopbackCallbackServer(dataDir: string): void {
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(
           CALLBACK_HTML(
-            "Signed in to AO Cloud",
-            "You can close this tab and return to Agent Orchestrator.",
+            "Signed in to Orchestrator Cloud",
+            "You can close this tab and return to Orchestrator.",
           ),
         );
       } catch (callbackError) {
@@ -602,7 +912,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
         res.end(
           CALLBACK_HTML(
             "Sign-in failed",
-            "Return to Agent Orchestrator and try signing in again.",
+            "Return to Orchestrator and try signing in again.",
           ),
         );
       } finally {
@@ -626,6 +936,9 @@ export async function signOutCloud(dataDir: string): Promise<void> {
 }
 
 function signInFailureDetail(error: unknown): string {
+  if (error instanceof AuthStoreUnreadableError) {
+    return "Orchestrator could not read its saved sign-in just now. Nothing was changed. Try again in a moment.";
+  }
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("cancel") || message.includes("access_denied")) {
     return "The WorkOS sign-in was cancelled. You can try again whenever you are ready.";
@@ -641,16 +954,16 @@ function signInFailureDetail(error: unknown): string {
     return "The WorkOS response could not be verified. Start sign-in again to continue.";
   }
   if (message.includes("network") || message.includes("fetch")) {
-    return "Agent Orchestrator could not reach WorkOS. Check your connection and try again.";
+    return "Orchestrator could not reach WorkOS. Check your connection and try again.";
   }
-  return "Agent Orchestrator could not complete WorkOS sign-in. Please try again.";
+  return "Orchestrator could not complete WorkOS sign-in. Please try again.";
 }
 
 export async function showCloudSignInFailure(error: unknown): Promise<void> {
   await dialog.showMessageBox({
     type: "error",
-    title: "AO Cloud sign-in failed",
-    message: "Unable to sign in to AO Cloud",
+    title: "Orchestrator Cloud sign-in failed",
+    message: "Unable to sign in to Orchestrator Cloud",
     detail: signInFailureDetail(error),
   });
 }
@@ -695,9 +1008,38 @@ export function registerCloudProtocol(): void {
   }
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The control plane's reason for refusing an account login (the same login is
+// already saved, or a sign-in again used another login), from its error
+// envelope's message. Never the response body itself.
+async function controlPlaneRefusal(response: Response): Promise<string | undefined> {
+  if (response.status !== 409 && response.status !== 422) return undefined;
+  try {
+    const envelope = (await response.json()) as { message?: unknown };
+    return typeof envelope.message === "string" && envelope.message.trim() !== "" ? envelope.message.slice(0, 300) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether the control plane saved an account login as its harness's default
+// account, from its answer ({ agentAccount: { isDefault } }).
+async function savedAsDefaultAccount(response: Response): Promise<boolean> {
+  try {
+    const answer = (await response.json()) as { agentAccount?: { isDefault?: unknown } };
+    return answer.agentAccount?.isDefault === true;
+  } catch {
+    return false;
+  }
+}
+
 export function installCloudIPC(
   getDataDir: () => string,
   notifyRenderers: (session: CloudAccount | null) => void,
+  // Runs before an explicit sign-out completes, so its effects are durable even
+  // if the app quits right after.
+  onSignedOut: () => Promise<void> = async () => undefined,
 ): void {
   notifyRenderersFn = notifyRenderers;
   ipcMain.handle("cloud:getSession", () => getCloudSessionCached(getDataDir()));
@@ -708,11 +1050,17 @@ export function installCloudIPC(
         title: "WorkOS not configured",
         message: "WorkOS sign-in is not configured.",
         detail:
-          "Set VITE_WORKOS_CLIENT_ID and restart Agent Orchestrator to enable sign-in.",
+          "Set VITE_WORKOS_CLIENT_ID and restart Orchestrator to enable sign-in.",
       });
       return;
     }
-    await beginCloudSignIn(getDataDir());
+    try {
+      await beginCloudSignIn(getDataDir());
+    } catch (error) {
+      // The renderer starts sign-in without waiting on it, so say why it did not open.
+      if (!(error instanceof AuthStoreUnreadableError)) throw error;
+      await showCloudSignInFailure(error);
+    }
   });
   ipcMain.handle("cloud:signOut", async () => {
     const dataDir = getDataDir();
@@ -727,6 +1075,7 @@ export function installCloudIPC(
       // Sign-out must never fail on a revoke round-trip; clear the store anyway.
     }
     await signOutCloud(dataDir);
+    await onSignedOut().catch(() => undefined);
     notifyRenderers(null);
   });
   ipcMain.handle("cloud:cancelProviderAuth", async () => {
@@ -737,8 +1086,11 @@ export function installCloudIPC(
   });
   ipcMain.handle("cloud:connectProviderAuth", async (_event, input: unknown) => {
     if (typeof input !== "object" || input === null) throw new Error("Invalid Cloud provider login request.");
-    const { baseUrl, provider, persistLocalClaudeToken } = input as Record<string, unknown>;
+    const { baseUrl, provider, persistLocalClaudeToken, account } = input as Record<string, unknown>;
     if (typeof baseUrl !== "string" || typeof provider !== "string") throw new Error("Invalid Cloud provider login request.");
+    // account: "new" saves the login as another account, an account id signs
+    // that account in again; absent, the login replaces the agent's default.
+    if (account !== undefined && account !== "new" && !(typeof account === "string" && UUID_PATTERN.test(account))) throw new Error("Invalid Cloud provider login request.");
     let base: URL;
     try {
       base = new URL(baseUrl);
@@ -749,7 +1101,7 @@ export function installCloudIPC(
     if (base.username !== "" || base.password !== "" || base.search !== "" || base.hash !== "") throw new Error("Cloud control plane URL must not include credentials, a query string, or a fragment.");
     const dataDir = getDataDir();
     const token = await getCloudAccessToken(dataDir);
-    if (!token) throw new Error("Sign in to AO Cloud before connecting a provider.");
+    if (!token) throw new Error("Sign in to Orchestrator Cloud before connecting a provider.");
     
     if (activeProviderAuthAbort) activeProviderAuthAbort.abort();
     activeProviderAuthAbort = new AbortController();
@@ -777,21 +1129,29 @@ export function installCloudIPC(
     const basePath = base.pathname.replace(/\/+$/, "");
     // Cloud agent credentials are always personal: the caller's own connection,
     // usable in every org they belong to.
-    const endpointPath = `/api/cloud/v1/me/providers/${encodeURIComponent(credential.provider)}`;
-    const target = new URL(`${base.origin}${basePath}${endpointPath}`);
+    const save = account === "new"
+      ? { method: "POST", path: "/me/agent-accounts", body: { agent: credential.provider, credentialType: credential.credentialType, secret: credential.secret } }
+      : typeof account === "string"
+        ? { method: "PUT", path: `/me/agent-accounts/${account}/credential`, body: { credentialType: credential.credentialType, secret: credential.secret } }
+        : { method: "PUT", path: `/me/providers/${encodeURIComponent(credential.provider)}`, body: { credentialType: credential.credentialType, secret: credential.secret } };
+    const target = new URL(`${base.origin}${basePath}/api/cloud/v1${save.path}`);
     const response = await fetch(target, {
-      method: "PUT",
+      method: save.method,
       redirect: "error",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }),
+      body: JSON.stringify(save.body),
     });
-    if (!response.ok) throw new Error("AO Cloud could not save the provider credential.");
+    if (!response.ok) throw new Error(await controlPlaneRefusal(response) ?? "Orchestrator Cloud could not save the provider credential.");
 
     // Persist the captured Claude setup-token locally as a fallback for local
     // sessions, only once the cloud copy is saved: a failed cloud save must not
     // leave a local login behind. The daemon's claudecode adapter injects it only
     // when no native login is present, so it never shadows an existing login.
-    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token") {
+    // Of a harness's several accounts only the default's: the control plane
+    // says which account the login became (an added one is the default when it
+    // is the first, or when the default stopped working).
+    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token" &&
+      (account === undefined || await savedAsDefaultAccount(response))) {
       await persistLocalClaudeOAuthToken(dataDir, credential.secret);
     }
     return undefined;

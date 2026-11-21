@@ -12,6 +12,28 @@ export function reviewRouteForPR(sessionId: string, pr: Pick<DashboardPR, "numbe
 	};
 }
 
+/** The chat of the worker that owns a pull request, which its PR page and PR row both open. */
+export function workerRouteForSession(session: Pick<DashboardSession, "id" | "projectId">, hostId?: string) {
+	return {
+		pathname: "/session/[id]" as const,
+		params: { id: session.id, projectId: session.projectId, ...(hostId ? { hostId } : {}) },
+	};
+}
+
+/**
+ * Whether the screen under the PR page is already this worker's chat. The chat
+ * opens its PR page, so opening the worker from there should go back rather than
+ * stack a second copy of the same chat.
+ */
+export function previousRouteIsWorker(
+	routes: readonly { name: string; params?: object }[],
+	index: number,
+	sessionId: string,
+): boolean {
+	const previous = index > 0 ? routes[index - 1] : undefined;
+	return previous?.name === "session/[id]" && (previous.params as { id?: unknown } | undefined)?.id === sessionId;
+}
+
 /** The chat shortcut is for PRs that can still be reviewed. */
 export function sessionPRReadyForReview(session: DashboardSession) {
 	const prs = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];

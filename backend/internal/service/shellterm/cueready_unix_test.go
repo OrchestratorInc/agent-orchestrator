@@ -14,6 +14,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -103,6 +104,47 @@ func TestCueReadinessUsesEffectiveZshEnvironment(t *testing.T) {
 	}
 }
 
+// TestCueReadinessHandsZshBackTheUsersZDOTDIR covers a Cue zsh whose ZDOTDIR
+// holds AO's login-shell wrappers. It sources them, so AO's ao stays first,
+// and then ends on the user's own ZDOTDIR, not AO's: tools like p10k configure
+// write to ${ZDOTDIR:-~}, and AO rewrites its wrappers on the next launch. The
+// wrappers track that ZDOTDIR as the user's files run, since ~/.zshenv may set
+// it, so the hand-back reads their value rather than the daemon's.
+func TestCueReadinessHandsZshBackTheUsersZDOTDIR(t *testing.T) {
+	for _, mode := range []string{"user ZDOTDIR", "no ZDOTDIR"} {
+		t.Run(mode, func(t *testing.T) {
+			user := filepath.Join(t.TempDir(), "zsh config")
+			if mode == "no ZDOTDIR" {
+				user = ""
+			}
+			end := "ZDOTDIR=\"$AO_USER_ZDOTDIR\"\n"
+			getenv := func(key string) string {
+				if key == "ZDOTDIR" {
+					return user
+				}
+				return ""
+			}
+			env, err := agentlaunch.LoginShellEnv(t.TempDir()+":/usr/bin", getenv, nil, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := prepareCueShellReadiness(t.TempDir(), []string{"zsh"}, env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ready.cleanup()
+			data, err := os.ReadFile(filepath.Join(ready.env["ZDOTDIR"], ".zshrc"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrapper := filepath.Join(env["ZDOTDIR"], ".zshrc")
+			if !strings.Contains(string(data), "source "+shellSingleQuote(wrapper)) || !strings.HasSuffix(string(data), end) {
+				t.Fatalf(".zshrc = %q, want it to source %s and end with %q", data, wrapper, end)
+			}
+		})
+	}
+}
+
 func TestCueCommandPreparesReadinessWithProjectEnvironment(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	t.Setenv("ENV", "/daemon/profile")
@@ -149,10 +191,10 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if name == "bash" {
-				// Bash must not signal before a user startup hook finishes
+			if name == "bash" || name == "zsh" {
+				// The shell must not signal before a user startup hook finishes
 				// reading from its terminal.
-				if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("printf 'startup-blocked\\n'; read -r _\n"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(home, "."+name+"rc"), []byte("printf 'startup-blocked\\n'; read -r _\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -188,7 +230,7 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 					}
 				}
 			}()
-			if name == "bash" || name == "fish" {
+			if name == "bash" || name == "zsh" || name == "fish" {
 				deadline := time.After(5 * time.Second)
 				var transcript string
 				for {

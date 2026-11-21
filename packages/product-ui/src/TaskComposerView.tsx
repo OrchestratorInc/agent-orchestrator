@@ -113,6 +113,8 @@ export type TaskComposerAttachments = {
 export type TaskComposerSubmission = {
 	showFallbackAction: boolean;
 	error?: string;
+	status?: string;
+	errorAction?: { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } };
 	isSubmitting: boolean;
 	// A string renders as plain warning text; a node lets the host render its
 	// own notice (for example one with a login action).
@@ -381,7 +383,7 @@ export function TaskComposerView({
 				<p className="px-4 pb-2 text-caption text-destructive" role="alert">{attachments.error}</p>
 			)}
 
-			{(submission.error || submission.modelWarning) && (
+			{(submission.error || submission.status || submission.modelWarning) && (
 				<div className="px-3 pb-2">
 					{submission.error && (
 						<div
@@ -389,6 +391,19 @@ export function TaskComposerView({
 							role="alert"
 						>
 							<span>{submission.error}</span>
+							{submission.errorAction ? (
+								<div className="flex shrink-0 items-center gap-2">
+									{submission.errorAction.input ? <input
+										aria-label={submission.errorAction.input.label}
+										value={submission.errorAction.input.value}
+										onChange={(event) => submission.errorAction?.input?.onChange(event.target.value)}
+										className="min-w-0 max-w-40 rounded border border-current bg-background px-2 py-1 text-foreground"
+									/> : null}
+									<button type="button" onClick={submission.errorAction.onClick} disabled={Boolean(submission.errorAction.input && !submission.errorAction.input.value.trim())} className="shrink-0 text-xs underline underline-offset-2">
+										{submission.errorAction.label}
+									</button>
+								</div>
+							) : null}
 							{submission.showFallbackAction ? (
 								<button
 									type="button"
@@ -401,6 +416,7 @@ export function TaskComposerView({
 							) : null}
 						</div>
 					)}
+					{submission.status && <p className="text-caption text-foreground" role="status">{submission.status}</p>}
 					{!submission.error && submission.modelWarning ? (
 						typeof submission.modelWarning === "string"
 							? <p className="text-caption text-warning" role="status">{submission.modelWarning}</p>

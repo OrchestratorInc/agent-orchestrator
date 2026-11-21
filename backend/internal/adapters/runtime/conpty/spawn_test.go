@@ -333,12 +333,12 @@ func TestCreatePassesHostOptionsToSpawner(t *testing.T) {
 	}})
 	_, err := runtime.Create(context.Background(), ports.RuntimeConfig{
 		SessionID: "shellterm-deferred", WorkspacePath: t.TempDir(), Argv: []string{"/bin/zsh"},
-		StartOnAttach: true, LazyStyledOutput: true,
+		StartOnAttach: true, LazyStyledOutput: true, ReplayFile: "/tmp/saved", OutputLines: 5000,
 	})
 	if !errors.Is(err, spawnErr) {
 		t.Fatalf("Create error = %v, want spawner error", err)
 	}
-	if want := (HostOptions{StartOnAttach: true, LazySurface: true}); got != want {
+	if want := (HostOptions{StartOnAttach: true, LazySurface: true, ReplayFile: "/tmp/saved", OutputLines: 5000}); got != want {
 		t.Fatalf("spawner options = %+v, want %+v", got, want)
 	}
 }

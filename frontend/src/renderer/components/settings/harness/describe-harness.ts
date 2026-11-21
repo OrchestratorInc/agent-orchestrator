@@ -50,6 +50,8 @@ export type HarnessDescribeInput = {
 	authState?: AgentAuthState;
 	/** The login or logout terminal, when it belongs to this harness. */
 	authWorkflow: AuthTerminalWorkflow | null;
+	/** The last login check for this harness failed. */
+	authCheckFailed?: boolean;
 	updatedAt?: string;
 };
 
@@ -88,7 +90,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	// existing cached-readiness fallback when fetching the snapshot fails.
 	const installationPending = !input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown");
 	const isSetupAction = authPlan?.action === "setup";
-	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
+	// Inline key methods replace the documentation card: the button opens the
+	// Account login panel instead of the setup docs.
+	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation" && !authPlan?.methods?.length;
 	const authStatus = readinessAgent?.authentication.state;
 	// Who the harness is signed in as, when its own login check names it.
 	const account = authStatus === "authorized" || authStatus === "configured" ? readinessAgent?.authentication.account : undefined;
@@ -107,6 +111,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const rowAuthWorkflow = input.authWorkflow;
 	const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
 	const needsLogin = needsHarnessLogin(authPlan, authStatus);
+	const showSetup = isSetupAction && authStatus === "unknown";
 	const showUpdate = updateAvailable && !input.authPlansPending && !input.authPlansFailed;
 	// The daemon retains this component-repair instruction in persisted output,
 	// including after CLI verification succeeds or AO restarts.
@@ -114,18 +119,36 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
 	const unverifiedProvider = readinessAgent?.authentication.diagnostics?.some((step) => step.method === "provider_validation"
-		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code))
+		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "provider_rate_limited", "provider_quota_exhausted", "probe_timeout", "probe_cancelled"].includes(step.code))
 		|| readinessAgent?.authentication.diagnostics?.some((step) => step.code === "model_selection_unresolved");
 	const renewsOnRun = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
+	// The CLI reports a saved login it could not confirm with its provider
+	// (rejected, or the provider was unreachable). It stays signed in, with
+	// a caveat instead of a plain "Connected".
+	const loginUnconfirmed = authStatus === "authorized" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "account_unconfirmed"));
+	// One sign-in tone for the Account and Health tabs: green only for a fresh,
+	// successful check. An expired login token the harness renews by itself is
+	// signed in, not a problem to fix; a login the CLI could not confirm is not
+	// a successful check.
+	const authTone: HarnessTone = input.authCheckFailed || readinessAgent?.authentication.freshness !== "fresh" || loginUnconfirmed ? "off"
+		: renewsOnRun || authStatus === "authorized" || authStatus === "not_applicable" ? "ok"
+		: authStatus === "unauthorized" ? "error" : "off";
 	const authSummary = renewsOnRun ? t("settings.harness.loggedIn")
-		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : "settings.harness.installed")
+		: loginUnconfirmed ? t("settings.harness.loginUnconfirmed")
+		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : isSetupAction ? "settings.harness.configured" : "settings.harness.installed")
 		: authStatus === "authorized" ? t("settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
 		: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
+	// Once the installer reports progress, the label names its step, with a
+	// percentage only when its output stated one.
+	const stage = installStage(job);
+	const percent = installPercent(job);
 	const progressLabel = job?.status === "waiting_for_idle" ? t("settings.harness.waitingForIdle")
 		: job?.status === "verifying" ? t("settings.harness.verifying")
+		: stage === "downloading" ? (percent === undefined ? t("settings.harness.progress.downloadingNow") : t("settings.harness.progress.downloadingPercent", { percent }))
+		: stage === "installing" ? (percent === undefined ? t("settings.harness.installing") : t("settings.harness.progress.installingPercent", { percent }))
 		: currentOperation === "update" ? t("settings.harness.updating")
 		: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
 	const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
@@ -149,9 +172,34 @@ export function describeHarness(input: HarnessDescribeInput) {
 	return {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
-		authPlan, authState, authStatus, authSummary, renewsOnRun, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, isSetupAction, isDocumentationAction, canRelogin,
+		authPlan, authState, authStatus, authSummary, authTone, renewsOnRun, loginUnconfirmed, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, showSetup, isSetupAction, isDocumentationAction, canRelogin,
 		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
 	};
 }
 
 export type HarnessDetails = ReturnType<typeof describeHarness>;
+
+export type InstallStage = "downloading" | "installing" | "verifying" | "done";
+
+/** The step a running job is on. The daemon reads download and install from the
+ * installer's own output, so a job that has not reported progress yet is on no
+ * step; it reports verification itself. */
+export function installStage(job?: Pick<InstallJob, "status" | "progress">): InstallStage | undefined {
+	if (job?.status === "verifying") return "verifying";
+	if (job?.status === "installing" || job?.status === "running") return job.progress?.phase;
+	return undefined;
+}
+
+/** An install or update is running its command or verifying, not waiting for idle sessions. */
+export function showsInstallProgress(job?: Pick<InstallJob, "status">): boolean {
+	return job?.status === "installing" || job?.status === "running" || job?.status === "verifying";
+}
+
+/** The percentage the installer's output stated while its command runs. A bar
+ * with no named phase (a script printing only "45%") still fills; the label
+ * then stays generic. */
+export function installPercent(job?: Pick<InstallJob, "status" | "progress">): number | undefined {
+	const percent = job?.progress?.percent;
+	return (job?.status === "installing" || job?.status === "running") && typeof percent === "number" ? Math.max(0, Math.min(100, Math.round(percent))) : undefined;
+}
+

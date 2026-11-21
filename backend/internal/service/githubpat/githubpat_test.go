@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 func jsonResp(status int, body string) *http.Response {
@@ -157,5 +159,26 @@ func TestListReposNoRefreshMaterialStaysInvalidOn401(t *testing.T) {
 	}
 	if refreshCalls != 0 {
 		t.Fatalf("refreshCalls = %d, want 0 (no refresh token to use)", refreshCalls)
+	}
+}
+
+func TestListReposRefreshOutageIsNotReportedAsInvalidCredentials(t *testing.T) {
+	s := newWithClient(t.TempDir(), &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/user/repos") {
+			return jsonResp(http.StatusUnauthorized, `{"message":"bad credentials"}`), nil
+		}
+		return jsonResp(http.StatusServiceUnavailable, `{}`), nil
+	})}, "https://api.github.example")
+	s.oauthURL, s.clientID, s.clientSecret = "https://github.example", "client-id", "client-secret"
+	if err := s.StoreOAuthToken(context.Background(), "old-token", "refresh-token", time.Now().Add(time.Hour), time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.ListRepos(context.Background())
+	if errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("refresh outage reported as invalid credentials: %v", err)
+	}
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "GITHUB_REFRESH_UNAVAILABLE" {
+		t.Fatalf("refresh outage = %v, want typed temporary failure", err)
 	}
 }

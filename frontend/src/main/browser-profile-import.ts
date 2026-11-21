@@ -303,8 +303,8 @@ function isAccessDenied(error: unknown): boolean {
 
 function safariAccessError(): Error {
 	return Object.assign(new Error(
-		"AO couldn't access Safari's data. In System Settings, open Privacy & Security > Full Disk Access, "
-		+ "allow AO, then restart AO and try the import again.",
+		"Orchestrator couldn't access Safari's data. In System Settings, open Privacy & Security > Full Disk Access, "
+		+ "allow Orchestrator, then restart Orchestrator and try the import again.",
 	), { code: "EACCES" });
 }
 
@@ -766,7 +766,7 @@ export class BrowserProfileImportService {
 			for (const [index, group] of groups.entries()) {
 				throwIfImportAborted(signal);
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index, total: groups.length });
-				const profile = await this.options.profileStore.createProfile(group.name);
+				const profile = await this.options.profileStore.createProfile(group.name, { claimDefault: false });
 				created.push(profile);
 				throwIfImportAborted(signal);
 				const history = group.data.flatMap((data) => data.history);
@@ -803,6 +803,8 @@ export class BrowserProfileImportService {
 				});
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index + 1, total: groups.length });
 			}
+			// Only a committed import may become the default; see createProfile.
+			if (created[0]) await this.options.profileStore.claimDefaultIfFirst(created[0].id);
 			return { sourceName: source.public.name, entries: results };
 		} catch (error) {
 			const cleanupFailures: string[] = [];
@@ -1019,15 +1021,18 @@ async function snapshotSQLite(
 ): Promise<string> {
 	const destination = path.join(staging, `${randomUUID()}-${path.basename(database)}`);
 	const canonical = await preflightContainedFile(database, profileRoot, SOURCE_FILE_MAX_BYTES, budget);
-	for (const suffix of ["-wal", "-shm"]) {
+	const sidecars: string[] = [];
+	for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
 		try {
 			await preflightContainedFile(`${database}${suffix}`, profileRoot, SOURCE_SIDECAR_MAX_BYTES, budget);
+			sidecars.push(suffix);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 	}
-	const source = new Database(canonical, { readonly: true, fileMustExist: true, timeout: 5_000 });
+	const source = new Database(canonical, { readonly: true, fileMustExist: true, timeout: 1_000 });
 	const temporarySnapshots: string[] = [];
+	let backupError: unknown;
 	try {
 		source.pragma("query_only = ON");
 		for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1038,9 +1043,10 @@ async function snapshotSQLite(
 				await source.backup(temporary);
 			} catch (error) {
 				await rm(temporary, { force: true }).catch(() => undefined);
-				if (attempt === 0) continue;
-				if (browserName) throw temporarySnapshotError(browserName);
-				throw error;
+				backupError = error;
+				// A running Chromium browser holds its databases in exclusive
+				// locking mode, so retrying the backup cannot help.
+				break;
 			}
 			const output = await stat(temporary).catch((error) => {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -1057,8 +1063,17 @@ async function snapshotSQLite(
 			await rename(temporary, destination);
 			return destination;
 		}
+		// A locked database makes backup() reject, or resolve without writing
+		// anything. Either way the source files can still be copied.
+		try {
+			await copySQLiteSnapshot(canonical, sidecars, staging, destination);
+			return destination;
+		} catch {
+			// Report the original failure below.
+		}
 		if (browserName) throw temporarySnapshotError(browserName);
-		throw new Error("AO's temporary browser data snapshot disappeared before it could be read. Restart AO and retry the import.");
+		if (backupError !== undefined) throw backupError;
+		throw new Error("Orchestrator's temporary browser data snapshot disappeared before it could be read. Restart Orchestrator and retry the import.");
 	} catch (error) {
 		await rm(destination, { force: true }).catch(() => undefined);
 		throw error;
@@ -1070,11 +1085,81 @@ async function snapshotSQLite(
 	}
 }
 
+const SQLITE_SIDECAR_SUFFIXES = ["-journal", "-wal", "-shm"] as const;
+const SQLITE_COPY_ATTEMPTS = 3;
+
+// Copies a database that SQLite cannot open in place. Chromium keeps History
+// and Cookies in exclusive locking mode while the browser runs, but the files
+// themselves stay readable. The copy carries the rollback journal or WAL so
+// SQLite can recover a consistent state from it, never touching the source.
+async function copySQLiteSnapshot(
+	canonical: string,
+	sidecars: string[],
+	staging: string,
+	destination: string,
+): Promise<void> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < SQLITE_COPY_ATTEMPTS; attempt += 1) {
+		const directory = path.join(staging, randomUUID());
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		const copy = path.join(directory, "source.sqlite");
+		try {
+			await copyRegularFile(canonical, copy, SOURCE_FILE_MAX_BYTES);
+			// The -shm index is rebuilt from the WAL; a stale copy only misleads.
+			for (const suffix of sidecars.filter((candidate) => candidate !== "-shm")) {
+				try {
+					await copyRegularFile(`${canonical}${suffix}`, `${copy}${suffix}`, SOURCE_SIDECAR_MAX_BYTES);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+			}
+			// Read-write on the private copy so a hot journal or WAL is replayed.
+			const database = new Database(copy, { fileMustExist: true, timeout: 1_000 });
+			try {
+				const check = database.prepare("PRAGMA quick_check").get() as { quick_check?: unknown } | undefined;
+				if (check?.quick_check !== "ok") throw new Error("Browser database copy is inconsistent.");
+				await database.backup(destination);
+			} finally {
+				database.close();
+			}
+			await chmod(destination, 0o600);
+			return;
+		} catch (error) {
+			lastError = error;
+			await rm(destination, { force: true }).catch(() => undefined);
+		} finally {
+			await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+		}
+	}
+	throw lastError;
+}
+
+async function copyRegularFile(source: string, destination: string, maxBytes: number): Promise<void> {
+	const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+	const input = await open(source, constants.O_RDONLY | noFollow);
+	try {
+		const opened = await input.stat();
+		if (!opened.isFile() || opened.size > maxBytes) {
+			throw new Error("Browser source file exceeds the snapshot size limit.");
+		}
+		const bytes = await input.readFile();
+		if (bytes.length > maxBytes) throw new Error("Browser source file exceeds the snapshot size limit.");
+		const output = await open(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+		try {
+			await output.writeFile(bytes);
+		} finally {
+			await output.close();
+		}
+	} finally {
+		await input.close();
+	}
+}
+
 function temporarySnapshotError(browserName: string): Error {
 	return new Error(
-		`AO couldn't create a temporary copy of ${browserName}'s profile database. `
+		`Orchestrator couldn't create a temporary copy of ${browserName}'s profile database. `
 		+ `Fully close ${browserName}, including background processes, then retry the import. `
-		+ "If this keeps happening, restart AO and try again.",
+		+ "If this keeps happening, restart Orchestrator and try again.",
 	);
 }
 
@@ -1288,6 +1373,15 @@ function readNullTerminatedUTF8(record: Buffer, offset: number): string {
 	return new TextDecoder("utf-8", { fatal: true }).decode(record.subarray(offset, end));
 }
 
+// Bot managers bind these to the browser that earned them. Replayed from
+// another browser they read as stolen, and sites keep challenging. They are
+// issued again on the next visit, so nothing is lost by leaving them behind.
+const ANTI_BOT_COOKIE = /^(cf_clearance|__cf_bm|_cfuvid|cf_chl_.*|datadome|_abck|ak_bmsc|bm_sz|bm_sv|bm_mi|reese84|incap_ses_.*|visid_incap_.*|nlbi_.*|_px\d?|_pxvid|_pxhd)$/;
+
+export function isAntiBotCookie(name: string): boolean {
+	return ANTI_BOT_COOKIE.test(name);
+}
+
 function normalizeCookieRows(
 	rows: Array<Record<string, unknown>>,
 	now: Date,
@@ -1295,6 +1389,7 @@ function normalizeCookieRows(
 	const cookies: ImportedCookie[] = [];
 	let expired = 0;
 	let invalid = 0;
+	let antiBot = 0;
 	for (const row of rows) {
 		const domain = stringValue(row.domain).trim().toLowerCase();
 		const hostname = domain.replace(/^\.+/, "");
@@ -1306,6 +1401,10 @@ function normalizeCookieRows(
 		const value = stringValue(row.value);
 		if (!name) {
 			invalid += 1;
+			continue;
+		}
+		if (isAntiBotCookie(name)) {
+			antiBot += 1;
 			continue;
 		}
 		const expirationDate = typeof row.expires === "number" && Number.isFinite(row.expires) && row.expires > 0 ? row.expires : undefined;
@@ -1339,18 +1438,19 @@ function normalizeCookieRows(
 	const warnings: BrowserImportWarning[] = [];
 	if (expired > 0) warnings.push({ code: "expired-cookies-skipped", count: expired });
 	if (invalid > 0) warnings.push({ code: "invalid-cookies-skipped", count: invalid });
-	return { cookies, skipped: expired + invalid, warnings };
+	return { cookies, skipped: expired + invalid + antiBot, warnings };
 }
 
 function readFirefoxHistory(file: string): { history: BrowserHistoryEntry[]; warnings: BrowserImportWarning[] } {
 	return withReadOnlyDatabase(file, (database) => {
 		requireTable(database, "moz_places", "The selected Firefox profile does not contain supported history data.");
-		const eligible = countRows(database, "moz_places", "WHERE url LIKE 'http%'");
+		const historyFilter = "WHERE url LIKE 'http%' AND last_visit_date IS NOT NULL";
+		const eligible = countRows(database, "moz_places", historyFilter);
 		const truncated = Math.max(0, eligible - BROWSER_IMPORT_MAX_HISTORY_ENTRIES);
 		const history = (database.prepare(`
 			SELECT url, title, visit_count, last_visit_date
 			FROM moz_places
-			WHERE url LIKE 'http%'
+			${historyFilter}
 			ORDER BY last_visit_date DESC, rowid DESC
 			LIMIT ${BROWSER_IMPORT_MAX_HISTORY_ENTRIES}
 		`).all() as Record<string, unknown>[]).flatMap((row) => {

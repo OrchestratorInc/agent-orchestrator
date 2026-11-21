@@ -1,19 +1,25 @@
-import { Feather } from "../../lib/icons";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { WebView } from "react-native-webview";
+import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { BackHandler, Platform, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { WebView, type WebViewNavigation } from "react-native-webview";
 import { getPreview } from "../../lib/api";
+import { AppSymbol } from "../../lib/AppSymbol";
 import { authHeaders } from "../../lib/config";
-import { haptics } from "../../lib/haptics";
-import { hostRouteMatches, previewForConfig } from "../../lib/hostRoute";
+import { userFacingError } from "../../lib/connectionError";
+import { rowDividerWidth } from "../../lib/divider";
+import { heldPreview, hostRouteMatches, machineState } from "../../lib/hostRoute";
+import { MachineRejectedState } from "../../lib/MachineRejectedState";
 import { BrowserLivePane } from "../../lib/preview/BrowserLivePane";
+import { LoadingBar } from "../../lib/preview/LoadingBar";
+import { previewModeMenu, type PreviewMode } from "../../lib/preview/previewModeMenu";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { iconSize, space, type } from "../../lib/tokens";
+import { useTheme, useThemedStyles, useThemeState } from "../../lib/ThemeProvider";
+import { toolbarIcon } from "../../lib/toolbarIcon";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
+import { font, gutter, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
-import { userFacingError } from "../../lib/connectionError";
 
 /** One preview surface for the session browser and any generated app/document preview. */
 export default function SessionPreviewScreen() {
@@ -26,15 +32,24 @@ function SessionPreviewContent() {
 	const sessionID = String(rawID ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { config, currentHostId, connection } = useApp();
+	const app = useApp();
+	const { config, currentHostId } = app;
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const t = useTheme();
+	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
+	const insets = useSafeAreaInsets();
+	const glassInset = useGlassBarInset();
 	const web = useRef<WebView>(null);
 	// An explicit choice wins over the initial disabled-sharing fallback.
 	const [active, setActive] = useState<"browser" | "app" | null>(null);
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
-	const preview = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
+	// The page on screen stays through an app switch: while the connection is away,
+	// and once it is back on the same endpoint with the same credential, the
+	// preview loaded for it is still the one to show, so the web view keeps its
+	// page instead of loading it again. A different endpoint loads it fresh.
+	const shown = loaded?.id === sessionID ? heldPreview(loaded, config, routeHostId) : null;
+	const preview = shown?.value ?? null;
 	const currentConfig = useRef(config);
 	currentConfig.current = config;
 	const currentRoute = useRef(`${routeHostId ?? ""}|${sessionID}`);
@@ -45,31 +60,103 @@ function SessionPreviewContent() {
 	const sharingDisabled = disabledStream?.id === sessionID && disabledStream?.hostId === routeHostId;
 	const wantsResponsive = active === "app" || (active === null && sharingDisabled);
 	const refreshingResponsive = wantsResponsive && !previewError && loaded !== null &&
-		loaded.id === sessionID && loaded.config.hostId === routeHostId && Boolean(loaded.value) && loaded.config !== config;
+		loaded.id === sessionID && loaded.config.hostId === routeHostId && Boolean(loaded.value) && loaded.config !== config && !shown;
 	const responsive = wantsResponsive && (canShowResponsive || refreshingResponsive);
+	const showingApp = responsive && !refreshingResponsive && preview !== null;
 	const onBrowserDisabled = useCallback(() => {
 		setDisabledStream({ id: sessionID, hostId: routeHostId });
 	}, [routeHostId, sessionID]);
 
+	// The app preview's own page: its title for the bar, its history for Android's
+	// back, and how far its load has come (1 once it is done).
+	const [webTitle, setWebTitle] = useState<string>();
+	const [webProgress, setWebProgress] = useState(1);
+	const webHistory = useRef(false);
+	const appURL = showingApp ? preview.url : undefined;
+	// The URL with the headers of the connection that answered it, kept as one
+	// object while both are the same: a new source makes the web view reload.
+	const appHeaders = showingApp && preview.authenticated && shown ? authHeaders(shown.config) : undefined;
+	const appHeadersKey = JSON.stringify(appHeaders ?? null);
+	const appSource = useMemo(() => appURL ? { uri: appURL, headers: appHeaders } : undefined, [appURL, appHeadersKey]);
+	// Those headers are the old connection's while the app reconnects, and its
+	// address may be another device's until the machine answers as itself. The
+	// page already open stays, but nothing new is requested with them: a web
+	// view mounted fresh waits for a verified connection, and so does a reload.
+	const appMounted = useRef(false);
+	const appWaits = showingApp && !config && !appMounted.current;
+	useEffect(() => { appMounted.current = showingApp && !appWaits; });
+	const reloadWhenVerified = useRef(false);
+	useEffect(() => {
+		setWebTitle(undefined);
+		setWebProgress(1);
+		webHistory.current = false;
+	}, [appURL]);
+	const onWebNavigation = useCallback((event: WebViewNavigation) => {
+		webHistory.current = event.canGoBack;
+		// Android reports the address as the title until the page names itself.
+		setWebTitle(event.title && event.title !== event.url ? event.title : undefined);
+	}, []);
+
+	// The live browser names its page as it changes.
+	const showingBrowser = !refreshingResponsive && !showingApp;
+	// A live browser already on screen stays through an app switch even with no
+	// app preview held, so its last frame and an open address prompt survive the
+	// reconnect: it starts no stream without a verified connection and says it is
+	// waiting (see BrowserLivePane). One that never mounted waits for the
+	// connection below instead, and a machine really gone or refusing this phone
+	// still says so.
+	const paneRoute = `${routeHostId ?? ""}|${sessionID}`;
+	const browserMountedFor = useRef<string | null>(null);
+	const browserHeld = !config && browserMountedFor.current === paneRoute;
+	const machine = !config ? machineState(app) : "ok";
+	const screenWaits = !hostMatches || (!preview && (machine !== "ok" || (!config && !browserHeld)));
+	useEffect(() => { browserMountedFor.current = !screenWaits && showingBrowser ? paneRoute : null; });
+	const [browserTitle, setBrowserTitle] = useState<string>();
+	const headerTitle = (showingApp && (webTitle || preview.entry)) || (showingBrowser && browserTitle) || title || "Preview";
 	useLayoutEffect(() => {
-		navigation.setOptions({
-			title: title || "Preview",
-			unstable_headerRightItems: undefined,
-			headerRight: hostMatches && config ? () => <Pressable
-				accessibilityRole="switch"
-				hitSlop={4}
-				accessibilityLabel="Mobile view"
-				accessibilityState={{ checked: responsive, disabled: !canShowResponsive }}
-				accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
-				disabled={!canShowResponsive}
-				onPress={() => { haptics.tap(); setActive(responsive ? "browser" : "app"); }}
-				style={({ pressed }) => [styles.modeToggle, responsive && styles.modeToggleActive, (!canShowResponsive || pressed) && styles.modeToggleDimmed]}
-			>
-				<Feather name="smartphone" size={iconSize.sm} color={responsive ? t.onAccent : t.textSecondary} />
-				<Text style={[styles.modeLabel, responsive && styles.modeLabelActive]}>Mobile view</Text>
-			</Pressable> : undefined,
+		navigation.setOptions({ title: headerTitle });
+	}, [headerTitle, navigation]);
+
+	const reloadApp = useCallback(() => {
+		setPreviewError(undefined);
+		if (!currentConfig.current) {
+			reloadWhenVerified.current = true;
+			return;
+		}
+		web.current?.reload();
+	}, []);
+	useEffect(() => {
+		if (!config || !reloadWhenVerified.current) return;
+		reloadWhenVerified.current = false;
+		web.current?.reload();
+	}, [config]);
+
+	// Reload and the choice between the two views, as native items in the bar.
+	// Memoized: each new element re-registers the header's items, and the page
+	// re-renders on every preview poll. The live browser draws the bar's right
+	// side itself, ending with the view menu handed to it.
+	const mode: PreviewMode = responsive ? "app" : "browser";
+	const showMenu = hostMatches && Boolean(config || shown);
+	const modeMenu = useMemo(() => showMenu ? previewModeMenu({ mode, appAvailable: canShowResponsive, onSelect: setActive }) : null, [canShowResponsive, mode, showMenu]);
+	const headerItems = useMemo(() => modeMenu && !showingBrowser ? (
+		<Stack.Toolbar placement="right">
+			{showingApp ? <Stack.Toolbar.Button icon={toolbarIcon("refresh")} accessibilityLabel="Reload app preview" onPress={reloadApp} /> : null}
+			{modeMenu}
+		</Stack.Toolbar>
+	) : null, [modeMenu, reloadApp, showingApp, showingBrowser]);
+
+	// Android's back walks the page's own history first, as a browser's does,
+	// and leaves Preview once the page is back where it started.
+	const canGoBack = useCallback(() => webHistory.current, []);
+	useFocusEffect(useCallback(() => {
+		if (Platform.OS !== "android" || !showingApp) return;
+		const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+			if (!canGoBack()) return false;
+			web.current?.goBack();
+			return true;
 		});
-	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleActive, styles.modeToggleDimmed, t.onAccent, t.textSecondary, title]);
+		return () => subscription.remove();
+	}, [canGoBack, showingApp]));
 
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
@@ -99,33 +186,48 @@ function SessionPreviewContent() {
 		return () => clearInterval(poll);
 	}, [hostMatches, refreshPreview]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
-	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Connecting to this machine…</Text></View>;
+	// Preview is pushed over the board, so the way back to it pops rather than
+	// stacking a second board on top.
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
+	// Only with nothing to show yet: a page already open stays while the app
+	// reconnects. An app switch closes the connection on purpose, so only a
+	// machine that is really gone says so, and one that refused this phone says
+	// that rather than spinning (see machineState).
+	if (!preview && machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
+	if (!preview && machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
+	if (!config && !preview && !browserHeld) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
 
-	return <View style={styles.screen}>
-		{refreshingResponsive ? <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Loading mobile preview…</Text></View> : !responsive || !preview ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} /> : <View style={styles.appPane}>
-			<View style={styles.appBar}>
-				<Feather name="globe" size={iconSize.sm} color={t.textTertiary} />
-				<Text numberOfLines={1} style={styles.appPath}>{preview.entry}</Text>
-				<Pressable accessibilityRole="button" accessibilityLabel="Reload app preview" hitSlop={10} onPress={() => { haptics.tap(); web.current?.reload(); }} style={styles.appAction}>
-					<Feather name="refresh-cw" size={iconSize.sm} color={t.textSecondary} />
-				</Pressable>
-			</View>
+	return <View style={[styles.screen, { paddingTop: glassInset }]}>
+		{headerItems}
+		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : appWaits ? <View style={styles.center}>{machine === "rejected" ? <MachineRejectedState /> : <EmptyState busy title="Connecting to this machine…" />}</View> : <View style={styles.appPane}>
 			<WebView
 				ref={web}
-				source={{ uri: preview.url, headers: preview.authenticated && config ? authHeaders(config) : undefined }}
+				source={appSource ?? { uri: preview.url }}
 				style={styles.web}
-				startInLoadingState
-				renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
-				onLoadStart={() => setPreviewError(undefined)}
+				// The bar shows a load in progress; a reload keeps the page readable
+				// under it rather than covering it with a spinner.
+				renderLoading={() => <View />}
+				// iOS: the edge swipe walks the page's history and a pull reloads it,
+				// as in Safari.
+				allowsBackForwardNavigationGestures
+				// A pull reloads with the credential: only on a verified connection.
+				pullToRefreshEnabled={Boolean(config)}
+				refreshControlLightMode={scheme === "dark"}
+				onLoadStart={() => {
+					setPreviewError(undefined);
+					setWebProgress(0);
+				}}
+				onLoadProgress={(event) => setWebProgress(event.nativeEvent.progress)}
+				onLoadEnd={() => setWebProgress(1)}
+				onNavigationStateChange={onWebNavigation}
 				onHttpError={(event) => setPreviewError(previewHttpErrorCopy(event.nativeEvent.statusCode))}
 				onError={(event) => setPreviewError(event.nativeEvent.description || "Couldn't load this preview.")}
 			/>
-			{previewError ? <View accessibilityRole="alert" style={styles.webError}>
-				<Feather name="alert-triangle" size={iconSize.sm} color={t.red} />
+			<LoadingBar loading={webProgress < 1} progress={webProgress} accessibilityLabel="Loading app preview" />
+			{previewError ? <View accessibilityRole="alert" style={[styles.webError, { bottom: insets.bottom + space.lg }]}>
+				<AppSymbol name="warning" size={iconSize.md} color={t.red} />
 				<Text style={styles.webErrorText}>{previewError}</Text>
-				<Pressable onPress={() => { haptics.tap(); setPreviewError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable>
+				<Button variant="ghost" title="Retry" onPress={reloadApp} />
 			</View> : null}
 		</View>}
 	</View>;
@@ -133,22 +235,25 @@ function SessionPreviewContent() {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
-	copy: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	modeToggle: { height: 36, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 18, borderCurve: "circular", overflow: "hidden" },
-	modeToggleActive: { backgroundColor: t.blue },
-	modeToggleDimmed: { opacity: 0.5 },
-	modeLabel: { color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
-	modeLabelActive: { color: t.onAccent },
+	center: { flex: 1, backgroundColor: t.bgBase },
 	appPane: { flex: 1, backgroundColor: t.bgBase },
-	appBar: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgSurface },
-	appPath: { flex: 1, color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
-	appAction: { width: 42, height: 42, alignItems: "center", justifyContent: "center", borderRadius: 12 },
 	web: { flex: 1, backgroundColor: t.bgBase },
-	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	webError: { position: "absolute", left: 12, right: 12, bottom: 16, minHeight: 48, flexDirection: "row", alignItems: "center", gap: space.sm, borderRadius: 12, borderCurve: "continuous", borderWidth: 1, borderColor: t.tintRed, backgroundColor: t.bgElevated, paddingHorizontal: space.md, paddingVertical: space.sm },
-	webErrorText: { flex: 1, color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	retryText: { color: t.accent, fontFamily: "Geist_600SemiBold", fontSize: type.caption1.fontSize, fontWeight: "600" },
+	webError: {
+		position: "absolute",
+		left: gutter,
+		right: gutter,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: space.sm,
+		borderRadius: radius.lg,
+		borderCurve: "continuous",
+		borderWidth: rowDividerWidth,
+		borderColor: t.tintRed,
+		backgroundColor: t.bgElevated,
+		paddingLeft: space.md,
+		paddingVertical: space.xxs,
+	},
+	webErrorText: { flex: 1, color: t.textSecondary, fontFamily: font.regular, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

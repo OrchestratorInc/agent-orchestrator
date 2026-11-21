@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +56,23 @@ describe("useCloudScriptRuns", () => {
 		expect(query).toMatchObject({ after: 0, limit: 500 });
 		expect(query.types).toEqual(expect.arrayContaining([SCRIPT_STEP_EVENT, "workspace.setup", "agent.ready"]));
 		expect(mocks.subscribe).not.toHaveBeenCalled();
+	});
+
+	it("reads the chat's events instead of asking again when a session opens with its chat", async () => {
+		let answerChat: (events: CloudCpClientEvent[]) => void = () => undefined;
+		const chatRead = vi.fn(() => new Promise<CloudCpClientEvent[]>((resolve) => { answerChat = resolve; }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		// The inspector's Setup log and the chat surface mount together.
+		const { result } = renderHook(() => {
+			const runs = useCloudScriptRuns("org-1", "s1", { lifecycle: { desiredState: "running", observedState: "running" } });
+			useQuery({ queryKey: ["cloud-chat-events", "org-1", "s1"], queryFn: chatRead });
+			return runs;
+		}, { wrapper });
+		await waitFor(() => expect(chatRead).toHaveBeenCalledTimes(1));
+		await act(async () => answerChat([{ sessionId: "s1", sequence: 1, type: "chat.user_message", payload: {}, createdAt: "" }, step(2, { status: "succeeded", exitCode: 0 })]));
+		await waitFor(() => expect(result.current[0]?.status).toBe("succeeded"));
+		expect(mocks.client.listChatEvents).not.toHaveBeenCalled();
 	});
 
 	it("pages every event without the filter once the control plane refuses it", async () => {

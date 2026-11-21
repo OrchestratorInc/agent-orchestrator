@@ -22,7 +22,11 @@ describe("conversationPollIntervalFor", () => {
 	// store's poll did not help: that one refreshes the session list, not the
 	// conversation.
 	it("polls the conversation over the tunnel, where the stream cannot deliver", () => {
-		expect(conversationPollIntervalFor(cfg({ endpointKind: "tunnel" }))).toBe(CONVERSATION_POLL_MS);
+		expect(conversationPollIntervalFor(cfg({ endpointKind: "tunnel", host: "old.trycloudflare.com" }))).toBe(CONVERSATION_POLL_MS);
+	});
+
+	it("does not poll over a named tunnel, which streams", () => {
+		expect(conversationPollIntervalFor(cfg({ endpointKind: "tunnel", host: "h-0d483066194a12a5dc17.useao.dev" }))).toBeNull();
 	});
 
 	// On direct paths the stream delivers, and polling the conversation on top

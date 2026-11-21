@@ -10,15 +10,19 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const {
 	navigateMock,
 	postMock,
+	deleteMock,
 	workspaceQueryMock,
 	usageQueryMock,
 	notificationShowMock,
 } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
 	postMock: vi.fn(),
+	deleteMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 	usageQueryMock: vi.fn(),
 	notificationShowMock: vi.fn(),
@@ -43,6 +47,7 @@ vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		GET: vi.fn().mockResolvedValue({ data: { prs: [] } }),
 		POST: (...args: unknown[]) => postMock(...args),
+		DELETE: (...args: unknown[]) => deleteMock(...args),
 	},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
@@ -51,7 +56,6 @@ vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
 	return {
 		...actual,
-		usesBoardActionsInPanel: () => true,
 	};
 });
 
@@ -67,6 +71,7 @@ vi.mock("../lib/bridge", () => ({
 import { appI18n } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { StandaloneArchiveView } from "./StandaloneArchiveView";
+import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderArchive() {
@@ -86,6 +91,7 @@ function renderArchive() {
 beforeEach(() => {
 	navigateMock.mockReset();
 	postMock.mockReset().mockResolvedValue({ data: {} });
+	deleteMock.mockReset().mockResolvedValue({ data: { ok: true, sessionId: "standalone-dead" } });
 	workspaceQueryMock
 		.mockReset()
 		.mockReturnValue({ data: [], isError: false, isSuccess: true });
@@ -168,6 +174,37 @@ describe("StandaloneArchiveView", () => {
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
 			to: "/sessions/$sessionId",
 			params: { sessionId: "standalone-dead" },
+		}));
+	});
+});
+
+describe("StandaloneArchiveView with Cloud standalone agents", () => {
+	it("lists the person's archived Cloud agent and restores it on its project's route", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{
+				id: "agent-1",
+				name: "Fix the flake",
+				kind: "cloud",
+				cloudOrgId: "org-1",
+				standaloneAgent: true,
+				path: "",
+				sessions: [terminatedSession({
+					id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake",
+					branch: undefined, cloud: { orgId: "org-1" },
+				})],
+			}],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderArchive();
+		const list = screen.getByRole("list", { name: "Archived sessions" });
+		expect(within(list).getByText("Fix the flake")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Restore Fix the flake" }));
+
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "agent-1", sessionId: "cloud-agent" },
 		}));
 	});
 });
@@ -262,6 +299,109 @@ describe("archived session card accessible labels", () => {
 		unmount();
 
 		expect(clearTimeoutSpy).toHaveBeenCalledWith(copiedTimer);
+	});
+});
+
+describe("archived session delete", () => {
+	const archived = (overrides: Partial<WorkspaceSession> = {}) => standaloneWorkspaceWithSessions([
+		terminatedSession({
+			id: "standalone-dead",
+			title: "archived ad hoc",
+			workspaceId: STANDALONE_WORKSPACE_ID,
+			workspaceName: "Scratchpad",
+			...overrides,
+		}),
+	]);
+
+	// An empty list may be stale or a failed read, so files still on disk are kept.
+	it("deletes a released session permanently once confirmed, keeping files the list did not show", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [archived({ workspaceCleanup: "removed" })], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		expect(dialog).toHaveTextContent("Its conversation and attachments are deleted for good.");
+		expect(dialog).not.toHaveTextContent("worktree");
+		expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+		expect(deleteMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true, keepArtifacts: true } },
+		}));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	const withArtifacts = () => archived({
+		workspaceCleanup: "removed",
+		outputType: "artifact",
+		artifactFiles: [
+			{ kind: "html", name: "report.html", path: "report.html", size: 1, updatedAt: "2026-11-16T00:00:00Z", registered: true },
+			{ kind: "markdown", name: "notes.md", path: "notes.md", size: 1, updatedAt: "2026-11-16T00:00:00Z", registered: true },
+		],
+	});
+
+	it("keeps a deleted session's artifacts unless the person also deletes them", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [withArtifacts()], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		const box = within(dialog).getByRole("checkbox", { name: "Also delete its 2 artifacts" });
+		expect(box).not.toBeChecked();
+		expect(dialog).toHaveTextContent("Otherwise they stay on the Artifacts page, view only.");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true, keepArtifacts: true } },
+		}));
+	});
+
+	it("deletes the artifacts with the session when the box is checked", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [withArtifacts()], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		await userEvent.click(within(dialog).getByRole("checkbox", { name: "Also delete its 2 artifacts" }));
+		expect(dialog).toHaveTextContent("They are deleted for good.");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true } },
+		}));
+	});
+
+	it("warns that a worktree still on disk is cleaned up first, and keeps the dialog open when the delete is refused", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [archived()], isError: false, isSuccess: true });
+		deleteMock.mockResolvedValue({ error: { code: "WORKSPACE_CLEANUP_REFUSED" } });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		expect(dialog).toHaveTextContent("Its worktree is cleaned up first; uncommitted changes stop the delete.");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Unable to delete the session");
+		expect(screen.getByRole("dialog")).toBeInTheDocument();
+	});
+
+	it("offers no delete for a cloud session, whose record this daemon does not own", () => {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<ArchivedSessionCardAdapter
+						isRestoreDisabled={false}
+						isRestoring={false}
+						restoreAction={vi.fn()}
+						session={terminatedSession({ title: "cloud worker", cloud: { orgId: "org-1" } })}
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("button", { name: "Restore cloud worker" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Delete cloud worker permanently" })).not.toBeInTheDocument();
 	});
 });
 

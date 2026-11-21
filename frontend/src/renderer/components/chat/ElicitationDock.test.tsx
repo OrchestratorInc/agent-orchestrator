@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import type { ConversationActivity } from "../../types/conversation";
 import { ElicitationDock } from "./ElicitationDock";
+import codexInput from "../../../../../backend/internal/adapters/chatdriver/codexappserver/testdata/user_input.json";
 
 function activity(detail: ConversationActivity["detail"]): ConversationActivity {
 	return {
@@ -26,6 +27,81 @@ function otherAnswerFor(questionId: string) {
 }
 
 describe("ElicitationDock", () => {
+	it("renders Codex question, header and option descriptions and submits the native question id", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn();
+		render(<ElicitationDock activity={activity({ ...codexInput.detail, inputMode: "form", schema: { ...codexInput.detail.schema, type: "object" } })} onResolve={onResolve} />);
+		expect(screen.getAllByText(codexInput.params.questions[0].question).length).toBeGreaterThan(0);
+		expect(screen.getByRole("group", { name: "Direction *" })).toBeVisible();
+		expect(screen.getByText("Use the native protocol")).toBeVisible();
+		expect(screen.getByText("Keep the bridge")).toBeVisible();
+		expect(screen.queryByText("Do you want to run this command?")).not.toBeInTheDocument();
+		expect(onResolve).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("radio", { name: /Bridge/ }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { first_value: "Bridge" });
+	});
+
+	it("can answer a Codex Other question with free text without inventing an option", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn();
+		render(<ElicitationDock activity={activity({
+			...codexInput.detail,
+			inputMode: "form",
+			schema: {
+				...codexInput.detail.schema,
+				type: "object",
+				required: [],
+				properties: {
+					...codexInput.detail.schema.properties,
+					codex_other_0: { type: "string", title: "Direction — other answer or additional details", description: codexInput.detail.message },
+				},
+			},
+		})} onResolve={onResolve} />);
+		await user.type(screen.getByRole("textbox", { name: /other answer or additional details/ }), "SDK wrapper");
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { codex_other_0: "SDK wrapper" });
+		expect(screen.getAllByRole("radio")).toHaveLength(2);
+	});
+
+	it("keeps a Codex choice and its additional details independent in the redesigned card", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn();
+		render(<ElicitationDock activity={activity({
+			...codexInput.detail,
+			inputMode: "form",
+			schema: {
+				...codexInput.detail.schema,
+				type: "object",
+				required: [],
+				properties: {
+					...codexInput.detail.schema.properties,
+					codex_other_0: { type: "string", title: "Direction — other answer or additional details", description: codexInput.detail.message },
+				},
+			},
+		})} onResolve={onResolve} />);
+		const details = screen.getByRole("textbox", { name: /other answer or additional details/ });
+		await user.type(details, "Keep the typed transport");
+		await user.click(screen.getByRole("radio", { name: /Native/ }));
+		expect(details).toHaveValue("Keep the typed transport");
+		await user.type(details, " and ACK ownership");
+		expect(screen.getByRole("radio", { name: /Native/ })).toBeChecked();
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", {
+			first_value: "Native",
+			codex_other_0: "Keep the typed transport and ACK ownership",
+		});
+	});
+
+	it.each([ ["Skip", "decline"], ["Cancel", "cancel"] ] as const)("keeps Codex %s explicit in the redesigned card", async (button, action) => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn();
+		render(<ElicitationDock activity={activity({ ...codexInput.detail, inputMode: "form", schema: { ...codexInput.detail.schema, type: "object" } })} onResolve={onResolve} />);
+		expect(onResolve).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: button }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", action, undefined);
+	});
+
 	const claudeQuestions = {
 		type: "object" as const,
 		required: ["question_0", "question_1"],

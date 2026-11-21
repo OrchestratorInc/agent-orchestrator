@@ -12,6 +12,9 @@ type Summary struct {
 	OrchestratorAgent domain.AgentHarness `json:"orchestratorAgent,omitempty"`
 	ResolveError      string              `json:"resolveError,omitempty"`
 	FolderMissing     bool                `json:"folderMissing"`
+	// AutoSpawnPauses lists the harnesses whose automatic starts (tracker
+	// intake, schedules) stopped after three identical failures in a row.
+	AutoSpawnPauses []domain.AutoSpawnPause `json:"autoSpawnPauses,omitempty"`
 }
 
 // Project is the full read-model returned by GET /api/v1/projects/{id}.
@@ -26,6 +29,14 @@ type Project struct {
 	Config         *domain.ProjectConfig `json:"config,omitempty"`
 	WorkspaceRepos []WorkspaceRepo       `json:"workspaceRepos,omitempty"`
 	FolderMissing  bool                  `json:"folderMissing"`
+
+	// CanonicalRepo is GitHub's current owner/name for a github.com Repo,
+	// which differs from Repo's path after a rename or transfer. Omitted for
+	// other hosts and while GitHub has not answered.
+	CanonicalRepo string `json:"canonicalRepo,omitempty"`
+	// CanonicalOwnerAvatarURL is GitHub's id-based avatar for CanonicalRepo's
+	// owner. Login-based avatar URLs can answer with GitHub's placeholder.
+	CanonicalOwnerAvatarURL string `json:"canonicalOwnerAvatarUrl,omitempty"`
 }
 
 // Degraded is returned in place of Project when project config failed to load.

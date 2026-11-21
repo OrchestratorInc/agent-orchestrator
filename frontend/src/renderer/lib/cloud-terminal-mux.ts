@@ -54,6 +54,8 @@ export interface CloudTerminalMuxOptions {
 	 * so a future epoch-aware CP can resume within an epoch instead.
 	 */
 	cursor?: { value: number };
+	/** Typed into the terminal once, when it first reports ready (a command cue's command). */
+	initialInput?: string;
 	WebSocketImpl?: typeof WebSocket;
 }
 
@@ -93,6 +95,7 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	// sent since that send, so the screen no longer matches the program's.
 	let reflowed = false;
 	const pendingInput: string[] = [];
+	let initialInput = options.initialInput;
 
 	const setConnectionState = (next: MuxConnectionState) => {
 		if (disposed || connectionState === next) return;
@@ -142,6 +145,9 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			case "ready":
 				if (typeof message.sequence === "number") advanceCursor(message.sequence);
 				openedListeners.forEach((listener) => listener());
+				// Typed only once the shell is up, so it is never lost to a
+				// terminal that has not started yet.
+				if (initialInput && sendJSON({ type: "input", data: initialInput })) initialInput = undefined;
 				break;
 			case "output":
 				if (typeof message.sequence === "number") advanceCursor(message.sequence);

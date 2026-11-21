@@ -14,7 +14,9 @@ ao project <subcommand> [args] [flags]
 
 ### ao project add
 
-Register a local git repo as a project so sessions can be spawned in it. The path must be an existing git repository on disk. With `--as-workspace`, the path may be a parent folder containing direct child git repositories; AO initializes/adopts the parent as the root repo and gitignores children.
+Register a local git repo as a project so sessions can be spawned in it. The path must be an existing git repository on disk. With `--as-workspace`, the path may be a parent folder containing direct child git repositories; Orchestrator initializes/adopts the parent as the root repo and gitignores children.
+
+A repository with no remote needs `--default-branch`: Orchestrator does not take a default from the checked-out branch. Without it the command still registers the project and prints a warning, and sessions fail to start until `ao project set-config <id> --default-branch <branch>` sets one.
 
 **Syntax:**
 ```
@@ -26,6 +28,7 @@ ao project add [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--as-workspace` | Register a parent folder as a workspace project (root-as-repo plus direct child repos) | - |
+| `--default-branch string` | Base branch for new worktrees; needed when the repository has no remote. With `--as-workspace` it applies to the workspace's root repository; child repositories resolve their own | Resolved from the remote |
 | `--id string` | Project id | Derived by the daemon from the path |
 | `--name string` | Display name | - |
 | `--orchestrator-agent string` | Default orchestrator session agent | - |
@@ -37,6 +40,11 @@ ao project add [flags]
 ```bash
 # Register a repo as a project
 ao project add --path /path/to/agent-orchestrator --name "agent-orchestrator"
+```
+
+```bash
+# Register a local-only repo that has no remote
+ao project add --path /path/to/prototype --default-branch main
 ```
 
 ```bash
@@ -126,9 +134,9 @@ ao project rm agent-orchestrator -y
 
 ### ao project set-config
 
-Replace a project's saved configuration. AO reads these settings when it spawns a session. Use flags for common fields or `--config-json` for the full object. `--clear` removes all configuration.
+Update a project's saved configuration. Orchestrator reads these settings when it spawns a session. Flags change only the fields they name and keep the rest of the saved config; a repeatable flag replaces that whole list or map. `--config-json` replaces the full object, and `--clear` removes all configuration.
 
-**Warning:** This command replaces the whole config, even when you use focused flags. The CLI silently ignores unknown keys in `--config-json`, so a typo can leave the replacement empty. Its config mirror also omits `effort`; `ao project get --json` cannot show it, and a CLI configuration replacement drops existing effort values. Use Project Settings in the desktop app or the daemon API when you need to preserve or change effort. See the [full-config warning](https://docs.orchestrator.inc/configuration/projects/#update-from-the-cli) before updating project settings from the CLI.
+**Warning:** `--config-json` replaces the whole config. The CLI silently ignores unknown keys in it, so a typo can leave the replacement empty. See the [full-config warning](https://docs.orchestrator.inc/configuration/projects/#update-from-the-cli) before updating project settings from the CLI.
 
 **Syntax:**
 ```
@@ -152,6 +160,7 @@ ao project set-config <id> [flags]
 | `--orchestrator-rules string` | Project-specific standing instructions appended to orchestrator session prompts | - |
 | `--permission string` | Permission mode: `default`, `accept-edits`, `auto`, `bypass-permissions` | - |
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
+| `--pre-remove stringArray` | Command to run before workspace removal (repeatable) | - |
 | `--session-prefix string` | Displayed session-id prefix | - |
 | `--symlink stringArray` | Repo-relative path to symlink into workspaces (repeatable) | - |
 | `--tracker-assignee string` | Issue assignee required for tracker intake eligibility | - |
@@ -162,9 +171,9 @@ ao project set-config <id> [flags]
 
 Use `--config-json` for fields without a dedicated flag, including
 `trackerIntake.provider`, `autoReview`, `containerReap.disabled`,
-`agentConfig.mode`, `worker.agentConfig.mode`, and
-`orchestrator.agentConfig.mode`. The full-config replacement warning above
-still applies.
+`agentConfig.mode`, `worker.agentConfig.mode`,
+`orchestrator.agentConfig.mode`, and `effort` under any `agentConfig`. The
+full-config replacement warning above still applies.
 
 **Examples:**
 
@@ -182,6 +191,11 @@ ao project set-config agent-orchestrator --config-json \
 ```bash
 # Set an env var and a post-create command
 ao project set-config agent-orchestrator --env "NODE_ENV=development" --post-create "npm install"
+```
+
+```bash
+# Set cleanup commands that run before a worktree is removed
+ao project set-config agent-orchestrator --pre-remove "docker compose down -v" --pre-remove "rm -rf .cache"
 ```
 
 ```bash

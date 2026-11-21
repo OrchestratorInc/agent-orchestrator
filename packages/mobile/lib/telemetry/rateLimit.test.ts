@@ -9,7 +9,7 @@ import {
 
 const T0 = Date.parse("2026-08-07T10:00:00Z");
 
-function run(count: number, startState: RateLimitState = {}, name = "ao.v2.mobile_app.feature_used", now = T0) {
+function run(count: number, startState: RateLimitState = {}, name = "mobile.app.feature_used", now = T0) {
 	let state = startState;
 	const results: boolean[] = [];
 	for (let i = 0; i < count; i++) {
@@ -29,7 +29,7 @@ describe("checkRateLimit", () => {
 
 	it("reopens the minute window after 60s", () => {
 		const first = run(EVENTS_PER_NAME_PER_MINUTE);
-		const later = checkRateLimit(first.state, "ao.v2.mobile_app.feature_used", T0 + 61_000);
+		const later = checkRateLimit(first.state, "mobile.app.feature_used", T0 + 61_000);
 		expect(later.allowed).toBe(true);
 	});
 
@@ -40,7 +40,7 @@ describe("checkRateLimit", () => {
 		let allowed = 0;
 		// One event every 30s for a full day's worth of attempts.
 		for (let i = 0; i < EVENTS_PER_NAME_PER_DAY + 50; i++) {
-			const r = checkRateLimit(state, "ao.v2.mobile_app.connected", T0 + i * 30_000);
+			const r = checkRateLimit(state, "mobile.app.connected", T0 + i * 30_000);
 			state = r.state;
 			if (r.allowed) allowed++;
 		}
@@ -50,11 +50,11 @@ describe("checkRateLimit", () => {
 	it("resets the daily counter on a new UTC day", () => {
 		let state: RateLimitState = {};
 		for (let i = 0; i < EVENTS_PER_NAME_PER_DAY; i++) {
-			state = checkRateLimit(state, "ao.v2.app.active", T0 + i * 1000).state;
+			state = checkRateLimit(state, "mobile.app.active", T0 + i * 1000).state;
 		}
-		const capped = checkRateLimit(state, "ao.v2.app.active", T0 + 5000);
+		const capped = checkRateLimit(state, "mobile.app.active", T0 + 5000);
 		expect(capped.allowed).toBe(false);
-		const nextDay = checkRateLimit(capped.state, "ao.v2.app.active", Date.parse("2026-08-08T00:01:00Z"));
+		const nextDay = checkRateLimit(capped.state, "mobile.app.active", Date.parse("2026-08-08T00:01:00Z"));
 		expect(nextDay.allowed).toBe(true);
 	});
 
@@ -74,9 +74,9 @@ describe("mergeRateState (restart persistence)", () => {
 	// state loaded. The higher persisted day count must survive, or a restart
 	// resets the ceiling.
 	it("keeps the higher day count for the same day, so a restart cannot reset it", () => {
-		const persisted = { "ao.v2.mobile_app.connected": { minuteStart: 0, minuteCount: 0, day: DAY, dayCount: 199 } };
-		const current = { "ao.v2.mobile_app.connected": { minuteStart: 1, minuteCount: 1, day: DAY, dayCount: 1 } };
-		expect(mergeRateState(persisted, current)["ao.v2.mobile_app.connected"].dayCount).toBe(199);
+		const persisted = { "mobile.app.connected": { minuteStart: 0, minuteCount: 0, day: DAY, dayCount: 199 } };
+		const current = { "mobile.app.connected": { minuteStart: 1, minuteCount: 1, day: DAY, dayCount: 1 } };
+		expect(mergeRateState(persisted, current)["mobile.app.connected"].dayCount).toBe(199);
 	});
 
 	it("drops a persisted entry from an older day", () => {

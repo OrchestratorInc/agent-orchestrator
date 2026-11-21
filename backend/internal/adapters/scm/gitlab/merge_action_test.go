@@ -99,8 +99,12 @@ func TestMergePullRequest_RejectsInvalidArgs(t *testing.T) {
 			modify: func(r ports.SCMMergeRequest) ports.SCMMergeRequest { r.ExpectedHeadSHA = "abc"; return r },
 		},
 		{
-			name:   "unsupported method",
-			modify: func(r ports.SCMMergeRequest) ports.SCMMergeRequest { r.Method = "merge"; return r },
+			name:   "unknown method",
+			modify: func(r ports.SCMMergeRequest) ports.SCMMergeRequest { r.Method = "octopus"; return r },
+		},
+		{
+			name:   "rebase method",
+			modify: func(r ports.SCMMergeRequest) ports.SCMMergeRequest { r.Method = ports.SCMMergeRebase; return r },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -46,29 +47,33 @@ import (
 )
 
 const (
-	maxPromptLen      = 16 << 10
+	maxPromptLen      = 100 << 10
 	maxMessageLen     = 4096
 	maxModelLen       = 256
 	maxDisplayNameLen = 100
 	maxIdempotencyKey = 128
 
-	// Attachment limits guard the daemon against oversized spawn bodies. Files
-	// are pasted/dropped into the task brief and inlined as base64 in the JSON
-	// body, so the caps are deliberately conservative.
-	maxAttachments      = 8
-	maxAttachmentBytes  = attachmentstore.MaxFileBytes // 50 MiB per file, decoded
-	maxAttachmentsBytes = 100 << 20                    // 100 MiB total, decoded
-	// maxSpawnBodyBytes bounds the raw request body before it is decoded. The
-	// per-attachment and total caps above only apply after the whole body is
-	// materialized, so without this an oversized body (base64 inflates the
-	// decoded total by ~4/3) would allocate in full first. Derived from the
-	// decoded total plus headroom for the prompt and JSON envelope.
-	maxSpawnBodyBytes = maxAttachmentsBytes*4/3 + (2 << 20)
-	// maxSendBodyBytes is the /send equivalent of maxSpawnBodyBytes, sized off
-	// maxAttachmentBytes (one attachment) rather than maxAttachmentsBytes
-	// (spawn's up-to-eight): unlike spawn, a send carries at most one inline
-	// attachment.
-	maxSendBodyBytes = maxAttachmentBytes*4/3 + (2 << 20)
+	// Attachment bytes inlined as base64 in a JSON body are held in memory
+	// whole while the body is decoded, so those bodies stay bounded. A file of
+	// any size is streamed to disk first through POST /api/v1/attachment-uploads
+	// (uploadAttachment) and named by its uploadId, which costs a few bytes here;
+	// clients inline only small files. The count cap stays: it bounds how many
+	// files one message names, not how big they are.
+	maxAttachments = 8
+	// maxInlineAttachmentsBytes is the decoded total one body may inline.
+	maxInlineAttachmentsBytes = 100 << 20
+	// maxSpawnBodyBytes bounds the raw request body before it is decoded, so an
+	// oversized body (base64 inflates the decoded total by ~4/3) cannot allocate
+	// in full first. Derived from the inline total plus headroom for the prompt
+	// and JSON envelope.
+	maxSpawnBodyBytes = maxInlineAttachmentsBytes*4/3 + (2 << 20)
+	// maxSendBodyBytes is the /send equivalent of maxSpawnBodyBytes, sized for
+	// the one attachment a send carries.
+	maxSendBodyBytes = (50<<20)*4/3 + (2 << 20)
+	// uploadIdleTimeout ends an upload whose client stops sending. An upload
+	// has no overall deadline: a large file over a slow link takes as long as
+	// it takes while bytes keep arriving.
+	uploadIdleTimeout = 2 * time.Minute
 )
 
 // blockedAttachmentMimes contains MIME types that are explicitly rejected for
@@ -96,6 +101,8 @@ type SessionService interface {
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	DeleteArtifacts(ctx context.Context, id domain.SessionID) error
+	RegisterArtifacts(ctx context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error)
+	UnregisterArtifact(ctx context.Context, id domain.SessionID, path string) error
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
@@ -157,6 +164,12 @@ type ActivityRecorder interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
 
+// PRRefresher re-reads a session's pull requests early, when a local signal
+// says they probably just changed on the provider.
+type PRRefresher interface {
+	RequestSessionRefresh(id domain.SessionID)
+}
+
 // ManagedPreviewServer is the deterministic server lifecycle attached to a
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
@@ -191,7 +204,9 @@ type SessionsController struct {
 		Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error)
 	}
 	Activity                 ActivityRecorder
+	PRRefresh                PRRefresher
 	NativeSessions           ports.AgentNativeSessionResolver
+	TerminalReplies          ports.AgentResolver // adapters whose Stop hook omits the reply
 	DataDir                  string
 	Usage                    UsageHookRecorder
 	Attachments              *attachmentstore.Store
@@ -221,8 +236,10 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
 	r.Get("/sessions/{sessionId}/preview/artifacts/*", c.previewArtifactFile)
 	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
+	r.Get("/kept-artifacts", c.listKeptArtifacts)
 	r.Delete("/sessions/{sessionId}/artifact-files", c.deleteArtifactFile)
 	r.Put("/sessions/{sessionId}/artifact-files", c.updateArtifactFile)
+	r.Post("/sessions/{sessionId}/artifact-registrations", c.registerArtifacts)
 	r.Get("/sessions/{sessionId}/artifact-versions", c.listArtifactVersions)
 	r.Get("/sessions/{sessionId}/artifact-versions/{version}", c.getArtifactVersion)
 	r.Post("/sessions/{sessionId}/artifact-versions/restore", c.restoreArtifactVersion)
@@ -234,6 +251,7 @@ func (c *SessionsController) Register(r chi.Router) {
 		r.Method(method, "/sessions/{sessionId}/agent-browser/*", http.HandlerFunc(c.agentBrowser))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Post("/attachment-uploads", c.uploadAttachment)
 	r.Post("/sessions/{sessionId}/conversation/file-references/resolve", c.resolveFileReference)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
 	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
@@ -255,6 +273,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/pr", c.listPRs)
 	r.Post("/sessions/{sessionId}/pr/claim", c.claimPR)
 	r.Patch("/sessions/{sessionId}", c.rename)
+	r.Delete("/sessions/{sessionId}", c.deleteSession)
 	r.Patch("/sessions/{sessionId}/merge-policy", c.setMergePolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-review", c.setAutoInjectReviewPolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-ci", c.setAutoInjectCIPolicy)
@@ -283,10 +302,11 @@ func (c *SessionsController) Register(r chi.Router) {
 }
 
 // RegisterStreams mounts long-lived session streams outside the REST timeout
-// middleware. Worktree notifications remain active only while a client is
-// actually viewing that session's files.
+// middleware. Worktree and artifact notifications remain active only while a
+// client is actually viewing that session's files or artifacts.
 func (c *SessionsController) RegisterStreams(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/events", c.streamWorkspaceChanges)
+	r.Get("/sessions/{sessionId}/artifact-events", c.streamArtifactChanges)
 }
 
 func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +328,9 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		Sessions:   sessionViews(r, page.Sessions),
 		NextCursor: page.NextCursor,
 		Archived:   archiveSummaryView(page.Archived),
+		PRState:    filter.PRState,
+		Total:      page.Total,
+		Version:    page.Version,
 	})
 }
 
@@ -356,7 +379,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(in.Prompt) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 100 KiB or fewer", nil)
 		return
 	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
@@ -383,7 +406,9 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		keyless.Attachments = nil
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
+	// A standalone worker has no project to start in the background.
+	async := in.Async && in.ProjectID != ""
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -410,6 +435,8 @@ func extensionForMimeType(mimeType string) string {
 		"image/jpg":       ".jpg",
 		"text/plain":      ".txt",
 		"video/quicktime": ".mov",
+		// Go's table also lists .f4v for MP4, and which comes first differs by platform.
+		"video/mp4": ".mp4",
 	}
 
 	// Check if we have a preferred extension for this MIME type
@@ -446,16 +473,28 @@ func extensionForMimeType(mimeType string) string {
 	return ".bin"
 }
 
-// decodeAttachment validates and base64-decodes a single inline file
-// attachment shared by spawn, delegate, stage, send, and chat requests, enforcing
-// the blocked-MIME-type rule and the caller's per-file cap. Callers handling multiple
-// attachments are responsible for the count and total-size caps.
+// decodeAttachment validates a single file attachment shared by spawn,
+// delegate, stage, send, and chat requests: it enforces the blocked-MIME-type
+// rule, base64-decodes inline data, and checks an upload id's shape. maxBytes
+// caps inline data (0 leaves it to the body limit); a caller with a cap, such
+// as native chat images, which go to the model inline, takes no uploads.
+// Callers handling multiple attachments are responsible for the count and
+// total-size caps.
 func decodeAttachment(a AttachmentInput, maxBytes int) (ports.SpawnAttachment, *attachmentError) {
 	mimeType := strings.ToLower(strings.TrimSpace(a.MimeType))
 	if blockedAttachmentMimes[mimeType] {
 		return ports.SpawnAttachment{}, &attachmentError{"UNSUPPORTED_ATTACHMENT_TYPE", "unsupported attachment type"}
 	}
 	ext := extensionForMimeType(mimeType)
+	if upload := strings.TrimSpace(a.UploadID); upload != "" {
+		if maxBytes > 0 || strings.TrimSpace(a.Data) != "" {
+			return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_DATA", "attachment must carry either data or an uploadId"}
+		}
+		if attachmentstore.ValidateUploadID(upload) != nil {
+			return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_UPLOAD", "attachment uploadId is invalid"}
+		}
+		return ports.SpawnAttachment{Ext: ext, Upload: upload}, nil
+	}
 	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(a.Data))
 	if err != nil {
 		return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_DATA", "attachment data is not valid base64"}
@@ -463,18 +502,21 @@ func decodeAttachment(a AttachmentInput, maxBytes int) (ports.SpawnAttachment, *
 	if len(data) == 0 {
 		return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_DATA", "attachment is empty"}
 	}
-	if len(data) > maxBytes {
+	if maxBytes > 0 && len(data) > maxBytes {
 		return ports.SpawnAttachment{}, &attachmentError{"ATTACHMENT_TOO_LARGE", "attachment is too large"}
 	}
 	return ports.SpawnAttachment{Ext: ext, Data: data}, nil
 }
 
+// decodeSpawnAttachments decodes workspace file attachments, which have no
+// size cap: inline data is bounded by the request body limit, and an upload
+// was streamed to disk.
 func decodeSpawnAttachments(in []AttachmentInput) ([]ports.SpawnAttachment, *attachmentError) {
-	return decodeAttachments(in, maxAttachmentBytes, maxAttachmentsBytes)
+	return decodeAttachments(in, 0, 0)
 }
 
-// decodeAttachments enforces the caller's count and size caps, accepting any
-// MIME type except explicitly blocked ones (e.g., SVG).
+// decodeAttachments enforces the count cap and the caller's size caps (0 for
+// none), accepting any MIME type except explicitly blocked ones (e.g., SVG).
 func decodeAttachments(in []AttachmentInput, maxFileBytes, maxTotalBytes int) ([]ports.SpawnAttachment, *attachmentError) {
 	if len(in) == 0 {
 		return nil, nil
@@ -490,12 +532,60 @@ func decodeAttachments(in []AttachmentInput, maxFileBytes, maxTotalBytes int) ([
 			return nil, err
 		}
 		total += len(attachment.Data)
-		if total > maxTotalBytes {
+		if maxTotalBytes > 0 && total > maxTotalBytes {
 			return nil, &attachmentError{"ATTACHMENTS_TOO_LARGE", "attachments are too large"}
 		}
 		out = append(out, attachment)
 	}
 	return out, nil
+}
+
+// uploadAttachment streams a request body to disk and answers with the id a
+// spawn, stage, delegate, or send names as uploadId in place of inline data.
+// The body is the file's raw bytes. Nothing is read into memory, so there is
+// no size cap; the only deadline is uploadIdleTimeout between reads.
+func (c *SessionsController) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	if c.Attachments == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/attachment-uploads")
+		return
+	}
+	rc := http.NewResponseController(w)
+	defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
+	id, size, err := c.Attachments.Upload(r.Context(), idleDeadlineReader{rc: rc, body: r.Body, idle: uploadIdleTimeout})
+	if err != nil {
+		if errors.Is(err, attachmentstore.ErrEmpty) {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT_DATA", "attachment is empty", nil)
+			return
+		}
+		envelope.WriteError(w, r, fmt.Errorf("store attachment upload: %w", err))
+		return
+	}
+	envelope.WriteJSON(w, http.StatusCreated, AttachmentUploadResponse{UploadID: id, Bytes: size})
+}
+
+// idleDeadlineReader pushes the connection's read deadline out before every
+// read, so an upload fails only when its client stops sending.
+type idleDeadlineReader struct {
+	rc   *http.ResponseController
+	body io.Reader
+	idle time.Duration
+}
+
+func (r idleDeadlineReader) Read(p []byte) (int, error) {
+	_ = r.rc.SetReadDeadline(time.Now().Add(r.idle))
+	return r.body.Read(p)
+}
+
+// writeAttachmentWriteError answers a failed attachment write, naming an
+// upload that is gone (swept after UploadTTL, or from another machine) so the
+// client can say to attach the file again.
+func writeAttachmentWriteError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, attachmentstore.ErrUploadNotFound) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_UPLOAD_NOT_FOUND",
+			"An attached file is no longer on this machine. Attach it again.", nil)
+		return
+	}
+	envelope.WriteError(w, r, err)
 }
 
 func (c *SessionsController) get(w http.ResponseWriter, r *http.Request) {
@@ -557,7 +647,7 @@ func (c *SessionsController) previewArtifactFile(w http.ResponseWriter, r *http.
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/preview/artifacts/*")
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	sess, _, err := c.artifactSession(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -577,7 +667,15 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/preview/files/*")
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	// Only artifact files outlive their session; workspace previews need it.
+	fromArtifacts := r.URL.Query().Get("source") == "artifact"
+	var sess domain.Session
+	var err error
+	if fromArtifacts {
+		sess, _, err = c.artifactSession(r.Context(), sessionID(r))
+	} else {
+		sess, err = c.Svc.Get(r.Context(), sessionID(r))
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -587,7 +685,11 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return
 	}
-	if r.URL.Query().Get("source") == "artifact" {
+	if fromArtifacts {
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
+			return
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
@@ -807,7 +909,7 @@ func (c *SessionsController) inlineArtifactOrigin(w http.ResponseWriter, r *http
 	}
 	// The session read fills in the default artifact directory for a row
 	// stored without one.
-	sess, err := c.Svc.Get(r.Context(), id)
+	sess, _, err := c.artifactSession(r.Context(), id)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -855,7 +957,14 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return true
 	}
-	sess, err := c.Svc.Get(r.Context(), id)
+	var sess domain.Session
+	var err error
+	if artifactOrigin {
+		// A deleted session's kept artifacts are still served here.
+		sess, _, err = c.artifactSession(r.Context(), id)
+	} else {
+		sess, err = c.Svc.Get(r.Context(), id)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return true
@@ -865,6 +974,10 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		// is served verbatim from ArtifactDir: there is no marker to strip
 		// and nothing a real workspace path could collide with.
 		asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, asset, version)
+			return true
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
 		return true
 	}
@@ -1583,8 +1696,9 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 //   - An explicit workspace-local path (e.g. `index.html`, `./dist/index.html`)
 //     is served through the preview/files route so local files load.
 //   - Absolute paths and file: URLs are accepted only when their fully resolved
-//     target remains inside the fully resolved session workspace. They use the
-//     workspace-confined preview origin rather than an automatable file: URL.
+//     target remains inside the fully resolved session workspace or artifact
+//     directory. They use that root's confined preview origin rather than an
+//     automatable file: URL.
 //   - External http(s) URLs and host:port dev servers are kept verbatim.
 //
 // Every call bumps the session's preview revision, so re-running `ao preview`
@@ -1621,7 +1735,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 			}
 		} else if existing := strings.TrimSpace(sess.Metadata.PreviewURL); existing != "" {
 			var resolveErr error
-			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, existing, false)
+			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, existing, false)
 			if resolveErr != nil {
 				writePreviewResolveError(w, r, resolveErr)
 				return
@@ -1632,7 +1746,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 		}
 	} else {
 		var resolveErr error
-		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, previewURL, in.RequireWorkspaceFile)
+		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, previewURL, in.RequireWorkspaceFile)
 		if resolveErr != nil {
 			writePreviewResolveError(w, r, resolveErr)
 			return
@@ -2125,7 +2239,7 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	result, err := c.Svc.RequestKill(r.Context(), sessionID(r))
+	result, err := c.Svc.RequestKill(sessionsvc.WithActionCaller(r.Context(), in.CallerSessionID), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -2163,6 +2277,45 @@ func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, RollbackSessionResponse{OK: true, SessionID: sessionID(r), Deleted: out.Deleted, Killed: out.Killed})
 }
 
+// sessionDeleteService is optional so unrelated controller fakes keep
+// implementing the stable SessionService surface.
+type sessionDeleteService interface {
+	Delete(ctx context.Context, id domain.SessionID, cleanup bool) error
+}
+
+// sessionKeepingDeleteService deletes a session but keeps its artifacts.
+type sessionKeepingDeleteService interface {
+	DeleteKeepingArtifacts(ctx context.Context, id domain.SessionID, cleanup bool) error
+}
+
+// deleteSession permanently removes a terminated session's record. The service
+// refuses a live session, and one whose worktree is not cleaned up yet unless
+// the caller asks it to clean it up first.
+func (c *SessionsController) deleteSession(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(sessionDeleteService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
+		return
+	}
+	cleanup := r.URL.Query().Get("cleanup") == "true"
+	var err error
+	if r.URL.Query().Get("keepArtifacts") == "true" {
+		keeping, ok := c.Svc.(sessionKeepingDeleteService)
+		if !ok {
+			apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
+			return
+		}
+		err = keeping.DeleteKeepingArtifacts(r.Context(), sessionID(r), cleanup)
+	} else {
+		err = svc.Delete(r.Context(), sessionID(r), cleanup)
+	}
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, DeleteSessionResponse{OK: true, SessionID: sessionID(r)})
+}
+
 func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/cleanup")
@@ -2175,7 +2328,7 @@ func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	skipped := make([]CleanupSkippedSession, 0, len(out.Skipped))
 	for _, skip := range out.Skipped {
-		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Reason: skip.Reason})
+		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Code: string(skip.Code), Reason: skip.Reason})
 	}
 	envelope.WriteJSON(w, http.StatusOK, CleanupSessionsResponse{
 		OK: true, Cleaned: out.Cleaned, AlreadyGone: out.AlreadyGone, Skipped: skipped,
@@ -2203,7 +2356,7 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	var attachment *ports.SpawnAttachment
 	if in.Attachment != nil {
-		decoded, attachErr := decodeAttachment(*in.Attachment, maxAttachmentBytes)
+		decoded, attachErr := decodeAttachment(*in.Attachment, 0)
 		if attachErr != nil {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 			return
@@ -2222,9 +2375,17 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
-	if err != nil {
-		envelope.WriteError(w, r, err)
+	if errors.Is(err, chatsvc.ErrControllerHandoff) {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_INTERFACE_TRANSITION",
+			"the session is switching agents or interfaces; send again after the handoff completes", nil)
 		return
+	}
+	if err != nil {
+		writeAttachmentWriteError(w, r, err)
+		return
+	}
+	if recorder, ok := c.Svc.(UserMessageRecorder); ok {
+		recordUserMessage(r.Context(), recorder, sessionID(r), in.SenderSessionID, false)
 	}
 	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
 }
@@ -2249,7 +2410,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if len(in.Brief) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 100 KiB or fewer", nil)
 		return
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(in.Model)) > maxModelLen {
@@ -2287,11 +2448,14 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		ClientRequestHash: requestHash,
 		ProjectID:         in.ProjectID,
 		Brief:             domain.SanitizeControlChars(in.Brief),
+		BaseBranch:        strings.TrimSpace(in.BaseBranch),
+		Branch:            domain.SanitizeControlChars(strings.TrimSpace(in.Branch)),
 		RequestedAgent:    in.Agent,
 		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
 		Effort:            sanitizedOptionalString(in.Effort),
 		ApprovalMode:      in.ApprovalMode,
 		RequestedMode:     in.Mode,
+		AccountID:         strings.TrimSpace(in.AccountID),
 		Attachments:       attachments,
 		TaskPreparation:   domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
 	})
@@ -2315,6 +2479,11 @@ func clientRequestFingerprint(route string, request any, attachments []ports.Spa
 	for _, attachment := range attachments {
 		_, _ = fmt.Fprintf(h, "%d:%s:%d:", len(attachment.Ext), attachment.Ext, len(attachment.Data))
 		_, _ = h.Write(attachment.Data)
+		// An upload is named, not hashed: its id is unique to its bytes, and a
+		// retry of the same request names the same upload.
+		if attachment.Upload != "" {
+			_, _ = fmt.Fprintf(h, "upload:%d:%s:", len(attachment.Upload), attachment.Upload)
+		}
 	}
 	return "v1:" + hex.EncodeToString(h.Sum(nil))
 }
@@ -2381,7 +2550,7 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_CONVERSATION_CHECKPOINT_ORIGIN", "Conversation checkpoint origin must be human or coordination", nil)
 		return
 	}
-	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" {
+	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" && !in.PRMayHaveChanged {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state, agent session ID, or subagent ID is required", nil)
 		return
 	}
@@ -2426,6 +2595,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		if running != nil {
 			sig.RunningSubagentIDs = &running
 		}
+	}
+	if sig.Event == "stop" && sig.SubagentID == "" && sig.FinalAssistantMessage == "" {
+		sig.FinalAssistantMessage = c.terminalTurnReply(r.Context(), sessionID(r), sig.ExpectedHarness, sig.AgentSessionID)
 	}
 	var activityErr error
 	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "" || sig.SubagentID != "") {
@@ -2472,6 +2644,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "1")
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "ACTIVITY_PROJECTION_BUSY", "Concurrent session updates prevented this activity signal from committing; retry the hook", nil)
 		return
+	}
+	if in.PRMayHaveChanged && c.PRRefresh != nil {
+		c.PRRefresh.RequestSessionRefresh(sessionID(r))
 	}
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: in.State})
 }
@@ -2571,6 +2746,26 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: string(signal.State)})
 }
 
+// terminalTurnReply reads a main Stop's missing reply from the harness's
+// native history, for adapters that keep it (ports.AgentTerminalReplyReader).
+// The harness only selects the reader: the history it reads is located from
+// AO's own data for this session, never from a hook-supplied path.
+func (c *SessionsController) terminalTurnReply(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, nativeID string) string {
+	if c.TerminalReplies == nil || harness == "" || c.DataDir == "" {
+		return ""
+	}
+	agent, ok := c.TerminalReplies.Agent(harness)
+	if !ok {
+		return ""
+	}
+	reader, ok := agent.(ports.AgentTerminalReplyReader)
+	if !ok {
+		return ""
+	}
+	reply := reader.TerminalTurnReply(ctx, ports.TerminalReplyConfig{DataDir: c.DataDir, SessionID: id, NativeSessionID: nativeID})
+	return capActivityText(domain.SanitizeControlChars(strings.TrimSpace(reply)), 16<<10)
+}
+
 // capActivityMeta bounds an optional activity correlation string; overlong
 // values are dropped, not truncated (see the comment at its call site).
 func capActivityMeta(v string) string {
@@ -2629,7 +2824,7 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 	}
 	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		envelope.WriteErrorWithCode(w, r, err, "ORCHESTRATOR_SPAWN_FAILED", "Unable to start orchestrator")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnOrchestratorResponse{
@@ -2713,6 +2908,13 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 		}
 		filter.Limit = limit
 	}
+	switch state := domain.PRState(q.Get("prState")); state {
+	case "":
+	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateMerged, domain.PRStateClosed:
+		filter.PRState = state
+	default:
+		return sessionsvc.ListFilter{}, errors.New("prState must be open, draft, merged or closed")
+	}
 	if filter.Cursor = q.Get("cursor"); filter.Cursor != "" && filter.Limit == 0 {
 		return sessionsvc.ListFilter{}, errors.New("cursor requires limit")
 	}
@@ -2775,16 +2977,16 @@ func resolveLocalPreview(r *http.Request, id domain.SessionID, workspacePath, ra
 	return resolved, true, err
 }
 
-func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, raw string, requireWorkspaceFile bool) (string, error) {
+func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, artifactDir, raw string, requireWorkspaceFile bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if filePath, isFileURL, err := previewFileURLPath(raw); isFileURL {
 		if err != nil {
 			return "", err
 		}
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, filePath)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, filePath)
 	}
 	if isAbsolutePreviewPath(raw) {
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, raw)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, raw)
 	}
 	if !hasURLScheme(raw) && containsParentPathSegment(raw) {
 		return "", errPreviewFileOutsideWorkspace
@@ -2838,20 +3040,16 @@ func previewFileURLPath(raw string) (string, bool, error) {
 	return filePath, true, nil
 }
 
-func workspaceAbsolutePreviewURL(
+// absolutePreviewURL opens an absolute file path only when its fully resolved
+// target is a file inside the fully resolved session workspace or session
+// artifact directory. Each root keeps its own isolated preview origin.
+func absolutePreviewURL(
 	r *http.Request,
 	id domain.SessionID,
 	workspacePath,
+	artifactDir,
 	filePath string,
 ) (string, error) {
-	workspaceAbs, err := filepath.Abs(workspacePath)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
-	workspaceResolved, err := filepath.EvalSymlinks(workspaceAbs)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
 	fileAbs, err := filepath.Abs(filePath)
 	if err != nil {
 		return "", errPreviewFileNotFound
@@ -2860,20 +3058,50 @@ func workspaceAbsolutePreviewURL(
 	if err != nil {
 		return "", errPreviewFileNotFound
 	}
-	rel, err := filepath.Rel(workspaceResolved, fileResolved)
+	if root, rel, ok := resolvedRootRelative(workspacePath, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewFileURL(r, id, entry.Path)
+	}
+	// Deliverables live in the artifact directory, outside the workspace, and
+	// agents open them by their absolute path.
+	if root, rel, ok := resolvedRootRelative(artifactDir, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewutil.ArtifactFileURL("http://"+r.Host, id, entry.Path)
+	}
+	return "", errPreviewFileOutsideWorkspace
+}
+
+// resolvedRootRelative returns root with its symlinks resolved and target's
+// slash path below it. It reports false for an empty or missing root and for a
+// target that is root itself or outside it.
+func resolvedRootRelative(root, target string) (string, string, bool) {
+	if root == "" {
+		return "", "", false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", false
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(rootResolved, target)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errPreviewFileOutsideWorkspace
+		return "", "", false
 	}
-	entry, ok := previewutil.EntryAtPath(workspaceResolved, filepath.ToSlash(rel))
-	if !ok {
-		return "", errPreviewFileNotFound
-	}
-	return previewFileURL(r, id, entry.Path)
+	return rootResolved, filepath.ToSlash(rel), true
 }
 
 func writePreviewResolveError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errPreviewFileOutsideWorkspace) {
-		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace", nil)
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace or artifact directory", nil)
 		return
 	}
 	if errors.Is(err, errPreviewFileNotFound) {
@@ -2954,11 +3182,16 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 	out := make([]SessionArtifactView, 0, len(s.ArtifactFiles))
 	for _, artifact := range s.ArtifactFiles {
 		view := SessionArtifactView{
-			Path:      artifact.Path,
-			Name:      artifact.Name,
-			Kind:      artifact.Kind,
-			Size:      artifact.Size,
-			UpdatedAt: artifact.UpdatedAt,
+			ID:            artifact.ID,
+			Path:          artifact.Path,
+			Name:          artifact.Name,
+			Kind:          artifact.Kind,
+			Size:          artifact.Size,
+			UpdatedAt:     artifact.UpdatedAt,
+			ShareURL:      artifact.ShareURL,
+			ShareAccess:   artifact.ShareAccess,
+			Registered:    artifact.Registered,
+			PreviousPaths: artifact.PreviousPaths,
 		}
 		// A distinct host (not a shared path-prefix marker) gives every
 		// artifact link an unambiguous source identity: it can never collide
@@ -2999,7 +3232,7 @@ func artifactRawURL(r *http.Request, id domain.SessionID, filePath string) (stri
 func sessionPRFacts(prs []domain.PRFacts) []SessionPRFacts {
 	out := make([]SessionPRFacts, 0, len(prs))
 	for _, pr := range prs {
-		out = append(out, SessionPRFacts{URL: pr.URL, Number: pr.Number, State: prState(pr), CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability, ReviewComments: pr.ReviewComments, UpdatedAt: pr.UpdatedAt})
+		out = append(out, SessionPRFacts{URL: pr.URL, Number: pr.Number, State: prState(pr), CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability, ReviewComments: pr.ReviewComments, UpdatedAt: pr.UpdatedAt, StackParent: pr.StackParent})
 	}
 	return out
 }
@@ -3261,4 +3494,56 @@ func workspaceSnapshotQuery(query url.Values) (sessionsvc.WorkspaceSelectionRevi
 // Source selectors must never be silently answered with mutable worktree data.
 func workspaceSnapshotRequested(query url.Values) bool {
 	return query.Get("snapshot") == "true" || query.Has("branch") || query.Has("prNumber") || query.Has("sourceUrl") || query.Has("expectedTipSha") || query.Has("expectedBaseSha") || query.Has("commitShas")
+}
+
+// artifactSessionService finds the session whose artifact files a request
+// reads, including a deleted session whose artifacts were kept.
+type artifactSessionService interface {
+	ArtifactSession(ctx context.Context, id domain.SessionID) (domain.Session, bool, error)
+}
+
+// keptArtifactsService lists and forgets kept artifacts.
+type keptArtifactsService interface {
+	ListKeptArtifacts(ctx context.Context) ([]sessionsvc.KeptArtifacts, error)
+	ForgetKeptArtifact(ctx context.Context, id domain.SessionID, path string) error
+}
+
+// artifactSession returns the session whose artifact files a request reads,
+// and whether it is the stand-in for a deleted session's kept artifacts. Its
+// files are view only.
+func (c *SessionsController) artifactSession(ctx context.Context, id domain.SessionID) (domain.Session, bool, error) {
+	if svc, ok := c.Svc.(artifactSessionService); ok {
+		return svc.ArtifactSession(ctx, id)
+	}
+	sess, err := c.Svc.Get(ctx, id)
+	return sess, false, err
+}
+
+// listKeptArtifacts lists the artifacts no session or project lists: those of
+// sessions deleted with their artifacts kept, and of sessions in removed projects.
+func (c *SessionsController) listKeptArtifacts(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(keptArtifactsService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/kept-artifacts")
+		return
+	}
+	sets, err := svc.ListKeptArtifacts(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := make([]KeptArtifactsView, 0, len(sets))
+	for _, set := range sets {
+		files := domain.Session{ArtifactFiles: set.Files}
+		files.ID = set.SessionID
+		out = append(out, KeptArtifactsView{
+			SessionID:      set.SessionID,
+			ProjectID:      set.ProjectID,
+			Title:          set.Title,
+			SessionDeleted: set.SessionDeleted,
+			At:             set.At,
+			ArtifactFiles:  sessionArtifactFiles(r, files),
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListKeptArtifactsResponse{Sets: out})
 }

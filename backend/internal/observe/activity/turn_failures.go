@@ -44,6 +44,13 @@ type turnFailureSource interface {
 type TurnFailureConfig struct {
 	Tick   time.Duration
 	Logger *slog.Logger
+	// Wake, when set, signals that a session changed (a turn may have started).
+	// The observer then polls every Tick while it watches a turn and every
+	// IdleTick otherwise; a wake while it watches none polls at once, or one
+	// Tick after the previous poll if that is later. Without it (or with
+	// IdleTick not above Tick) it polls every Tick, as before.
+	Wake     <-chan struct{}
+	IdleTick time.Duration
 }
 
 // TurnFailureObserver marks a terminal session idle when its harness's
@@ -60,6 +67,17 @@ type TurnFailureObserver struct {
 	tick     time.Duration
 	logger   *slog.Logger
 	watches  map[domain.SessionID]*turnFailureWatch
+
+	wake     <-chan struct{}
+	idleTick time.Duration
+	// candidates is how many sessions the last poll found in a turn. The
+	// observer stays on its short tick while there is one, even before a watch
+	// opens on it (its transcript may not be readable yet).
+	candidates int
+	// pollFailed records that the last poll returned an error. The observer
+	// does not know whether a turn runs then, so it keeps its short tick.
+	pollFailed bool
+	lastPoll   time.Time
 }
 
 // turnFailureWatch caches one session's transcript read. The transcript is
@@ -97,6 +115,8 @@ func NewTurnFailureObserver(sessions turnFailureSource, sink activitySink, agent
 		tick:     cfg.Tick,
 		logger:   cfg.Logger,
 		watches:  make(map[domain.SessionID]*turnFailureWatch),
+		wake:     cfg.Wake,
+		idleTick: cfg.IdleTick,
 	}
 	if o.tick <= 0 {
 		o.tick = DefaultTurnFailureTick
@@ -109,7 +129,59 @@ func NewTurnFailureObserver(sessions turnFailureSource, sink activitySink, agent
 
 // Start runs polling until the context is canceled.
 func (o *TurnFailureObserver) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "turn failure observer")
+	if o.wake == nil || o.idleTick <= o.tick {
+		return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "turn failure observer")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		o.pollAndLog(ctx)
+		// With no turn to watch the 2 s tick only re-runs two empty queries, so
+		// wait IdleTick. A turn starting changes its session, and that change
+		// polls at once, no sooner than one tick after the previous poll.
+		watching := o.busy()
+		timer := time.NewTimer(o.nextPoll(watching))
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-o.wake:
+				if !watching {
+					watching = true // poll now; the poll decides whether to stay fast
+					timer.Reset(max(0, time.Until(o.lastPoll.Add(o.tick))))
+				}
+			case <-timer.C:
+				o.pollAndLog(ctx)
+				watching = o.busy()
+				timer.Reset(o.nextPoll(watching))
+			}
+		}
+	}()
+	return done
+}
+
+// busy reports a turn in progress: a candidate session or an open watch.
+// busy reports a turn in progress: a candidate session or an open watch, or
+// a failed poll, after which it cannot tell.
+func (o *TurnFailureObserver) busy() bool {
+	return o.pollFailed || o.candidates > 0 || len(o.watches) > 0
+}
+
+func (o *TurnFailureObserver) nextPoll(watching bool) time.Duration {
+	if watching {
+		return o.tick
+	}
+	return o.idleTick
+}
+
+func (o *TurnFailureObserver) pollAndLog(ctx context.Context) {
+	o.lastPoll = time.Now()
+	err := o.Poll(ctx)
+	o.pollFailed = err != nil
+	if err != nil && ctx.Err() == nil {
+		o.logger.Error("turn failure observer: poll failed", "err", err)
+	}
 }
 
 // Poll performs one pass. It is not safe for concurrent use. The store
@@ -121,15 +193,19 @@ func (o *TurnFailureObserver) Start(ctx context.Context) <-chan struct{} {
 // idle session has nothing to recover.
 func (o *TurnFailureObserver) Poll(ctx context.Context) error {
 	watched := make(map[domain.SessionID]bool, len(o.watches))
+	candidates := 0
 	for _, harness := range turnFailureHarnesses {
 		detector, ok := o.detector(harness)
 		if !ok {
 			continue
 		}
-		sessions, err := o.sessions.ListTurnFailureCandidates(ctx, harness)
+		// Not cancellable: a cancellable context makes the SQLite driver and
+		// database/sql start a watcher goroutine per query, twice per tick.
+		sessions, err := o.sessions.ListTurnFailureCandidates(context.WithoutCancel(ctx), harness)
 		if err != nil {
 			return err
 		}
+		candidates += len(sessions)
 		for _, session := range sessions {
 			watched[session.ID] = true
 			o.reconcile(ctx, session, detector)
@@ -140,6 +216,7 @@ func (o *TurnFailureObserver) Poll(ctx context.Context) error {
 			delete(o.watches, id)
 		}
 	}
+	o.candidates = candidates
 	return nil
 }
 

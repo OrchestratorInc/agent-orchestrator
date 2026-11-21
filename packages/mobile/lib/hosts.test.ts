@@ -419,3 +419,29 @@ describe("the active host", () => {
 		expect(secure.get("ao.hostToken.a")).toBeUndefined();
 	});
 });
+
+describe("fallback token", () => {
+	beforeEach(() => {
+		plain.clear();
+		secure.clear();
+		vi.resetModules();
+	});
+
+	it("keeps the pairing password beside the device token, in the keystore only", async () => {
+		const { saveHost, loadHosts, updateHostToken, removeHost } = await mod();
+		await saveHost({ id: "a", name: "A", platform: "darwin", endpoints: [lan("192.168.1.2")], token: "aod_token", fallbackToken: "pairing1", lastConnected: 1 });
+
+		expect((await loadHosts())[0]).toMatchObject({ token: "aod_token", fallbackToken: "pairing1" });
+		expect(plain.get("ao.hosts")).not.toContain("pairing1");
+		expect(secure.get("ao.hostFallbackToken.a")).toBe("pairing1");
+
+		await updateHostToken("a", "pairing1");
+		expect((await loadHosts())[0]).toMatchObject({ token: "pairing1" });
+		expect((await loadHosts())[0].fallbackToken).toBeUndefined();
+		await updateHostToken("a", "aod_next", "pairing1");
+		expect((await loadHosts())[0]).toMatchObject({ token: "aod_next", fallbackToken: "pairing1" });
+
+		await removeHost("a");
+		expect(secure.get("ao.hostFallbackToken.a")).toBeUndefined();
+	});
+});

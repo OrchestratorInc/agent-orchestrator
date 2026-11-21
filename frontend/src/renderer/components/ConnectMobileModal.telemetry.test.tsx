@@ -19,6 +19,12 @@ const { captureRendererEvent, mobileStatus, post } = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent }));
+// An app with no AO sign-in pairs signed out; signing in to pair is covered in
+// settings/ConnectMobileContent.signin.test.tsx.
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ session: null, status: "unauthenticated", configured: false, signIn: () => undefined }),
+}));
+
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		GET: async (path: string) =>
@@ -44,11 +50,11 @@ function renderMobileSettings(active = true) {
 }
 
 function openEvents() {
-	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.renderer.mobile_connect_opened");
+	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.mobile.connect_opened");
 }
 
 function toggleEvents() {
-	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.renderer.mobile_bridge_toggled");
+	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.mobile.bridge_toggled");
 }
 
 describe("Connect Mobile telemetry", () => {

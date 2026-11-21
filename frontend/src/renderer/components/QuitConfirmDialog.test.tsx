@@ -6,7 +6,7 @@ test("asks to quit AO with Quit focused so Return confirms", async () => {
 	const onResolve = vi.fn();
 	render(<QuitConfirmDialog open onResolve={onResolve} />);
 
-	expect(screen.getByRole("dialog", { name: "Quit AO?" })).toHaveAccessibleDescription("Are you sure you want to quit AO?");
+	expect(screen.getByRole("dialog", { name: "Quit Orchestrator?" })).toHaveAccessibleDescription("Are you sure you want to quit Orchestrator?");
 	const quit = screen.getByRole("button", { name: "Quit" });
 	await waitFor(() => expect(quit).toHaveFocus());
 	expect(quit).toHaveAttribute("aria-keyshortcuts", "Enter");
@@ -29,7 +29,7 @@ test("Cancel and Escape both dismiss without quitting", () => {
 test("says AO keeps running in the menu bar when quitting only closes the window", () => {
 	render(<QuitConfirmDialog open keepsRunning onResolve={vi.fn()} />);
 
-	expect(screen.getByRole("dialog", { name: "Quit AO?" })).toHaveAccessibleDescription(
-		"AO will keep running in the background. You can reopen it from the menu bar.",
+	expect(screen.getByRole("dialog", { name: "Quit Orchestrator?" })).toHaveAccessibleDescription(
+		"Orchestrator will keep running in the background. You can reopen it from the menu bar.",
 	);
 });

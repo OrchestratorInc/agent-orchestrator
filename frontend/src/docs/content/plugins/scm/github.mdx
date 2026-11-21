@@ -29,7 +29,7 @@ Orchestrator checks active PRs for new CI failures, review feedback, and merge c
 ## Explicit actions
 
 ```bash
-ao pr merge 42
+ao pr merge 42 --url https://github.com/acme/widgets/pull/42 --expected-head-sha <sha>
 ao pr resolve-comments 42
 ao review trigger <worker-session-id>
 ```
