@@ -73,11 +73,6 @@ func checkInstalledHarnessUpdates(
 		if agent.Installation.State != domain.AgentInstallationInstalled || !systeminstall.IsAgentTarget(target) {
 			continue
 		}
-		// The launch pass covers harnesses with sessions; the periodic pass
-		// (refresh) still covers every installed one.
-		if !refresh && agent.UsageCount == 0 {
-			continue
-		}
 		wg.Go(func() {
 			defer sentryobs.RecoverBackground()
 			if _, err := check(ctx, target, refresh); err != nil && ctx.Err() == nil {
