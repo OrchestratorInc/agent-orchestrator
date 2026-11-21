@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	maxWaitSessions = 20
-	maxWaitSeconds  = 110
+	maxWaitSessions            = 20
+	maxWaitSeconds             = 110
+	quietPollsAfterWork        = 2
+	quietPollsNeverSeenWorking = 5
 )
 
 var waitPollInterval = 2 * time.Second
@@ -105,10 +107,10 @@ func callSessionWait(ctx context.Context, s *server, args map[string]any) (any, 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	settledBefore := false
+	quiet, worked := map[string]int{}, map[string]bool{}
 	for {
 		sessions := make([]map[string]any, 0, len(ids))
-		settled := true
+		done := true
 		for _, id := range ids {
 			var response struct {
 				Session map[string]any `json:"session"`
@@ -117,16 +119,28 @@ func callSessionWait(ctx context.Context, s *server, args map[string]any) (any, 
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 					return map[string]any{"timedOut": true, "sessions": sessions}, nil
 				}
-				return nil, fmt.Errorf("session %s: %w", id, err)
+				sessions = append(sessions, map[string]any{"id": id, "error": err.Error()})
+				continue
 			}
 			summary := sessionSummary(response.Session)
 			sessions = append(sessions, summary)
-			settled = settled && sessionSettled(summary)
+			if summary["activity"] == "active" {
+				worked[id] = true
+			}
+			if !sessionSettled(summary) {
+				quiet[id], done = 0, false
+				continue
+			}
+			quiet[id]++
+			needed := quietPollsNeverSeenWorking
+			if worked[id] || summary["isTerminated"] == true || summary["provisionState"] == "failed" {
+				needed = quietPollsAfterWork
+			}
+			done = done && quiet[id] >= needed
 		}
-		if settled && settledBefore {
+		if done {
 			return map[string]any{"timedOut": false, "sessions": sessions}, nil
 		}
-		settledBefore = settled
 		select {
 		case <-ctx.Done():
 			return map[string]any{"timedOut": true, "sessions": sessions}, nil

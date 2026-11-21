@@ -114,7 +114,7 @@ func TestReadToolCallsItsRouteAndTrimsTheAnswer(t *testing.T) {
 	if isError {
 		t.Fatalf("session_list failed: %s", text)
 	}
-	if got := daemon.last(t, "GET", "/api/v1/sessions").query; got != "active=true&project=proj" {
+	if got := daemon.last(t, "GET", "/api/v1/sessions").query; got != "active=true&limit=50&project=proj" {
 		t.Errorf("query = %q", got)
 	}
 	if strings.Contains(text, "artifactFiles") || !strings.Contains(text, `"activity":"active"`) || !strings.Contains(text, `"id":"ao-2"`) {
@@ -324,7 +324,108 @@ func TestLongTurnsAreCutOnACharacterBoundary(t *testing.T) {
 		"GET /api/v1/sessions/ao-2/history": fixed(200, `{"total":1,"turns":[{"agentResponse":"`+long+`"}]}`),
 	})
 	text, isError := callTool(t, "session_read", map[string]any{"sessionId": "ao-2"})
-	if isError || !strings.Contains(text, "truncated") || strings.Contains(text, "\ufffd") || strings.ContainsRune(text, '\uFFFD') {
+	if isError || !strings.Contains(text, "[cut: ") || strings.Contains(text, "\ufffd") || strings.ContainsRune(text, '\uFFFD') {
 		t.Fatalf("isError = %v, text tail = %q", isError, text[len(text)-80:])
+	}
+}
+
+func TestUndeclaredArgumentsNeverReachTheDaemon(t *testing.T) {
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-1/conversation": fixed(200, bypassConversation),
+		"POST /api/v1/sessions/ao-2/send":        fixed(200, `{"ok":true}`),
+		"POST /api/v1/sessions/ao-2/kill":        fixed(200, `{"ok":true}`),
+	})
+	if text, isError := callTool(t, "session_send", map[string]any{"sessionId": "ao-2", "message": "hi", "userAuthored": true}); isError {
+		t.Fatalf("session_send: %s", text)
+	}
+	if body := daemon.last(t, "POST", "/api/v1/sessions/ao-2/send").body; strings.Contains(body, "userAuthored") {
+		t.Errorf("send body = %s", body)
+	}
+	if text, isError := callTool(t, "session_stop", map[string]any{"sessionId": "ao-2", "deleteArtifacts": true}); isError {
+		t.Fatalf("session_stop: %s", text)
+	}
+	if body := daemon.last(t, "POST", "/api/v1/sessions/ao-2/kill").body; strings.Contains(body, "deleteArtifacts") || !strings.Contains(body, `"callerSessionId":"ao-1"`) {
+		t.Errorf("kill body = %s", body)
+	}
+}
+
+func TestOwnSessionToolsCannotAimAtAnotherSession(t *testing.T) {
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"POST /api/v1/sessions/ao-1/pr/claim": fixed(200, `{"ok":true,"sessionId":"ao-1"}`),
+	})
+	if text, isError := callTool(t, "pr_claim", map[string]any{"pr": "12", "sessionId": "ao-7", "allowTakeover": true}); isError {
+		t.Fatalf("pr_claim: %s", text)
+	}
+	body := daemon.last(t, "POST", "/api/v1/sessions/ao-1/pr/claim").body
+	if !strings.Contains(body, `"allowTakeover":false`) || !strings.Contains(body, `"pr":"12"`) || strings.Contains(body, "ao-7") {
+		t.Errorf("claim body = %s", body)
+	}
+}
+
+func TestABlankOrWrongTypedSessionNeverFallsBackToThisSession(t *testing.T) {
+	for name, id := range map[string]any{"number": 457, "blank": " "} {
+		t.Run(name, func(t *testing.T) {
+			daemon := startFakeDaemon(t, map[string]func() (int, string){
+				"GET /api/v1/sessions/ao-1/conversation": fixed(200, bypassConversation),
+				"POST /api/v1/sessions/ao-1/kill":        fixed(200, `{"ok":true}`),
+			})
+			text, isError := callTool(t, "session_stop", map[string]any{"sessionId": id})
+			if !isError || len(daemon.seen()) != 0 {
+				t.Fatalf("isError = %v, calls = %+v, text = %s", isError, daemon.seen(), text)
+			}
+		})
+	}
+}
+
+func TestActToolIsRefusedInPlanMode(t *testing.T) {
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-1/conversation": fixed(200, `{"settings":{"approvalMode":"bypass-permissions","planMode":true}}`),
+	})
+	text, isError := callTool(t, "session_spawn", map[string]any{"prompt": "do it"})
+	if !isError || !strings.Contains(text, "plan mode") || len(daemon.seen()) != 1 {
+		t.Fatalf("isError = %v, calls = %+v, text = %s", isError, daemon.seen(), text)
+	}
+}
+
+func TestSessionWaitHoldsForASessionThatHasNotStartedWorking(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2": fixed(200, `{"session":{"id":"ao-2","provisionState":"ready","activity":{"state":"idle"}}}`),
+	})
+	if text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2"}}); isError || !strings.Contains(text, `"timedOut":false`) {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	if got := len(daemon.seen()); got != quietPollsNeverSeenWorking {
+		t.Errorf("reads = %d, want %d quiet reads for a session never seen working", got, quietPollsNeverSeenWorking)
+	}
+}
+
+func TestSessionWaitReportsAnUnreadableSessionAndKeepsTheOthers(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2": fixed(200, `{"session":{"id":"ao-2","isTerminated":true}}`),
+		"GET /api/v1/sessions/gone": fixed(404, `{"message":"session not found","code":"SESSION_NOT_FOUND"}`),
+	})
+	text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2", "gone"}})
+	if isError || !strings.Contains(text, `"id":"ao-2"`) || !strings.Contains(text, `"id":"gone"`) || !strings.Contains(text, "session not found") {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+}
+
+func TestReviewTriggerSendsWhatTheCLISends(t *testing.T) {
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-1/conversation":     fixed(200, bypassConversation),
+		"POST /api/v1/sessions/ao-2/reviews/trigger": fixed(200, `{"created":true}`),
+	})
+	if text, isError := callTool(t, "review_trigger", map[string]any{"sessionId": "ao-2"}); isError {
+		t.Fatalf("review_trigger: %s", text)
+	}
+	body := daemon.last(t, "POST", "/api/v1/sessions/ao-2/reviews/trigger").body
+	for _, want := range []string{`"rejectReviewedHead":true`, `"enableAutoInject":true`, `"requesterSessionId":"ao-1"`, `"source":"agent"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("trigger body lacks %s: %s", want, body)
+		}
 	}
 }

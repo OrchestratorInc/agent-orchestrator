@@ -29,7 +29,8 @@ type routeTool struct {
 	method, path string
 	query        []string
 	rename       map[string]string
-	body         func(caller string) map[string]any
+	defaults     map[string]any
+	body         func(caller string, args map[string]any) map[string]any
 	pick         func(map[string]any) any
 }
 
@@ -77,8 +78,18 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 	if args == nil {
 		args = map[string]any{}
 	}
+	for name, value := range args {
+		prop, declared := t.props[name].(map[string]any)
+		if !declared || value == nil {
+			delete(args, name)
+			continue
+		}
+		if text, isString := value.(string); prop["type"] == "string" && (!isString || strings.TrimSpace(text) == "") {
+			return mcpToolError(fmt.Errorf("%s must be a non-empty string", name))
+		}
+	}
 	for _, name := range t.required {
-		if v, ok := args[name]; !ok || v == nil || v == "" {
+		if _, ok := args[name]; !ok {
 			return mcpToolError(fmt.Errorf("%s is required", name))
 		}
 	}
@@ -97,7 +108,7 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 	}
 	text := string(encoded)
 	if len(text) > maxToolResultChars {
-		text = strings.ToValidUTF8(text[:maxToolResultChars], "") + fmt.Sprintf("\n[truncated: %d of %d characters shown; narrow the request]", maxToolResultChars, len(encoded))
+		text = strings.ToValidUTF8(text[:maxToolResultChars], "") + fmt.Sprintf("\n[cut: %d of %d bytes shown, so this is not complete JSON; narrow the request]", maxToolResultChars, len(encoded))
 	}
 	return map[string]any{"content": []any{mcpText(text)}}
 }
@@ -110,6 +121,7 @@ func (s *server) requireFullAccess(ctx context.Context) error {
 	var conversation struct {
 		Settings struct {
 			ApprovalMode string `json:"approvalMode"`
+			PlanMode     bool   `json:"planMode"`
 		} `json:"settings"`
 	}
 	if err := s.daemon.DoJSON(ctx, http.MethodGet, "sessions/"+url.PathEscape(caller)+"/conversation?limit=1", nil, &conversation); err != nil {
@@ -121,6 +133,9 @@ func (s *server) requireFullAccess(ctx context.Context) error {
 		}
 		return fmt.Errorf("this session's permission mode is %q. Tools that start or change sessions need full access (%s). "+
 			"Ask the user to switch this session to full access, or to do this step in Orchestrator", mode, fullAccessMode)
+	}
+	if conversation.Settings.PlanMode {
+		return errors.New("this session is in plan mode. Tools that start or change sessions do not run while it plans")
 	}
 	return nil
 }
@@ -134,14 +149,19 @@ func (r routeTool) call(ctx context.Context, s *server, args map[string]any) (an
 			continue
 		}
 		value, _ := args[name].(string)
-		if value = strings.TrimSpace(value); value == "" && name == "sessionId" {
+		if _, given := args[name]; !given && name == "sessionId" {
 			value = caller
 		}
-		if value == "" {
+		if value = strings.TrimSpace(value); value == "" {
 			return nil, fmt.Errorf("%s is required", name)
 		}
 		path = strings.ReplaceAll(path, placeholder, url.PathEscape(value))
 		delete(args, name)
+	}
+	for name, value := range r.defaults {
+		if _, given := args[name]; !given {
+			args[name] = value
+		}
 	}
 	query := url.Values{}
 	for _, name := range r.query {
@@ -166,7 +186,7 @@ func (r routeTool) call(ctx context.Context, s *server, args map[string]any) (an
 			}
 		}
 		if r.body != nil {
-			for key, value := range r.body(caller) {
+			for key, value := range r.body(caller, args) {
 				args[key] = value
 			}
 		}
@@ -225,7 +245,7 @@ func clip(text string) string {
 	if len(text) <= maxTurnTextChars {
 		return text
 	}
-	return strings.ToValidUTF8(text[:maxTurnTextChars], "") + fmt.Sprintf(" [truncated: %d more characters]", len(text)-maxTurnTextChars)
+	return strings.ToValidUTF8(text[:maxTurnTextChars], "") + fmt.Sprintf(" [cut: %d more bytes]", len(text)-maxTurnTextChars)
 }
 
 func stringProp(desc string) map[string]any {
@@ -255,8 +275,9 @@ func ownSession(t catalogTool) catalogTool {
 	return t
 }
 
-func requesterBody(caller string) map[string]any {
-	return map[string]any{"requesterSessionId": caller, "source": "agent"}
+func reviewTriggerBody(caller string, args map[string]any) map[string]any {
+	rerun, _ := args["rerun"].(bool)
+	return map[string]any{"requesterSessionId": caller, "source": "agent", "rejectReviewedHead": !rerun, "enableAutoInject": true}
 }
 
 var catalog = []catalogTool{
@@ -283,11 +304,11 @@ var catalog = []catalogTool{
 			"projectId": stringProp("Only sessions of this project."),
 			"active":    map[string]any{"type": "boolean", "description": "Only sessions that are not terminated."},
 			"kind":      enumProp("Only this kind.", "worker", "orchestrator"),
-			"limit":     intProp("Sessions per page.", 1, 200),
+			"limit":     intProp("Sessions per page. Defaults to 50.", 1, 200),
 			"cursor":    stringProp("nextCursor from the previous page."),
 		}, nil,
 		routeTool{method: http.MethodGet, path: "sessions", query: []string{"projectId", "active", "kind", "limit", "cursor"},
-			rename: map[string]string{"projectId": "project"},
+			rename: map[string]string{"projectId": "project"}, defaults: map[string]any{"limit": 50},
 			pick: func(m map[string]any) any {
 				out := keep(m, "nextCursor", "total")
 				out["sessions"] = each(m["sessions"], sessionSummary)
@@ -358,6 +379,7 @@ var catalog = []catalogTool{
 		name: "session_spawn", title: "Start a session", act: true,
 		desc: "Starts a new session with its own worktree and sends it the prompt. It returns as soon as the session exists; " +
 			"call session_wait, then session_read, to get the result. The new session knows only the prompt: write a complete brief. " +
+			"Pass requestId, so that a retry of this call does not start a second session. " +
 			"The project, agent and model default to this session's project and that project's settings.",
 		props: map[string]any{
 			"prompt":      stringProp("The task, as a complete brief."),
@@ -379,14 +401,14 @@ var catalog = []catalogTool{
 		map[string]any{"sessionId": otherSessionProp, "message": stringProp("The message.")},
 		[]string{"sessionId", "message"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/send",
-			body: func(caller string) map[string]any { return map[string]any{"senderSessionId": caller} }}),
+			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"senderSessionId": caller} }}),
 	routed("session_interrupt", "Interrupt a session's turn", "Stops the turn a Chat session runs now. The session stays, and a later message starts it again.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/conversation/interrupt"}),
 	routed("session_stop", "Stop a session", "Terminates a session. Its worktree and history stay, and session_restore brings it back.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/kill",
-			body: func(caller string) map[string]any { return map[string]any{"callerSessionId": caller} }}),
+			body: func(caller string, _ map[string]any) map[string]any { return map[string]any{"callerSessionId": caller} }}),
 	routed("session_restore", "Restore a session", "Restores a terminated session, or resumes an agent that exited.", true,
 		map[string]any{"sessionId": otherSessionProp}, []string{"sessionId"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/restore", pick: func(m map[string]any) any {
@@ -429,13 +451,15 @@ var catalog = []catalogTool{
 		required: []string{"sessionId", "requestId"},
 		call:     callPendingRespond,
 	},
-	ownSession(routed("pr_claim", "Attach a pull request to this session", "Attaches an existing pull request to this session, by number or URL. It changes ownership only and checks out nothing.", true,
+	ownSession(routed("pr_claim", "Attach a pull request to this session", "Attaches an existing pull request to this session, by number or URL. It changes ownership only and checks out nothing. "+
+		"It does not take a pull request from a session that owns it; use ao session claim-pr for that.", true,
 		map[string]any{"pr": stringProp("Pull request number or URL.")}, []string{"pr"},
 		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/pr/claim",
+			body: func(string, map[string]any) map[string]any { return map[string]any{"allowTakeover": false} },
 			pick: func(m map[string]any) any { return keep(m, "ok", "sessionId", "branchChanged", "takenOverFrom") }})),
 	routed("review_trigger", "Start a code review", "Starts Orchestrator's code reviewer on a worker session's pull request.", true,
 		map[string]any{"sessionId": sessionProp, "rerun": map[string]any{"type": "boolean", "description": "Review the same commit again."}}, nil,
-		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/reviews/trigger", body: requesterBody,
+		routeTool{method: http.MethodPost, path: "sessions/{sessionId}/reviews/trigger", body: reviewTriggerBody,
 			pick: func(m map[string]any) any { return keep(m, "created", "reviews", "runs") }}),
 	routed("review_cancel", "Cancel code reviews", "Cancels every running review of a worker session's pull request.", true,
 		map[string]any{"sessionId": sessionProp}, nil,
