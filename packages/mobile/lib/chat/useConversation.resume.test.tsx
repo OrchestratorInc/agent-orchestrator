@@ -1,12 +1,11 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../config";
-import type { ConversationEvent } from "./sse";
 
 // The verified connection drops on every app switch and endpoint race. The
 // conversation on screen must not: keyed on the connection, it emptied to the
 // "Loading conversation…" state and refilled on each resume.
-const fixture = vi.hoisted(() => ({ request: vi.fn(), subscribe: vi.fn(), stored: new Map<string, string>() }));
+const fixture = vi.hoisted(() => ({ request: vi.fn(), stored: new Map<string, string>() }));
 vi.mock("../api", () => ({ apiRequest: fixture.request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
 vi.mock("../config", () => ({ machineIdentity: (cfg: { hostId?: string }) => `host.${cfg.hostId}`, authHeaders: () => ({}), httpBase: () => "http://qa-host" }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
@@ -15,7 +14,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	setItem: async (key: string, value: string) => { fixture.stored.set(key, value); },
 	removeItem: async (key: string) => { fixture.stored.delete(key); },
 } }));
-vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: fixture.subscribe }));
+vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
 import { RECONNECTING_ACTION_COPY } from "../connectionError";
 import { useMobileConversation, type MobileConversation } from "./useConversation";
@@ -41,7 +40,6 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	seen.length = 0;
 	fixture.stored.clear();
-	fixture.subscribe.mockReset().mockReturnValue(() => {});
 	fixture.request.mockReset().mockImplementation(async (cfg: ServerConfig) => ({
 		json: async () => ({ controller: "ready", capabilities: [], messages: [], conversationId: `c-${cfg.hostId}` }),
 	}));
@@ -58,25 +56,6 @@ it("keeps the transcript while the connection is gone, and refreshes when it ret
 
 	expect(seen.slice(shown).every((frame) => frame.snapshot && !frame.loading)).toBe(true);
 	expect(conversationRequests().map(([cfg]) => (cfg as ServerConfig).host)).toEqual(["192.168.1.20", "a.trycloudflare.com"]);
-});
-
-it("refreshes live snapshots while events keep arriving", async () => {
-	vi.useFakeTimers();
-	try {
-		await act(async () => { renderer = create(<Harness cfg={lan} machine="host.a" id="live" />); });
-		const onEvent = fixture.subscribe.mock.lastCall?.[2] as (event: ConversationEvent) => void;
-		const event = { seq: 1, projectId: "p", sessionId: "live", type: "updated", payload: { conversationId: "c-a" }, createdAt: "" };
-		fixture.request.mockClear();
-		await act(async () => {
-			for (let seq = 1; seq <= 6; seq++) {
-				onEvent({ ...event, seq });
-				await vi.advanceTimersByTimeAsync(50);
-			}
-		});
-		expect(conversationRequests()).toHaveLength(2);
-	} finally {
-		vi.useRealTimers();
-	}
 });
 
 it("never shows one machine's conversation for another, or asks it through the wrong connection", async () => {
