@@ -4,7 +4,7 @@ Use this when the user asks you to set up Orchestrator, add their first project,
 
 ## One command: `ao setup`
 
-`ao setup` does the whole setup in one go and tells you what is left for the user:
+Run `ao setup --json` first. It does manual steps 1–4 below for you (daemon, agent, repository, registration) and lists what needs a person. If it isn't available, follow the manual steps.
 
 ```bash
 ao setup --path <repo> --json
