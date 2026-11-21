@@ -4,7 +4,7 @@ Use this when the user asks you to set up Orchestrator, add their first project,
 
 ## One command: `ao setup`
 
-Run `ao setup --json` first. It does manual steps 1–4 below for you (daemon, agent, repository, registration) and lists what needs a person. If it isn't available, follow the manual steps.
+Choose the repository first, as in manual step 3: run `ao project ls`, and if the user named no repository, offer a few recent ones. Then run `ao setup --path <repo> --json`. It does manual steps 1, 2 and 4 for you (daemon, agent, registration) and lists what needs a person. Without `--path` it registers the git repository around the current directory, so pass `--path` unless that is the one the user wants. If `ao setup` isn't available, follow the manual steps.
 
 ```bash
 ao setup --path <repo> --json
@@ -13,9 +13,9 @@ ao setup --path <repo> --json
 It runs these steps in order. Each one reports `{step, status, detail, fix}`, with `status` one of `ok`, `fixed`, `skipped`, `needs_human` or `failed`:
 
 1. **daemon:** reuses the running daemon, or starts one in the background the way `ao serve` does.
-2. **agent:** uses `--agent` if given, otherwise the agents an already registered project runs, otherwise the coding agent running the command (you), detected from its environment (`AI_AGENT` first, then tags such as `CLAUDECODE` or `CODEX_THREAD_ID`), otherwise the first ready agent. It checks the agent is installed and signed in, asking the agent's own status command (such as `claude auth status`) when the daemon cannot tell. It never installs an agent or signs one in.
+2. **agent:** picks an agent for each role, worker and orchestrator. `--worker-agent` and `--orchestrator-agent` set one role each. `--agent` sets every role not named by a role flag. Without those flags, a registered project keeps the agents it already saves. A role that still has no agent gets the coding agent running the command (you), detected from its environment (`AI_AGENT` first, then tags such as `CLAUDECODE` or `CODEX_THREAD_ID`), or else the first ready agent. It checks the agent is installed and signed in, asking the agent's own status command (such as `claude auth status`) when the daemon cannot tell. It never installs an agent or signs one in.
 3. **github:** checks that the GitHub CLI is signed in. It never runs `gh auth login`. For a repository with a `github.com` remote, a missing or signed-out `gh` is `needs_human`. Otherwise it is advisory: `skipped`, with its fix in `next_actions`, and setup can still be ready.
-4. **project:** registers `--path` (default: the git repository around the current directory) with that agent as worker and orchestrator, or reuses its existing registration. A repository with no remote, or whose remote's default branch cannot be resolved (never fetched, unreachable), gets its checked-out branch as the default branch.
+4. **project:** registers `--path` (default: the git repository around the current directory) with those agents as worker and orchestrator, or reuses its existing registration. On a registered project it fills in a role that has no saved agent, but replaces a saved agent only when you pass an agent flag **and** `--yes`; otherwise it reports `needs_human`. A repository with no remote, or whose remote's default branch cannot be resolved (never fetched, unreachable), gets its checked-out branch as the default branch.
 5. **first-run:** a registered project makes the desktop app skip its first-run screens.
 6. **start:** only with `--start "<task>"`. Pass the user's own request as the task. It goes to the project's orchestrator, or to one worker with `--worker`, and setup waits until it has started.
 7. **verify:** `ready` is true when nothing is left to do.
@@ -45,8 +45,8 @@ With `--json` the output is `{ready, agent, project, steps, next_actions, task}`
 | `--json` | Print the result as JSON. |
 
 ```bash
-# Set up the repository you are in, with yourself as the agent, and start the user's task
-ao setup --start "Fix the failing login test" --json
+# Set up the repository the user chose, with yourself as the agent, and start the user's task
+ao setup --path ~/code/my-app --start "Fix the failing login test" --json
 ```
 
 On macOS the user can then open the app with `open "/Applications/Agent Orchestrator.app"`. If `ao setup` is not available (an older Orchestrator), follow the manual steps below.
