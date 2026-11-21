@@ -76,6 +76,10 @@ const (
 func newSetupDaemon(t *testing.T) *taskDaemon {
 	t.Helper()
 	clearCallerEnv(t)
+	// Never run the agent CLIs installed on this machine.
+	savedStatusCommands := setupAuthStatusCommands
+	setupAuthStatusCommands = map[string]setupAuthStatusCommand{}
+	t.Cleanup(func() { setupAuthStatusCommands = savedStatusCommands })
 	d := newTaskDaemon(t)
 	dataDir := os.Getenv("AO_DATA_DIR")
 	health := func(status string) func() (int, string) {
@@ -861,5 +865,120 @@ func TestSetupBothRoleFlagsIgnoreAnUnusedAgentFlag(t *testing.T) {
 	if err := json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body); err != nil || body.Config == nil ||
 		body.Config.Worker.Agent != "codex" || body.Config.Orchestrator.Agent != "claude-code" {
 		t.Fatalf("POST /projects body = %s", d.bodies["POST /api/v1/projects"])
+	}
+}
+
+// fakeStatusCommand points the agent's own status command at a script that
+// prints out and exits with code.
+func fakeStatusCommand(t *testing.T, agent, out string, code int, cmd setupAuthStatusCommand) {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "status")
+	body := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s'\nexit %d\n", out, code)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd.binary = script
+	setupAuthStatusCommands[agent] = cmd
+}
+
+func TestSetupAgentOwnStatusCommandDecidesUnprovenSignIn(t *testing.T) {
+	cases := []struct {
+		name     string
+		out      string
+		code     int
+		cmd      setupAuthStatusCommand
+		wantExit int
+		want     string
+	}{
+		{"json signed out", `{"loggedIn":false}`, 1, setupAuthStatusCommand{loggedInField: "loggedIn"}, setupExitNeedsHuman, setupNeedsHuman},
+		{"json signed out after a warning line", `Warning: renew soon\n{"loggedIn":false}`, 1, setupAuthStatusCommand{loggedInField: "loggedIn"}, setupExitNeedsHuman, setupNeedsHuman},
+		{"json signed in", `{"loggedIn":true}`, 0, setupAuthStatusCommand{loggedInField: "loggedIn"}, 0, setupOK},
+		{"exit code signed out", "Not logged in", 1, setupAuthStatusCommand{signedOutText: "Not logged in"}, setupExitNeedsHuman, setupNeedsHuman},
+		{"exit code signed in", "Logged in using ChatGPT", 0, setupAuthStatusCommand{signedOutText: "Not logged in"}, 0, setupOK},
+		{"unclear output stays unproven", "boom", 2, setupAuthStatusCommand{loggedInField: "loggedIn"}, 0, setupOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newSetupDaemon(t)
+			repo := gitRepo(t, true)
+			registerOnPost(d, repo, "example/calc")
+			d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"configured"},"supported":true,"installed":true}`)
+			fakeStatusCommand(t, "claude-code", tc.out, tc.code, tc.cmd)
+
+			out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "claude-code", "--json")
+			if got := ExitCode(err); got != tc.wantExit {
+				t.Fatalf("exit = %d (%v), want %d\n%s", got, err, tc.wantExit, out)
+			}
+			res := decodeSetup(t, out)
+			agent := stepNamed(t, res, "agent")
+			if agent.Status != tc.want {
+				t.Fatalf("agent step = %+v, want %s", agent, tc.want)
+			}
+			if tc.want == setupNeedsHuman && (agent.Fix != "claude auth login" || len(res.NextActions) == 0 || res.NextActions[0] != "claude auth login") {
+				t.Fatalf("agent step = %+v, next_actions = %q; want the verbatim login command", agent, res.NextActions)
+			}
+		})
+	}
+}
+
+func TestSetupGitHubIsAdvisoryWithoutAGitHubRemote(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	registerOnPost(d, repo, "")
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc","defaultBranch":"main"}}`)
+	d.set("GET /api/v1/system/github-auth", 200, `{"id":"github-auth","satisfied":false}`)
+
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+		LookPath:     func(string) (string, error) { return "/usr/bin/gh", nil },
+	}, "setup", "--path", repo, "--json")
+	if got := ExitCode(err); got != 0 {
+		t.Fatalf("exit = %d (%v), want 0: GitHub is advisory without a GitHub remote", got, err)
+	}
+	res := decodeSetup(t, out)
+	if gh := stepNamed(t, res, "github"); gh.Status != setupSkipped || gh.Fix != "gh auth login" {
+		t.Fatalf("github step = %+v", gh)
+	}
+	if !res.Ready || !reflect.DeepEqual(res.NextActions, []string{"gh auth login"}) {
+		t.Fatalf("ready = %v, next_actions = %q; want ready with the gh fix listed", res.Ready, res.NextActions)
+	}
+	human, _, _ := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+		LookPath:     func(string) (string, error) { return "/usr/bin/gh", nil },
+	}, "setup", "--path", repo)
+	if !strings.Contains(human, "Orchestrator is ready.") || !strings.Contains(human, "Optional:\n  1. gh auth login") {
+		t.Fatalf("human output:\n%s", human)
+	}
+}
+
+func TestSetupGitHubCheckErrorIsAdvisoryWithoutAGitHubRemote(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	registerOnPost(d, repo, "")
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc","defaultBranch":"main"}}`)
+	d.set("GET /api/v1/system/github-auth", 500, `{"code":"INTERNAL","message":"boom"}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if got := ExitCode(err); got != 0 {
+		t.Fatalf("exit = %d (%v), want 0", got, err)
+	}
+	if gh := stepNamed(t, decodeSetup(t, out), "github"); gh.Status != setupSkipped || !strings.Contains(gh.Detail, "boom") {
+		t.Fatalf("github step = %+v", gh)
+	}
+}
+
+func TestSetupStartAuthRequiredGivesTheLoginCommand(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"calc-1"}`)
+	d.set("GET /api/v1/sessions/calc-1", 200, `{"session":{"id":"calc-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"idle"}}}`)
+	d.set("GET /api/v1/sessions/calc-1/conversation", 200, `{"turns":[{"id":"t1","state":"failed","failureCode":"auth_required","errorMessage":"Not logged in"}]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "claude-code", "--start", "fix", "--worker", "--json")
+	if got := ExitCode(err); got != setupExitFailed {
+		t.Fatalf("exit = %d (%v)", got, err)
+	}
+	res := decodeSetup(t, out)
+	if start := stepNamed(t, res, "start"); start.Fix != "claude auth login" || !reflect.DeepEqual(res.NextActions, []string{"claude auth login"}) {
+		t.Fatalf("start step = %+v, next_actions = %q", start, res.NextActions)
 	}
 }

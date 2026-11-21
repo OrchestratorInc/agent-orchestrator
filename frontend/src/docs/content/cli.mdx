@@ -151,8 +151,8 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
 | Step | What it does |
 | --- | --- |
 | `daemon` | Reuses the daemon serving this data directory, or starts one in the background the same way `ao serve` does. |
-| `agent` | Picks the agent: `--agent` if given, otherwise the agents an already registered project runs, otherwise the coding agent running the command (detected from its environment, `AI_AGENT` first), otherwise the first ready agent. Checks that it is installed and signed in. It never installs an agent or signs one in. |
-| `github` | Checks that the GitHub CLI is signed in. It never runs `gh auth login`. |
+| `agent` | Picks the agent: `--agent` if given, otherwise the agents an already registered project runs, otherwise the coding agent running the command (detected from its environment, `AI_AGENT` first), otherwise the first ready agent. Checks that it is installed and signed in, asking the agent's own status command (such as `claude auth status`) when the daemon cannot tell. It never installs an agent or signs one in. |
+| `github` | Checks that the GitHub CLI is signed in. It never runs `gh auth login`. For a repository with a GitHub remote, a missing or signed-out `gh` needs you (`needs_human`). Otherwise the step is advisory: `skipped`, with its fix in `next_actions`, and setup can still be ready. |
 | `project` | Registers `--path` (default: the Git repository containing the current directory) with the chosen agent for workers and the orchestrator, or reuses its registration. A repository with no remote gets its checked-out branch as the default branch, as `ao project set-config --default-branch` would. |
 | `first-run` | Reports that a registered project makes the desktop app skip its first-run screens. |
 | `start` | Only with `--start "<task>"`: starts the task as `ao task start --wait` does, on the project's orchestrator or, with `--worker`, on one worker. |

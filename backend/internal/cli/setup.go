@@ -2,14 +2,15 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -51,10 +52,6 @@ const (
 	setupExitNeedsHuman = 10
 	setupExitFailed     = 1
 )
-
-// setupAppPath is where the desktop app installs on macOS. Users know it as
-// Orchestrator; the bundle keeps its original name on disk.
-const setupAppPath = "/Applications/Agent Orchestrator.app"
 
 type setupOptions struct {
 	path              string
@@ -245,7 +242,7 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	// Save agents on the project only once they passed their check, so a
 	// person who picks another agent next run is not asked for --yes.
 	res.agentUsable = agentStep.Status == setupOK || agentStep.Status == setupFixed
-	add(c.setupGitHubStep(ctx))
+	add(c.setupGitHubStep(ctx, opts))
 	projectStep := add(c.setupProjectStep(ctx, opts, &res))
 	add(setupFirstRunStep(projectStep))
 
@@ -264,10 +261,15 @@ func finishSetup(res *setupResult, opts setupOptions) {
 		switch s.Status {
 		case setupFailed, setupNeedsHuman:
 			blocked = true
-			if s.Fix != "" && !seen[s.Fix] {
-				seen[s.Fix] = true
-				res.NextActions = append(res.NextActions, s.Fix)
-			}
+		case setupSkipped:
+			// An advisory step (GitHub without a GitHub remote) names a fix
+			// without blocking ready.
+		default:
+			continue
+		}
+		if s.Fix != "" && !seen[s.Fix] {
+			seen[s.Fix] = true
+			res.NextActions = append(res.NextActions, s.Fix)
 		}
 	}
 	res.Ready = !blocked && !res.pending
@@ -423,7 +425,7 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	if agent.ID == "" {
 		step.Status = setupNeedsHuman
 		step.Detail = callerNote + "no installed coding agent was found"
-		step.Fix = "install a coding agent CLI (for example Claude Code or Codex) and sign it in, then run `ao setup` again"
+		step.Fix = "install a supported coding agent CLI (see `ao agent ls`) and sign it in, then run `ao setup` again"
 		return step
 	}
 	agent.Worker = firstNonEmpty(opts.workerAgent, agent.ID)
@@ -520,6 +522,17 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 		return setupAgentCheck{}, fmt.Errorf("could not check agent %s: %w", id, err)
 	}
 	check := setupAgentCheck{status: setupOK, auth: probe.Agent.AuthStatus}
+	// The daemon's probe cannot always prove a sign-in either way (it says
+	// "configured" for a saved sign-in that may be gone). Then ask the agent's
+	// own status command, which can say it is signed out.
+	if probe.Supported && probe.Installed && check.auth != "unauthorized" && check.auth != "authorized" && check.auth != "not_applicable" {
+		switch c.setupOwnSignIn(ctx, id) {
+		case setupSignedOut:
+			check.auth = "unauthorized"
+		case setupSignedIn:
+			check.auth = "authorized"
+		}
+	}
 	switch {
 	case !probe.Supported:
 		check.status = setupFailed
@@ -624,6 +637,84 @@ func (c *commandContext) setupSignInFix(ctx context.Context, id string, res *set
 	return fmt.Sprintf("sign %s in", id)
 }
 
+type setupSignIn int
+
+const (
+	setupSignInUnknown setupSignIn = iota
+	setupSignedIn
+	setupSignedOut
+)
+
+// setupAuthStatusCommand is an agent's own sign-in status command. With
+// loggedInField set, its JSON output names the answer; otherwise exit 0 means
+// signed in, and a failure whose output contains signedOutText means signed
+// out. binary is the name ResolveAgentBinary knows, or an absolute path.
+type setupAuthStatusCommand struct {
+	binary        string
+	args          []string
+	loggedInField string
+	signedOutText string
+}
+
+// setupAuthStatusCommands maps registry ids to their own status commands, for
+// agents whose daemon probe can report an unproven sign-in. Keep it a plain
+// data list: one row per agent.
+var setupAuthStatusCommands = map[string]setupAuthStatusCommand{
+	"claude-code": {binary: "claude", args: []string{"auth", "status"}, loggedInField: "loggedIn"},
+	"codex":       {binary: "codex", args: []string{"login", "status"}, signedOutText: "Not logged in"},
+}
+
+// setupOwnSignIn runs the agent's own status command. Anything unclear (no
+// binary, a timeout, unexpected output) stays unknown.
+func (c *commandContext) setupOwnSignIn(ctx context.Context, id string) setupSignIn {
+	cmd, ok := setupAuthStatusCommands[id]
+	if !ok {
+		return setupSignInUnknown
+	}
+	path := cmd.binary
+	if !filepath.IsAbs(path) {
+		resolved, err := c.deps.ResolveAgentBinary(ctx, cmd.binary)
+		if err != nil || resolved == "" {
+			if resolved, err = c.deps.LookPath(cmd.binary); err != nil || resolved == "" {
+				return setupSignInUnknown
+			}
+		}
+		path = resolved
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, runErr := c.deps.CommandOutput(runCtx, path, cmd.args...)
+	if runCtx.Err() != nil {
+		return setupSignInUnknown
+	}
+	if cmd.loggedInField != "" {
+		// The output can carry warning lines around the JSON object.
+		text := string(out)
+		start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+		if start < 0 || end < start {
+			return setupSignInUnknown
+		}
+		var report map[string]any
+		if json.Unmarshal([]byte(text[start:end+1]), &report) != nil {
+			return setupSignInUnknown
+		}
+		switch report[cmd.loggedInField] {
+		case true:
+			return setupSignedIn
+		case false:
+			return setupSignedOut
+		}
+		return setupSignInUnknown
+	}
+	switch {
+	case runErr == nil:
+		return setupSignedIn
+	case cmd.signedOutText != "" && strings.Contains(string(out), cmd.signedOutText):
+		return setupSignedOut
+	}
+	return setupSignInUnknown
+}
+
 // setupInstallFix tells the person how to install an agent. Setup never
 // installs one itself.
 func (c *commandContext) setupInstallFix(ctx context.Context, id string, res *setupResult) string {
@@ -649,27 +740,53 @@ type setupGitHubAuth struct {
 }
 
 // setupGitHubStep reads the daemon's GitHub check. It never runs a login:
-// `gh auth login` is the person's step.
-func (c *commandContext) setupGitHubStep(ctx context.Context) setupStep {
+// `gh auth login` is the person's step. GitHub blocks ready only for a
+// repository whose remote is on GitHub, where agents need gh to open pull
+// requests. Elsewhere it is advisory, like the daemon's own check: the step
+// is skipped with its fix listed in next_actions, and ready is unaffected.
+func (c *commandContext) setupGitHubStep(ctx context.Context, opts setupOptions) setupStep {
 	step := setupStep{Step: setupStepGitHub}
+	blocking := c.setupRepoOnGitHub(ctx, opts)
+	notOK := setupSkipped
+	if blocking {
+		notOK = setupNeedsHuman
+	}
 	var auth setupGitHubAuth
 	if err := c.getJSON(ctx, "system/github-auth", &auth); err != nil {
-		step.Status, step.Detail = setupFailed, "could not check GitHub access: "+err.Error()
+		step.Status, step.Detail = setupSkipped, "could not check GitHub access: "+err.Error()
+		if blocking {
+			step.Status = setupFailed
+		}
 		return step
 	}
 	if auth.Satisfied {
 		step.Status, step.Detail = setupOK, "GitHub CLI is signed in"
 		return step
 	}
-	step.Status = setupNeedsHuman
+	step.Status = notOK
+	why := "agents use it to open pull requests"
+	if !blocking {
+		why += "; this repository has no GitHub remote, so setup does not need it"
+	}
 	if path, err := c.deps.LookPath("gh"); err != nil || path == "" {
-		step.Detail = "the GitHub CLI (gh) is not installed; agents use it to open pull requests"
+		step.Detail = "the GitHub CLI (gh) is not installed; " + why
 		step.Fix = "install the GitHub CLI (https://cli.github.com), then run `gh auth login`"
 		return step
 	}
-	step.Detail = "the GitHub CLI is not signed in; agents use it to open pull requests"
+	step.Detail = "the GitHub CLI is not signed in; " + why
 	step.Fix = "gh auth login"
 	return step
+}
+
+// setupRepoOnGitHub reports whether the repository setup will register has a
+// remote on GitHub. Anything unclear counts as not.
+func (c *commandContext) setupRepoOnGitHub(ctx context.Context, opts setupOptions) bool {
+	path, stop := c.setupRepoPath(ctx, opts)
+	if stop != nil {
+		return false
+	}
+	out, err := c.deps.CommandOutputInDir(ctx, path, "git", "remote", "-v")
+	return err == nil && strings.Contains(strings.ToLower(string(out)), "github.com")
 }
 
 // setupProjectStep registers the repository, or reuses its registration, and
@@ -992,11 +1109,21 @@ func (c *commandContext) setupNoRemoteBranch(ctx context.Context, path string) s
 // findProjectByPath returns the registered project whose path is the same
 // directory as path.
 func (c *commandContext) findProjectByPath(ctx context.Context, path string) (projectDetails, bool, error) {
-	var list projectListResult
+	// The list carries each project's path, so only a match is read in full.
+	// A summary without one (an older daemon) is read to compare.
+	var list struct {
+		Projects []struct {
+			ID   string `json:"id"`
+			Path string `json:"path"`
+		} `json:"projects"`
+	}
 	if err := c.getJSON(ctx, "projects", &list); err != nil {
 		return projectDetails{}, false, err
 	}
 	for _, summary := range list.Projects {
+		if summary.Path != "" && !sameDir(summary.Path, path) {
+			continue
+		}
 		project, err := c.fetchProjectDetails(ctx, summary.ID)
 		if err != nil {
 			return projectDetails{}, false, err
@@ -1017,9 +1144,9 @@ func setupFirstRunStep(project setupStep) setupStep {
 	case setupOK, setupFixed:
 		step.Status = setupOK
 		step.Detail = "a project is registered, so the Orchestrator app skips its first-run screens"
-		if runtime.GOOS == "darwin" {
-			if _, err := os.Stat(setupAppPath); err == nil {
-				step.Detail += fmt.Sprintf("; open it with: open %q", setupAppPath)
+		if app := darwinApplicationsBundle(); app != "" {
+			if _, err := os.Stat(app); err == nil {
+				step.Detail += fmt.Sprintf("; open it with: open %q", app)
 			}
 		}
 	default:
@@ -1067,6 +1194,14 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 		// The exit code comes from the task (1); the step stays out of
 		// next_actions unless the task names a fix.
 		step.Status, step.Detail, step.Fix = setupFailed, "the task failed: "+task.Reason, task.Fix
+		if strings.Contains(task.Reason, "auth_required") && res.Agent != nil {
+			// Name the login command verbatim, as the agent step does.
+			agent := res.Agent.Orchestrator
+			if opts.worker {
+				agent = res.Agent.Worker
+			}
+			step.Fix = c.setupSignInFix(ctx, agent, res)
+		}
 	case taskStatusNeedsInput:
 		step.Status, step.Detail, step.Fix = setupNeedsHuman, "the task is waiting on you: "+task.Reason, task.Fix
 	default:
@@ -1083,7 +1218,7 @@ func writeSetupResult(w io.Writer, res setupResult, opts setupOptions) error {
 	var b strings.Builder
 	for _, s := range res.Steps {
 		fmt.Fprintf(&b, "%-13s %-10s %s\n", "["+s.Status+"]", s.Step, s.Detail)
-		if s.Fix != "" && (s.Status == setupNeedsHuman || s.Status == setupFailed) {
+		if s.Fix != "" && (s.Status == setupNeedsHuman || s.Status == setupFailed || s.Status == setupSkipped) {
 			fmt.Fprintf(&b, "%-13s %-10s fix: %s\n", "", "", s.Fix)
 		}
 	}
@@ -1098,6 +1233,12 @@ func writeSetupResult(w io.Writer, res setupResult, opts setupOptions) error {
 			b.WriteString(" Start a task with: ao task start \"<task>\"")
 		}
 		b.WriteString("\n")
+		if len(res.NextActions) > 0 {
+			b.WriteString("Optional:\n")
+			for i, a := range res.NextActions {
+				fmt.Fprintf(&b, "  %d. %s\n", i+1, a)
+			}
+		}
 	case len(res.NextActions) > 0:
 		b.WriteString("\nNot ready yet. Next steps:\n")
 		for i, a := range res.NextActions {
