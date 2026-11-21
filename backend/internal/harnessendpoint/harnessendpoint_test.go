@@ -98,6 +98,32 @@ func TestSaveKeepsStoredKeyWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestSaveWaitsForWriterInAnotherStore(t *testing.T) {
+	root := t.TempDir()
+	path, err := NewStore(root).path("claude-code")
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	// Each request builds its own Store; a writer holding the file's lock in
+	// one must block a key-keeping save made through another.
+	unlock := lockPath(path)
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewStore(root).Save("claude-code", Input{BaseURL: "https://a.example.com", APIKey: "sk-new"}, testNow)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("Save finished while another store held the lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("Save after unlock: %v", err)
+	}
+}
+
 func TestSaveValidation(t *testing.T) {
 	cases := map[string]Input{
 		"missing key":      {BaseURL: "https://a.example.com"},
