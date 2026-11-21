@@ -17,7 +17,7 @@ import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent, spawnHostSelectionReady } from "../lib/hostRoute";
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
@@ -31,7 +31,8 @@ import { connectedAgents } from "../lib/cloud/agents";
 import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
 import { cloudPlanBlock, cloudSessionBilled, planBlocksCloudSetup } from "../lib/cloud/plan";
 import { useCloudPlan } from "../lib/cloud/planStore";
-import { agentModelCatalog } from "../lib/cloud/modelCatalog";
+import { agentModelCatalog, isReleaseCatalog } from "../lib/cloud/modelCatalog";
+import { useReleaseCatalogRereads } from "../lib/cloud/useReleaseCatalogRereads";
 import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, cloudSpawnProjectOptions, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
 import { standaloneAgentsOffered } from "../lib/cloud/standaloneAgents";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
@@ -427,18 +428,32 @@ export default function SpawnScreen() {
 	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
+	// The mode the project pins for the agent (a mode-list agent such as Amp), which the daemon applies.
+	const projectWorkerMode = projectDetail?.config?.worker?.agentConfig?.mode ?? projectDetail?.config?.agentConfig?.mode ?? "";
+	const resolvedMode = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel: projectWorkerMode });
 	const displayedModel = modelTouched ? model : resolvedModel;
 	// The project-aware catalog once it lists something. An empty one (still
 	// discovering, or a project that names none) must not hide the machine's
 	// list, which is what left the menu offering only the default.
 	const currentModels = modelCatalog?.models.length ? modelCatalog.models : agentModelLists[harness] ?? [];
-	// "Default model" when the project pins nothing, because that is the truth:
-	// the provider picks, and naming a model here promised one the session never
-	// ran. Not "Automatic", which reads as an approval mode.
+	// "Default model" when nothing is picked and the project pins nothing: the
+	// default row then names the catalog's default, which the task sends
+	// (modelOverride). Not "Automatic", which reads as an approval mode.
 	const displayedModelLabel = displayedModel ? menuModelName(currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel) : "Default model";
 	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
 	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";
+	// The model the default row names ("Opus 5.5 · Default"), which the task
+	// sends when nothing is picked (modelOverride): from this agent's own loaded
+	// catalog, never one still shown from the agent picked before; none for a
+	// mode list or over the project's pinned model or mode. On Cloud, while the
+	// agent's catalog is missing (reloading after a project change, or its load
+	// failed), the menu names the default from the agent's menu list, which is
+	// the same Cloud catalog (always models, never modes), so that is sent.
+	const defaultRowCatalog = modelCatalog?.agentId === harness
+		? modelCatalog
+		: cloudSelected && agentModelLists[harness]?.length ? { selectionMode: "catalog" as const, models: agentModelLists[harness] } : undefined;
+	const defaultRowModel = defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode });
 	// The model the task will run, picked or the catalog's default, for its
 	// effort levels.
 	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
@@ -534,19 +549,49 @@ export default function SpawnScreen() {
 	const agentIds = agents.filter((agent) => agent.selectable).map((agent) => agent.id).join("|");
 	// Orchestrator Cloud's model lists, one per connected agent, from its catalog.
 	const cloudOrgId = cloudState.org?.id;
+	// While a list shown is still Cloud's release list, it is read again until
+	// the account's own arrives, as the desktop does (useReleaseCatalogRereads).
+	const [cloudMenuListsRelease, setCloudMenuListsRelease] = useState(false);
+	const [cloudPickedListRelease, setCloudPickedListRelease] = useState(false);
+	const cloudRereads = useReleaseCatalogRereads(cloudSelected && (cloudMenuListsRelease || cloudPickedListRelease));
+	const cloudListsFor = useRef<string | undefined>(undefined);
+	// Whether each agent's menu list is still the release list.
+	const cloudListsRelease = useRef<Record<string, boolean>>({});
+	// The organization the menu lists were loaded for.
+	const cloudListsOrg = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!cloudSelected) return;
-		if (!cloudOrgId || !agentIds) { setAgentModelLists({}); return; }
+		if (!cloudSelected) { cloudListsFor.current = undefined; return; }
+		if (!cloudOrgId || !agentIds) { cloudListsFor.current = undefined; cloudListsOrg.current = undefined; cloudListsRelease.current = {}; setAgentModelLists({}); setCloudMenuListsRelease(false); return; }
+		// Another organization's lists go at once, not when the new ones land:
+		// the default row falls back to them (defaultRowCatalog), and must never
+		// send a model from an organization this task is not in.
+		if (cloudListsOrg.current !== cloudOrgId) {
+			cloudListsOrg.current = cloudOrgId;
+			cloudListsRelease.current = {};
+			setAgentModelLists({});
+		}
+		const key = `${cloudOrgId}/${agentIds}`;
+		const reread = cloudListsFor.current === key;
 		let cancelled = false;
 		void Promise.all(agentIds.split("|").map(async (id) => {
 			try {
-				return [id, cloudModelCatalog(id, await agentModelCatalog(cloudState.client, cloudOrgId, id)).models] as const;
+				const catalog = await agentModelCatalog(cloudState.client, cloudOrgId, id, { rereadRelease: reread });
+				return [id, cloudModelCatalog(id, catalog).models, isReleaseCatalog(catalog)] as const;
 			} catch {
-				return [id, []] as const;
+				return [id, undefined, undefined] as const;
 			}
-		})).then((entries) => { if (!cancelled) setAgentModelLists(Object.fromEntries(entries)); });
+		})).then((entries) => {
+			if (cancelled) return;
+			cloudListsFor.current = key;
+			// A failed re-read keeps the list already shown, and whether it is
+			// still the release list, so its re-reads go on.
+			const released = Object.fromEntries(entries.map(([id, , release]) => [id, release ?? (reread ? cloudListsRelease.current[id] : undefined) ?? false]));
+			cloudListsRelease.current = released;
+			setAgentModelLists((current) => Object.fromEntries(entries.map(([id, models]) => [id, models ?? (reread ? current[id] : undefined) ?? []])));
+			setCloudMenuListsRelease(Object.values(released).some(Boolean));
+		});
 		return () => { cancelled = true; };
-	}, [agentIds, cloudOrgId, cloudSelected, cloudState.client]);
+	}, [agentIds, cloudOrgId, cloudRereads, cloudSelected, cloudState.client]);
 
 	useEffect(() => {
 		if (cloudSelected) return;
@@ -578,17 +623,32 @@ export default function SpawnScreen() {
 	}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);
 
 	// A new cloud task's models come from Orchestrator Cloud's catalog for the agent.
+	const cloudCatalogFor = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!cloudSelected) return;
-		if (!cloudOrgId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!cloudSelected) { cloudCatalogFor.current = undefined; return; }
+		if (!cloudOrgId || !harness) { cloudCatalogFor.current = undefined; setModelCatalog(undefined); setModelLoading(false); setCloudPickedListRelease(false); return; }
+		// A re-read of the list shown neither clears it nor shows it loading.
+		// Another project is a new load: changing it clears the catalog
+		// (changeProject), and Start waits until it is back, so the default
+		// row's model is there to send.
+		const key = `${cloudOrgId}/${harness}/${projectId ?? ""}`;
+		const reread = cloudCatalogFor.current === key;
 		let cancelled = false;
-		setModelLoading(true);
-		agentModelCatalog(cloudState.client, cloudOrgId, harness)
-			.then((catalog) => { if (!cancelled) { setModelCatalog(cloudModelCatalog(harness, catalog)); setModelError(undefined); } })
-			.catch(() => { if (!cancelled) setModelCatalog(undefined); })
+		if (!reread) setModelLoading(true);
+		agentModelCatalog(cloudState.client, cloudOrgId, harness, { rereadRelease: reread })
+			.then((catalog) => {
+				if (cancelled) return;
+				cloudCatalogFor.current = key;
+				setModelCatalog(cloudModelCatalog(harness, catalog));
+				setCloudPickedListRelease(isReleaseCatalog(catalog));
+				setModelError(undefined);
+			})
+			.catch(() => { if (!cancelled && !reread) setModelCatalog(undefined); })
+			// Any answer ends a load: a re-read shows none, but the load it
+			// replaced (another agent's, cut short) may have.
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [cloudOrgId, cloudSelected, cloudState.client, harness]);
+	}, [cloudOrgId, cloudRereads, cloudSelected, cloudState.client, harness, projectId]);
 
 	useEffect(() => {
 		if (cloudSelected) return;
@@ -841,7 +901,7 @@ export default function SpawnScreen() {
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
-				model: modelOverride(displayedModel, modelTouched),
+				model: modelOverride(displayedModel, modelTouched, defaultRowModel),
 				// Only a level picked here; otherwise the model's default applies.
 				effort: chosenEffort,
 				accountId: accountPick || undefined,
@@ -852,12 +912,16 @@ export default function SpawnScreen() {
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
 			const { attachments: _, ...requestFields } = request;
-			const payload = JSON.stringify(requestFields);
+			// A request is what the person chose. The default row's model is the
+			// catalog's, which a re-read can change between a Start whose answer
+			// was lost and its retry: the retry keeps the id, and the model it
+			// went with, so the server matches it instead of starting a second worker.
+			const payload = JSON.stringify({ ...requestFields, model: modelOverride(displayedModel, modelTouched) });
 			// Compared by content, not by object: attachments read back from a
 			// restored draft are the same files the last Start sent.
 			const sent: SpawnDraftRequest = requestMatches(requestRef.current, payload, attachmentsRef.current)
 				? requestRef.current
-				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`, ...(request.model ? { model: request.model } : {}) };
 			requestRef.current = sent;
 			// The request id is on the phone before the request leaves: closed
 			// after the daemon took the task but before the draft is cleared, the
@@ -875,7 +939,7 @@ export default function SpawnScreen() {
 				setBusy(false);
 				return;
 			}
-			const session = await spawn({ ...request, clientRequestId: sent.id });
+			const session = await spawn({ ...request, model: sent.model, clientRequestId: sent.id });
 			// Started: the draft goes, so the next New task opens empty. Only this
 			// Start's: another open page's draft saved meanwhile stays.
 			startedDraft.current = { prompt, attachments: attachmentsRef.current };

@@ -1,5 +1,5 @@
 import { splitModelChoices, type TurnSettingChoice } from "./chat/turnSettingsModel";
-import type { AgentModelInfo } from "./api";
+import type { AgentModelCatalog, AgentModelInfo } from "./api";
 
 export type SpawnModelDefaults = {
 	selectedAgent: string;
@@ -29,12 +29,8 @@ export function spawnModelSourceChanged(current: SpawnModelSource, next: SpawnMo
 /**
  * The model the project pins for the agent about to be spawned, or "" for none.
  *
- * Only the project's own configuration counts. The catalog's `isDefault` entry is
- * deliberately **not** consulted: it is a claim about which model the provider
- * will choose, and it is not always true. Codex advertises `gpt-6-astra` as its
- * default while a fresh thread comes up on `gpt-5.6-sol`, so the spawn sheet
- * named Astra and the chat named Sol. Nothing on this side can know what a
- * provider will really pick, so nothing here pretends to.
+ * Only the project's own configuration counts here; the catalog's default is
+ * what the default row names, and modelOverride sends it.
  */
 export function resolveSpawnModel(input: SpawnModelDefaults): string {
 	if (input.selectedAgent !== input.projectWorkerAgent) return "";
@@ -42,22 +38,42 @@ export function resolveSpawnModel(input: SpawnModelDefaults): string {
 }
 
 /**
- * What to send as the model.
+ * What to send as the model: the one New task shows, as the desktop's New task
+ * sends it (TaskComposer's requestedModel).
  *
  * A picked value is sent even when the project pins the same one. The old rule
  * dropped it as redundant, so choosing the model the sheet had *shown* as the
  * default sent no model at all: the session recorded nothing, and the chat had no
  * way to know what was asked for, so it displayed whatever the thread happened to
- * be running. Sending the pick is what makes "you started this with Astra" true
- * in both places.
+ * be running.
  *
- * `touched` is false for the untouched "Automatic" state, which sends nothing and
- * lets the provider choose — the one case where no model is the honest answer.
+ * With nothing picked, the project's pin (`value` while untouched) is left to the
+ * server, which applies it. Else the default row's model (`catalogDefault`, the
+ * catalog's default: "Opus 5.5 · Default") is sent. That row is the only way the
+ * menu offers it, and sending nothing let the agent start on its own default:
+ * Claude Code's depends on the account (Sonnet on some), and Codex's list named
+ * Astra while a fresh thread came up on Sol, so the chat named another model than
+ * New task had. Nothing is sent only when the catalog names no concrete default.
  */
-export function modelOverride(value: string, touched: boolean): string | undefined {
-	if (!touched) return undefined;
+export function modelOverride(value: string, touched: boolean, catalogDefault?: string): string | undefined {
 	const clean = value.trim();
-	return clean && clean !== "__auto__" ? clean : undefined;
+	if (touched && clean && clean !== "__auto__") return clean;
+	if (!touched && clean && clean !== "__auto__") return undefined;
+	const fallback = catalogDefault?.trim() ?? "";
+	return fallback && fallback.toLowerCase() !== "default" ? fallback : undefined;
+}
+
+/**
+ * The default row's model for modelOverride to send: the catalog's default, from
+ * the selected agent's own loaded catalog. None for a list of modes, or when the
+ * project pins a model or mode for the agent (`projectPin`): the server applies
+ * the pin, and a mode list's default sent as the model would replace a pinned
+ * mode (an Amp project pinned to "high" ran "medium"). As the desktop's New task
+ * decides it (TaskComposer: !catalogUsesModes && !projectModelOrMode).
+ */
+export function defaultRowModelToSend(input: { catalog: Pick<AgentModelCatalog, "selectionMode" | "models"> | undefined; projectPin?: string }): string | undefined {
+	if (!input.catalog || input.catalog.selectionMode === "mode" || input.projectPin?.trim()) return undefined;
+	return input.catalog.models.find((model) => model.isDefault)?.id;
 }
 
 /** How many of a catalog's models an agent's menu lists before "All models". */

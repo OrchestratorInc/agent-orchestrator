@@ -27,7 +27,12 @@ export type SpawnDraftOwner = { hostId: string | null; accountId: string | null 
  * unchanged, with the same id, the daemon answers with the task it already
  * started instead of starting a second one.
  */
-export type SpawnDraftRequest = { id: string; payload: string; attachments: string };
+/**
+ * A Start's identity, kept with the draft. `model` is the model it sent when
+ * that was not the person's pick (the default row's, the catalog's default), so
+ * a retry sends the same body even if the catalog's default changed meanwhile.
+ */
+export type SpawnDraftRequest = { id: string; payload: string; attachments: string; model?: string };
 /**
  * What was picked on the page besides the prompt: the project, an agent, a
  * model, a level, an approval mode, the session mode. Each goes into a Start,
@@ -110,11 +115,25 @@ export function requestMatches(request: SpawnDraftRequest | undefined, payload: 
 	return Boolean(request && request.payload === payload && request.attachments === attachmentsKey(attachments));
 }
 
+/**
+ * The model a request saved before `model` was kept sent: then a picked model
+ * went only in the payload. Its retry matches that payload and reuses the id,
+ * so it must send that model again: the daemon fingerprints the body.
+ */
+function payloadModel(payload: string): string | undefined {
+	try {
+		const parsed = JSON.parse(payload) as { model?: unknown } | null;
+		return parsed && typeof parsed.model === "string" && parsed.model ? parsed.model : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function readRequest(value: unknown): SpawnDraftRequest | undefined {
 	const request = value as Partial<SpawnDraftRequest> | null | undefined;
-	return request && typeof request.id === "string" && typeof request.payload === "string" && typeof request.attachments === "string"
-		? { id: request.id, payload: request.payload, attachments: request.attachments }
-		: undefined;
+	if (!(request && typeof request.id === "string" && typeof request.payload === "string" && typeof request.attachments === "string")) return undefined;
+	const model = typeof request.model === "string" && request.model ? request.model : request.model === undefined ? payloadModel(request.payload) : undefined;
+	return { id: request.id, payload: request.payload, attachments: request.attachments, ...(model ? { model } : {}) };
 }
 
 function readSelections(value: unknown): SpawnDraftSelections | undefined {
