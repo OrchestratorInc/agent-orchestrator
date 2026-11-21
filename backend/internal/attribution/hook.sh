@@ -88,16 +88,17 @@ commit_args() {
 }
 
 # commit_option prints the value of `git commit` option $1 (--cleanup or
-# --template, which also matches -t) and reports whether it was given.
+# --template, which also matches -t) and reports whether it was given. Like
+# git, the last occurrence wins.
 commit_option() {
 	printf '%s\n' "$args" | awk -v opt="$1" '
 		$0 == "--" { exit }
-		want { print; found = 1; exit }
+		want { value = $0; found = 1; want = 0; next }
 		$0 == opt { want = 1; next }
-		index($0, opt "=") == 1 { print substr($0, length(opt) + 2); found = 1; exit }
+		index($0, opt "=") == 1 { value = substr($0, length(opt) + 2); found = 1; next }
 		opt == "--template" && $0 == "-t" { want = 1; next }
-		opt == "--template" && $0 ~ /^-t./ { print substr($0, 3); found = 1; exit }
-		END { exit !found }
+		opt == "--template" && $0 ~ /^-t./ { value = substr($0, 3); found = 1; next }
+		END { if (found) print value; exit !found }
 	'
 }
 

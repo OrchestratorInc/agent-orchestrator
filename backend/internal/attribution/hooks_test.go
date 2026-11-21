@@ -86,6 +86,13 @@ func newRepo(t *testing.T, coAuthor string, setup func(r repo)) repo {
 	return r
 }
 
+// TestMain runs every git in this package in the C locale: the tests match
+// git's English messages, which a translated git would not print.
+func TestMain(m *testing.M) {
+	os.Setenv("LC_ALL", "C")
+	os.Exit(m.Run())
+}
+
 func countTrailer(msg string) int { return strings.Count(msg, "Co-authored-by: "+testCoAuthor) }
 
 func TestHookAddsTrailerOnce(t *testing.T) {
@@ -340,6 +347,9 @@ func TestHookFollowsGitForTemplateSignoffsAndCleanup(t *testing.T) {
 		// Reported: strip drops "#" lines from -m too, leaving nothing.
 		{"cleanup=strip, -m holding only a # line", "", "strip", "true", []string{"-m", "# Placeholder"}, "", false},
 		{"cleanup=strip, -m text and a # line", "", "strip", "true", []string{"-m", "feat: x\n# note"}, "feat: x", false},
+		// Like git, the last --cleanup wins.
+		{"--cleanup given twice, the last is strip", "", "", "true", []string{"--cleanup=verbatim", "--cleanup=strip", "-m", "# Placeholder"}, "", false},
+		{"--cleanup given twice, the last is verbatim", "", "", "true", []string{"--cleanup=strip", "--cleanup", "verbatim", "-m", "# Placeholder"}, "# Placeholder", false},
 		{"default cleanup keeps a -m # line", "", "", "true", []string{"-m", "# Placeholder"}, "# Placeholder", false},
 		{"cleanup=verbatim, -m holding only a sign-off", "", "verbatim", "true", []string{"-m", dev}, dev, false},
 		{"-t template untouched", "Subject\n", "", "true", nil, "", true},
