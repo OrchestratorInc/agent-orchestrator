@@ -1,7 +1,7 @@
 ---
 title: 安装
 description: 下载 Orchestrator 桌面应用，并连接你的编程工具。
-translatedFrom: 7460247266d0
+translatedFrom: 37cc4347a49c
 ---
 
 如需最新的稳定版桌面构建，请从 [Orchestrator 官方下载页面](https://orchestrator.inc/download/)开始。该页面还列出了每夜构建和移动应用。如果你想直接获取桌面安装包，请从下面选择：
@@ -13,20 +13,60 @@ translatedFrom: 7460247266d0
 桌面应用是标准的安装方式。它管理本地守护进程，不需要全局的 `ao` 命令，并会在启动后和运行期间检查更新。
 
 <span id="optional-macos-install-with-homebrew" />
-## 可选：在 macOS 上用 Homebrew 安装
+<span id="install-with-a-package-manager" />
+## 用包管理器安装
 
-推荐使用上面的桌面下载进行安装。在 macOS 上，你也可以安装现有的 Homebrew cask：
+推荐使用上面的桌面下载进行安装。你也可以用包管理器安装同一个桌面应用。
 
-```bash
-brew install --cask agentwrapper/tap/agent-orchestrator
-```
-
-桌面应用通常会自动更新。要更新由 Homebrew 管理的安装，请先更新 Homebrew，再升级 cask：
+在 macOS 上，使用官方 Homebrew cask。它会安装应用，并把 `ao` 命令链接到 Homebrew 的 `bin` 目录，因此 `ao` 会在你的 `PATH` 中：
 
 ```bash
-brew update
-brew upgrade --cask agentwrapper/tap/agent-orchestrator
+brew install --cask agent-orchestrator
 ```
+
+在 Windows 上，使用 winget：
+
+```powershell
+winget install --id OrchestratorInc.AgentOrchestrator -e
+```
+
+桌面应用通常会自动更新。要更新由包管理器管理的安装，用同样的方式升级：
+
+```bash
+brew upgrade --cask agent-orchestrator
+```
+
+```powershell
+winget upgrade --id OrchestratorInc.AgentOrchestrator -e
+```
+
+如果你之前从 `agentwrapper/tap` 安装，请切换到官方 cask，它才会链接 `ao`：
+
+```bash
+brew uninstall --cask agentwrapper/tap/agent-orchestrator
+brew install --cask agent-orchestrator
+```
+
+<span id="where-ao-is" />
+<span id="where-the-ao-command-is" />
+## `ao` 命令在哪里
+
+桌面应用自带 `ao` CLI。日常使用桌面应用不需要它，但脚本和编程代理会用它来操作 Orchestrator。
+
+| 安装方式 | `ao` 的位置 |
+| --- | --- |
+| Homebrew cask（macOS） | 从应用包链接，在 `PATH` 中名为 `ao` |
+| 磁盘映像或 zip（macOS） | `/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao` |
+| Windows 安装程序或 winget | 应用安装目录中的 `resources\daemon\ao.exe` |
+| Linux `.deb` 或 `.rpm` | 应用安装目录中的 `resources/daemon/ao` |
+
+不使用 cask 时，请用完整路径调用 `ao`，或在 shell 配置文件中添加别名：
+
+```bash
+alias ao="/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
+```
+
+运行 `ao status` 确认它可以使用。操作项目和会话的命令需要桌面应用处于打开状态，因为这些命令连接的守护进程由应用运行。要从编程代理操作 Orchestrator，请参阅[从你的编程代理使用 Orchestrator](/agent-setup)。
 
 <span id="prerequisites" />
 ## 前提条件
@@ -38,7 +78,7 @@ brew upgrade --cask agentwrapper/tap/agent-orchestrator
 | 外部编程代理（在 Orchestrator 中称为 harness） | 使用已安装 CLI 的代理会话 | 安装受支持的工具，例如 Claude Code、Codex、Cursor、Aider 或 OpenCode。当前列表和界面支持情况请参阅[代理目录](/plugins/agents)。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。 |
 | tmux | macOS 预检，以及旧版或回退的终端会话 | macOS 和 Linux 的桌面安装包已包含它。从源码启动时可能需要系统中的 tmux；请参阅 [Runtime](/plugins/runtimes)。 |
 
-Orchestrator 使用你电脑上已经安装并登录的编程代理。**Settings → Harness** 提供受支持代理的设置和就绪检查；有些代理需要在 Orchestrator 之外安装或登录。Unreal Agent 是一个例外：它是内置的、仅用于 Chat 的代理，有自己的平台和权限限制。请参阅[代理目录](/plugins/agents)。
+Orchestrator 使用你电脑上已经安装并登录的编程代理。**Settings → Harness** 会显示每个受支持代理的就绪状态，并为支持的代理提供 **Install** 和 **Login**。Unreal Agent 是一个例外：它是内置的、仅用于 Chat 的代理，有自己的平台和权限限制。请参阅[代理目录](/plugins/agents)。
 
 <span id="set-up-ao" />
 <span id="set-up-orchestrator" />
@@ -77,7 +117,11 @@ gh auth status
 <span id="install-and-sign-in-to-an-external-agent" />
 ### 安装并登录外部代理
 
-对于外部安装的 harness，请先安装，然后在 Orchestrator 之外运行一次以完成登录。Orchestrator 会在你创建会话时检测可用的 harness。如果你使用内置的 Unreal Agent，可以跳过这一步，在受支持的 macOS 或 Linux 上创建 Chat 会话时直接选择它。
+打开 **Settings → Harness**，选择要使用的代理。如果它尚未安装，选择 **Install**（或 **Open installation guide**）。如果它尚未登录，选择 **Login** 并完成打开的登录流程。当 Settings 显示它已安装并已登录时，代理就准备好了。你已经在使用并已登录的代理会被自动检测到。
+
+如果你更喜欢终端，可以改用代理自己的命令登录，例如 `codex login`，或运行 `claude` 后使用 `/login`。然后运行 `ao agent ls --refresh`，让 Orchestrator 重新检查。
+
+如果你使用内置的 Unreal Agent，可以跳过这一步，在受支持的 macOS 或 Linux 上创建 Chat 会话时直接选择它。
 
 是否支持 Chat 取决于 harness 及其已安装的版本；请参阅[代理能力目录](/plugins/agents#chat-versus-terminal-ui)。
 
@@ -101,14 +145,14 @@ gh auth status
 <summary>
 	<span className="ao-legacy-cli-summary-copy">
 		<span className="ao-legacy-cli-summary-title">已经在用 npm CLI？</span>
-		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> 已冻结在 <code>0.10.0</code>，不再推荐使用。</span>
+		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> 已冻结在 <code>0.10.3</code>，不再推荐使用。</span>
 	</span>
 	<span className="ao-legacy-cli-summary-icon" aria-hidden="true" />
 </summary>
 
 <div className="ao-legacy-cli-details__content">
 
-`0.10.0` 是最后一个 npm 版本。该包作为现有用户的旧版过渡保留，不会再获得新的产品功能。从该安装运行 `ao start` 会获取并打开桌面构建。
+`0.10.3` 是最后一个 npm 版本。该包作为现有用户的旧版过渡保留，不会再获得新的产品功能。从该安装运行 `ao start` 会获取并打开桌面构建。它留在 `PATH` 中的 `ao` 仍是 `0.10.3`，与当前应用不匹配，因此请优先使用[应用自带的 `ao`](#where-ao-is)。
 
 ```bash
 npm install -g @aoagents/ao
@@ -131,7 +175,7 @@ Orchestrator 的所有应用状态默认都存放在 `~/.ao` 下，包括守护�
 
 <Accordions>
 	<Accordion title="没有可用的代理">
-		对于外部 harness，请安装它并运行一次以完成认证，然后重启 Orchestrator，让从桌面启动的守护进程获得更新后的登录 shell 环境。Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat；直接选择它即可，无需安装 CLI。
+		打开 **Settings → Harness**，选择代理，然后使用 **Install** 或 **Login**。在终端中，先用代理自己的登录命令登录，再运行 `ao agent ls --refresh`。如果新安装的代理仍未出现，请退出并重新打开 Orchestrator，让守护进程读取更新后的 shell `PATH`。Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat；直接选择它即可，无需安装 CLI。
 	</Accordion>
 	<Accordion title="缺少 GitHub 数据">
 		运行 `gh auth status`。确认当前账户能够访问该仓库及其拉取请求。
@@ -139,8 +183,8 @@ Orchestrator 的所有应用状态默认都存放在 `~/.ao` 下，包括守护�
 	<Accordion title="在 macOS 或 Linux 上无法启动 Terminal UI">
 		打包的构建已包含 tmux。新会话通常使用原生 PTY 宿主；macOS 仍会检查 tmux 是否可用，较旧的会话可能需要它。源码安装和回退行为请参阅[运行时诊断](/plugins/runtimes/tmux)。
 	</Accordion>
-	<Accordion title="找不到旧版 `ao` 命令">
-		桌面应用不需要这个命令。只有在你有意使用已冻结的旧版 CLI 时，才需要排查包管理器的全局 bin 路径。
+	<Accordion title="找不到 `ao` 命令">
+		桌面应用不需要这个命令。应用自带 `ao`，但不会把它加入 `PATH`；请参阅 [`ao` 命令在哪里](#where-ao-is)。官方 Homebrew cask 会为你链接它。如果旧版 npm 包中的旧 `ao` 在 `PATH` 中排在前面，`ao doctor` 会报告它找到的是哪个 `ao`。
 	</Accordion>
 	<Accordion title="macOS 提示无法验证开发者">
 		在访达中右键点按 Orchestrator，选择“打开”，然后在确认对话框中再次选择“打开”。如果 macOS 仍然阻止该应用，请运行以下诊断命令，并在提交 issue 时附上输出：
