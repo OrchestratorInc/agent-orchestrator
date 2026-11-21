@@ -417,6 +417,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		useUiStore.getState().setNewChatSending(pending);
 		return () => useUiStore.getState().setNewChatSending(false);
 	}, [pending]);
+	// After a refused send the composer shows the load error itself, so the notice
+	// drops the text and keeps only the action, which the composer cannot show.
+	const loadErrorInComposer = task.remoteLoadError === reportedLoadError;
 	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
 		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
 			<span>{task.error}</span>
@@ -438,8 +441,11 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		</div>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
-	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (
-		<p role="alert" className="px-1 text-xs text-destructive">{task.remoteLoadError}</p>
+	) : task.remoteLoadError && (!loadErrorInComposer || task.remoteLoadErrorAction) ? (
+		<div role={loadErrorInComposer ? undefined : "alert"} className="flex items-center gap-2 px-1 text-xs text-destructive">
+			{loadErrorInComposer ? null : <span>{task.remoteLoadError}</span>}
+			{task.remoteLoadErrorAction ? <Button size="sm" variant="ghost" onClick={task.remoteLoadErrorAction.onClick}>{task.remoteLoadErrorAction.label}</Button> : null}
+		</div>
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>

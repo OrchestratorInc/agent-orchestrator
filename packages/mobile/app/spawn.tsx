@@ -2,8 +2,9 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
+import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
+import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
@@ -13,7 +14,7 @@ import { ApiError, getAgentModels, getAgents, getProject, getSettings, type Agen
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
-import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
+import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent, spawnHostSelectionReady } from "../lib/hostRoute";
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
@@ -21,7 +22,8 @@ import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pa
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
-import { spawnNotices } from "../lib/spawnNotices";
+import { errorAfterEdit, spawnHostState, spawnNotices, START_DROPPED_NOTICE } from "../lib/spawnNotices";
+import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
@@ -36,7 +38,7 @@ import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
-import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
+import { approvalOptions, isApprovalMode, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
 import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
@@ -52,17 +54,41 @@ export default function SpawnScreen() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved, phoneNetwork } = useApp();
 	const cloudState = useCloud();
 	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
 	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
 	const connectedHosts = useMemo(() => cloud ? [...machineHosts, { id: CLOUD_HOST_ID, label: CLOUD_HOST_NAME, icon: "cloud" as const }] : machineHosts, [cloud, machineHosts]);
+	// Whether Cloud is offered, or known not to be: signed in and loaded, signed
+	// out, or failed. A Cloud draft's page waits for it before picking.
+	const cloudResolved = Boolean(cloud) || (cloudState.status !== "loading" && cloudState.status !== "connecting");
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const hostSelectionInitialized = useRef(false);
+	// State, not a ref: what was typed while the saved New task draft was being
+	// read is saved as soon as the read is done (see the draft below).
+	const [draftRestored, setDraftRestored] = useState(false);
+	// The machine the restored draft was written for, picked again if it is connected.
+	const restoredHostId = useRef<string | null>(null);
 	const catalogGeneration = useRef(0);
 	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
 	const cloudSelected = isCloudHost(selectedHostId);
 	const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	// The pickers load once per machine, not once per connection. An app switch
+	// drops the connection and brings it back, and the loads below used to empty
+	// every picker and fetch it all again each time. Each remembers what it last
+	// loaded (`loadedFor`) and keeps it on screen while the connection is away;
+	// a load whose inputs changed meanwhile runs once it is back. Requests only
+	// ever go through the live `config`. A connection that really changed
+	// (another endpoint or credential, as an upgrade race brings) moves `epoch`
+	// on, which loads them all again through it.
+	const connected = Boolean(config);
+	const connectionEpoch = useRef<ConnectionEpoch>({ last: null, epoch: 0 });
+	connectionEpoch.current = nextConnectionEpoch(connectionEpoch.current, config);
+	const epoch = connectionEpoch.current.epoch;
+	const loadedFor = useRef<{ catalog?: string; project?: string; models?: string }>({});
+	// The agent menu's lists, kept per agent: one that failed is asked again on
+	// the next load without asking again for the ones that loaded.
+	const agentModelCache = useRef(createAgentModelCache());
 	const projects = cloudSelected ? cloud?.projects ?? [] : selectedHost?.projects ?? [];
 	// Cloud's list is known once it loaded, not as soon as Cloud is signed in:
 	// before that, an empty list would ask to create a project that exists.
@@ -77,7 +103,9 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) void reloadCloudPlan?.();
 	}, [cloudSelected, reloadCloudPlan]);
-	const unreachable = Boolean(selectedHost && selectedHost.connection === "closed");
+	// Offline or rejected by the same rule as the other screens: a connection the
+	// app closed on going to the background is neither (see spawnHostState).
+	const machine = spawnHostState(selectedHost, phoneNetwork, Date.now());
 	const hostOptions = useMemo(() => {
 		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
 		const selected = hostStates.find((host) => host.hostId === selectedHostId);
@@ -86,12 +114,17 @@ export default function SpawnScreen() {
 
 	useEffect(() => {
 		if (hostSelectionInitialized.current) return;
-		const routed = routeHostId ? hostStates.find((host) => host.hostId === routeHostId) : undefined;
-		// A machine still connecting is waited for before Cloud can become the default.
-		if ((routeHostId && routed?.loading) || (!routeHostId && machineHosts.length === 0 && hostStates.some((host) => host.loading))) return;
+		// The saved draft is read first: restored, it goes back to its own machine.
+		if (!draftRestored) return;
+		const draftHostId = restoredHostId.current;
+		// Unrouted, a restored draft's machine is the one waited for: picking
+		// another while it is still connecting would move its draft there.
+		const awaitedHostId = routeHostId ?? draftHostId ?? undefined;
+		if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;
 		hostSelectionInitialized.current = true;
-		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: currentHostId ?? undefined, hosts: connectedHosts }));
-	}, [connectedHosts, currentHostId, hostStates, machineHosts, routeHostId]);
+		const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;
+		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: preferredHostId, hosts: connectedHosts }));
+	}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	// Only a session the plan pays for is the plan's to stop: Coder the
@@ -105,6 +138,32 @@ export default function SpawnScreen() {
 	const [prompt, setPrompt] = useState("");
 	const [attachments, setAttachments] = useState<SpawnAttachment[]>([]);
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
+	// The prompt and attachments are saved as they change, so they survive the
+	// phone closing the app in the background (see spawnDraft). A draft from
+	// before comes back when the page opens empty; starting the task clears it.
+	// It is saved for the machine picked and the account signed in, so another
+	// account, or the same phone after that machine is forgotten, never finds it.
+	const [draftSaver] = useState(() => createSpawnDraftSaver());
+	// Bumped by each read of the saved draft, and on leaving the page: only the latest one lands.
+	const restoreGeneration = useRef(0);
+	// The last read of the saved draft failed: it may still be on the phone, so
+	// an empty composer is not saved over it (which would delete it).
+	const draftUnread = useRef(false);
+	// The saved draft is another machine's than the one this page was opened
+	// for: an empty composer is not saved over it either.
+	const draftElsewhere = useRef(false);
+	// The draft a Start began a task with: cleared rather than saved again, until
+	// the prompt or attachments change (on a page kept open after it started).
+	const startedDraft = useRef<{ prompt: string; attachments: readonly SpawnAttachment[] } | null>(null);
+	const promptRef = useRef(prompt);
+	promptRef.current = prompt;
+	// Until Cloud has read who is signed in, a draft is neither saved (it would
+	// be saved as no account's, which any account then finds) nor cleared.
+	const accountKnown = cloudState.status !== "loading";
+	const draftAccountId = cloudState.account?.id ?? null;
+	const draftAccountRef = useRef(draftAccountId);
+	draftAccountRef.current = draftAccountId;
+	const draftOwner = useMemo(() => ({ hostId: selectedHostId, accountId: draftAccountId }), [draftAccountId, selectedHostId]);
 	const pickingAttachments = useRef(false);
 	// A paste that came in while a pick was loading, said again when it ends.
 	const missedPaste = useRef(false);
@@ -123,7 +182,26 @@ export default function SpawnScreen() {
 	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
 	const [accountPick, setAccountPick] = useState<string>();
 	const spawnAccounts = useAgentAccounts(config, cloudSelected ? undefined : harness);
-	useEffect(() => setAccountPick(undefined), [selectedHostId, harness]);
+	// The agent account a restored draft's Start used, put back once the page is
+	// on the draft's machine and agent: each of those, picked as the page sets
+	// up, starts the account over below. Kept with the draft until then.
+	const [restoredAccount, setRestoredAccount] = useState<{ hostId: string | null; harness: string; accountId: string } | null>(null);
+	const accountScope = useRef<string | null>(null);
+	useEffect(() => {
+		const scope = JSON.stringify([selectedHostId, harness]);
+		const moved = accountScope.current !== scope;
+		accountScope.current = scope;
+		if (restoredAccount && selectedHostId === restoredAccount.hostId && harness === restoredAccount.harness) {
+			setAccountPick(restoredAccount.accountId);
+			setRestoredAccount(null);
+			return;
+		}
+		if (moved) setAccountPick(undefined);
+		// Still setting up (no machine, or the draft's machine with no agent yet)
+		// keeps it waiting; anything else is another choice, which drops it.
+		const settingUp = restoredAccount && (selectedHostId === null || (selectedHostId === restoredAccount.hostId && !harness));
+		if (restoredAccount && !settingUp) setRestoredAccount(null);
+	}, [restoredAccount, selectedHostId, harness]);
 	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
 	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
@@ -132,7 +210,115 @@ export default function SpawnScreen() {
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const requestRef = useRef<{ payload: string; attachments: readonly SpawnAttachment[]; id: string } | undefined>(undefined);
+	const requestRef = useRef<SpawnDraftRequest | undefined>(undefined);
+	// What goes into a Start besides the prompt, saved with the draft so a
+	// restored one sends what it sent before (and so reuses its request id).
+	const draftSelections = useMemo((): SpawnDraftSelections => ({
+		...(projectId ? { projectId } : {}),
+		...(agentTouched && harness ? { harness } : {}),
+		...(modelTouched && model ? { model } : {}),
+		...(effort ? { effort } : {}),
+		...(approvalChoice ? { approvalMode: approvalChoice } : {}),
+		mode,
+		// Only an account picked (or one restored, not yet put back): the default goes unnamed, as in a Start.
+		...(accountPick ? { accountId: accountPick, accountHarness: harness } : restoredAccount ? { accountId: restoredAccount.accountId, accountHarness: restoredAccount.harness } : {}),
+	}), [accountPick, agentTouched, approvalChoice, effort, harness, mode, model, modelTouched, projectId, restoredAccount]);
+	useEffect(() => {
+		if (!draftRestored || !accountKnown) return;
+		if ((draftUnread.current || draftElsewhere.current) && !prompt.trim() && attachments.length === 0) return;
+		// Written here, this page's draft replaces the other machine's.
+		draftElsewhere.current = false;
+		const started = startedDraft.current;
+		if (started && started.prompt === prompt && started.attachments === attachments) return;
+		startedDraft.current = null;
+		// The last Start goes with the draft only while it sent these attachments:
+		// restored with others, its id must not be sent with them.
+		const request = requestRef.current;
+		const current = request && request.attachments === attachmentsKey(attachments) ? request : undefined;
+		// Until the machine is picked, the restored draft keeps the machine it was
+		// written for rather than being saved as no machine's.
+		const owner = selectedHostId === null && !hostSelectionInitialized.current
+			? { ...draftOwner, hostId: restoredHostId.current }
+			: draftOwner;
+		draftSaver.schedule({ prompt, attachments, owner, selections: draftSelections, ...(current ? { request: current } : {}) });
+	}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt, selectedHostId]);
+	// Puts back what a restored draft had picked. The machine is picked once the
+	// list of machines is known (above); a model or agent picked stays picked.
+	const restoreSelections = (draft: SpawnDraft) => {
+		restoredHostId.current = draft.owner?.hostId ?? null;
+		const picked = draft.selections;
+		if (!picked) return;
+		if (picked.mode === "chat" || picked.mode === "tui") setMode(picked.mode);
+		if (picked.projectId) setProjectId(picked.projectId);
+		if (picked.harness) { setHarness(picked.harness); setAgentTouched(true); }
+		if (picked.model) { setModel(picked.model); setModelTouched(true); }
+		if (picked.effort) setEffort(picked.effort);
+		if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);
+		if (picked.accountId && picked.accountHarness) setRestoredAccount({ hostId: restoredHostId.current, harness: picked.accountHarness, accountId: picked.accountId });
+	};
+	const restoreDraft = () => {
+		const generation = ++restoreGeneration.current;
+		setDraftRestored(false);
+		void loadSpawnDraft().then((draft) => {
+			if (generation !== restoreGeneration.current) return;
+			draftUnread.current = false;
+			draftElsewhere.current = false;
+			if (!draft) return;
+			// Routed to another machine than the draft's: the draft stays its
+			// machine's, neither shown here nor saved over by this empty page. An
+			// unrouted page goes to the draft's machine with it.
+			const draftHostId = draft.owner?.hostId ?? null;
+			if (routeHostId && draftHostId !== null && draftHostId !== routeHostId) {
+				draftElsewhere.current = true;
+				restoredHostId.current = null;
+				return;
+			}
+			// Text typed or files added before the draft was read are the page's
+			// now: the old draft neither replaces nor joins them.
+			if (promptRef.current || attachmentsRef.current.length) return;
+			setPrompt(draft.prompt);
+			attachmentsRef.current = draft.attachments;
+			setAttachments(draft.attachments);
+			restoreSelections(draft);
+			// The Start it last sent: sent again unchanged, it reuses the request id,
+			// so a task started before the app was closed is not started twice.
+			if (draft.request) requestRef.current = draft.request;
+		}, () => {
+			if (generation === restoreGeneration.current) draftUnread.current = true;
+		}).finally(() => { if (generation === restoreGeneration.current) setDraftRestored(true); });
+	};
+	useEffect(() => {
+		restoreDraft();
+		const subscription = AppState.addEventListener("change", (state) => { if (state !== "active") void draftSaver.flush(); });
+		return () => {
+			restoreGeneration.current += 1;
+			subscription.remove();
+			void draftSaver.flush();
+			draftSaver.release();
+		};
+		// Once, when the page opens.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [draftSaver]);
+	// Another account signed in, or this one signed out, with the page open:
+	// what the last account wrote leaves the composer, unsaved, and only the new
+	// account's own draft can come back.
+	const draftAccountSeen = useRef<string | null | undefined>(undefined);
+	useEffect(() => {
+		if (!accountKnown) return;
+		const previous = draftAccountSeen.current;
+		draftAccountSeen.current = draftAccountId;
+		if (previous === undefined || previous === draftAccountId) return;
+		void draftSaver.cancel();
+		promptRef.current = "";
+		setPrompt("");
+		attachmentsRef.current = [];
+		setAttachments([]);
+		startedDraft.current = null;
+		requestRef.current = undefined;
+		setRestoredAccount(null);
+		restoreDraft();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [accountKnown, draftAccountId]);
 
 	const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
 	const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -142,7 +328,11 @@ export default function SpawnScreen() {
 	const [reloadKey, setReloadKey] = useState(0);
 	// Spoken text lands in the prompt the way it does in the chat composer:
 	// appended, so dictation can extend what was typed rather than replace it.
-	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
+	// Dictation edits the form too, so it clears a dropped Start's notice.
+	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => {
+		setError(errorAfterEdit);
+		setPrompt((old) => old ? `${old} ${spoken}` : spoken);
+	}, []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
 	// The composer docks to the bottom as the chat's does, on the same keyboard
 	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
@@ -193,13 +383,17 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId) { setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
+		if (!requestedHostId) { loadedFor.current.catalog = undefined; setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
+		const wanted = `${catalogGeneration.current}|${epoch}|${requestedHostId}|${reloadKey}`;
+		if (!config) { setLoading(false); return; }
+		if (loadedFor.current.catalog === wanted) return;
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setLoading(true);
 		Promise.all([getAgents(config), getSettings(config)])
 			.then(([c, settings]) => {
 				if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+				loadedFor.current.catalog = wanted;
 				setCatalog(c);
 				setChatHarnesses(settings.chatHarnesses);
 				setCatalogError(null);
@@ -215,7 +409,10 @@ export default function SpawnScreen() {
 		return () => {
 			cancelled = true;
 		};
-	}, [cloudSelected, config, reloadKey, selectedHostId]);
+		// Keyed on whether the machine is connected and on which connection it is
+		// (`epoch`), not on the connection object, which an app switch replaces.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloudSelected, connected, epoch, reloadKey, selectedHostId]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -266,9 +463,10 @@ export default function SpawnScreen() {
 		...(!setupBlocked && cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
 	];
 	const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({
-		// Only when a reconnect can fix it: a rejected password stops the poll for
-		// good, and its catalog error already says to re-scan the pairing code.
-		offline: unreachable,
+		// One line for a machine that is gone or refused this phone, in place of
+		// the same failure from every request on this screen.
+		machine,
+		errorStatus: selectedHost?.errorStatus,
 		mode,
 		loading,
 		catalogLoaded: catalog !== null,
@@ -295,16 +493,24 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		// What is cleared is not loaded: coming back to the same project loads it again.
+		if (!requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { loadedFor.current.project = undefined; setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		const wanted = `${catalogGeneration.current}|${epoch}|${requestedHostId}|${projectId}|${reloadKey}`;
+		if (!config || loadedFor.current.project === wanted) return;
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
-			.then((nextProject) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetail(nextProject); })
+			.then((nextProject) => {
+				if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+				loadedFor.current.project = wanted;
+				setProjectDetail(nextProject);
+			})
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [cloudSelected, config, projectId, reloadKey, selectedHostId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloudSelected, connected, epoch, projectId, reloadKey, selectedHostId]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
@@ -339,21 +545,31 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !agentIds) { setAgentModelLists({}); return; }
+		if (!requestedHostId || !agentIds) { setAgentModelLists({}); return; }
+		const ids = agentIds.split("|");
+		const cache = agentModelCache.current;
+		const scope = `${catalogGeneration.current}|${epoch}|${requestedHostId}`;
+		const missing = cache.missing(scope, ids);
+		// Lists on screen stay while the ones still missing load. Those are asked
+		// again on a reconnect or a reload: only the agents whose list failed.
+		if (!config || missing.length === 0) { setAgentModelLists(cache.lists(ids)); return; }
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		const polling = new AbortController();
-		void Promise.all(agentIds.split("|").map(async (id) => {
+		void Promise.all(missing.map(async (id) => {
 			try {
 				return [id, (await getAgentModels(config, id, undefined, polling.signal)).models ?? []] as const;
 			} catch {
-				return [id, []] as const;
+				return [id, undefined] as const;
 			}
 		})).then((entries) => {
-			if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setAgentModelLists(Object.fromEntries(entries));
+			if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+			for (const [id, models] of entries) if (models) cache.record(scope, id, models);
+			setAgentModelLists(cache.lists(ids));
 		});
 		return () => { cancelled = true; polling.abort(); };
-	}, [agentIds, cloudSelected, config, reloadKey, selectedHostId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);
 
 	// A new cloud task's models come from Orchestrator Cloud's catalog for the agent.
 	useEffect(() => {
@@ -373,17 +589,26 @@ export default function SpawnScreen() {
 		const requestedHostId = selectedHostId;
 		// The machine's own catalog loads before a project is chosen, so the
 		// model menu is never just the default; choosing a project swaps in its.
-		if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!requestedHostId || !harness) { loadedFor.current.models = undefined; setModelCatalog(undefined); setModelLoading(false); return; }
+		const wanted = `${catalogGeneration.current}|${epoch}|${requestedHostId}|${harness}|${projectId ?? ""}|${reloadKey}`;
+		if (!config) { setModelLoading(false); return; }
+		if (loadedFor.current.models === wanted) return;
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
 		const polling = new AbortController();
 		getAgentModels(config, harness, !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
-			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
+			.then((nextCatalog) => {
+				if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+				loadedFor.current.models = wanted;
+				setModelCatalog(nextCatalog);
+				setModelError(nextCatalog.warning);
+			})
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
 		return () => { cancelled = true; polling.abort(); };
-	}, [cloudSelected, config, harness, projectId, reloadKey, selectedHostId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloudSelected, connected, epoch, harness, projectId, reloadKey, selectedHostId]);
 
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
@@ -396,15 +621,27 @@ export default function SpawnScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [connection]);
 
+	// A change the user makes to the form. The notice a dropped Start left
+	// asked for one, so it goes; changes the page makes itself (an account
+	// change emptying the composer) leave it.
+	const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {
+		setError(errorAfterEdit);
+		change(...args);
+	};
+
 	// A level belongs to the model it was picked for, so a new model starts at its own default.
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); };
-	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
+	// A cleared catalog is not loaded any more: picking the same agent or
+	// project again (A, B, then A) loads it again rather than leaving it empty.
+	const resetModelSource = () => { clearModelOverride(); loadedFor.current.models = undefined; setModelCatalog(undefined); setModelError(undefined); };
 	const chooseHost = (nextHostId: string) => {
 		if (nextHostId === selectedHostId) return;
 		catalogGeneration.current += 1;
 		setProjectId(null);
 		setHarness("");
 		setAgentTouched(false);
+		loadedFor.current.catalog = undefined;
+		loadedFor.current.project = undefined;
 		setCatalog(null);
 		setCatalogError(null);
 		setChatHarnesses([]);
@@ -430,6 +667,7 @@ export default function SpawnScreen() {
 		}
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
+		loadedFor.current.project = undefined;
 		setProjectDetail(undefined);
 		setProjectDetailLoadedFor(null);
 		setAgentTouched(false);
@@ -483,7 +721,7 @@ export default function SpawnScreen() {
 			// A cloud task browses Orchestrator Cloud's catalog, not the machine's.
 			...(cloudSelected ? { hostId: CLOUD_HOST_ID } : {}),
 			// The sheet's default row answers "".
-			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
+			onSelect: edited((id: string) => selectAgentModel(agentId, id || "__auto__")),
 		}));
 	};
 	/** Adds picks to the task; resolves to how many were added. `notice` says what a paste left out. */
@@ -502,11 +740,16 @@ export default function SpawnScreen() {
 			missedPaste.current = false;
 			return was ? "Paste the images again: they came in while attachments were loading." : undefined;
 		};
+		// The account the pick was made under: another signed in while it loaded
+		// emptied the composer, and the files are not the next account's.
+		const pickedFor = draftAccountRef.current;
 		try {
 			const picked = await pick();
+			if (draftAccountRef.current !== pickedFor) return 0;
 			if (!picked) { setAttachmentError(missed()); return 0; }
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
+			if (draftAccountRef.current !== pickedFor) return 0;
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
 			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
@@ -604,10 +847,33 @@ export default function SpawnScreen() {
 			};
 			const { attachments: _, ...requestFields } = request;
 			const payload = JSON.stringify(requestFields);
-			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
-				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+			// Compared by content, not by object: attachments read back from a
+			// restored draft are the same files the last Start sent.
+			const sent: SpawnDraftRequest = requestMatches(requestRef.current, payload, attachmentsRef.current)
+				? requestRef.current
+				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+			requestRef.current = sent;
+			// The request id is on the phone before the request leaves: closed
+			// after the daemon took the task but before the draft is cleared, the
+			// restored draft's Start reuses it, and the daemon answers with that
+			// task. A save that fails does not hold the task back; the draft is
+			// deleted instead, so none without this id can be restored and sent again.
+			const saved = await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });
+			// Dropped while it waited: the account changed or this machine was
+			// forgotten, which emptied the draft, and the task it held does not
+			// start. It says so, rather than Start seeming to do nothing.
+			if (saved === "dropped") {
+				holding.current = false;
+				haptics.error();
+				setError(START_DROPPED_NOTICE);
+				setBusy(false);
+				return;
 			}
-			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
+			const session = await spawn({ ...request, clientRequestId: sent.id });
+			// Started: the draft goes, so the next New task opens empty. Only this
+			// Start's: another open page's draft saved meanwhile stays.
+			startedDraft.current = { prompt, attachments: attachmentsRef.current };
+			void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			else rememberLastProject(selectedHostId, projectId);
 			holding.current = false;
@@ -678,47 +944,47 @@ export default function SpawnScreen() {
 				<SpawnComposerControls
 					hosts={hostOptions}
 					hostId={selectedHostId}
-					onSelectHost={chooseHost}
+					onSelectHost={edited(chooseHost)}
 					projects={cloudSelected
 						// Cloud sessions always run in a project; a new one is created from here.
 						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
-					onSelectProject={changeProject}
+					onSelectProject={edited(changeProject)}
 					accounts={accountOptions}
 					accountId={shownAccountId}
-					onSelectAccount={setAccountPick}
+					onSelectAccount={edited(setAccountPick)}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
-					onSelectHarness={selectAgent}
+					onSelectHarness={edited(selectAgent)}
 					models={currentModels.map((item) => ({ id: item.id, label: item.label }))}
 					agentModels={agentMenuModels}
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
-					onSelectModel={selectModel}
-					onSelectAgentModel={selectAgentModel}
+					onSelectModel={edited(selectModel)}
+					onSelectAgentModel={edited(selectAgentModel)}
 					usesDefaultModel={!displayedModel}
 					onBrowseModels={browseModels}
 					approvalModes={approvalOptions(harness)}
 					approvalMode={approvalMode}
-					onSelectApprovalMode={(next) => setApprovalChoice(next as ApprovalMode)}
+					onSelectApprovalMode={edited((next: string) => setApprovalChoice(next as ApprovalMode))}
 					effortChoices={effortChoices}
-					onSelectEffort={selectEffort}
-					onChoosePhoto={() => { void pickPhotos(); }}
-					onChooseFile={() => { void pickFiles(); }}
-					onPasteImages={busy ? null : pasteImages}
+					onSelectEffort={edited(selectEffort)}
+					onChoosePhoto={edited(() => { void pickPhotos(); })}
+					onChooseFile={edited(() => { void pickFiles(); })}
+					onPasteImages={busy ? null : edited(pasteImages)}
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
-					onChangePrompt={setPrompt}
+					onChangePrompt={edited(setPrompt)}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
 					attachments={<ComposerAttachmentTray
 						items={trayItems}
-						onRemove={(key) => {
+						onRemove={edited((key: string) => {
 							const item = attachments[trayItems.findIndex((candidate) => candidate.key === key)];
 							if (!item) return;
 							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
 							setAttachments(attachmentsRef.current);
-						}}
+						})}
 					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}

@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveState } from "../browserLive";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
+import { machineState, rejectedMachineLine } from "../hostRoute";
 import { useApp } from "../store";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import type { Theme } from "../theme";
@@ -30,6 +31,8 @@ const TAP_MAX_MS = 10_000;
 /** The mark a tap leaves on the frame: about a fingertip. */
 const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
+const BROWSER_UNPAIRED_COPY = "Pair this phone with the desktop app first.";
+const BROWSER_OFFLINE_COPY = "This machine is offline. The browser connects once the app reconnects.";
 
 export type BrowserLivePaneProps = {
 	sessionID: string;
@@ -45,7 +48,19 @@ export type BrowserLivePaneProps = {
 };
 
 export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null }: BrowserLivePaneProps) {
-	const { config } = useApp();
+	const app = useApp();
+	const { config } = app;
+	// Why there is no verified connection to stream over, while there is none.
+	// The app drops it every time it goes to the background, and Preview keeps
+	// this pane on screen through that when it holds an app preview, so a
+	// missing connection is a reconnect unless the machine is really gone or
+	// refused this phone (by the same rule as every other screen, see
+	// machineState) or none is paired. Null with a connection, so nothing here
+	// restarts the stream.
+	const state = config ? "ok" : machineState(app);
+	const away = config ? null : app.paired === false ? "unpaired" : state === "ok" ? "reconnecting" : state;
+	// The board's words for the refusal, as one line.
+	const rejection = away === "rejected" ? rejectedMachineLine(app.errorStatus) : undefined;
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
@@ -58,6 +73,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const [error, setError] = useState<string>();
 	const [page, setPage] = useState<BrowserLiveState | null>(null);
 	const [frameURI, setFrameURI] = useState<string>();
+	// Whether the frame on screen came from the stream that is running now. The
+	// last stream's frame stays up through a reconnect so the page doesn't blank,
+	// but the desktop page may have moved meanwhile: a tap on it could land on
+	// another control, so it takes no gestures until this stream draws its own.
+	const [frameIsLive, setFrameIsLive] = useState(false);
 	const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
 	const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
 	const frameRect = useMemo(() => containBrowserFrame(viewportSize, frameSize), [frameSize, viewportSize]);
@@ -73,9 +93,15 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 
 	useEffect(() => {
 		setPage(null);
+		setFrameIsLive(false);
 		if (!config) {
+			if (away === "reconnecting") {
+				setStatus("connecting");
+				setError(undefined);
+				return;
+			}
 			setStatus("error");
-			setError("Pair this phone with the desktop app first.");
+			setError(away === "unpaired" ? BROWSER_UNPAIRED_COPY : rejection ?? BROWSER_OFFLINE_COPY);
 			return;
 		}
 		if (!sessionID) {
@@ -109,6 +135,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				try {
 					setFrameSize({ width: frame.width, height: frame.height });
 					setFrameURI(browserJPEGDataURI(frame.jpeg));
+					setFrameIsLive(true);
 				} catch {
 					setStatus("error");
 					setError("This mobile build couldn't display the browser frame.");
@@ -123,7 +150,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
-	}, [attempt, config, onDisabled, sessionID, showNotice]);
+	}, [attempt, away, config, onDisabled, rejection, sessionID, showNotice]);
 
 	// The bar is titled with the desktop's page while one is showing.
 	const pageTitle = status === "open" && page?.url ? page.title.trim() || undefined : undefined;
@@ -200,7 +227,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const markY = useSharedValue(0);
 	const markScale = useSharedValue(1);
 	const markOpacity = useSharedValue(0);
-	const interactive = status === "open" && Boolean(frameURI) && !blank;
+	const interactive = status === "open" && Boolean(frameURI) && frameIsLive && !blank;
 	// Another session's page starts at its fitted size.
 	useEffect(() => {
 		zoomScale.value = 1;
