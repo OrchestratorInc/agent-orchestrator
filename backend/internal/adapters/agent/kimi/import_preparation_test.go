@@ -92,6 +92,123 @@ func TestKimiPrivatePreparationAndRetry(t *testing.T) {
 	}
 }
 
+// A new selection must not be trapped by an older reservation, and it must
+// never retire a home/proof that a prepared or active session may still own.
+func TestKimiReimportChangedSelectionPreservesEarlierBinding(t *testing.T) {
+	for _, mode := range []string{"prepared", "advanced private history", "missing private home", "without selection fingerprint", "legacy prepared", "legacy advanced private history", "legacy missing private home"} {
+		t.Run(mode, func(t *testing.T) {
+			r := kimiImportFixture(t)
+			original, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode != "without selection fingerprint" {
+				r.SourceFingerprint = original.Fingerprint
+			}
+			first, err := prepareKimiImport(t.Context(), r, "2.4.1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding := r.ConfigDir + "\x00" + r.NativeSessionID + "\x00" + r.LaunchCWD
+			reservationPath := filepath.Join(r.DataDir, "native-imports", "kimi", fmt.Sprintf("%x.json", sha256.Sum256([]byte(binding+"\x00"+original.Fingerprint))))
+			if strings.HasPrefix(mode, "legacy") {
+				legacyPath := filepath.Join(filepath.Dir(reservationPath), fmt.Sprintf("%x.json", sha256.Sum256([]byte(binding))))
+				if err := os.Rename(reservationPath, legacyPath); err != nil {
+					t.Fatal(err)
+				}
+				reservationPath = legacyPath
+			}
+			reservation, err := os.ReadFile(reservationPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proof, err := os.ReadFile(filepath.Join(first.ConfigDir, ".ao-import.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			appendTurn := func(path, marker string) {
+				t.Helper()
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = fmt.Fprintf(f, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":%q}],"origin":{"kind":"user"}}}`+"\n", marker)
+				closeErr := f.Close()
+				if err != nil || closeErr != nil {
+					t.Fatalf("append native turn: %v, %v", err, closeErr)
+				}
+			}
+			if strings.Contains(mode, "advanced private history") {
+				appendTurn(first.TranscriptPath, "PRIVATE_ONLY_TURN")
+			}
+			privateWire, err := os.ReadFile(first.TranscriptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(mode, "missing private home") {
+				if err := os.RemoveAll(first.ConfigDir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			appendTurn(r.TranscriptPath, "NEW_SOURCE_TURN")
+			selected, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selected.Fingerprint == original.Fingerprint {
+				t.Fatal("new turn did not advance selection")
+			}
+			if strings.HasSuffix(mode, "prepared") {
+				// A lost checkpoint still recovers its exact earlier selection.
+				if retry, err := prepareKimiImport(t.Context(), r, "2.4.1"); err != nil || retry != first {
+					t.Fatalf("earlier selection retry: %#v, %v", retry, err)
+				}
+			}
+			if strings.Contains(mode, "advanced private history") || strings.Contains(mode, "missing private home") {
+				if _, err := prepareKimiImport(t.Context(), r, "2.4.1"); err == nil {
+					t.Fatal("retry replaced a changed/missing earlier binding")
+				}
+			}
+			if mode != "without selection fingerprint" {
+				r.SourceFingerprint = selected.Fingerprint
+			}
+			second, err := prepareKimiImport(t.Context(), r, "2.4.1")
+			if err != nil || second.ConfigDir == first.ConfigDir || second.NativeSessionID != first.NativeSessionID {
+				t.Fatalf("new selection did not get an independent home: %#v, %v", second, err)
+			}
+			copied, err := ReadImportedSession(t.Context(), second.ConfigDir, second.NativeSessionID)
+			if err != nil || !bytes.Contains(copied.Wire, []byte("NEW_SOURCE_TURN")) || bytes.Contains(copied.Wire, []byte("PRIVATE_ONLY_TURN")) {
+				t.Fatalf("new selection lost/mixed history: %v", err)
+			}
+			if retry, err := prepareKimiImport(t.Context(), r, "2.4.1"); err != nil || retry != second {
+				t.Fatalf("new selection retry: %#v, %v", retry, err)
+			}
+			if strings.Contains(mode, "missing private home") {
+				if _, err := os.Lstat(first.ConfigDir); !os.IsNotExist(err) {
+					t.Fatalf("reimport recreated earlier home: %v", err)
+				}
+			} else {
+				gotProof, err := os.ReadFile(filepath.Join(first.ConfigDir, ".ao-import.json"))
+				if err != nil || !bytes.Equal(gotProof, proof) {
+					t.Fatal("reimport rewrote earlier session proof")
+				}
+				gotWire, err := os.ReadFile(first.TranscriptPath)
+				if err != nil || !bytes.Equal(gotWire, privateWire) {
+					t.Fatal("reimport rewrote earlier private history")
+				}
+			}
+			gotReservation, err := os.ReadFile(reservationPath)
+			if err != nil || !bytes.Equal(gotReservation, reservation) {
+				t.Fatal("reimport retired or rewrote earlier reservation")
+			}
+			unchanged, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID)
+			if err != nil || unchanged.Fingerprint != selected.Fingerprint {
+				t.Fatal("reimport changed the source")
+			}
+		})
+	}
+}
+
 func TestKimiPreparationRefusesUnknownOrChangedState(t *testing.T) {
 	for _, mode := range []string{"version", "selection", "state", "protocol", "subagent", "symlink", "empty", "runtime"} {
 		t.Run(mode, func(t *testing.T) {

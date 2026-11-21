@@ -153,8 +153,8 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 			return ports.NativeSessionRef{}, err
 		}
 	}
-	if reservation.SourceID != r.NativeSessionID || reservation.ConfigDir != r.ConfigDir || reservation.CWD != cwd || reservation.SourceFingerprint != r.SourceFingerprint || reservation.SourceDigest != before {
-		return ports.NativeSessionRef{}, errors.New("kilo import reservation does not match the unchanged selected source and worktree")
+	if reservation.SourceID != r.NativeSessionID || reservation.ConfigDir != r.ConfigDir || reservation.CWD != cwd || reservation.SourceFingerprint != r.SourceFingerprint {
+		return ports.NativeSessionRef{}, errors.New("kilo import reservation does not match the selected source and worktree")
 	}
 	expected, ids, err := reservation.history()
 	if err != nil {
@@ -166,6 +166,12 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 		return ports.NativeSessionRef{}, err
 	}
 	if !published {
+		// An unpublished snapshot still requires the unchanged source. Once
+		// published, only the reserved graph below may be adopted: later source
+		// turns cannot invalidate or replace that independent native identity.
+		if reservation.SourceDigest != before {
+			return ports.NativeSessionRef{}, errors.New("kilo source session rows changed before native import")
+		}
 		// A reserved but unpublished graph keeps its IDs. Partial publication
 		// or a collision is refused; never overwrite or generate another copy.
 		for _, id := range ids {
@@ -185,10 +191,9 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 			return ports.NativeSessionRef{}, fmt.Errorf("import kilo history: %w", err)
 		}
 	}
-	after, err := kiloSourceDigest(ctx, db, r.NativeSessionID)
-	if err != nil || before != after {
-		return ports.NativeSessionRef{}, errors.New("kilo source session rows changed during native import")
-	}
+	// The export was checked against the source before reservation. Native
+	// import consumes that fixed export, not the live source; confirm the
+	// reserved destination even when the original gained turns during import.
 	if err := verifyKiloPublishedImport(ctx, db, nativeID, cwd, expected); err != nil {
 		return ports.NativeSessionRef{}, err
 	}

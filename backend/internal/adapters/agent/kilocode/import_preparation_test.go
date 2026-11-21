@@ -16,7 +16,7 @@ import (
 )
 
 func TestKiloNativeImportPreparation(t *testing.T) {
-	for _, mode := range []string{"native import", "tampered reservation", "lost acknowledgement", "retry pending", "import failure", "missing row", "wrong directory", "missing history", "export changes source", "import changes source", "unknown version"} {
+	for _, mode := range []string{"native import", "tampered reservation", "lost acknowledgement", "retry pending", "import failure", "missing row", "wrong directory", "missing history", "export changes source", "import changes source", "lost acknowledgement changes source", "retry pending changes source", "wrong directory changes source", "foreign history changes source", "wrong workspace changes source", "unknown version"} {
 		t.Run(mode, func(t *testing.T) {
 			dataRoot := t.TempDir()
 			t.Setenv("AO_DATA_DIR", dataRoot)
@@ -76,7 +76,7 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 				if args[0] != "import" {
 					t.Fatalf("unexpected native command: %v", args)
 				}
-				if mode == "import changes source" {
+				if strings.Contains(mode, "changes source") && mode != "export changes source" {
 					if _, err := db.Exec(`INSERT INTO session_message VALUES ('canonical-change', ?)`, sourceID); err != nil {
 						t.Fatal(err)
 					}
@@ -85,7 +85,7 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 				if err != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 					t.Fatalf("private native export = %v, %v", info, err)
 				}
-				if mode == "import failure" || mode == "retry pending" && calls == 3 {
+				if mode == "import failure" || strings.HasPrefix(mode, "retry pending") && calls == 3 {
 					return nil, errors.New("synthetic provider refusal")
 				}
 				if mode == "missing row" {
@@ -131,11 +131,21 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 				if json.Unmarshal(proof, &reservation) != nil || reservation.NativeID != transformed.Info.ID || string(reservation.Export) != string(data) {
 					t.Fatal("native import ran before its exact identity graph was reserved")
 				}
-				if mode == "wrong directory" {
+				if strings.HasPrefix(mode, "wrong directory") {
 					transformed.Info.Directory = "/source"
 				}
 				_, err = db.Exec(`INSERT INTO session VALUES (?, ?, NULL)`, transformed.Info.ID, transformed.Info.Directory)
 				if err != nil || mode == "missing history" {
+					return nil, err
+				}
+				if mode == "wrong workspace changes source" {
+					if _, err := db.Exec(`UPDATE session SET workspace_id = 'wrk_foreign' WHERE id = ?`, transformed.Info.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode == "foreign history changes source" {
+					// A row at the reserved session ID is insufficient evidence.
+					_, err := db.Exec(`INSERT INTO message VALUES ('msg_foreign', ?)`, transformed.Info.ID)
 					return nil, err
 				}
 				for _, message := range transformed.Messages {
@@ -148,24 +158,44 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 						}
 					}
 				}
-				if mode == "lost acknowledgement" {
+				if strings.HasPrefix(mode, "lost acknowledgement") {
 					return nil, errors.New("native process lost after committing import")
 				}
 				return nil, nil
 			}
 			request := ports.ImportedSessionRelocation{NativeSessionID: sourceID, ConfigDir: root, LaunchCWD: cwd, DataDir: dataRoot}
 			ref, err := New().prepareKiloImport(context.Background(), request, run)
-			if mode == "native import" || mode == "tampered reservation" {
+			if mode == "native import" || mode == "tampered reservation" || mode == "import changes source" {
 				if err != nil || ref.NativeSessionID == "" || ref.NativeSessionID == sourceID || ref.ConfigDir != root {
 					t.Fatalf("native import = %#v, %v", ref, err)
 				}
 			} else if err == nil || ref.NativeSessionID != "" {
 				t.Fatalf("failed import published identity: %#v, %v", ref, err)
 			}
-			if mode == "native import" || mode == "lost acknowledgement" || mode == "retry pending" {
+			if mode == "native import" || strings.HasPrefix(mode, "lost acknowledgement") || mode == "retry pending" || mode == "import changes source" {
+				reservationPath := filepath.Join(dataRoot, "native-imports", "kilo", kiloReservationName(root, sourceID, cwd, ""))
+				body, err := os.ReadFile(reservationPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var reserved kiloImportReservation
+				if err := json.Unmarshal(body, &reserved); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "native import" {
+					// Even a source change after a successful publication must not
+					// redirect retry to a new export or a different native identity.
+					if _, err := db.Exec(`INSERT INTO session_message VALUES ('later-source-turn', ?)`, sourceID); err != nil {
+						t.Fatal(err)
+					}
+				}
 				again, retryErr := New().prepareKiloImport(context.Background(), request, run)
-				if retryErr != nil || again.NativeSessionID == "" || mode == "native import" && again != ref {
+				if retryErr != nil || again.NativeSessionID == "" || again.NativeSessionID != reserved.NativeID || again.TranscriptPath != filepath.Join(root, "kilo.db", reserved.NativeID) || (mode == "native import" || mode == "import changes source") && again != ref {
 					t.Fatalf("reservation retry = %#v, %v", again, retryErr)
+				}
+				after, err := os.ReadFile(reservationPath)
+				if err != nil || string(after) != string(body) {
+					t.Fatal("adoption replaced the reserved snapshot")
 				}
 				var copies int
 				if err := db.QueryRow(`SELECT COUNT(*) FROM session WHERE id != ?`, sourceID).Scan(&copies); err != nil || copies != 1 {
@@ -178,13 +208,13 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if mode == "missing history" || mode == "wrong directory" || mode == "import changes source" || mode == "tampered reservation" {
-				if _, err := New().prepareKiloImport(context.Background(), request, run); err == nil {
-					t.Fatal("retry accepted rejected publication")
+			if mode == "missing history" || strings.HasPrefix(mode, "wrong directory") || mode == "foreign history changes source" || mode == "wrong workspace changes source" || mode == "retry pending changes source" || mode == "tampered reservation" {
+				if again, err := New().prepareKiloImport(context.Background(), request, run); err == nil || again.NativeSessionID != "" {
+					t.Fatalf("retry accepted rejected publication: %#v, %v", again, err)
 				}
 			}
 			wantCalls := 3
-			if mode == "native import" || mode == "lost acknowledgement" || mode == "missing history" || mode == "wrong directory" || mode == "import changes source" || mode == "tampered reservation" {
+			if mode == "native import" || strings.HasPrefix(mode, "lost acknowledgement") || mode == "missing history" || strings.HasPrefix(mode, "wrong directory") || mode == "foreign history changes source" || mode == "wrong workspace changes source" || mode == "retry pending changes source" || mode == "import changes source" || mode == "tampered reservation" {
 				wantCalls = 4 // retry checks version but never exports/imports again
 			}
 			if mode == "retry pending" {
@@ -202,6 +232,15 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 			var sourceDirectory, sourceWorkspace string
 			if err := db.QueryRow(`SELECT directory, workspace_id FROM session WHERE id = ?`, sourceID).Scan(&sourceDirectory, &sourceWorkspace); err != nil || (sourceDirectory != "/source" && mode != "export changes source") || sourceWorkspace != "wrk_source" {
 				t.Fatalf("original row changed: %q, %q, %v", sourceDirectory, sourceWorkspace, err)
+			}
+			if strings.Contains(mode, "changes source") && mode != "export changes source" || mode == "native import" {
+				var sourceOnlyTurns, copiedTurns int
+				if err := db.QueryRow(`SELECT COUNT(*) FROM session_message WHERE session_id = ?`, sourceID).Scan(&sourceOnlyTurns); err != nil || sourceOnlyTurns != 1 {
+					t.Fatalf("source-only turn was lost: %d, %v", sourceOnlyTurns, err)
+				}
+				if err := db.QueryRow(`SELECT COUNT(*) FROM session_message WHERE session_id != ?`, sourceID).Scan(&copiedTurns); err != nil || copiedTurns != 0 {
+					t.Fatalf("source-only turn entered the reserved copy: %d, %v", copiedTurns, err)
+				}
 			}
 			entries, err := os.ReadDir(filepath.Join(dataRoot, "tmp", "native-import"))
 			if err != nil || len(entries) != 0 {
