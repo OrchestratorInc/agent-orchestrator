@@ -2520,6 +2520,22 @@ func TestHistoricalUserContentDropsStandingInstructionsJoinedToTheFirstMessage(t
 	}
 }
 
+func TestHistoricalUserContentDropsPlainStandingInstructionsJoinedToTheFirstMessage(t *testing.T) {
+	standing := PlainStandingInstructionsBlock("AO standing instructions")
+	// Antigravity replays the preamble and the first prompt as one message.
+	joined := acpsdk.TextBlock(standing.Text.Text + "\n\nFix the failing test")
+	if got := historicalUserContent(joined); got != "Fix the failing test" {
+		t.Fatalf("replayed first message = %q, want only what the user typed", got)
+	}
+	if got := historicalUserContent(standing); got != "" {
+		t.Fatalf("replayed preamble alone = %q, want empty", got)
+	}
+	quoted := acpsdk.TextBlock("Explain </ao_standing_instructions> in the docs")
+	if got := historicalUserContent(quoted); got != quoted.Text.Text {
+		t.Fatalf("message quoting the tag = %q, want it unchanged", got)
+	}
+}
+
 func TestHistoricalUserContentSuppressesOnlyMarkedInternalReplayResources(t *testing.T) {
 	resource := acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
 		TextResourceContents: &acpsdk.TextResourceContents{
