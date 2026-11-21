@@ -525,3 +525,17 @@ func TestCodexAccountEventStreamSendsNamedCachedState(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexAccountEventStreamClientGoneWhileSubscribingIsNot5xx(t *testing.T) {
+	fake := &fakeCodexAccounts{subscribeErr: context.Canceled}
+	srv := newCodexAccountServer(t, fake)
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/codex/accounts/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	srv.Config.Handler.ServeHTTP(rec, req)
+	if rec.Code >= http.StatusInternalServerError {
+		t.Fatalf("status = %d, want no 5xx once the client has left", rec.Code)
+	}
+}
