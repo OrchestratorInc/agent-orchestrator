@@ -78,6 +78,8 @@ type selection struct {
 
 // sourceFiles is one native conversation on disk; Codex may split it into segments.
 type sourceFiles struct {
+	// preview is provider-computed metadata from one shared immutable store snapshot.
+	preview *parsed
 	harness domain.AgentHarness
 	root    string
 	paths   []string
@@ -590,6 +592,10 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 					results[i] = parsed{err: errManagedByAO}
 					continue
 				}
+			}
+			if file.preview != nil {
+				results[i] = *file.preview
+				continue
 			}
 			if cached, ok := s.cache[file.cacheKey()]; ok {
 				results[i] = cached
