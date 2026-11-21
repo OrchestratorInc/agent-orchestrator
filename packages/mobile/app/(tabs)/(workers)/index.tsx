@@ -1,12 +1,17 @@
+import { useIsFocused } from "expo-router";
 import { Sidebar } from "../../../lib/sidebar/Sidebar";
+import { useSidebarEdgeSwipe } from "../../../lib/sidebar/sidebarContext";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
 /**
- * Home: the desktop's left sidebar as the app's main view. Every page it opens
- * (a session, a project, Pull requests, Notifications, Settings, the Workers
- * board) is pushed over it and comes back to it, as a phone's list-first apps do.
+ * Home: the desktop sidebar's Sessions and Projects as the app's main view,
+ * with New chat at the bottom right. The rest of the sidebar (Pull requests,
+ * All workers, Notifications, Pinned, the account and Settings) is the side bar
+ * that slides in from the left: from the header's button, or a swipe from the
+ * left edge while home is in front. Every page it opens is pushed over home.
  */
 export default function HomeScreen() {
-	return <Sidebar />;
+	useSidebarEdgeSwipe(useIsFocused());
+	return <Sidebar part="home" />;
 }

@@ -32,6 +32,7 @@ import { useOrchestratorLauncher } from "../useOrchestratorLauncher";
 import { useReducedMotion } from "../useReducedMotion";
 import { ARCHIVE_SESSION_CONFIRM, workerContextActions, type WorkerActionId } from "../worker-action-model";
 import { changedAt, isUnread, loadReadState, markRead, useReadState } from "./readState";
+import { useSidebarMaybe } from "./sidebarContext";
 import {
 	buildSidebarTree,
 	capRows,
@@ -104,9 +105,10 @@ function withAlpha(hex: string, alpha: number): string {
 
 // ── Persisted disclosure state ────────────────────────────────────────────────
 
-const PREFS_KEY = "ao.sidebar.prefs.v1";
-type Prefs = { expanded: string[]; pinnedProjects: string[]; closedSections: string[] };
-const EMPTY_PREFS: Prefs = { expanded: [], pinnedProjects: [], closedSections: [] };
+const PREFS_KEY = "ao.sidebar.prefs.v2";
+/** `collapsed`: projects the user folded. Home shows every project's dropdown until then. */
+type Prefs = { collapsed: string[]; pinnedProjects: string[]; closedSections: string[] };
+const EMPTY_PREFS: Prefs = { collapsed: [], pinnedProjects: [], closedSections: [] };
 
 function useSidebarPrefs() {
 	const [prefs, setPrefs] = useState<Prefs>(EMPTY_PREFS);
@@ -134,12 +136,16 @@ function useSidebarPrefs() {
 // ── The sidebar ───────────────────────────────────────────────────────────────
 
 /**
- * The desktop's left sidebar as the app's home screen, top to bottom: the
- * Orchestrator brand, Search, the top rows, Pinned, Sessions (agents with no
- * project), Projects with their sessions, and the footer with the account,
- * machines and Settings. Every page it opens is pushed over it.
+ * The desktop's left sidebar, split the way a phone wants it.
+ *
+ * `home` is the app's main view: Sessions (agents with no project) and Projects
+ * with their sessions, a header with the sidebar button and Search, and New
+ * chat floating at the bottom right. `drawer` is the side bar that slides in
+ * from the left with the rest: Pull requests, All workers, Notifications,
+ * Pinned, and the footer with the account, machines and Settings. Both read
+ * the same rows and run the same actions.
  */
-export function Sidebar() {
+export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () => void }) {
 	const { theme: t, scheme, style } = useThemeState();
 	const colors = useMemo(() => sidebarPalette(t, scheme, style), [t, scheme, style]);
 	const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -156,7 +162,6 @@ export function Sidebar() {
 	const [query, setQuery] = useState<string | null>(null);
 	const [renamingKey, setRenamingKey] = useState<string>();
 	const [showAll, setShowAll] = useState<Record<string, boolean>>({});
-	const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
 
 	useEffect(() => { void loadReadState(); }, []);
 
@@ -194,15 +199,17 @@ export function Sidebar() {
 	}, [prefs.pinnedProjects, tree.projects]);
 
 	const go = useCallback((href: Parameters<typeof router.navigate>[0]) => {
+		close?.();
 		router.navigate(href);
-	}, [router]);
+	}, [close, router]);
 
-	// A session opens over home, and back returns here.
+	// A session opens over home, and back returns there.
 	const openSession = useCallback((row: SidebarSessionRow) => {
 		const session = row.session;
 		markRead(row.key, changedAt(session));
+		close?.();
 		router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, hostId: session.hostId ?? app.currentHostId } });
-	}, [app.currentHostId, router]);
+	}, [app.currentHostId, close, router]);
 
 	const newTask = useCallback((projectId?: string, hostId?: string) => {
 		go(projectId ? { pathname: "/spawn", params: { projectId, ...(hostId ? { hostId } : {}) } } : "/spawn");
@@ -217,8 +224,9 @@ export function Sidebar() {
 		const row = projectRows.get(node.key);
 		if (!row) return;
 		// Opens a running orchestrator, or starts or resumes one, as the Projects page did.
+		close?.();
 		openOrchestrator(row);
-	}, [openOrchestrator, projectRows]);
+	}, [close, openOrchestrator, projectRows]);
 
 	const sessionAction = useCallback((row: SidebarSessionRow, id: WorkerActionId) => {
 		const session = row.session;
@@ -241,7 +249,7 @@ export function Sidebar() {
 				return void app.restore(session.id, hostId).then(() => haptics.success(), fail("Couldn't restore the session"));
 			case "openPr": {
 				const route = reviewRouteForSession(session, hostId ?? app.currentHostId);
-				if (route) openPage(route);
+				if (route) { close?.(); openPage(route); }
 				return;
 			}
 			default:
@@ -251,7 +259,7 @@ export function Sidebar() {
 					{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => void app.kill(session.id, hostId).catch(fail("Couldn't archive the session")) },
 				]);
 		}
-	}, [app, openPage, openSession]);
+	}, [app, close, openPage, openSession]);
 
 	const commitRename = useCallback((row: SidebarSessionRow, name: string) => {
 		setRenamingKey(undefined);
@@ -287,16 +295,45 @@ export function Sidebar() {
 	const standalone = capRows(tree.standalone, SIDEBAR_SESSIONS_LIMIT, searching || showAll.standalone === true, activeKey);
 	const listedProjects = capRows(projects, SIDEBAR_INITIAL_SECTION_LIMIT, searching || showAll.projects === true);
 	const paired = app.hostStates.length > 0 || Boolean(app.cloud);
+	const sidebar = useSidebarMaybe();
+
+	if (part === "drawer") {
+		return (
+			<View style={[styles.root, styles.drawerRoot, { paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]} testID="sidebar-drawer">
+				<View style={styles.brand}>
+					<Text accessibilityRole="header" style={styles.brandLabel} numberOfLines={1}>Orchestrator</Text>
+				</View>
+				<View style={styles.fixed}>
+					<NavRow icon="git-pull-request" label="Pull requests" onPress={() => go("/prs")} styles={styles} colors={colors} active={pathname.startsWith("/prs")} />
+					<NavRow icon="layout-grid" label="All workers" onPress={() => go("/board")} styles={styles} colors={colors} disabled={!paired} />
+					<NavRow icon="bell" label="Notifications" onPress={() => go("/notifications")} styles={styles} colors={colors} active={pathname.startsWith("/notifications")} trailing={unread > 0 ? String(unread) : undefined} />
+				</View>
+				<ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+					{tree.pinned.length > 0 ? (
+						<Section label="Pinned" open={sectionOpen("pinned")} onToggle={() => toggleIn("closedSections", "pinned")} styles={styles} colors={colors}>
+							{tree.pinned.map((row) => sessionRow(row, false))}
+						</Section>
+					) : null}
+				</ScrollView>
+				<Footer
+					styles={styles}
+					colors={colors}
+					onSettings={() => go("/settings")}
+					onMachines={() => go("/pair")}
+				/>
+			</View>
+		);
+	}
 
 	return (
-		<View style={[styles.root, { paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]} testID="sidebar">
-			{/* The brand heads home, as it heads the desktop's sidebar. */}
-			<View style={styles.brand} testID="sidebar-brand">
-				<Text accessibilityRole="header" style={styles.brandLabel} numberOfLines={1}>Orchestrator</Text>
+		<View style={[styles.root, { paddingTop: insets.top }]} testID="sidebar-home">
+			<View style={styles.homeHeader}>
+				<HeaderButton icon="panel-left" label={unread > 0 ? `Open sidebar, ${unread} unread notification${unread === 1 ? "" : "s"}` : "Open sidebar"} onPress={() => sidebar?.open()} colors={colors} dot={unread > 0} testID="sidebar-open" />
+				<Text accessibilityRole="header" style={[styles.brandLabel, styles.homeTitle]} numberOfLines={1}>Orchestrator</Text>
+				<HeaderButton icon={searching ? "x" : "search"} label={searching ? "Close search" : "Search"} onPress={() => setQuery(searching ? null : "")} colors={colors} />
 			</View>
-
-			<View style={styles.fixed}>
-				{searching ? (
+			{searching ? (
+				<View style={styles.fixed}>
 					<View style={[styles.navRow, styles.searchRow]}>
 						<Feather name="search" size={ICON} color={colors.muted} />
 						<TextInput
@@ -310,26 +347,11 @@ export function Sidebar() {
 							{...textSelectionColors(t)}
 							accessibilityLabel="Search sessions and projects"
 						/>
-						<Pressable accessibilityRole="button" accessibilityLabel="Close search" hitSlop={8} onPress={() => setQuery(null)}>
-							<Feather name="x" size={ICON} color={colors.muted} />
-						</Pressable>
 					</View>
-				) : (
-					<NavRow icon="search" label="Search" onPress={() => setQuery("")} styles={styles} colors={colors} />
-				)}
-				<NavRow icon="edit" label="New task" onPress={() => newTask()} styles={styles} colors={colors} disabled={!paired} />
-				<NavRow icon="git-pull-request" label="Pull requests" onPress={() => go("/prs")} styles={styles} colors={colors} active={pathname.startsWith("/prs")} />
-				<NavRow icon="layout-grid" label="All workers" onPress={() => go("/board")} styles={styles} colors={colors} disabled={!paired} />
-				<NavRow icon="bell" label="Notifications" onPress={() => go("/notifications")} styles={styles} colors={colors} active={pathname.startsWith("/notifications")} trailing={unread > 0 ? String(unread) : undefined} />
-			</View>
+				</View>
+			) : null}
 
-			<ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}>
-				{tree.pinned.length > 0 ? (
-					<Section label="Pinned" open={sectionOpen("pinned")} onToggle={() => toggleIn("closedSections", "pinned")} styles={styles} colors={colors}>
-						{tree.pinned.map((row) => sessionRow(row, false))}
-					</Section>
-				) : null}
-
+			<ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { paddingBottom: FAB_HEIGHT + 32 + insets.bottom }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}>
 				{tree.standalone.length > 0 || !searching ? (
 					<Section
 						label="Sessions"
@@ -366,8 +388,8 @@ export function Sidebar() {
 						<Text style={styles.empty}>{searching ? "No matches." : "No projects yet."}</Text>
 					) : null}
 					{listedProjects.listed.map((node) => {
-						// The open session's project shows its list until the user folds it (desktop's initial expand).
-						const expanded = searching || prefs.expanded.includes(node.key) || (node.sessions.some((row) => row.key === activeKey) && !dismissed.has(node.key));
+						// Home shows each project's dropdown, its orchestrator and workers, until the user folds it.
+						const expanded = searching || !prefs.collapsed.includes(node.key);
 						const capped = capRows(node.sessions, SIDEBAR_PROJECT_SESSION_LIMIT, searching || showAll[node.key] === true, activeKey);
 						const row = projectRows.get(node.key);
 						return (
@@ -380,10 +402,7 @@ export function Sidebar() {
 									orchestrator={row ? { action: row.action, busy: busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id)) } : undefined}
 									colors={colors}
 									styles={styles}
-									onToggle={() => {
-										if (expanded && !prefs.expanded.includes(node.key)) setDismissed((prev) => new Set(prev).add(node.key));
-										else toggleIn("expanded", node.key);
-									}}
+									onToggle={() => toggleIn("collapsed", node.key)}
 									onOrchestrator={() => launchOrchestrator(node)}
 									onNewTask={() => newTask(node.project.id, node.project.hostId)}
 									onOpenProject={() => openProject(node)}
@@ -391,6 +410,18 @@ export function Sidebar() {
 								/>
 								{expanded ? (
 									<View>
+										{row ? (
+											<OrchestratorRow
+												action={row.action}
+												busy={busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id))}
+												workers={node.sessions.length}
+												active={Boolean(row.link?.id) && activeKey === sidebarSessionKey({ id: row.link!.id, hostId: node.project.hostId })}
+												colors={colors}
+												styles={styles}
+												onPress={() => launchOrchestrator(node)}
+												testID={`sidebar-orchestrator-row-${node.project.id}`}
+											/>
+										) : null}
 										{capped.listed.map((item) => sessionRow(item, true))}
 										{capped.hiddenCount > 0 ? (
 											<View style={{ paddingLeft: SESSION_INDENT + 2 }}>
@@ -420,15 +451,70 @@ export function Sidebar() {
 				</Section>
 			</ScrollView>
 
-			<Footer
-				styles={styles}
-				colors={colors}
-				onSettings={() => go("/settings")}
-				onMachines={() => go("/pair")}
-			/>
+			{/* New chat, floating at the bottom right over the list. */}
+			{paired ? (
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel="New chat"
+					onPress={() => newTask()}
+					style={({ pressed }) => [styles.fab, { bottom: Math.max(insets.bottom, 16) + 8, backgroundColor: t.accent }, pressed && styles.fabPressed]}
+					testID="new-chat"
+				>
+					<Feather name="edit" size={18} color={t.onAccent} />
+					<Text style={[styles.fabLabel, { color: t.onAccent }]}>New chat</Text>
+				</Pressable>
+			) : null}
 		</View>
 	);
 }
+
+/**
+ * The project's orchestrator, leading its dropdown above the workers it
+ * coordinates: open when it runs, start or resume when it does not.
+ */
+function OrchestratorRow({ action, busy, workers, active, colors, styles, onPress, testID }: {
+	action: "open" | "start" | "resume";
+	busy: boolean;
+	workers: number;
+	active: boolean;
+	colors: Palette;
+	styles: Styles;
+	onPress(): void;
+	testID?: string;
+}) {
+	const state = action === "open" ? "Running" : action === "resume" ? "Stopped" : "Not started";
+	const detail = `${state} · ${workers} worker${workers === 1 ? "" : "s"}`;
+	return (
+		<Pressable
+			accessibilityRole="button"
+			accessibilityLabel={`Orchestrator, ${detail}`}
+			accessibilityHint={action === "open" ? "Opens the orchestrator" : action === "resume" ? "Resumes the orchestrator" : "Starts the orchestrator"}
+			disabled={busy}
+			onPress={onPress}
+			style={({ pressed }) => [styles.sessionRow, styles.indented, active && { backgroundColor: colors.active }, pressed && !active && { backgroundColor: colors.hover }]}
+			testID={testID}
+		>
+			<View style={glyphSlot}>
+				{busy ? <Spinner color={colors.working} /> : <OrchestratorIcon size={12} color={action === "open" ? colors.text : colors.muted} />}
+			</View>
+			<Text style={[styles.sessionTitle, (active || action === "open") && styles.sessionTitleBright]} numberOfLines={1}>Orchestrator</Text>
+			<Text style={styles.age}>{detail}</Text>
+		</Pressable>
+	);
+}
+
+/** A 36pt square header control, the desktop sidebar's icon-button size. */
+function HeaderButton({ icon, label, onPress, colors, dot = false, testID }: { icon: FeatherIconName; label: string; onPress(): void; colors: Palette; dot?: boolean; testID?: string }) {
+	return (
+		<Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} hitSlop={4} style={({ pressed }) => [actionStyle, pressed && { backgroundColor: colors.hover }]} testID={testID}>
+			<Feather name={icon} size={18} color={colors.text} />
+			{dot ? <View style={[headerDot, { backgroundColor: colors.attention, borderColor: colors.bg }]} /> : null}
+		</Pressable>
+	);
+}
+
+const headerDot = { position: "absolute", top: 7, right: 7, width: 8, height: 8, borderRadius: 4, borderWidth: 1.5 } as const;
+const FAB_HEIGHT = 48;
 
 /**
  * The width a row's slot gives it. iOS's native menu host sizes what it wraps
@@ -854,5 +940,11 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 	showMoreLabel: { fontFamily: font.regular, fontSize: 13, color: c.passive },
 	footer: { flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 8, paddingTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
 	footerAccount: { flex: 1 },
+	drawerRoot: { borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.border },
+	homeHeader: { height: 52, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8 },
+	homeTitle: { flex: 1, paddingHorizontal: 6 },
+	fab: { position: "absolute", right: 16, height: FAB_HEIGHT, borderRadius: FAB_HEIGHT / 2, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 8, shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+	fabLabel: { fontFamily: font.medium, fontSize: 15 },
+	fabPressed: { opacity: 0.85 },
 	fill: { flex: 1, minWidth: 0 },
 });

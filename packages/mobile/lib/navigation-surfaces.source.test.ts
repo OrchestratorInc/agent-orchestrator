@@ -25,12 +25,14 @@ describe("navigation surfaces", () => {
 		expect(layout).toContain("<Stack screenOptions={stackScreenOptions(t)}>");
 	});
 
-	// Home is the desktop's sidebar: Pull requests, Notifications, Settings and
-	// the Workers board are its rows, each opened the same way: navigated to,
-	// so a second tap during the push doesn't stack a copy.
-	it("opens the app's pages from home's rows", () => {
+	// Home is the desktop sidebar's Sessions and Projects; the side bar holds
+	// Pull requests, All workers, Notifications and Settings, each opened the
+	// same way: navigated to, so a second tap during the push doesn't stack a copy.
+	it("opens the app's pages from the side bar's rows", () => {
 		const home = source("../app/(tabs)/(workers)/index.tsx");
-		expect(home).toContain("return <Sidebar />;");
+		expect(home).toContain('return <Sidebar part="home" />;');
+		expect(home).toContain("useSidebarEdgeSwipe(useIsFocused());");
+		expect(source("../app/_layout.tsx")).toContain('<Sidebar part="drawer" close={close} />');
 		const sidebar = source("./sidebar/Sidebar.tsx");
 		expect(sidebar).toContain('label="Pull requests" onPress={() => go("/prs")}');
 		expect(sidebar).toContain('label="Notifications" onPress={() => go("/notifications")}');
