@@ -34,7 +34,7 @@ type NativeSessionConfig struct {
 
 // NativeSessionObserver turns what a hookless harness reports about its live
 // sessions into the activity signals its hooks would have sent. It compares
-// message times with the session's stored activity time, so a poll missed
+// message times with the session's durable message cursor, so a poll missed
 // mid-turn or a daemon restart neither loses a turn nor reports one twice.
 type NativeSessionObserver struct {
 	dataDir  string
@@ -118,21 +118,27 @@ func (o *NativeSessionObserver) Poll(ctx context.Context) error {
 	return nil
 }
 
-// matchNativeSession finds the session running in rec's workspace. The identity
-// AO already holds wins, then the newest session.
+// matchNativeSession finds the session running in rec's workspace. Once AO holds
+// a native identity only that session matches: another worker sharing the
+// workspace must never take over the durable id, transcript, or kill target.
+// Before that, the newest session is taken.
 func matchNativeSession(rec domain.SessionRecord, snapshots []ports.NativeSessionSnapshot) (ports.NativeSessionSnapshot, bool) {
 	workspace := canonicalPath(rec.Metadata.WorkspacePath)
 	if workspace == "" {
 		return ports.NativeSessionSnapshot{}, false
 	}
+	bound := rec.Metadata.AgentSessionID
 	var match ports.NativeSessionSnapshot
 	found := false
 	for _, snapshot := range snapshots {
 		if canonicalPath(snapshot.WorkspacePath) != workspace {
 			continue
 		}
-		if snapshot.AgentSessionID == rec.Metadata.AgentSessionID {
-			return snapshot, true
+		if bound != "" {
+			if snapshot.AgentSessionID == bound {
+				return snapshot, true
+			}
+			continue
 		}
 		if !found || snapshot.StartedAt.After(match.StartedAt) {
 			match, found = snapshot, true
@@ -154,12 +160,25 @@ func canonicalPath(path string) string {
 	return filepath.Clean(path)
 }
 
+// reconcile replays every message newer than the session's message cursor, so
+// turns that finished between polls each report their prompt, and every AO
+// coordination delivery among them is accepted. The cursor is the session's
+// NativeIdentityObservedAt: the newest timestamp of a signal scoped to the
+// native id. Only signals carrying a transcript message are scoped, so the
+// synthetic activity below, stamped with the poll time, never moves the cursor
+// past a message the transcript has not shown yet.
 func (o *NativeSessionObserver) reconcile(ctx context.Context, rec domain.SessionRecord, snapshot ports.NativeSessionSnapshot) {
 	latest, state := rec.Activity.LastActivityAt, rec.Activity.State
-	emit := func(signal ports.ActivitySignal) bool {
+	cursor := rec.Metadata.NativeIdentityObservedAt
+	if cursor.IsZero() {
+		cursor = latest
+	}
+	emit := func(signal ports.ActivitySignal, scoped bool) bool {
 		signal.Valid = true
-		signal.AgentSessionID = snapshot.AgentSessionID
-		signal.TranscriptPath = snapshot.TranscriptPath
+		if scoped {
+			signal.AgentSessionID = snapshot.AgentSessionID
+			signal.TranscriptPath = snapshot.TranscriptPath
+		}
 		signal.ExpectedHarness = rec.Harness
 		signal.LaunchID = rec.Metadata.RuntimeLaunchID
 		if err := o.sink.ApplyActivitySignal(ctx, rec.ID, signal); err != nil {
@@ -167,6 +186,9 @@ func (o *NativeSessionObserver) reconcile(ctx context.Context, rec domain.Sessio
 			return false
 		}
 		latest, state = signal.Timestamp, signal.State
+		if scoped && signal.Timestamp.After(cursor) {
+			cursor = signal.Timestamp
+		}
 		return true
 	}
 	now := o.clock()
@@ -180,30 +202,57 @@ func (o *NativeSessionObserver) reconcile(ctx context.Context, rec domain.Sessio
 			at = now
 		}
 		// Identity only: the turn below decides whether the session is working.
-		if !emit(ports.ActivitySignal{Event: "session-start", State: state, Timestamp: at}) {
+		// A new identity starts its cursor here, so resumed history isn't replayed.
+		if rec.Metadata.AgentSessionID != snapshot.AgentSessionID {
+			cursor = at
+		}
+		if !emit(ports.ActivitySignal{Event: "session-start", State: state, Timestamp: at}, true) {
 			return
 		}
 	}
-	if snapshot.Prompt.At.After(latest) && !emit(nativePromptSignal(snapshot.Prompt)) {
-		return
+	// A turn's reply is its last assistant message before the next prompt.
+	var reply *ports.NativeMessage
+	for i := range snapshot.Messages {
+		message := snapshot.Messages[i]
+		if !message.At.After(cursor) {
+			continue
+		}
+		if message.Assistant {
+			reply = &message
+			continue
+		}
+		if reply != nil {
+			if !emit(nativeStopSignal(*reply), true) {
+				return
+			}
+			reply = nil
+		}
+		if !emit(nativePromptSignal(message), true) {
+			return
+		}
 	}
 	if snapshot.Working {
+		// The newest reply may be mid-turn while tools run, so it waits.
 		if state != domain.ActivityActive {
-			emit(ports.ActivitySignal{Event: "terminal-active", State: domain.ActivityActive, Timestamp: now})
+			emit(ports.ActivitySignal{Event: "terminal-active", State: domain.ActivityActive, Timestamp: now}, false)
 		}
 		return
 	}
 	switch {
-	case snapshot.Reply.At.After(latest):
-		emit(ports.ActivitySignal{
-			Event:                 "stop",
-			State:                 domain.ActivityIdle,
-			Timestamp:             snapshot.Reply.At,
-			FinalAssistantMessage: capNativeText(snapshot.Reply.Text),
-		})
+	case reply != nil:
+		emit(nativeStopSignal(*reply), true)
 	case state == domain.ActivityActive && now.Sub(latest) >= nativeTurnEndGrace:
 		// The turn ended with no reply, such as an interrupt.
-		emit(ports.ActivitySignal{Event: "stop", State: domain.ActivityIdle, Timestamp: now})
+		emit(ports.ActivitySignal{Event: "stop", State: domain.ActivityIdle, Timestamp: now}, false)
+	}
+}
+
+func nativeStopSignal(reply ports.NativeMessage) ports.ActivitySignal {
+	return ports.ActivitySignal{
+		Event:                 "stop",
+		State:                 domain.ActivityIdle,
+		Timestamp:             reply.At,
+		FinalAssistantMessage: capNativeText(reply.Text),
 	}
 }
 

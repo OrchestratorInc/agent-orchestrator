@@ -664,10 +664,12 @@ type TranscriptTurnFailureDetector interface {
 	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
 }
 
-// NativeMessage is one message a harness recorded. A zero At means there is none.
+// NativeMessage is one message a harness recorded: a user prompt, or an
+// assistant reply when Assistant is set.
 type NativeMessage struct {
-	Text string
-	At   time.Time
+	Assistant bool
+	Text      string
+	At        time.Time
 }
 
 // NativeSessionSnapshot is what a harness reports about one live top-level session.
@@ -678,9 +680,9 @@ type NativeSessionSnapshot struct {
 	StartedAt      time.Time
 	// Working is the harness's own report that a turn is running.
 	Working bool
-	// Prompt and Reply are the newest user and assistant messages.
-	Prompt NativeMessage
-	Reply  NativeMessage
+	// Messages are the user and assistant messages from the transcript's tail,
+	// oldest first, so turns that finished between polls can all be replayed.
+	Messages []NativeMessage
 }
 
 // NativeSessionObserver is implemented by adapters whose harness can't call AO's

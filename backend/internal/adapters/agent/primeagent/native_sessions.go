@@ -16,7 +16,7 @@ import (
 )
 
 // maxTranscriptTail bounds the read per session per poll. A prompt older than
-// this only loses its text: the session still reports working and idle.
+// this is not replayed: the session still reports working and idle.
 const maxTranscriptTail = 256 << 10
 
 var _ ports.NativeSessionObserver = (*Plugin)(nil)
@@ -54,7 +54,7 @@ func (p *Plugin) ObserveNativeSessions(ctx context.Context, dataDir string) ([]p
 		if !ok {
 			continue
 		}
-		snapshot.Prompt, snapshot.Reply = readLatestMessages(snapshot.TranscriptPath)
+		snapshot.Messages = readMessages(snapshot.TranscriptPath)
 		snapshots = append(snapshots, snapshot)
 	}
 	return snapshots, true, nil
@@ -89,13 +89,15 @@ func nativeSnapshot(session primeSessionSummary, sessions string) (ports.NativeS
 	}, true
 }
 
-// readLatestMessages returns the newest user and assistant messages. A transcript
-// that can't be read reports none: Prime's own working or idle state still holds.
-func readLatestMessages(path string) (prompt, reply ports.NativeMessage) {
+// readMessages returns the dated user and assistant messages in the transcript's
+// tail, oldest first. A transcript that can't be read reports none: Prime's own
+// working or idle state still holds.
+func readMessages(path string) []ports.NativeMessage {
 	tail, err := readTail(path, maxTranscriptTail)
 	if err != nil {
-		return prompt, reply
+		return nil
 	}
+	var messages []ports.NativeMessage
 	for _, line := range bytes.Split(tail, []byte{'\n'}) {
 		var entry struct {
 			Type      string `json:"type"`
@@ -112,15 +114,16 @@ func readLatestMessages(path string) (prompt, reply ports.NativeMessage) {
 		if err != nil {
 			continue
 		}
-		message := ports.NativeMessage{Text: messageText(entry.Message.Content), At: at}
 		switch entry.Message.Role {
-		case "user":
-			prompt = message
-		case "assistant":
-			reply = message
+		case "user", "assistant":
+			messages = append(messages, ports.NativeMessage{
+				Assistant: entry.Message.Role == "assistant",
+				Text:      messageText(entry.Message.Content),
+				At:        at,
+			})
 		}
 	}
-	return prompt, reply
+	return messages
 }
 
 // readTail returns the last limit bytes of path without a leading partial line.

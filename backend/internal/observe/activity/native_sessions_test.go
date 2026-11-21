@@ -12,7 +12,10 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 type nativeAgent struct {
@@ -61,8 +64,22 @@ func nativeSnapshot(workspace string) ports.NativeSessionSnapshot {
 func signaled(rec domain.SessionRecord, snapshot ports.NativeSessionSnapshot, at time.Time, state domain.ActivityState) domain.SessionRecord {
 	rec.FirstSignalAt = nativeSpawnedAt.Add(time.Second)
 	rec.Metadata.AgentSessionID = snapshot.AgentSessionID
+	rec.Metadata.NativeIdentityObservedAt = at
 	rec.Activity = domain.Activity{State: state, LastActivityAt: at}
 	return rec
+}
+
+// turn lists a prompt and its reply as a transcript would, leaving out a zero one.
+func turn(prompt, reply ports.NativeMessage) []ports.NativeMessage {
+	var messages []ports.NativeMessage
+	if !prompt.At.IsZero() {
+		messages = append(messages, prompt)
+	}
+	if !reply.At.IsZero() {
+		reply.Assistant = true
+		messages = append(messages, reply)
+	}
+	return messages
 }
 
 func pollNative(t *testing.T, agent *nativeAgent, records ...domain.SessionRecord) []ports.ActivitySignal {
@@ -89,8 +106,7 @@ func events(signals []ports.ActivitySignal) string {
 
 func TestNativeSessionReportsATurnFinishedBetweenPolls(t *testing.T) {
 	snapshot := nativeSnapshot("/work")
-	snapshot.Prompt = ports.NativeMessage{Text: "do it", At: nativeSpawnedAt.Add(2 * time.Second)}
-	snapshot.Reply = ports.NativeMessage{Text: "done", At: nativeSpawnedAt.Add(3 * time.Second)}
+	snapshot.Messages = turn(ports.NativeMessage{Text: "do it", At: nativeSpawnedAt.Add(2 * time.Second)}, ports.NativeMessage{Text: "done", At: nativeSpawnedAt.Add(3 * time.Second)})
 
 	signals := pollNative(t, &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}, nativeRecord("/work"))
 
@@ -104,20 +120,19 @@ func TestNativeSessionReportsATurnFinishedBetweenPolls(t *testing.T) {
 		}
 	}
 	prompt, stop := signals[1], signals[2]
-	if prompt.LatestUserPrompt != "do it" || prompt.TurnUserRequest != "do it" || !prompt.Timestamp.Equal(snapshot.Prompt.At) ||
+	if prompt.LatestUserPrompt != "do it" || prompt.TurnUserRequest != "do it" || !prompt.Timestamp.Equal(snapshot.Messages[0].At) ||
 		prompt.ConversationCheckpointOrigin != domain.ConversationCheckpointOriginHuman {
 		t.Fatalf("prompt signal = %#v", prompt)
 	}
-	if stop.FinalAssistantMessage != "done" || !stop.Timestamp.Equal(snapshot.Reply.At) {
+	if stop.FinalAssistantMessage != "done" || !stop.Timestamp.Equal(snapshot.Messages[1].At) {
 		t.Fatalf("stop signal = %#v", stop)
 	}
 }
 
 func TestNativeSessionDoesNotRepeatATurnAOAlreadyHas(t *testing.T) {
 	snapshot := nativeSnapshot("/work")
-	snapshot.Prompt = ports.NativeMessage{Text: "do it", At: nativeSpawnedAt.Add(2 * time.Second)}
-	snapshot.Reply = ports.NativeMessage{Text: "done", At: nativeSpawnedAt.Add(3 * time.Second)}
-	rec := signaled(nativeRecord("/work"), snapshot, snapshot.Reply.At, domain.ActivityIdle)
+	snapshot.Messages = turn(ports.NativeMessage{Text: "do it", At: nativeSpawnedAt.Add(2 * time.Second)}, ports.NativeMessage{Text: "done", At: nativeSpawnedAt.Add(3 * time.Second)})
+	rec := signaled(nativeRecord("/work"), snapshot, snapshot.Messages[1].At, domain.ActivityIdle)
 
 	if signals := pollNative(t, &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}, rec); len(signals) != 0 {
 		t.Fatalf("signals = %q, want none", events(signals))
@@ -127,8 +142,7 @@ func TestNativeSessionDoesNotRepeatATurnAOAlreadyHas(t *testing.T) {
 func TestNativeSessionKeepsResumedHistoryOutOfTheNewLaunch(t *testing.T) {
 	snapshot := nativeSnapshot("/work")
 	snapshot.StartedAt = nativeSpawnedAt.Add(-time.Hour)
-	snapshot.Prompt = ports.NativeMessage{Text: "old", At: nativeSpawnedAt.Add(-time.Hour)}
-	snapshot.Reply = ports.NativeMessage{Text: "old reply", At: nativeSpawnedAt.Add(-time.Hour)}
+	snapshot.Messages = turn(ports.NativeMessage{Text: "old", At: nativeSpawnedAt.Add(-time.Hour)}, ports.NativeMessage{Text: "old reply", At: nativeSpawnedAt.Add(-time.Hour)})
 
 	signals := pollNative(t, &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}, nativeRecord("/work"))
 
@@ -161,7 +175,7 @@ func TestNativeSessionTurnBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			snapshot := nativeSnapshot("/work")
-			snapshot.Working, snapshot.Prompt, snapshot.Reply = tt.working, tt.prompt, tt.reply
+			snapshot.Working, snapshot.Messages = tt.working, turn(tt.prompt, tt.reply)
 			rec := signaled(nativeRecord("/work"), snapshot, tt.at, tt.state)
 
 			signals := pollNative(t, &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}, rec)
@@ -176,7 +190,7 @@ func TestNativeSessionTurnBoundaries(t *testing.T) {
 func TestNativeSessionKeepsCoordinationOutOfTheUserPrompt(t *testing.T) {
 	snapshot := nativeSnapshot("/work")
 	snapshot.Working = true
-	snapshot.Prompt = ports.NativeMessage{Text: domain.WrapReportDelivery("report-1", "worker finished"), At: nativeSpawnedAt.Add(2 * time.Second)}
+	snapshot.Messages = turn(ports.NativeMessage{Text: domain.WrapReportDelivery("report-1", "worker finished"), At: nativeSpawnedAt.Add(2 * time.Second)}, ports.NativeMessage{})
 	rec := signaled(nativeRecord("/work"), snapshot, nativeSpawnedAt, domain.ActivityIdle)
 
 	signals := pollNative(t, &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}, rec)
@@ -193,7 +207,7 @@ func TestNativeSessionKeepsCoordinationOutOfTheUserPrompt(t *testing.T) {
 
 func TestNativeSessionCapsMessageText(t *testing.T) {
 	snapshot := nativeSnapshot("/work")
-	snapshot.Reply = ports.NativeMessage{Text: strings.Repeat("é", maxNativeMessageText), At: nativeSpawnedAt.Add(time.Second)}
+	snapshot.Messages = turn(ports.NativeMessage{}, ports.NativeMessage{Text: strings.Repeat("é", maxNativeMessageText), At: nativeSpawnedAt.Add(time.Second)})
 	rec := signaled(nativeRecord("/work"), snapshot, nativeSpawnedAt, domain.ActivityActive)
 
 	signals := pollNative(t, &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}, rec)
@@ -209,8 +223,7 @@ func TestNativeSessionCapsMessageText(t *testing.T) {
 
 func TestNativeSessionStopsAfterARejectedSignal(t *testing.T) {
 	snapshot := nativeSnapshot("/work")
-	snapshot.Prompt = ports.NativeMessage{Text: "do it", At: nativeSpawnedAt.Add(2 * time.Second)}
-	snapshot.Reply = ports.NativeMessage{Text: "done", At: nativeSpawnedAt.Add(3 * time.Second)}
+	snapshot.Messages = turn(ports.NativeMessage{Text: "do it", At: nativeSpawnedAt.Add(2 * time.Second)}, ports.NativeMessage{Text: "done", At: nativeSpawnedAt.Add(3 * time.Second)})
 	sink := &fakeSink{err: errors.New("rejected")}
 	agent := &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}
 	observer := NewNativeSessionObserver(fakeSessions{rows: []domain.SessionRecord{nativeRecord("/work")}}, sink, fakeAgents{domain.HarnessPrimeAgent: agent}, NativeSessionConfig{
@@ -301,9 +314,155 @@ func TestMatchNativeSession(t *testing.T) {
 			t.Fatalf("match = %q, want old", got.AgentSessionID)
 		}
 	})
+	t.Run("bound identity missing takes no other session", func(t *testing.T) {
+		rec := nativeRecord(target)
+		rec.Metadata.AgentSessionID = "gone"
+		if got, ok := matchNativeSession(rec, []ports.NativeSessionSnapshot{session("other", target, newer)}); ok {
+			t.Fatalf("match = %#v, want none", got)
+		}
+	})
 	t.Run("session without a workspace", func(t *testing.T) {
 		if got, ok := matchNativeSession(nativeRecord(""), []ports.NativeSessionSnapshot{session("a", "", older)}); ok {
 			t.Fatalf("match = %#v, want none", got)
 		}
 	})
+}
+
+// nativeLab runs the native observer against the real lifecycle and store, so a
+// test sees what AO durably keeps between polls.
+type nativeLab struct {
+	t        *testing.T
+	store    *sqlite.Store
+	id       domain.SessionID
+	agent    *nativeAgent
+	observer *NativeSessionObserver
+	now      time.Time
+}
+
+func newNativeLab(t *testing.T, workspace string) *nativeLab {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "prime", Path: workspace, RegisteredAt: start}); err != nil {
+		t.Fatal(err)
+	}
+	rec := nativeRecord(workspace)
+	rec.ID = ""
+	rec.ProjectID = "prime"
+	rec.Kind = domain.KindWorker
+	rec.Mode = domain.SessionModeTUI
+	rec.Activity.LastActivityAt = start
+	rec.CreatedAt, rec.UpdatedAt = start, start
+	created, err := store.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lab := &nativeLab{t: t, store: store, id: created.ID, agent: &nativeAgent{ok: true}, now: start}
+	lab.observer = NewNativeSessionObserver(store, lifecycle.New(store, nil), fakeAgents{domain.HarnessPrimeAgent: lab.agent}, NativeSessionConfig{
+		DataDir: "/data",
+		Clock:   func() time.Time { return lab.now },
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	return lab
+}
+
+// poll advances the clock by step, then polls with the given sessions.
+func (l *nativeLab) poll(step time.Duration, snapshots ...ports.NativeSessionSnapshot) domain.SessionRecord {
+	l.t.Helper()
+	l.now = l.now.Add(step)
+	l.agent.snapshots = snapshots
+	if err := l.observer.Poll(context.Background()); err != nil {
+		l.t.Fatalf("Poll: %v", err)
+	}
+	rec, found, err := l.store.GetSession(context.Background(), l.id)
+	if err != nil || !found {
+		l.t.Fatalf("GetSession: found=%v err=%v", found, err)
+	}
+	return rec
+}
+
+func (l *nativeLab) accepted(deliveryID string) bool {
+	l.t.Helper()
+	ok, err := l.store.SemanticDeliveryAccepted(context.Background(), l.id, "launch-1", deliveryID)
+	if err != nil {
+		l.t.Fatal(err)
+	}
+	return ok
+}
+
+func TestNativeSessionReplaysEveryTurnFinishedWhileAOWasDown(t *testing.T) {
+	lab := newNativeLab(t, "/work")
+	snapshot := nativeSnapshot("/work")
+	snapshot.StartedAt = lab.now.Add(time.Second)
+	lab.poll(2*time.Second, snapshot)
+
+	// Two turns finish before the next poll; the first is an AO delivery.
+	at := lab.now.Add(time.Second)
+	snapshot.Messages = []ports.NativeMessage{
+		{Text: domain.WrapReportDelivery("report-1", "worker finished"), At: at},
+		{Assistant: true, Text: "noted", At: at.Add(time.Second)},
+		{Text: "second task", At: at.Add(2 * time.Second)},
+		{Assistant: true, Text: "second done", At: at.Add(3 * time.Second)},
+	}
+	rec := lab.poll(time.Minute, snapshot)
+
+	if !lab.accepted("report-1") {
+		t.Fatal("the coordination delivery in the earlier turn was not accepted")
+	}
+	if rec.Activity.State != domain.ActivityIdle || rec.Metadata.LatestUserPrompt != "second task" ||
+		rec.Metadata.ConversationCheckpointState != domain.ConversationCheckpointComplete ||
+		!rec.Metadata.LatestAssistantUpdateAt.Equal(at.Add(3*time.Second)) {
+		t.Fatalf("session = %+v, %+v", rec.Activity, rec.Metadata)
+	}
+	if signals := pollNative(t, &nativeAgent{snapshots: []ports.NativeSessionSnapshot{snapshot}, ok: true}, rec); len(signals) != 0 {
+		t.Fatalf("replayed again: %q", events(signals))
+	}
+}
+
+func TestNativeSessionAcceptsAPromptReadAfterPrimeReportedWorking(t *testing.T) {
+	lab := newNativeLab(t, "/work")
+	snapshot := nativeSnapshot("/work")
+	snapshot.StartedAt = lab.now.Add(time.Second)
+	lab.poll(2*time.Second, snapshot)
+
+	// Prime reports working while the transcript can't be read yet.
+	promptAt := lab.now.Add(time.Second)
+	snapshot.Working = true
+	if rec := lab.poll(3*time.Second, snapshot); rec.Activity.State != domain.ActivityActive {
+		t.Fatalf("state = %q, want active", rec.Activity.State)
+	}
+
+	// The prompt line, older than that poll, becomes readable.
+	snapshot.Messages = []ports.NativeMessage{{Text: domain.WrapReportDelivery("report-1", "worker finished"), At: promptAt}}
+	lab.poll(3*time.Second, snapshot)
+
+	if !lab.accepted("report-1") {
+		t.Fatal("the delivery read after synthetic activity was not accepted")
+	}
+}
+
+func TestNativeSessionKeepsItsIdentityWhenItsSessionIsGone(t *testing.T) {
+	lab := newNativeLab(t, "/work")
+	snapshot := nativeSnapshot("/work")
+	snapshot.StartedAt = lab.now.Add(time.Second)
+	lab.poll(2*time.Second, snapshot)
+
+	// AO's session left Prime's list; another worker remains in the workspace.
+	other := nativeSnapshot("/work")
+	other.AgentSessionID, other.TranscriptPath = "native-2", "/data/sessions/native-2.jsonl"
+	other.StartedAt = lab.now.Add(time.Second)
+	other.Working = true
+	rec := lab.poll(time.Minute, other)
+
+	if rec.Metadata.AgentSessionID != "native-1" || rec.Metadata.NativeTranscriptPath != snapshot.TranscriptPath {
+		t.Fatalf("identity = %q, %q, want native-1 kept", rec.Metadata.AgentSessionID, rec.Metadata.NativeTranscriptPath)
+	}
+	if rec.Activity.State != domain.ActivityIdle {
+		t.Fatalf("state = %q, another session's activity leaked in", rec.Activity.State)
+	}
 }

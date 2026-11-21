@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const primeListFixture = `{"sessions":[
@@ -87,10 +89,11 @@ func TestObserveNativeSessionsReportsTopLevelSessions(t *testing.T) {
 	if !first.Working || first.WorkspacePath != "/work/one" || first.TranscriptPath != transcript || !first.StartedAt.Equal(wantStarted) {
 		t.Fatalf("first = %#v", first)
 	}
-	if first.Prompt.Text != "do it" || first.Reply.Text != "done" {
-		t.Fatalf("messages = %q, %q", first.Prompt.Text, first.Reply.Text)
+	if len(first.Messages) != 2 || first.Messages[0].Text != "do it" || first.Messages[0].Assistant ||
+		first.Messages[1].Text != "done" || !first.Messages[1].Assistant {
+		t.Fatalf("messages = %#v", first.Messages)
 	}
-	if got[1].Working || !got[1].Prompt.At.IsZero() {
+	if got[1].Working || len(got[1].Messages) != 0 {
 		t.Fatalf("second = %#v, want idle with no transcript", got[1])
 	}
 }
@@ -130,7 +133,7 @@ func TestObserveNativeSessionsReportsFailures(t *testing.T) {
 	}
 }
 
-func TestReadLatestMessages(t *testing.T) {
+func TestReadMessages(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	writeTranscript(t, path,
 		`{"type":"session","id":"s","timestamp":"2026-11-05T13:00:00Z"}`,
@@ -143,31 +146,32 @@ func TestReadLatestMessages(t *testing.T) {
 		transcriptMessage("user", "2026-11-05T13:00:05Z", `[{"type":"image"}]`),
 	)
 
-	prompt, reply := readLatestMessages(path)
+	got := readMessages(path)
 
-	if prompt.Text != "" || !prompt.At.Equal(time.Date(2026, 11, 5, 13, 0, 5, 0, time.UTC)) {
-		t.Fatalf("prompt = %#v, want the newest dated user message", prompt)
+	want := []ports.NativeMessage{
+		{Text: "first", At: time.Date(2026, 11, 5, 13, 0, 1, 0, time.UTC)},
+		{Assistant: true, Text: "line one\nline two", At: time.Date(2026, 11, 5, 13, 0, 2, 0, time.UTC)},
+		{At: time.Date(2026, 11, 5, 13, 0, 5, 0, time.UTC)},
 	}
-	if reply.Text != "line one\nline two" {
-		t.Fatalf("reply = %#v", reply)
+	if !slices.Equal(got, want) {
+		t.Fatalf("messages = %#v, want every dated user and assistant message in order", got)
 	}
 }
 
-func TestReadLatestMessagesAbortedReplyHasNoText(t *testing.T) {
+func TestReadMessagesAbortedReplyHasNoText(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	writeTranscript(t, path, transcriptMessage("assistant", "2026-11-05T13:00:02Z", `[]`))
 
-	_, reply := readLatestMessages(path)
+	got := readMessages(path)
 
-	if reply.Text != "" || reply.At.IsZero() {
-		t.Fatalf("reply = %#v, want a dated reply with no text", reply)
+	if len(got) != 1 || !got[0].Assistant || got[0].Text != "" || got[0].At.IsZero() {
+		t.Fatalf("messages = %#v, want a dated reply with no text", got)
 	}
 }
 
-func TestReadLatestMessagesMissingTranscript(t *testing.T) {
-	prompt, reply := readLatestMessages(filepath.Join(t.TempDir(), "missing.jsonl"))
-	if !prompt.At.IsZero() || !reply.At.IsZero() {
-		t.Fatalf("messages = %#v, %#v, want none", prompt, reply)
+func TestReadMessagesMissingTranscript(t *testing.T) {
+	if got := readMessages(filepath.Join(t.TempDir(), "missing.jsonl")); len(got) != 0 {
+		t.Fatalf("messages = %#v, want none", got)
 	}
 }
 
