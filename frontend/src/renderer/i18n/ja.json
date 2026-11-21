@@ -5257,6 +5257,8 @@
 	"comment.count_one": "{{count}} 件のコメント",
 	"comment.count_other": "{{count}} 件のコメント",
 	"comment.askAgentPlaceholder": "エージェントに聞く",
+	"comment.askAgent": "エージェントに聞く",
+	"comment.askAgentLabel": "選択したテキストについてエージェントに聞く",
 	"comment.threads": "このメッセージのコメント",
 	"comment.wholeMessage": "メッセージ全体について",
 	"comment.replyFailed": "コメントを送信できませんでした。",

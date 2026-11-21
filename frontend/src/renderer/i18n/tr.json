@@ -5237,6 +5237,8 @@
 	"comment.count_one": "{{count}} yorum",
 	"comment.count_other": "{{count}} yorum",
 	"comment.askAgentPlaceholder": "Ajana sor",
+	"comment.askAgent": "Ajana sor",
+	"comment.askAgentLabel": "Seçili metin hakkında ajana sor",
 	"comment.threads": "Bu mesajdaki yorumlar",
 	"comment.wholeMessage": "Mesajın tamamı hakkında",
 	"comment.replyFailed": "Yorum gönderilemedi.",

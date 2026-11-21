@@ -514,6 +514,24 @@ describe("comment threads", () => {
 		expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
 	});
 
+	it("starts a comment typed on a selection with what was typed, and sends it only to the thread", async () => {
+		const user = userEvent.setup();
+		cloudMocks.createSessionAside.mockResolvedValue({ aside: commentAside, reply: commentThread.replies[0] });
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.markers).toBeDefined());
+		act(() => cloudMocks.markers!.startComment({ anchor: { sequence: 41, kind: "agent_message" }, quote: "real backoff", excerpt: "The retry uses a real backoff.", initialText: "S" }));
+		const pane = await screen.findByTestId("aside-pane");
+		const box = within(pane).getByRole("combobox", { name: "Write a comment" });
+		await waitFor(() => expect(document.activeElement).toBe(box));
+		await waitFor(() => expect(box).toHaveTextContent("S"));
+		await user.keyboard("hould this use jitter?");
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(cloudMocks.createSessionAside).toHaveBeenCalledWith("org-1", session.id, {
+			anchor: { sequence: 41 }, quote: "real backoff", text: "Should this use jitter?", clientMessageId: expect.any(String),
+		}));
+		expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
+	});
+
 	it("starts a comment on a whole message, saying which", async () => {
 		renderSurface();
 		await waitFor(() => expect(cloudMocks.markers).toBeDefined());

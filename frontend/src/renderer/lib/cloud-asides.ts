@@ -238,6 +238,8 @@ export interface CommentDraft {
 	excerpt: string;
 	/** Who wrote the message; absent for the agent's answer. */
 	authorName?: string;
+	/** What the person had already typed when the comment started (typing on a selection). */
+	initialText?: string;
 }
 
 /**

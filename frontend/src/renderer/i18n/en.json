@@ -5237,6 +5237,8 @@
 	"comment.count_one": "{{count}} comment",
 	"comment.count_other": "{{count}} comments",
 	"comment.askAgentPlaceholder": "Ask the agent",
+	"comment.askAgent": "Ask the agent",
+	"comment.askAgentLabel": "Ask the agent about the selected text",
 	"comment.threads": "Comments on this message",
 	"comment.wholeMessage": "On the whole message",
 	"comment.replyFailed": "Could not send the comment.",

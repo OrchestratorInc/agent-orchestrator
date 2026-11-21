@@ -121,6 +121,7 @@ export function AsidePaneView({
 	mentionSource,
 	focusKey,
 	firstComment = false,
+	initialText,
 }: {
 	title: string;
 	sessionTitle: string;
@@ -148,6 +149,8 @@ export function AsidePaneView({
 	focusKey?: number;
 	/** The box writes a new thread's first comment. */
 	firstComment?: boolean;
+	/** Text the reply box starts with when focusKey puts the caret there. */
+	initialText?: string;
 }) {
 	const { t } = useTranslation();
 	const list = useRef<HTMLDivElement>(null);
@@ -212,6 +215,7 @@ export function AsidePaneView({
 				disabled={replyDisabled}
 				firstComment={firstComment}
 				focusKey={focusKey}
+				initialText={initialText}
 				mentionSource={mentionSource}
 				onSend={onReply}
 			/>
@@ -341,9 +345,11 @@ function AsideReplyBox({
 	onSend,
 	canSendToAgent,
 	firstComment,
+	initialText,
 }: {
 	disabled?: string;
 	focusKey?: number;
+	initialText?: string;
 	mentionSource?: AsideMentionSource;
 	onSend: (text: string, mentions: ComposerMention[], sendToAgent: boolean) => Promise<void>;
 	canSendToAgent: boolean;
@@ -376,8 +382,16 @@ function AsideReplyBox({
 	const menuOpen = suggestions.length > 0;
 	const active = Math.min(highlighted, Math.max(0, suggestions.length - 1));
 
+	// initialText is read when focusKey changes, not on every render: it seeds a
+	// new comment once and never overwrites what the person typed since.
+	const seed = useRef(initialText);
+	seed.current = initialText;
 	useEffect(() => {
-		if (focusKey !== undefined && !disabled) editor.current?.focus();
+		if (focusKey === undefined || disabled) return;
+		// Focus first: the editor applies setText after this, so the caret it
+		// puts at the end of the seeded text is the one the next key types at.
+		editor.current?.focus();
+		if (seed.current) editor.current?.setText(seed.current, "end", []);
 	}, [disabled, focusKey]);
 
 	const onChange = useCallback((snapshot: ComposerEditorSnapshot) => {
@@ -1018,6 +1032,7 @@ export function CloudCommentDraftPane({
 			replies={[]}
 			sessionTitle={sessionTitle}
 			title={t("comment.newTitle")}
+			initialText={draft.initialText}
 		/>
 	);
 }

@@ -5407,6 +5407,8 @@
 	"comment.count_other": "{{count}} comentarios",
 	"comment.count_many": "{{count}} comentarios",
 	"comment.askAgentPlaceholder": "Preguntar al agente",
+	"comment.askAgent": "Preguntar al agente",
+	"comment.askAgentLabel": "Preguntar al agente sobre el texto seleccionado",
 	"comment.threads": "Comentarios de este mensaje",
 	"comment.wholeMessage": "Sobre todo el mensaje",
 	"comment.replyFailed": "No se pudo enviar el comentario.",

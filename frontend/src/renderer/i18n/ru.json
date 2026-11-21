@@ -5547,6 +5547,8 @@
 	"comment.count_one": "{{count}} комментарий",
 	"comment.count_other": "{{count}} комментария",
 	"comment.askAgentPlaceholder": "Спросить агента",
+	"comment.askAgent": "Спросить агента",
+	"comment.askAgentLabel": "Спросить агента о выделенном тексте",
 	"comment.threads": "Комментарии к сообщению",
 	"comment.wholeMessage": "Ко всему сообщению",
 	"comment.replyFailed": "Не удалось отправить комментарий.",

@@ -5257,6 +5257,8 @@
 	"comment.count_one": "{{count}} Kommentar",
 	"comment.count_other": "{{count}} Kommentare",
 	"comment.askAgentPlaceholder": "Den Agenten fragen",
+	"comment.askAgent": "Den Agenten fragen",
+	"comment.askAgentLabel": "Den Agenten zum markierten Text fragen",
 	"comment.threads": "Kommentare zu dieser Nachricht",
 	"comment.wholeMessage": "Zur ganzen Nachricht",
 	"comment.replyFailed": "Der Kommentar konnte nicht gesendet werden.",

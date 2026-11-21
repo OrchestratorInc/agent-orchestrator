@@ -5257,6 +5257,8 @@
 	"comment.count_one": "댓글 {{count}}개",
 	"comment.count_other": "댓글 {{count}}개",
 	"comment.askAgentPlaceholder": "에이전트에게 묻기",
+	"comment.askAgent": "에이전트에게 묻기",
+	"comment.askAgentLabel": "선택한 텍스트에 대해 에이전트에게 묻기",
 	"comment.threads": "이 메시지의 댓글",
 	"comment.wholeMessage": "메시지 전체에 대해",
 	"comment.replyFailed": "댓글을 보낼 수 없습니다.",
