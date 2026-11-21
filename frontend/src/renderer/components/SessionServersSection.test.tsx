@@ -48,6 +48,21 @@ describe("SessionServersSection", () => {
 		expect(screen.getByRole("button", { name: "Stop forwarding port 5173" })).toBeInTheDocument();
 	});
 
+	it("drops the servers once the session stops", async () => {
+		getMock.mockResolvedValue({ data: { servers: [{ port: 5173, pid: 41, command: "node" }] } });
+		vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("tunnel");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = (current: WorkspaceSession) => (
+			<QueryClientProvider client={client}>
+				<SessionServersSection hostId="box-a" session={current} visible />
+			</QueryClientProvider>
+		);
+		const { rerender } = render(view(session));
+		expect(await screen.findByText("node")).toBeInTheDocument();
+		rerender(view({ ...session, status: "terminated", isTerminated: true } as WorkspaceSession));
+		expect(screen.queryByTestId("session-servers")).toBeNull();
+	});
+
 	it("offers no forward for a host on this computer", async () => {
 		getMock.mockResolvedValue({ data: { servers: [{ port: 5173, pid: 41, command: "node" }] } });
 		const reach = vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("same");

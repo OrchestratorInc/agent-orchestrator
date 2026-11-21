@@ -13,6 +13,7 @@ export function useLoopbackReach(hostId?: string): LoopbackReach | undefined {
 		queryFn: () => aoBridge.remotes.loopbackReach(hostId!),
 		enabled: Boolean(hostId),
 		staleTime: 60_000,
+		refetchInterval: (query) => (query.state.data === "off" ? 10_000 : false),
 	}).data;
 }
 

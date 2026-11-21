@@ -387,14 +387,22 @@ export function registerRemotesIpc(
 		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during remote connection.");
 		return await tunnels.localUrl(hostId, url) ?? registry.externalUrl(hostId, url);
 	});
-	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => tunnels.reach(hostId));
+	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => {
+		await requireAccount();
+		return tunnels.reach(hostId);
+	});
 	ipcMain.handle("remotes:portForwards", async () => tunnels.list());
 	ipcMain.handle("remotes:forwardPort", async (_event, hostId: string, port: number) => {
-		try {
-			return await tunnels.forward(hostId, port);
-		} catch (error) {
+		const account = await accountID();
+		refuseSelf(hostId, await localIdentity());
+		const forward = await tunnels.forward(hostId, port).catch((error: unknown) => {
 			throw new ExpectedIpcError(error instanceof Error ? error.message : String(error));
+		});
+		if (await accountID() !== account) {
+			tunnels.stop(hostId, port);
+			throw new ExpectedIpcError("Account changed during remote connection.");
 		}
+		return forward;
 	});
 	ipcMain.handle("remotes:stopPortForward", async (_event, hostId: string, port: number) => tunnels.stop(hostId, port));
 }

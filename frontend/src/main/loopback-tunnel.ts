@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { createServer, type AddressInfo, type Server, type Socket } from "node:net";
+import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import ipaddr from "ipaddr.js";
 import { LoopbackTunnelError } from "./remote-proxy";
@@ -88,11 +88,14 @@ function listen(server: Server, port: number): Promise<number> {
 	});
 }
 
-function freeOn(host: string, port: number): Promise<boolean> {
+function answers(host: string, port: number): Promise<boolean> {
 	return new Promise((resolve) => {
-		const probe = createServer();
-		probe.once("error", (error: NodeJS.ErrnoException) => resolve(error.code !== "EADDRINUSE"));
-		probe.listen(port, host, () => probe.close(() => resolve(true)));
+		const probe = connect(port, host);
+		probe.once("connect", () => {
+			probe.destroy();
+			resolve(true);
+		});
+		probe.once("error", () => resolve(false));
 	});
 }
 
@@ -191,9 +194,8 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 				join(client, tunnel);
 			})();
 		});
-		const localPort = (await freeOn("::1", remotePort))
-			? await listen(server, remotePort).catch(() => listen(server, 0))
-			: await listen(server, 0);
+		const taken = (await Promise.all([answers("127.0.0.1", remotePort), answers("::1", remotePort)])).some(Boolean);
+		const localPort = taken ? await listen(server, 0) : await listen(server, remotePort).catch(() => listen(server, 0));
 		const forward = { hostId, remotePort, localPort };
 		forwards.set(key(hostId, remotePort), { forward, server, clients });
 		return forward;

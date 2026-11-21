@@ -17,7 +17,6 @@ export function isHostLocalWebLink(href: string): boolean {
 	}
 }
 
-// A preview target on the host's own loopback, as a URL the host's tunnel loads.
 export function hostLoopbackUrl(target: string): string | undefined {
 	const raw = target.trim();
 	const href = /^(?:localhost|127\.|0\.0\.0\.0|\[::1?\])/i.test(raw) ? `http://${raw}` : raw;

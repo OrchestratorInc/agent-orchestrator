@@ -137,11 +137,11 @@ describe("loopback tunnels", () => {
 		await expect(tunnels.forward("h_box", 0)).rejects.toThrow(/1 to 65535/);
 	});
 
-	it("moves a forward off a port another server holds on IPv6 localhost", async () => {
+	it.each(["::1", "::"])("moves a forward off a port another server holds on %s", async (address) => {
 		const taken = net.createServer();
 		const port = await new Promise<number>((resolve) => {
 			taken.once("error", () => resolve(0));
-			taken.listen(0, "::1", () => resolve((taken.address() as net.AddressInfo).port));
+			taken.listen(0, address, () => resolve((taken.address() as net.AddressInfo).port));
 		});
 		if (!port) return;
 		cleanup.push(() => taken.close());

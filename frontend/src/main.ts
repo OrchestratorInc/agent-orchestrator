@@ -94,7 +94,7 @@ import type { GitHubIssueArtifact } from "./shared/github-issue-artifact";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1047,9 +1047,15 @@ const userBrowser = createUserBrowser({
 });
 
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
-	const browserSession = session.fromPartition(partition);
-	// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
-	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
+	const hostPrefix = `${partition.replace(/^persist:/, "")}-host-`.toLowerCase();
+	const hostPartitions = (await readdir(path.join(app.getPath("userData"), "Partitions")).catch(() => []))
+		.filter((name) => name.toLowerCase().startsWith(hostPrefix))
+		.map((name) => `persist:${name}`);
+	await Promise.all([partition, ...hostPartitions].map((name) => {
+		const browserSession = session.fromPartition(name);
+		// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
+		return Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
+	}));
 }
 
 async function disposeAllBrowserViewHosts(): Promise<void> {

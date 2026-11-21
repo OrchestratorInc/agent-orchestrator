@@ -31,7 +31,7 @@ export function SessionServersSection({ session, hostId, visible }: { session: W
 	const reach = useLoopbackReach(hostId);
 	const { forwards, forward, stop } = usePortForwards();
 	const openInBrowser = useSessionBrowserLink(session);
-	if (servers.length === 0) return null;
+	if (servers.length === 0 || !sessionIsActive(session)) return null;
 	const tunnelHost = hostId && reach === "tunnel" ? hostId : undefined;
 	const forwardFailed = (error: unknown) =>
 		showGlobalToast(t("sessionServers.forwardFailed"), error instanceof Error ? error.message : undefined, "error");
