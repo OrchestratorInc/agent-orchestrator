@@ -183,12 +183,13 @@ export interface CloudShareLinks {
 	privateLinks: boolean;
 }
 
-const UNPLAYABLE_VIDEO = /\.(avi|mkv)$/i;
+const UNPLAYABLE_VIDEO = /\.(avi|mkv|ogv)$/i;
 
 /**
  * Whether a file is a video in a format browsers do not play. A share link
  * has no download, so its viewer could show nothing of one: it is never
- * published. The control plane refuses it too.
+ * published. The control plane refuses it too. .ogv is Theora, which Chrome
+ * and Firefox no longer play.
  */
 export function isUnplayableShareVideo(name: string): boolean {
 	return UNPLAYABLE_VIDEO.test(name);
