@@ -480,3 +480,65 @@ func TestBrowserBatchPrintsRemoteTabList(t *testing.T) {
 		t.Fatalf("tab list output should print once, tab new not at all:\n%s", out)
 	}
 }
+
+// lockedBuffer lets the fake daemon read what the CLI has printed so far.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A slow step must not hide the steps that already ran: if the harness kills
+// the batch mid-way, the agent still sees which steps touched the page.
+func TestBrowserBatchStreamsEachStepAsItFinishes(t *testing.T) {
+	out := &lockedBuffer{}
+	var seenAtStep2 string
+	server := &batchBrowserServer{respond: func(b browserCommandRequestDTO) (int, string) {
+		if b.Action == "wait" {
+			seenAtStep2 = out.String()
+		}
+		return 0, ""
+	}}
+	deps := startBatchBrowserServer(t, server)
+	deps.Out = out
+	deps.Err = &lockedBuffer{}
+	cmd := NewRootCommand(deps)
+	cmd.SetArgs([]string{"browser", "batch", "--steps", "click e1\nwait --text Saved\nget text body"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seenAtStep2, "[1] ok: click e1") || strings.Contains(seenAtStep2, "[2]") {
+		t.Fatalf("output when step 2 started:\n%q", seenAtStep2)
+	}
+	final := out.String()
+	if !strings.Contains(final, "Batch completed: 3/3 steps ok") ||
+		strings.Index(final, "[3] ok") > strings.Index(final, "Batch completed") {
+		t.Fatalf("summary should come after the steps:\n%s", final)
+	}
+}
+
+func TestBrowserBatchRefusesTerminalStdin(t *testing.T) {
+	server := &batchBrowserServer{}
+	deps := startBatchBrowserServer(t, server)
+	restore := browserBatchStdinIsTerminal
+	browserBatchStdinIsTerminal = func(io.Reader) bool { return true }
+	t.Cleanup(func() { browserBatchStdinIsTerminal = restore })
+	_, _, err := executeCLI(t, deps, "browser", "batch")
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "--steps") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := server.actions(); len(got) != 0 {
+		t.Fatalf("actions = %v", got)
+	}
+}

@@ -50,9 +50,8 @@ ao browser snapshot --interactive
 
 Every `ao browser` command costs you a full turn, and turns, not the browser,
 are what make a browser task slow. When you already know the next several
-steps, run them as one `ao browser batch`:
-
-Look at the page once, then do the whole task in a second call:
+steps, run them as one `ao browser batch`. Look at the page once, then do the
+whole task in a second call:
 
 ```bash
 ao browser batch --steps 'open http://localhost:5173/login
@@ -82,18 +81,20 @@ or a file path replaces stdin. At most 50 steps.
   out, or an `act` that is ambiguous, matches nothing, or whose `--expect-*`
   postcondition is unmet or cancelled. Later steps are reported as `not run`
   and never touch the page.
-- Output is compact: one line per step, plus the output of read steps (`get`,
+- Output is compact and streams as the batch runs: one line per step, printed
+  when that step finishes, plus the output of read steps (`get`,
   `snapshot`, `tabs`, `console`, `errors`, `screenshot`, `status`, `network`,
   `dialog`) and the full output of the failed step. A failed batch ends with an
   interactive snapshot so you can recover in your next call. Use
   `--snapshot always` to also get one after success, `--snapshot never` to skip
-  it, `--verbose` for every step's output, and `--json` for structured results.
-  The exit status is non-zero when a step failed.
+  it, `--verbose` for every step's output, and `--json` for structured results
+  (printed once, at the end). The summary line comes last, and the exit status
+  is non-zero when a step failed. A batch run with no `--steps`, file, or piped
+  input refuses to wait on a terminal.
 
 A failed batch looks like this:
 
 ```text
-Batch stopped at step 4 of 5: 3 ok, 1 failed, 1 not run (912 ms).
 [1] ok: open http://localhost:5173/login
 [2] ok: act Email --action fill --value ada@example.test -> matched textbox [ref=e3]
 [3] ok: act Password --action fill --value correct-horse -> matched textbox [ref=e4]
@@ -104,6 +105,7 @@ Ambiguous — multiple elements matched equally well:
 [5] not run: get text body
 Final snapshot (interactive):
 ...
+Batch stopped at step 4 of 5: 3 ok, 1 failed, 1 not run (912 ms).
 ```
 
 Refs are renumbered on every page load. Refs from a snapshot of the page that

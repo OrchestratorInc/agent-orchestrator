@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -72,13 +73,14 @@ func newBrowserBatchCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comman
 			"`ao browser` command line without the `ao browser` prefix, one per line\n" +
 			"(blank lines and # comments are ignored), or a JSON array whose items are\n" +
 			"argument arrays or command-line strings. Steps come from --steps, a file,\n" +
-			"or standard input (the default, or `-`).\n\n" +
+			"or standard input (the default, or `-`; a terminal is refused).\n\n" +
 			"Every step is checked for a known command, valid flags, and argument count\n" +
 			"before any step runs. Steps then run in order through the same path as the\n" +
 			"single command, and the batch stops at the first failure: a command error,\n" +
 			"an `act` that is ambiguous or matches nothing, or an `act` postcondition that\n" +
 			"is unmet or cancelled.\n\n" +
-			"Output is one status line per step. Read steps (get, snapshot, tabs, console,\n" +
+			"Output is one status line per step, printed as each step finishes, with the\n" +
+			"summary line last. Read steps (get, snapshot, tabs, console,\n" +
 			"errors, screenshot, status, network, dialog) also print their output; the\n" +
 			"failed step prints its full output. With --snapshot auto (default) a failed\n" +
 			"batch ends with an interactive snapshot so you can recover without another call.",
@@ -116,12 +118,23 @@ func newBrowserBatchCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comman
 					return usageError{fmt.Errorf("step %d (%s): %w", i+1, browserBatchEcho(step), err)}
 				}
 			}
-			result := ctx.runBrowserBatch(cmd.Context(), steps, snapshotMode)
+			// Text output streams one line per step as it finishes, so a
+			// harness that kills a long batch still shows which steps ran.
+			var onStep func(browserBatchStepResult) error
+			if !*jsonOutput {
+				onStep = func(step browserBatchStepResult) error {
+					return writeBrowserBatchStep(cmd.OutOrStdout(), step, verbose)
+				}
+			}
+			result, err := ctx.runBrowserBatch(cmd.Context(), steps, snapshotMode, onStep)
+			if err != nil {
+				return err
+			}
 			if *jsonOutput {
 				if err := writeJSON(cmd.OutOrStdout(), result); err != nil {
 					return err
 				}
-			} else if err := writeBrowserBatchResult(cmd.OutOrStdout(), result, verbose); err != nil {
+			} else if err := writeBrowserBatchSummary(cmd.OutOrStdout(), result); err != nil {
 				return err
 			}
 			if !result.OK {
@@ -134,6 +147,12 @@ func newBrowserBatchCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comman
 	cmd.Flags().StringVar(&snapshotMode, "snapshot", "auto", "end with an interactive snapshot: auto (only on failure), always, or never")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print the output of every step, not only read steps")
 	return cmd
+}
+
+// browserBatchStdinIsTerminal is a variable so tests can stand in a terminal.
+var browserBatchStdinIsTerminal = func(in io.Reader) bool {
+	file, ok := in.(*os.File)
+	return ok && term.IsTerminal(file.Fd())
 }
 
 func readBrowserBatchInput(cmd *cobra.Command, inline string, args []string) (string, error) {
@@ -149,6 +168,10 @@ func readBrowserBatchInput(cmd *cobra.Command, inline string, args []string) (st
 			return "", fmt.Errorf("read batch file: %w", err)
 		}
 		return string(data), nil
+	}
+	// Reading a terminal would wait for EOF that an agent never sends.
+	if browserBatchStdinIsTerminal(cmd.InOrStdin()) {
+		return "", usageError{errors.New("no batch steps: pass --steps, a file, or pipe them in (ao browser batch <<'EOF' ... EOF)")}
 	}
 	data, err := io.ReadAll(cmd.InOrStdin())
 	if err != nil {
@@ -350,7 +373,7 @@ func browserBatchIsReadStep(step []string) bool {
 	return len(step) > 1 && step[0] == "tab" && step[1] == "list"
 }
 
-func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, snapshotMode string) browserBatchResult {
+func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, snapshotMode string, onStep func(browserBatchStepResult) error) (browserBatchResult, error) {
 	started := c.batchNow()
 	result := browserBatchResult{OK: true, Total: len(steps)}
 	// An `act` with no match already printed the latest snapshot; a second
@@ -360,6 +383,11 @@ func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, 
 		stepResult := browserBatchStepResult{Index: i + 1, Args: step, Status: "skipped"}
 		if !result.OK {
 			result.Steps = append(result.Steps, stepResult)
+			if onStep != nil {
+				if err := onStep(stepResult); err != nil {
+					return result, err
+				}
+			}
 			continue
 		}
 		stepStarted := c.batchNow()
@@ -389,6 +417,11 @@ func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, 
 			}
 		}
 		result.Steps = append(result.Steps, stepResult)
+		if onStep != nil {
+			if err := onStep(stepResult); err != nil {
+				return result, err
+			}
+		}
 	}
 	if snapshotMode == "always" || (snapshotMode == "auto" && !result.OK && !failureHasSnapshot) {
 		output, _, err := c.runBrowserBatchStep(ctx, []string{"snapshot", "--interactive"})
@@ -399,7 +432,7 @@ func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, 
 		}
 	}
 	result.DurationMS = c.batchNow().Sub(started).Milliseconds()
-	return result
+	return result, nil
 }
 
 func (c *commandContext) batchNow() time.Time {
@@ -491,31 +524,38 @@ func browserBatchAssess(observations []browserBatchObservation) (summary, failur
 	return summary, failure
 }
 
-func writeBrowserBatchResult(w io.Writer, result browserBatchResult, verbose bool) error {
+// writeBrowserBatchStep prints one finished (or skipped) step.
+func writeBrowserBatchStep(w io.Writer, step browserBatchStepResult, verbose bool) error {
 	var b strings.Builder
+	label := map[string]string{"ok": "ok", "failed": "FAILED", "skipped": "not run"}[step.Status]
+	fmt.Fprintf(&b, "[%d] %s: %s", step.Index, label, browserBatchEcho(step.Args))
+	if step.Summary != "" {
+		fmt.Fprintf(&b, " -> %s", step.Summary)
+	}
+	if step.Error != "" {
+		fmt.Fprintf(&b, "\n    error: %s", step.Error)
+	}
+	b.WriteString("\n")
+	showOutput := step.Status == "failed" || (step.Status == "ok" && (verbose || browserBatchIsReadStep(step.Args)))
+	if output := strings.TrimRight(step.Output, "\n"); showOutput && output != "" {
+		b.WriteString(output + "\n")
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// writeBrowserBatchSummary prints the final snapshot and the summary line
+// after the streamed steps.
+func writeBrowserBatchSummary(w io.Writer, result browserBatchResult) error {
+	var b strings.Builder
+	if result.Snapshot != "" {
+		b.WriteString("Final snapshot (interactive):\n" + result.Snapshot + "\n")
+	}
 	if result.OK {
 		fmt.Fprintf(&b, "Batch completed: %d/%d steps ok (%d ms).\n", result.Completed, result.Total, result.DurationMS)
 	} else {
 		fmt.Fprintf(&b, "Batch stopped at step %d of %d: %d ok, 1 failed, %d not run (%d ms).\n",
 			result.FailedStep, result.Total, result.Completed, result.Total-result.Completed-1, result.DurationMS)
-	}
-	for _, step := range result.Steps {
-		label := map[string]string{"ok": "ok", "failed": "FAILED", "skipped": "not run"}[step.Status]
-		fmt.Fprintf(&b, "[%d] %s: %s", step.Index, label, browserBatchEcho(step.Args))
-		if step.Summary != "" {
-			fmt.Fprintf(&b, " -> %s", step.Summary)
-		}
-		if step.Error != "" {
-			fmt.Fprintf(&b, "\n    error: %s", step.Error)
-		}
-		b.WriteString("\n")
-		showOutput := step.Status == "failed" || (step.Status == "ok" && (verbose || browserBatchIsReadStep(step.Args)))
-		if output := strings.TrimRight(step.Output, "\n"); showOutput && output != "" {
-			b.WriteString(output + "\n")
-		}
-	}
-	if result.Snapshot != "" {
-		b.WriteString("Final snapshot (interactive):\n" + result.Snapshot + "\n")
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
