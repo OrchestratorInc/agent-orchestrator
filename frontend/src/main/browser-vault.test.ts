@@ -101,6 +101,23 @@ describe("redactor", () => {
     expect(out.n).toBe(3);
   });
 
+  it.each([
+    ["raw", (v: string) => v],
+    ["encodeURIComponent", (v: string) => encodeURIComponent(v)],
+    ["form encoding (URLSearchParams)", (v: string) => new URLSearchParams({ v }).toString().slice(2)],
+    ["lowercase percent escapes", (v: string) => new URLSearchParams({ v }).toString().slice(2).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase())],
+    ["JSON string escaping", (v: string) => JSON.stringify(v).slice(1, -1)],
+    ["base64", (v: string) => Buffer.from(v).toString("base64")],
+    ["base64url", (v: string) => Buffer.from(v).toString("base64url")],
+    ["HTML escaping", (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")],
+  ])("masks the %s form of a secret with !'()*~, spaces and quotes", (_name, encode) => {
+    const secret = `Pa ss!'(w)*~"<&>9 ü`;
+    const r = createRedactor();
+    r.add(secret);
+    const echoed = `before ${encode(secret)} after`;
+    expect(r.scrub(echoed)).toBe(`before ${SECRET_MASK} after`);
+  });
+
   it("ignores trivially short values and leaves results untouched when empty", () => {
     const r = createRedactor();
     r.add("ab");

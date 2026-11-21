@@ -26,6 +26,9 @@ type FakeFrame = {
   hasFocus?: boolean;
   // The verified field lost focus (or the document changed) before typing.
   focusMovesBeforeTyping?: boolean;
+  // A filled field of this kind is on the page, visible and unmasked (a code
+  // in a text field, or a password revealed with an eye toggle).
+  revealedKind?: "password" | "totp";
 };
 
 function fakeCdp(frames: FakeFrame[]) {
@@ -55,6 +58,10 @@ function fakeCdp(frames: FakeFrame[]) {
       if (method === "Runtime.evaluate") {
         const frame = contexts.get(params.contextId as number)!;
         const expression = String(params.expression);
+        if (expression.includes("ao-vault:revealed")) {
+          const kind = frame.revealedKind;
+          return { result: { value: Boolean(kind) && !expression.includes(`ignore:${kind}`) } };
+        }
         if (expression.includes("ao-vault:select")) {
           return { result: { value: !frame.focusMovesBeforeTyping } };
         }
@@ -239,37 +246,49 @@ describe("credential filler", () => {
     expect(t.inserted).toEqual([]);
   });
 
-  it("blocks agent screenshots of the document showing a typed 2FA code", async () => {
+  it("blocks agent screenshots while a filled code is visible in its document", async () => {
     let now = 1_000_000;
-    let url = `${ORIGIN}/2fa`;
-    const document = "tab1:3";
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/2fa`, focused: { tag: "INPUT", type: "text" } }];
     const filler = createCredentialFiller({ store, now: () => now });
-    const t = {
-      ...target([{ id: "top", url, focused: { tag: "INPUT", type: "text" } }]),
-      pageURL: () => url,
-      documentKey: () => document,
-    };
+    const t = { ...target(frames), documentKey: () => "tab1:3" };
     await filler.fillSecret(t, { itemId, field: "totp" });
-    expect(filler.screenshotBlocked("s1", "tab1:3")).toMatch(/2FA code/);
-    expect(filler.screenshotBlocked("other", "tab1:3")).toBeUndefined();
-    // An in-page URL change (#fragment) keeps the same document and the code.
-    url = `${ORIGIN}/2fa#step2`;
-    expect(filler.screenshotBlocked("s1", "tab1:3")).toMatch(/2FA code/);
-    // A screenshot of another tab is allowed and does not clear the protection.
-    expect(filler.screenshotBlocked("s1", "tab2:0")).toBeUndefined();
-    expect(filler.screenshotBlocked("s1", "tab1:3")).toMatch(/2FA code/);
-    // A replaced document (form submitted) no longer shows the code.
-    expect(filler.screenshotBlocked("s1", "tab1:4")).toBeUndefined();
-    // And the protection ends when the code expires.
+    frames[0].revealedKind = "totp";
+    await expect(filler.screenshotBlocked("s1", "tab1:3", t.cdp)).resolves.toMatch(/on screen/);
+    await expect(filler.screenshotBlocked("other", "tab1:3", t.cdp)).resolves.toBeUndefined();
+    // Another tab, or a replaced document, is not the one holding the code.
+    await expect(filler.screenshotBlocked("s1", "tab2:0", t.cdp)).resolves.toBeUndefined();
+    await expect(filler.screenshotBlocked("s1", "tab1:4", t.cdp)).resolves.toBeUndefined();
+    await expect(filler.screenshotBlocked("s1", "tab1:3", t.cdp)).resolves.toMatch(/on screen/);
+    // An expired code is no longer a secret worth hiding.
     now += 91_000;
-    expect(filler.screenshotBlocked("s1", "tab1:3")).toBeUndefined();
+    await expect(filler.screenshotBlocked("s1", "tab1:3", t.cdp)).resolves.toBeUndefined();
   });
 
-  it("does not block screenshots for masked password fields", async () => {
-    const filler = createCredentialFiller({ store });
-    const t = target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]);
+  it("allows screenshots while a filled password stays masked, and blocks them once it is revealed", async () => {
+    let now = 1_000_000;
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }];
+    const filler = createCredentialFiller({ store, now: () => now });
+    const t = { ...target(frames), documentKey: () => "tab1:0" };
     await filler.fillSecret(t, { itemId, field: "password" });
-    expect(filler.screenshotBlocked("s1", "tab1:0")).toBeUndefined();
+    await expect(filler.screenshotBlocked("s1", "tab1:0", t.cdp)).resolves.toBeUndefined();
+    // The page (or the agent clicking an eye toggle) turns it into type=text.
+    frames[0].revealedKind = "password";
+    await expect(filler.screenshotBlocked("s1", "tab1:0", t.cdp)).resolves.toMatch(/on screen/);
+    // A password does not expire the way a 2FA code does.
+    now += 10 * 60_000;
+    await expect(filler.screenshotBlocked("s1", "tab1:0", t.cdp)).resolves.toMatch(/on screen/);
+    // Masked again: screenshots resume.
+    frames[0].revealedKind = undefined;
+    await expect(filler.screenshotBlocked("s1", "tab1:0", t.cdp)).resolves.toBeUndefined();
+  });
+
+  it("refuses the screenshot when the field cannot be checked", async () => {
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }];
+    const filler = createCredentialFiller({ store });
+    const t = { ...target(frames), documentKey: () => "tab1:0" };
+    await filler.fillSecret(t, { itemId, field: "password" });
+    const failing = { sendCommand: async () => { throw new Error("target crashed"); } };
+    await expect(filler.screenshotBlocked("s1", "tab1:0", failing)).resolves.toMatch(/could not check/i);
   });
 
   it("refuses a project the item is not allowed in", async () => {

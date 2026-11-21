@@ -6960,13 +6960,13 @@ describe("browser view host credential fills", () => {
 			closeSession: vi.fn(async () => undefined),
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
-		const screenshotBlocked = vi.fn((_sessionId: string, _url: string) => "A 2FA code is on screen" as string | undefined);
+		const screenshotBlocked = vi.fn(async (_sessionId: string, _documentKey: string, _cdp: unknown) => "A 2FA code is on screen" as string | undefined);
 		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
 		const page = setupHost(runtime, { credentialFiller: filler as never });
 		await page.host.execute("sess-1", "tabs");
 		page.setCurrentURL(`${ORIGIN}/2fa`);
 		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
-		expect(screenshotBlocked).toHaveBeenCalledWith("sess-1", expect.stringMatching(/^.+:\d+$/));
+		expect(screenshotBlocked).toHaveBeenCalledWith("sess-1", expect.stringMatching(/^.+:\d+$/), expect.objectContaining({ sendCommand: expect.any(Function) }));
 		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
 	});
 
@@ -6980,9 +6980,9 @@ describe("browser view host credential fills", () => {
 		// Allowed when the command is admitted; by the time the queued capture
 		// runs, the tab it reads holds a typed 2FA code.
 		const screenshotBlocked = vi
-			.fn<(sessionId: string, documentKey: string) => string | undefined>()
-			.mockReturnValueOnce(undefined)
-			.mockReturnValue("A 2FA code is on screen");
+			.fn<(sessionId: string, documentKey: string, cdp: unknown) => Promise<string | undefined>>()
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValue("A 2FA code is on screen");
 		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
 		const page = setupHost(runtime, { credentialFiller: filler as never });
 		await page.host.execute("sess-1", "tabs");

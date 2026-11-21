@@ -110,9 +110,27 @@ export function createRedactor(): Redactor {
   const variants = (secret: string): string[] => {
     const json = JSON.stringify(secret).slice(1, -1);
     const uri = encodeURIComponent(secret);
-    const form = uri.replace(/%20/g, "+");
-    const b64 = Buffer.from(secret, "utf8").toString("base64");
-    return [secret, json, uri, form, b64];
+    // application/x-www-form-urlencoded, as a browser posts a login form: it
+    // also escapes !'()~ and turns spaces into +.
+    const form = new URLSearchParams({ v: secret }).toString().slice(2);
+    const lower = (encoded: string) => encoded.replace(/%[0-9A-F]{2}/g, (escape) => escape.toLowerCase());
+    const html = (apostrophe: string) =>
+      secret.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, apostrophe);
+    const bytes = Buffer.from(secret, "utf8");
+    return [
+      secret,
+      json,
+      uri,
+      lower(uri),
+      form,
+      lower(form),
+      uri.replace(/%20/g, "+"),
+      html("&#39;"),
+      html("&#x27;"),
+      html("&apos;"),
+      bytes.toString("base64"),
+      bytes.toString("base64url"),
+    ];
   };
   let ordered: string[] = [];
   const scrubString = (text: string): string => {

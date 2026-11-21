@@ -28,13 +28,16 @@ for (const line of fs.readFileSync(process.argv[1], "utf8").split("\n")) {
 const values = [env.DEMO_PASSWORD, env.DEMO_SEED];
 if (values.some((v) => !v)) { console.error("secret.env needs DEMO_PASSWORD and DEMO_SEED"); process.exit(2); }
 const out = new Set();
+// The same encodings the redactor in browser-vault.ts masks.
+const lower = (e) => e.replace(/%[0-9A-F]{2}/g, (x) => x.toLowerCase());
+const html = (v, apos) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\x27/g, apos);
 for (const v of values) {
-  out.add(v);
-  out.add(encodeURIComponent(v));
+  const uri = encodeURIComponent(v);
   // application/x-www-form-urlencoded, as a browser posts a login form.
-  out.add(new URLSearchParams({ v }).toString().slice(2));
-  out.add(JSON.stringify(v).slice(1, -1));
-  out.add(Buffer.from(v).toString("base64"));
+  const form = new URLSearchParams({ v }).toString().slice(2);
+  for (const e of [v, uri, lower(uri), form, lower(form), uri.replace(/%20/g, "+"), JSON.stringify(v).slice(1, -1),
+    html(v, "&#39;"), html(v, "&#x27;"), html(v, "&apos;"),
+    Buffer.from(v).toString("base64"), Buffer.from(v).toString("base64url")]) out.add(e);
 }
 process.stdout.write([...out].join("\n") + "\n");
 ' "$env_file" > "$patterns" || exit 2

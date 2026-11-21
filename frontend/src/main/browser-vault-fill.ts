@@ -53,11 +53,31 @@ const probeFocus = (token: string) => `/*ao-vault:probe*/(() => {
 // Right before typing: the element verified by the probe must still hold
 // focus in the same document (a navigation creates a new document, which has
 // no token). Input.insertText has no target node, so this binds it.
-const selectVerified = (token: string) => `/*ao-vault:select*/(() => {
+// It also tags the element with what is being typed, for the screenshot check.
+const selectVerified = (token: string, kind: string) => `/*ao-vault:select*/(() => {
   const el = document.activeElement;
   if (!el || el.__aoVaultToken !== ${JSON.stringify(token)}) return false;
   if (typeof el.select === "function") el.select();
+  el.__aoVaultFilled = ${JSON.stringify(kind)};
   return true;
+})()`;
+
+/**
+ * True when a field Orchestrator filled is on the page, visible and not masked:
+ * a code in a text field, or a password the page (or an eye toggle) turned
+ * into type=text. `ignore` lists kinds that no longer matter (expired codes).
+ */
+export const revealedSecretsCheck = (ignore: string[]) => `/*ao-vault:revealed ${ignore.map((kind) => `ignore:${kind}`).join(" ")}*/(() => {
+  const ignore = ${JSON.stringify(ignore)};
+  for (const el of document.querySelectorAll("input, textarea")) {
+    const kind = el.__aoVaultFilled;
+    if (!kind || ignore.includes(kind) || !el.isConnected) continue;
+    if (el.tagName === "INPUT" && el.type === "password") continue;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    if (r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none") return true;
+  }
+  return false;
 })()`;
 
 /** HTTPS, or plain HTTP only to this machine (local development). */
@@ -127,13 +147,16 @@ export type CredentialFiller = ReturnType<typeof createCredentialFiller>;
 // A TOTP code is valid for its 30 s step plus the clock skew sites accept.
 const CODE_ON_SCREEN_MS = 90_000;
 
+// The frames of one document that received a password or code.
+type FilledDocument = { frames: Set<string>; codeUntil?: number; hasPassword: boolean };
+
 export function createCredentialFiller(options: { store: VaultStore; now?: () => number }) {
   const now = options.now ?? Date.now;
   const redactors = new Map<string, Redactor>();
-  // Text redaction cannot reach pixels: while a 2FA code typed into a visible
-  // text field may still be on its document, agent screenshots of that
-  // document are refused. Keyed by session, then by `<tab>:<document>`.
-  const codesOnScreen = new Map<string, Map<string, number>>();
+  // Text redaction cannot reach pixels. For each document a secret was typed
+  // into, agent screenshots first check that no filled field is visible
+  // unmasked. Keyed by session, then by `<tab>:<document>`.
+  const filledDocuments = new Map<string, Map<string, FilledDocument>>();
   const redactorFor = (sessionId: string) => {
     let redactor = redactors.get(sessionId);
     if (!redactor) redactors.set(sessionId, (redactor = createRedactor()));
@@ -257,15 +280,20 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
       throw new FillRefused("Page origin changed before the fill", "origin changed");
     }
     if (field !== "username") redactorFor(target.sessionId).add(secret);
-    if (!(await evaluate<boolean>(target.cdp, frame.id, selectVerified(token)))) {
+    if (!(await evaluate<boolean>(target.cdp, frame.id, selectVerified(token, field)))) {
       throw new FillRefused("The verified field changed before typing; nothing was typed", "field changed");
     }
     ensureLive();
     await target.cdp.sendCommand("Input.insertText", { text: secret });
-    if (field === "totp" && probe.type !== "password") {
-      const shown = codesOnScreen.get(target.sessionId) ?? new Map<string, number>();
-      shown.set(target.documentKey(), now() + CODE_ON_SCREEN_MS);
-      codesOnScreen.set(target.sessionId, shown);
+    if (field !== "username") {
+      const documents = filledDocuments.get(target.sessionId) ?? new Map<string, FilledDocument>();
+      const key = target.documentKey();
+      const filled = documents.get(key) ?? { frames: new Set<string>(), hasPassword: false };
+      filled.frames.add(frame.id);
+      if (field === "password") filled.hasPassword = true;
+      else filled.codeUntil = now() + CODE_ON_SCREEN_MS;
+      documents.set(key, filled);
+      filledDocuments.set(target.sessionId, documents);
     }
     return origin;
   };
@@ -400,16 +428,35 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
     },
 
     /**
-     * Why an agent screenshot of this document must wait, if it must. Only
-     * expiry ends protection early; a replaced document has a new key.
+     * Why an agent screenshot of this document must wait, if it must: a filled
+     * password or unexpired code is visible unmasked. If the check itself
+     * fails, the screenshot waits too.
      */
-    screenshotBlocked(sessionId: string, documentKey: string): string | undefined {
-      const shown = codesOnScreen.get(sessionId);
-      if (!shown) return undefined;
-      for (const [key, until] of shown) if (now() >= until) shown.delete(key);
-      if (!shown.size) codesOnScreen.delete(sessionId);
-      if (!shown.has(documentKey)) return undefined;
-      return "A 2FA code Orchestrator typed is on screen, so screenshots are paused. Submit the form (or wait for the code to expire) and try again.";
+    async screenshotBlocked(sessionId: string, documentKey: string, cdp: CdpLike): Promise<string | undefined> {
+      const documents = filledDocuments.get(sessionId);
+      const filled = documents?.get(documentKey);
+      if (!documents || !filled) return undefined;
+      const codeExpired = filled.codeUntil === undefined || now() >= filled.codeUntil;
+      if (codeExpired && !filled.hasPassword) {
+        documents.delete(documentKey);
+        if (!documents.size) filledDocuments.delete(sessionId);
+        return undefined;
+      }
+      const check = revealedSecretsCheck(codeExpired ? ["totp"] : []);
+      for (const frameId of filled.frames) {
+        let revealed: boolean;
+        try {
+          revealed = await evaluate<boolean>(cdp, frameId, check);
+        } catch (error) {
+          // A frame that is gone took its fields with it.
+          if (/no frame/i.test(error instanceof Error ? error.message : "")) continue;
+          return "Orchestrator could not check whether a filled password is visible, so screenshots are paused.";
+        }
+        if (revealed) {
+          return "A password or 2FA code Orchestrator filled is visible on screen, so screenshots are paused. Mask or submit it and try again.";
+        }
+      }
+      return undefined;
     },
 
     scrub<T>(sessionId: string, value: T): T {
@@ -418,7 +465,7 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
 
     forget(sessionId: string) {
       redactors.delete(sessionId);
-      codesOnScreen.delete(sessionId);
+      filledDocuments.delete(sessionId);
     },
   };
 }
