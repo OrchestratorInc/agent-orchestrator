@@ -1297,6 +1297,14 @@ func TestNativeHarnessSpawnPermissionDefault(t *testing.T) {
 		harness                      domain.AgentHarness
 		project, role, request, want domain.PermissionMode
 	}{
+		{"native unset", domain.HarnessCodeBuddy, "", "", "", domain.PermissionModeDefault},
+		{"explicit project auto", domain.HarnessCodeBuddy, domain.PermissionModeAuto, "", "", domain.PermissionModeAuto},
+		{"explicit project bypass", domain.HarnessCodeBuddy, domain.PermissionModeBypassPermissions, "", "", domain.PermissionModeBypassPermissions},
+		{"explicit role auto", domain.HarnessCodeBuddy, "", domain.PermissionModeAuto, "", domain.PermissionModeAuto},
+		{"explicit role bypass", domain.HarnessCodeBuddy, "", domain.PermissionModeBypassPermissions, "", domain.PermissionModeBypassPermissions},
+		{"explicit request auto", domain.HarnessCodeBuddy, "", "", domain.PermissionModeAuto, domain.PermissionModeAuto},
+		{"explicit request bypass", domain.HarnessCodeBuddy, "", "", domain.PermissionModeBypassPermissions, domain.PermissionModeBypassPermissions},
+		{"request native default wins", domain.HarnessCodeBuddy, domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, domain.PermissionModeDefault, domain.PermissionModeDefault},
 		{"native unset", domain.HarnessMastraCode, "", "", "", domain.PermissionModeDefault},
 		{"explicit project auto", domain.HarnessMastraCode, domain.PermissionModeAuto, "", "", domain.PermissionModeAuto},
 		{"explicit project bypass", domain.HarnessMastraCode, domain.PermissionModeBypassPermissions, "", "", domain.PermissionModeBypassPermissions},

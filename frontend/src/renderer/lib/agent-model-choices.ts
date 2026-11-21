@@ -5,11 +5,12 @@ export function isConcreteModelID(id: string): boolean {
 }
 
 /**
- * Whether a local New Task may take a typed model ID. Mastra Code lists no
- * models and selects its native model by ID; other harnesses keep their catalog.
+ * Whether a local New Task may take a typed model ID. Mastra Code and CodeBuddy
+ * Code list no models and select their native model by ID; other harnesses keep
+ * their catalog.
  */
 export function acceptsLocalModelID(agentId: string, catalog?: { customModelEntry?: string }): boolean {
-	return agentId === "mastra-code" && catalog?.customModelEntry === "direct";
+	return (agentId === "mastra-code" || agentId === "codebuddy") && catalog?.customModelEntry === "direct";
 }
 
 /**

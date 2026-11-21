@@ -16,6 +16,7 @@ const LOGOS: Record<string, { light: number; dark?: number }> = {
 	claude: { light: require("../assets/agents/claude.png") },
 	"claude-code": { light: require("../assets/agents/claude-code.png") },
 	cline: { light: require("../assets/agents/cline-light.png"), dark: require("../assets/agents/cline-dark.png") },
+	codebuddy: { light: require("../assets/agents/codebuddy.png") },
 	codewhale: { light: require("../assets/agents/codewhale-light.png"), dark: require("../assets/agents/codewhale-dark.png") },
 	codex: { light: require("../assets/agents/codex.png") },
 	"command-code": { light: require("../assets/agents/command-code-light.png"), dark: require("../assets/agents/command-code-dark.png") },

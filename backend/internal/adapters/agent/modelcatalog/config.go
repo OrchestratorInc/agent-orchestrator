@@ -139,6 +139,15 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 				paths = append(paths, filepath.Join(root, name))
 			}
 		}
+	case "codebuddy":
+		// --help lists the account's models plus the models.json custom models.
+		root := strings.TrimSpace(envValue(env, "CODEBUDDY_CONFIG_DIR"))
+		if root == "" && home != "" {
+			root = filepath.Join(home, ".codebuddy")
+		}
+		if root != "" {
+			paths = append(paths, filepath.Join(root, "models.json"), filepath.Join(root, "settings.json"))
+		}
 	case "minimax-code":
 		// `mcode provider list` reads the profile's providers and models from
 		// config.yaml, and the region preference picks the account namespace.

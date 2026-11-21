@@ -20701,6 +20701,7 @@ components:
           - mastra-code
           - docker-agent
           - memcode
+          - codebuddy
           - hermes
           - stakpak
           - open-interpreter
@@ -21489,6 +21490,7 @@ components:
           - mastra-code
           - docker-agent
           - memcode
+          - codebuddy
           - hermes
           - stakpak
           - open-interpreter
@@ -25890,6 +25892,7 @@ components:
           - mastra-code
           - docker-agent
           - memcode
+          - codebuddy
           - hermes
           - stakpak
           - open-interpreter
