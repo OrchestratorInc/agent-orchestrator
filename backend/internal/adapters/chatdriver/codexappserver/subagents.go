@@ -1,8 +1,10 @@
 package codexappserver
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -20,7 +22,9 @@ import (
 //
 // The renderer groups a launch's steps by detail.parentProviderItemId and takes a
 // SubagentHandback step as the child's report (subagent-team.ts). subagentRouter
-// writes exactly that, so the timeline needs no Codex-specific code.
+// writes exactly that. The steps stay on the child's own turn, so that turn's
+// start and end settle them, and each says so (detail.childTurn) so the timeline
+// shows the turn on the subagent rather than as a turn of the parent's.
 
 // codexSpawnTool is the launch's providerToolName. The renderer lists it among the
 // tool names that start a subagent.
@@ -34,6 +38,14 @@ const subagentHandbackTool = "SubagentHandback"
 // name its child. Spawn completes as soon as the child starts, so the wait is
 // short; past the cap, everything held goes out unfiled rather than piling up.
 const maxHeldSubagentEvents = 2000
+
+// maxRecoveredSubagentThreads bounds how many threads a reconnect reads back to
+// find launches: the root, and the children its launches started.
+const maxRecoveredSubagentThreads = 32
+
+// subagentRecoveryWait bounds those reads. Recovery is best effort: a child it
+// cannot place goes out unfiled, as any thread no launch names does.
+const subagentRecoveryWait = 10 * time.Second
 
 func isSpawnAgent(it threadItem) bool {
 	return it.Type == itemCollabAgentToolCall && deref(it.Tool) == codexSpawnTool
@@ -108,11 +120,10 @@ type subagentRouter struct {
 	// that no launch has named yet. A v2 child can start before its launch item, so
 	// its events wait for it until the root turn ends.
 	expected map[string]bool
-	// origin is where each spawn call was made: its thread and native turn. The
-	// root turn a launch belongs to is read from it when routing (rootTurnOf), so a
-	// nested launch still joins the root turn when its own thread is placed only
-	// after the nested spawn completed.
-	origin map[string]launchOrigin
+	// origin is the thread each spawn call was made on. A nested launch's steps wait
+	// until its chain of launches reaches the root, so the launch they hang from has
+	// gone out before them.
+	origin map[string]string
 	// root is the conversation's own thread, as last seen.
 	root string
 
@@ -127,15 +138,13 @@ type subagentRouter struct {
 	lastSaid map[string]string
 }
 
-type launchOrigin struct{ thread, turn string }
-
 func newSubagentRouter(scope func(string) string) *subagentRouter {
 	return &subagentRouter{
 		scope:     scope,
 		inflight:  map[string]struct{}{},
 		launchOf:  map[string]string{},
 		expected:  map[string]bool{},
-		origin:    map[string]launchOrigin{},
+		origin:    map[string]string{},
 		held:      map[string][]ports.ChatEvent{},
 		streaming: map[string]bool{},
 		lastSaid:  map[string]string{},
@@ -160,7 +169,6 @@ func (r *subagentRouter) observe(n notification, root string) {
 	}
 	var p struct {
 		ThreadID string     `json:"threadId"`
-		TurnID   string     `json:"turnId"`
 		Item     threadItem `json:"item"`
 	}
 	r.root = root
@@ -168,47 +176,96 @@ func (r *subagentRouter) observe(n notification, root string) {
 		return
 	}
 	launch := p.Item.itemID()
-	v2 := isSubagentStart(p.Item)
-	if launch == "" || (!v2 && !isSpawnAgent(p.Item)) {
-		return
-	}
-	if _, known := r.origin[launch]; !known {
-		r.origin[launch] = launchOrigin{thread: p.ThreadID, turn: p.TurnID}
-	}
-	if v2 {
-		// The v2 item names the child's thread as soon as it exists.
-		if child := deref(p.Item.AgentThreadID); child != root {
-			r.launchOf[child] = launch
+	if n.Method == codexproto.MethodItemStarted && isSpawnAgent(p.Item) && launch != "" {
+		if _, known := r.origin[launch]; !known {
+			r.origin[launch] = p.ThreadID
 		}
-		return
-	}
-	if n.Method == codexproto.MethodItemStarted {
 		r.inflight[launch] = struct{}{}
 		return
 	}
-	delete(r.inflight, launch)
-	for _, child := range p.Item.ReceiverThreadIds {
-		if child != "" && child != root {
-			r.launchOf[child] = launch
-		}
+	if n.Method == codexproto.MethodItemCompleted && isSpawnAgent(p.Item) {
+		delete(r.inflight, launch)
 	}
+	r.place(p.ThreadID, p.Item, root)
 }
 
-// rootTurnOf is the root turn a launch belongs to. A grandchild's launch is on a
-// child thread, whose own turn AO never opened, so it takes its ancestor's.
-func (r *subagentRouter) rootTurnOf(launch string) string {
-	seen := map[string]bool{}
-	for !seen[launch] {
-		seen[launch] = true
-		from := r.origin[launch]
-		parent, nested := r.launchOf[from.thread]
-		if !nested || from.thread == r.root {
-			return from.turn
-		}
-		launch = parent
+// place records which child threads a launch item names: a completed spawn in
+// receiverThreadIds, a v2 launch in agentThreadId as soon as the child exists.
+func (r *subagentRouter) place(thread string, it threadItem, root string) []string {
+	launch := it.itemID()
+	var children []string
+	switch {
+	case launch == "":
+	case isSubagentStart(it):
+		children = []string{deref(it.AgentThreadID)}
+	case isSpawnAgent(it):
+		children = it.ReceiverThreadIds
 	}
-	// A malformed chain that loops back: keep the turn the launch named itself.
-	return r.origin[launch].turn
+	var placed []string
+	for _, child := range children {
+		if child == "" || child == root || child == thread {
+			continue
+		}
+		if _, known := r.origin[launch]; !known {
+			r.origin[launch] = thread
+		}
+		r.launchOf[child] = launch
+		placed = append(placed, child)
+	}
+	return placed
+}
+
+// recoverLaunches places the children of launches one thread made before AO
+// attached, from that thread's items as the provider reads them back. A reconnect
+// gets only what the host buffered while AO was away, so a launch delivered before
+// the detach never comes again. It returns the child threads those launches named,
+// so the caller can read them next for launches of their own.
+func (r *subagentRouter) recoverLaunches(root, thread string, items []threadItem) (children []string) {
+	r.root = root
+	for _, it := range items {
+		children = append(children, r.place(thread, it, root)...)
+	}
+	return children
+}
+
+func (r *subagentRouter) placed(thread string) bool {
+	_, ok := r.launchOf[thread]
+	return ok
+}
+
+// recoverSubagents reads back the launches the provider made before AO reattached
+// to it, from the root thread down, and places their children. Without it, a
+// surviving child's next reply would go out as the parent's and its launch would
+// never get a report.
+func (c *conversation) recoverSubagents(router *subagentRouter) {
+	ctx, cancel := context.WithTimeout(context.Background(), subagentRecoveryWait)
+	defer cancel()
+	includeTurns := true
+	queue := []string{c.threadID}
+	read := map[string]bool{}
+	for len(queue) > 0 && len(read) < maxRecoveredSubagentThreads {
+		thread := queue[0]
+		queue = queue[1:]
+		if read[thread] {
+			continue
+		}
+		read[thread] = true
+		var resp struct {
+			Thread struct {
+				Turns []struct {
+					Items []threadItem `json:"items"`
+				} `json:"turns"`
+			} `json:"thread"`
+		}
+		if err := c.conn.request(ctx, codexproto.MethodThreadRead,
+			codexproto.ThreadReadParams{ThreadID: thread, IncludeTurns: &includeTurns}, &resp); err != nil {
+			c.log.Debug("codex subagent launches not recovered", "thread", thread, "error", err)
+			continue
+		}
+		for _, turn := range resp.Thread.Turns {
+			queue = append(queue, router.recoverLaunches(c.threadID, thread, turn.Items)...)
+		}
+	}
 }
 
 // route returns what to emit for one event from thread.
@@ -230,7 +287,7 @@ func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.
 		}
 		return r.adopt(thread, ev)
 	}
-	if _, placed := r.launchOf[thread]; !placed && len(r.inflight) == 0 && !r.expected[thread] && !waiting {
+	if _, placed := r.launchOf[thread]; !placed && !r.claimable(thread) && !waiting {
 		// No spawn could claim this thread, such as a provider-internal one.
 		return []ports.ChatEvent{ev}
 	}
@@ -245,47 +302,52 @@ func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.
 	return nil
 }
 
-// settled reports whether a thread's events can be filed now: a spawn named the
-// thread, and its launch's chain reaches the root, so its steps get the root turn.
-// A nested launch whose own thread is not placed yet waits for its ancestor, while
-// any spawn that could place it is still in flight.
+// claimable reports whether a launch may still name a thread that none has yet:
+// a spawn is in flight, or Codex announced the thread as a child.
+func (r *subagentRouter) claimable(thread string) bool {
+	return len(r.inflight) > 0 || r.expected[thread]
+}
+
+// settled reports whether a thread's events can be filed now: a launch named the
+// thread, and that launch's chain reaches the root, so the launch it hangs from has
+// gone out first. A nested launch whose own thread is not placed yet waits for its
+// ancestor while anything could still place that thread.
 func (r *subagentRouter) settled(thread string) bool {
 	launch, placed := r.launchOf[thread]
 	if !placed {
 		return false
 	}
-	if len(r.inflight) == 0 {
-		return true
-	}
 	seen := map[string]bool{}
 	for !seen[launch] {
 		seen[launch] = true
 		from := r.origin[launch]
-		if from.thread == r.root {
+		if from == r.root {
 			return true
 		}
-		parent, nested := r.launchOf[from.thread]
+		parent, nested := r.launchOf[from]
 		if !nested {
-			return false
+			return !r.claimable(from)
 		}
 		launch = parent
 	}
-	return false
+	// A malformed chain that loops back cannot resolve: file it under its own launch.
+	return true
 }
 
-// release returns held events whose launch is now settled, filed under it. Once
-// no spawn is in flight, nothing can claim the rest, so they go out as they were.
+// release returns held events whose launch is now settled, filed under it. A
+// thread nothing can claim any more goes out as it was.
 func (r *subagentRouter) release() []ports.ChatEvent {
 	var out []ports.ChatEvent
 	kept := r.heldOrder[:0]
 	for _, thread := range r.heldOrder {
 		events := r.held[thread]
+		_, placed := r.launchOf[thread]
 		switch {
 		case r.settled(thread):
 			for _, ev := range events {
 				out = append(out, r.adopt(thread, ev)...)
 			}
-		case len(r.inflight) == 0 && !r.expected[thread]:
+		case !placed && !r.claimable(thread):
 			out = append(out, events...)
 		default:
 			kept = append(kept, thread)
@@ -311,19 +373,17 @@ func (r *subagentRouter) flush() []ports.ChatEvent {
 }
 
 // adopt rewrites one child event into a step under its launch.
+//
+// Every event keeps the child's own turn. The child's turn start and end are what
+// settle its steps, so a parent that finishes first leaves a running child command
+// running, and a child that fails settles its own rows. The renderer files the steps
+// under the launch by their parent link, whichever turn they are in.
 func (r *subagentRouter) adopt(thread string, ev ports.ChatEvent) []ports.ChatEvent {
-	launch := r.launchOf[thread]
-	parent := r.scope(launch)
-	turn := r.rootTurnOf(launch)
-	childTurn := ev.ProviderTurnID
-	if turn != "" && isChildStep(ev.Kind) {
-		// A step joins the parent's turn. Everything else keeps the child's native
-		// turn, so the child's lifecycle, diff or plan can never settle or replace
-		// the parent's.
-		ev.ProviderTurnID = turn
-	}
+	parent := r.scope(r.launchOf[thread])
 	switch ev.Kind {
-	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted:
+	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventPlanUpdated:
+		// A plan is a step too: on the child's turn it can never replace the
+		// parent's, and its row reads as the child's.
 		ev.Detail = withParent(ev.Detail, parent, false)
 		return []ports.ChatEvent{ev}
 
@@ -361,25 +421,16 @@ func (r *subagentRouter) adopt(thread string, ev ports.ChatEvent) []ports.ChatEv
 		}}
 
 	case ports.ChatEventTurnCompleted:
-		return []ports.ChatEvent{ev, r.handback(thread, parent, turn, childTurn, ev)}
+		// The report goes out before the turn ends, so the child never reads as
+		// finished without one.
+		return []ports.ChatEvent{r.handback(thread, parent, ev), ev}
 	}
 	return []ports.ChatEvent{ev}
 }
 
-// isChildStep reports the events that make or extend one of the child's steps.
-func isChildStep(kind ports.ChatEventKind) bool {
-	switch kind {
-	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventActivityText,
-		ports.ChatEventCommandOutputDelta, ports.ChatEventCommandInput, ports.ChatEventReasoningDelta,
-		ports.ChatEventMessageDelta, ports.ChatEventMessageCompleted:
-		return true
-	}
-	return false
-}
-
 // handback is the child's report to its launch: its last message when its turn
 // ends, or why the turn did not finish.
-func (r *subagentRouter) handback(thread, parent, turn, childTurn string, ev ports.ChatEvent) ports.ChatEvent {
+func (r *subagentRouter) handback(thread, parent string, ev ports.ChatEvent) ports.ChatEvent {
 	message := r.lastSaid[thread]
 	delete(r.lastSaid, thread)
 	status := domain.ActivityStatusCompleted
@@ -397,21 +448,21 @@ func (r *subagentRouter) handback(thread, parent, turn, childTurn string, ev por
 	if message != "" {
 		detail = withField(detail, "input", map[string]any{"message": message})
 	}
-	if turn == "" {
-		turn = childTurn
-	}
 	return ports.ChatEvent{
-		Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turn,
+		Kind: ports.ChatEventActivityCompleted, ProviderTurnID: ev.ProviderTurnID,
 		ProviderConversationID: ev.ProviderConversationID,
-		ProviderItemID:         "codex-handback:" + thread + ":" + childTurn,
+		ProviderItemID:         "codex-handback:" + thread + ":" + ev.ProviderTurnID,
 		ActivityKind:           domain.ActivityKindMCPTool, ActivityStatus: status,
 		Summary: subagentHandbackTool, Detail: detail,
 	}
 }
 
-// withParent stamps a detail payload with the launch it belongs to.
+// withParent stamps a detail payload with the launch it belongs to. childTurn says
+// the step sits on the child's own turn, which the renderer then leaves out of the
+// timeline: that turn's progress and outcome show on the subagent instead.
 func withParent(detail []byte, parent string, message bool) []byte {
 	detail = withField(detail, "parentProviderItemId", parent)
+	detail = withField(detail, "childTurn", true)
 	if message {
 		detail = withField(detail, "nestedAgent", true)
 	}

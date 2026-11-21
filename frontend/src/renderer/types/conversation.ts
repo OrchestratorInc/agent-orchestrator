@@ -350,6 +350,11 @@ export interface CommandDetail {
 	processId?: number;
 	/** ACP transcript hierarchy and richer provider terminal metadata. */
 	parentProviderItemId?: string;
+	/**
+	 * A subagent's step recorded on the subagent's own provider turn (Codex), not the
+	 * parent's. That turn is the child's: the subagent row shows how it is going.
+	 */
+	childTurn?: boolean;
 	nestedAgent?: boolean;
 	providerToolName?: string;
 	providerTitle?: string;

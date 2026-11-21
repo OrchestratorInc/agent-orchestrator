@@ -3715,7 +3715,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				Kind:           domain.ActivityKindPlan,
 				Status:         planActivityStatus(*event.Plan),
 				Summary:        event.Summary,
-				Detail:         planDetail(*event.Plan, now),
+				Detail:         withSubagentLink(planDetail(*event.Plan, now), event.Detail),
 				ProviderItemID: itemID,
 			}, now); err != nil {
 			return err
@@ -4425,6 +4425,32 @@ func planActivityStatus(plan domain.ConversationPlan) domain.ActivityStatus {
 		}
 	}
 	return domain.ActivityStatusCompleted
+}
+
+// withSubagentLink keeps the launch a subagent's plan belongs to. A driver that
+// files a child's work under its launch names it on the plan event, and the plan's
+// row then reads as one of that child's steps rather than as the parent's plan.
+func withSubagentLink(detail, from []byte) []byte {
+	var link struct {
+		Parent    string `json:"parentProviderItemId"`
+		ChildTurn bool   `json:"childTurn"`
+	}
+	if len(from) == 0 || json.Unmarshal(from, &link) != nil || link.Parent == "" {
+		return detail
+	}
+	fields := map[string]any{}
+	if json.Unmarshal(detail, &fields) != nil {
+		return detail
+	}
+	fields["parentProviderItemId"] = link.Parent
+	if link.ChildTurn {
+		fields["childTurn"] = true
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return detail
+	}
+	return encoded
 }
 
 // planDetail is the plan's typed payload. The steps go in as structure rather than

@@ -175,6 +175,9 @@ func (c *conversation) pump() {
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
 	subagents := newSubagentRouter(c.scopedID)
+	// A live reattach reads back the launches made before it, once, when a thread
+	// no launch has named first speaks.
+	subagentsRecovered := !c.proc.reconnected
 	var usageLimits usageLimitTracker
 
 	for n := range c.conn.notifs() {
@@ -192,6 +195,10 @@ func (c *conversation) pump() {
 		_ = json.Unmarshal(n.Params, &scope)
 		citations.observeNotification(n, c.threadID)
 		subagents.observe(n, c.threadID)
+		if !subagentsRecovered && scope.ThreadID != "" && scope.ThreadID != c.threadID && !subagents.placed(scope.ThreadID) {
+			subagentsRecovered = true
+			c.recoverSubagents(subagents)
+		}
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a

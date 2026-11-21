@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -19,6 +20,7 @@ const (
 
 type detailFields struct {
 	ParentProviderItemID string         `json:"parentProviderItemId"`
+	ChildTurn            bool           `json:"childTurn"`
 	NestedAgent          bool           `json:"nestedAgent"`
 	ProviderToolName     string         `json:"providerToolName"`
 	Background           bool           `json:"background"`
@@ -58,8 +60,9 @@ func TestNormalizeSpawnAgentIsALaunch(t *testing.T) {
 }
 
 // A child's work arrives on its own thread, before the spawn names that thread.
-// It must land under the launch, in the parent's turn, with its last message as
-// the hand-back, and the child's turn must never settle the parent's.
+// It must land under the launch, on the child's own turn, with its last message as
+// the hand-back before that turn ends. The child's turn settles its steps, never
+// the parent's.
 func TestChildThreadWorkFilesUnderItsLaunch(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -77,27 +80,22 @@ func TestChildThreadWorkFilesUnderItsLaunch(t *testing.T) {
 	srv.push(`{"method":"item/completed","params":{"threadId":"child-1","turnId":"child-turn","item":{"type":"agentMessage","id":"child-msg","text":"Build passes."}}}`)
 	srv.push(`{"method":"turn/completed","params":{"threadId":"child-1","turn":{"id":"child-turn","status":"completed","items":[]}}}`)
 
-	var got []ports.ChatEvent
-	deadline := time.After(3 * time.Second)
-	for !hasHandback(got) {
-		select {
-		case ev := <-conv.Events():
-			got = append(got, ev)
-		case <-deadline:
-			t.Fatalf("no hand-back; events: %+v", got)
-		}
-	}
+	got := collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool {
+		return ev.Kind == ports.ChatEventTurnCompleted && ev.ProviderConversationID == "child-1"
+	})
 
-	launchAt, commandAt := -1, -1
+	launchAt, commandAt, handbackAt := -1, -1, -1
 	for i, ev := range got {
 		switch {
 		case ev.ProviderItemID == "call-spawn" && launchAt < 0:
 			launchAt = i
 		case ev.ProviderItemID == "child-cmd":
 			commandAt = i
-			if ev.ProviderTurnID != "root-turn" || decodeDetail(t, ev).ParentProviderItemID != "call-spawn" {
+			if detail := decodeDetail(t, ev); ev.ProviderTurnID != "child-turn" || detail.ParentProviderItemID != "call-spawn" || !detail.ChildTurn {
 				t.Fatalf("child command = %+v detail %s", ev, ev.Detail)
 			}
+		case strings.HasPrefix(ev.ProviderItemID, "codex-handback:"):
+			handbackAt = i
 		case ev.ProviderItemID == "child-msg":
 			if ev.Kind == ports.ChatEventMessageDelta || ev.Kind == ports.ChatEventMessageCompleted {
 				t.Fatalf("child message reached the parent's reply: %+v", ev)
@@ -114,21 +112,38 @@ func TestChildThreadWorkFilesUnderItsLaunch(t *testing.T) {
 	if launchAt < 0 || commandAt < launchAt {
 		t.Fatalf("launch at %d, child command at %d: %+v", launchAt, commandAt, got)
 	}
-	handback := got[len(got)-1]
+	// The report is in before the child's turn ends, so the child never reads as
+	// finished without one.
+	if handbackAt < 0 || handbackAt != len(got)-2 {
+		t.Fatalf("hand-back at %d of %d: %+v", handbackAt, len(got), got)
+	}
+	handback := got[handbackAt]
 	detail := decodeDetail(t, handback)
-	if handback.ActivityStatus != domain.ActivityStatusCompleted || handback.ProviderTurnID != "root-turn" ||
+	if handback.ActivityStatus != domain.ActivityStatusCompleted || handback.ProviderTurnID != "child-turn" ||
 		detail.ParentProviderItemID != "call-spawn" || detail.Input["message"] != "Build passes." {
 		t.Fatalf("hand-back = %+v detail %s", handback, handback.Detail)
 	}
 }
 
-func hasHandback(events []ports.ChatEvent) bool {
-	for _, ev := range events {
-		if strings.HasPrefix(ev.ProviderItemID, "codex-handback:") {
-			return true
+// collectUntil reads events until one matches done, which it includes.
+func collectUntil(t *testing.T, events <-chan ports.ChatEvent, done func(ports.ChatEvent) bool) []ports.ChatEvent {
+	t.Helper()
+	var got []ports.ChatEvent
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatalf("event stream closed; events: %+v", got)
+			}
+			got = append(got, ev)
+			if done(ev) {
+				return got
+			}
+		case <-deadline:
+			t.Fatalf("timed out; events: %+v", got)
 		}
 	}
-	return false
 }
 
 func TestSubagentRouterLeavesUnclaimedThreadsAlone(t *testing.T) {
@@ -155,25 +170,25 @@ func TestSubagentRouterLeavesUnclaimedThreadsAlone(t *testing.T) {
 func TestSubagentHandbackCarriesAFailure(t *testing.T) {
 	r := newSubagentRouter(func(id string) string { return "scoped:" + id })
 	r.launchOf["child-1"] = "call-spawn"
-	r.origin["call-spawn"] = launchOrigin{thread: "thread-1", turn: "root-turn"}
+	r.origin["call-spawn"] = "thread-1"
 	out := r.route("thread-1", "child-1", ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "child-turn", ProviderConversationID: "child-1",
 		TurnState: domain.TurnStateFailed, Err: errors.New("context window exceeded"),
 	})
-	if len(out) != 2 {
+	if len(out) != 2 || out[1].Kind != ports.ChatEventTurnCompleted {
 		t.Fatalf("out = %+v", out)
 	}
-	handback := out[1]
+	handback := out[0]
 	detail := decodeDetail(t, handback)
-	if handback.ActivityStatus != domain.ActivityStatusFailed || detail.ParentProviderItemID != "scoped:call-spawn" ||
-		detail.Input["message"] != "context window exceeded" {
+	if handback.ActivityStatus != domain.ActivityStatusFailed || handback.ProviderTurnID != "child-turn" ||
+		detail.ParentProviderItemID != "scoped:call-spawn" || detail.Input["message"] != "context window exceeded" {
 		t.Fatalf("hand-back = %+v detail %s", handback, handback.Detail)
 	}
 }
 
 // A retry on a child thread starts while the router still holds that thread. Its
-// completion must come out after the start and under the launch, not ahead of it
-// on the child's own turn, or the row stays running.
+// completion must come out after the start and under the launch, or the row stays
+// running. Both stay on the child's turn, which settles the row if the child fails.
 func TestChildRetryCompletionFollowsItsHeldStart(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -204,15 +219,16 @@ func TestChildRetryCompletionFollowsItsHeldStart(t *testing.T) {
 		t.Fatalf("retry order = %s then %s", retries[0].Kind, retries[1].Kind)
 	}
 	for _, ev := range retries {
-		if ev.ProviderTurnID != "root-turn" || decodeDetail(t, ev).ParentProviderItemID != "call-spawn" {
-			t.Fatalf("retry event not under its launch: %+v detail %s", ev, ev.Detail)
+		if ev.ProviderTurnID != "child-turn" || decodeDetail(t, ev).ParentProviderItemID != "call-spawn" {
+			t.Fatalf("retry event not under its launch on the child's turn: %+v detail %s", ev, ev.Detail)
 		}
 	}
 }
 
 // A nested spawn can start and finish on a child thread before the outer spawn
-// names that thread. The grandchild's steps still join the root turn.
-func TestNestedLaunchJoinsRootTurnWhenItsThreadIsPlacedLater(t *testing.T) {
+// names that thread. The grandchild's steps wait until the inner launch they hang
+// from can go out, then keep their own turn.
+func TestNestedLaunchStepsWaitForTheirChainToReachTheRoot(t *testing.T) {
 	r := newSubagentRouter(func(id string) string { return id })
 	observe := func(method, params string) {
 		r.observe(notification{Method: method, Params: json.RawMessage(params)}, "thread-1")
@@ -222,14 +238,14 @@ func TestNestedLaunchJoinsRootTurnWhenItsThreadIsPlacedLater(t *testing.T) {
 	observe("item/completed", `{"threadId":"child-1","turnId":"child-turn","item":{"type":"collabAgentToolCall","id":"call-inner","tool":"spawnAgent","status":"completed","receiverThreadIds":["grandchild-1"]}}`)
 
 	// The grandchild is named, but its chain does not reach the root yet: the step
-	// waits rather than go out on the child's own turn.
+	// waits rather than go out ahead of the launch it hangs from.
 	step := ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: "grandchild-turn", ProviderItemID: "gc-cmd"}
 	if out := r.route("thread-1", "grandchild-1", step); out != nil {
 		t.Fatalf("grandchild step went out before its chain reached the root: %+v", out)
 	}
 	observe("item/completed", spawnCompletedParams)
 	out := r.release()
-	if len(out) != 1 || out[0].ProviderTurnID != "root-turn" || decodeDetail(t, out[0]).ParentProviderItemID != "call-inner" {
+	if len(out) != 1 || out[0].ProviderTurnID != "grandchild-turn" || decodeDetail(t, out[0]).ParentProviderItemID != "call-inner" {
 		t.Fatalf("released grandchild step = %+v", out)
 	}
 
@@ -237,8 +253,44 @@ func TestNestedLaunchJoinsRootTurnWhenItsThreadIsPlacedLater(t *testing.T) {
 	out = r.route("thread-1", "grandchild-1", ports.ChatEvent{
 		Kind: ports.ChatEventActivityStarted, ProviderTurnID: "grandchild-turn", ProviderItemID: "gc-cmd-2",
 	})
-	if len(out) != 1 || out[0].ProviderTurnID != "root-turn" {
+	if len(out) != 1 || out[0].ProviderTurnID != "grandchild-turn" {
 		t.Fatalf("grandchild step after placement = %+v", out)
+	}
+}
+
+// The v2 protocol names a child's thread as soon as it exists, so a grandchild's
+// launch can arrive before the launch of the child that made it. No spawn is in
+// flight, but the child was announced: the grandchild's steps wait for the
+// child's launch and go out after the inner launch they hang from.
+func TestNestedV2StepsWaitForAnAnnouncedAncestor(t *testing.T) {
+	r := newSubagentRouter(func(id string) string { return id })
+	observe := func(method, params string) {
+		r.observe(notification{Method: method, Params: json.RawMessage(params)}, "thread-1")
+	}
+	const innerLaunch = `{"threadId":"child-v2","turnId":"child-turn","item":{"type":"subAgentActivity","id":"act-inner","kind":"started","agentThreadId":"grandchild-v2","agentPath":"/root/alpha/beta"}}`
+	observe("thread/started", `{"thread":{"id":"child-v2","parentThreadId":"thread-1"}}`)
+	observe("thread/started", `{"thread":{"id":"grandchild-v2","parentThreadId":"child-v2"}}`)
+	observe("item/completed", innerLaunch)
+
+	launch := ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: "child-turn", ProviderItemID: "act-inner"}
+	if out := r.route("thread-1", "child-v2", launch); out != nil {
+		t.Fatalf("inner launch went out before its child was placed: %+v", out)
+	}
+	step := ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: "grandchild-turn", ProviderItemID: "gc-cmd"}
+	if out := r.route("thread-1", "grandchild-v2", step); out != nil {
+		t.Fatalf("grandchild step went out while its parent's launch could still arrive: %+v", out)
+	}
+
+	observe("item/completed", `{"threadId":"thread-1","turnId":"root-turn","item":{"type":"subAgentActivity","id":"act-alpha","kind":"started","agentThreadId":"child-v2","agentPath":"/root/alpha"}}`)
+	out := r.release()
+	if len(out) != 2 || out[0].ProviderItemID != "act-inner" || out[1].ProviderItemID != "gc-cmd" {
+		t.Fatalf("released = %+v", out)
+	}
+	if decodeDetail(t, out[0]).ParentProviderItemID != "act-alpha" || decodeDetail(t, out[1]).ParentProviderItemID != "act-inner" {
+		t.Fatalf("released chain = %s, %s", out[0].Detail, out[1].Detail)
+	}
+	if out[1].ProviderTurnID != "grandchild-turn" {
+		t.Fatalf("grandchild step turn = %q", out[1].ProviderTurnID)
 	}
 }
 
@@ -283,7 +335,7 @@ func TestV2SubagentLaunchFilesChildUnderIt(t *testing.T) {
 	if launch == nil || launch.Summary != "alpha task" || decodeDetail(t, *launch).ProviderToolName != "spawnAgent" {
 		t.Fatalf("launch = %+v", launch)
 	}
-	if command == nil || command.ProviderTurnID != "root-turn" || decodeDetail(t, *command).ParentProviderItemID != "act-alpha" {
+	if command == nil || command.ProviderTurnID != "child-turn" || decodeDetail(t, *command).ParentProviderItemID != "act-alpha" {
 		t.Fatalf("child command = %+v", command)
 	}
 	if handback == nil || decodeDetail(t, *handback).Input["message"] != "AO_ALPHA_COMMAND" ||
@@ -321,7 +373,7 @@ func TestV2ChildStepsBeforeTheLaunchItemWaitForIt(t *testing.T) {
 			if ev.ProviderItemID != "early-cmd" {
 				continue
 			}
-			if ev.ProviderTurnID != "root-turn" || decodeDetail(t, ev).ParentProviderItemID != "act-alpha" {
+			if ev.ProviderTurnID != "child-turn" || decodeDetail(t, ev).ParentProviderItemID != "act-alpha" {
 				t.Fatalf("early child step not under its launch: %+v detail %s", ev, ev.Detail)
 			}
 			return
@@ -344,5 +396,90 @@ func TestAnnouncedChildWithoutALaunchIsReleasedAtTurnEnd(t *testing.T) {
 	out := r.release()
 	if len(out) != 1 || out[0].ProviderTurnID != "g-turn" || out[0].Detail != nil {
 		t.Fatalf("released = %+v", out)
+	}
+}
+
+// A child's plan stays on the child's own turn, so it cannot replace the parent's,
+// and it carries its launch, so its row is one of the child's steps.
+func TestChildPlanStaysOnItsTurnUnderItsLaunch(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"root-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"turn/plan/updated","params":{"threadId":"thread-1","turnId":"root-turn","plan":[{"step":"Spawn a checker","status":"inProgress"}]}}`)
+	srv.push(`{"method":"item/started","params":` + spawnStartedParams + `}`)
+	srv.push(`{"method":"item/completed","params":` + spawnCompletedParams + `}`)
+	srv.push(`{"method":"turn/started","params":{"threadId":"child-1","turn":{"id":"child-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"turn/plan/updated","params":{"threadId":"child-1","turnId":"child-turn","plan":[{"step":"Run the build","status":"inProgress"}]}}`)
+
+	var plans []ports.ChatEvent
+	collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool {
+		if ev.Kind == ports.ChatEventPlanUpdated {
+			plans = append(plans, ev)
+		}
+		return len(plans) == 2
+	})
+	root, child := plans[0], plans[1]
+	if root.ProviderTurnID != "root-turn" || decodeDetail(t, root).ParentProviderItemID != "" {
+		t.Fatalf("parent plan = %+v detail %s", root, root.Detail)
+	}
+	if detail := decodeDetail(t, child); child.ProviderTurnID != "child-turn" ||
+		detail.ParentProviderItemID != "call-spawn" || !detail.ChildTurn {
+		t.Fatalf("child plan = %+v detail %s", child, child.Detail)
+	}
+}
+
+// A launch that reached AO before the daemon detached is not sent again when it
+// reattaches to the surviving provider. The driver reads it back, so the child's
+// reply and report after the reattach still land under it.
+func TestReconnectFilesASurvivingChildUnderItsEarlierLaunch(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.replyError("initialize", -32600, "Already initialized")
+	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.persistent = true
+	d.connectHost = func(_ context.Context, _ persistenthost.Config) (*persistenthost.Transport, error) {
+		return &persistenthost.Transport{Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41}, nil
+	}
+	spawned := `{"type":"collabAgentToolCall","id":"call-spawn","tool":"spawnAgent","status":"completed","senderThreadId":"thread-1","receiverThreadIds":["child-1"],"prompt":"Check the build","agentsStates":{}}`
+	srv.respondSequence("thread/read",
+		`{"thread":{"id":"thread-1","turns":[{"id":"root-turn","status":"inProgress","items":[`+spawned+`]}]}}`,
+		`{"thread":{"id":"child-1","turns":[{"id":"child-turn","status":"inProgress","items":[]}]}}`)
+
+	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "subagent-reconnect", ProviderConversationID: "thread-1", DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
+	})
+	if err != nil {
+		t.Fatalf("Reconnect: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"item/completed","params":{"threadId":"child-1","turnId":"child-turn","item":{"type":"agentMessage","id":"child-msg","text":"Build passes."}}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"child-1","turn":{"id":"child-turn","status":"completed","items":[]}}}`)
+
+	got := collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool {
+		return ev.Kind == ports.ChatEventTurnCompleted && ev.ProviderConversationID == "child-1"
+	})
+	var reply, handback *ports.ChatEvent
+	for i, ev := range got {
+		switch {
+		case ev.ProviderItemID == "child-msg":
+			reply = &got[i]
+		case strings.HasPrefix(ev.ProviderItemID, "codex-handback:"):
+			handback = &got[i]
+		}
+	}
+	if reply == nil || reply.Kind != ports.ChatEventActivityCompleted || decodeDetail(t, *reply).ParentProviderItemID != "call-spawn" {
+		t.Fatalf("child reply after reattach = %+v", reply)
+	}
+	if handback == nil || decodeDetail(t, *handback).ParentProviderItemID != "call-spawn" ||
+		decodeDetail(t, *handback).Input["message"] != "Build passes." {
+		t.Fatalf("hand-back after reattach = %+v", handback)
 	}
 }

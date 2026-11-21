@@ -7621,11 +7621,17 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 			// A part made only of steps that moved under a launch elsewhere has nothing
 			// left to draw. A live one keeps its Working row, and one whose turn did not
 			// simply complete keeps how it ended: a failure must not vanish with its steps.
+			// A subagent's own turn is the exception: its progress and outcome are the
+			// child's, and its row under the launch already shows them.
 			.filter((segment) =>
-				segment.live
-				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
-				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
+				segment.items.some((item) => !conversation.stepIds.has(item.id))
+				|| (!segment.items.every(isChildTurnStep)
+					&& (segment.live || (segment.outcome !== undefined && segment.outcome.state !== "completed")))),
 	);
+}
+
+function isChildTurnStep(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.detail?.childTurn === true;
 }
 
 type ConversationSubagents = {
