@@ -3460,9 +3460,9 @@ describe("ChatWorkspace timeline", () => {
 		const user = userEvent.setup();
 		const restore = vi.fn();
 		const send = vi.fn().mockResolvedValue(undefined);
-		const view = (resumingAgent: boolean, isTerminated = true) => (
+		const view = (resumingAgent: boolean, isTerminated = true, controller: "stopped" | "ready" = "stopped") => (
 			<ChatWorkspace
-				snapshot={{ ...chatFixtureSettled, sessionId: "archived-send", controller: { state: "stopped" } }}
+				snapshot={{ ...chatFixtureSettled, sessionId: "archived-send", controller: { state: controller } }}
 				session={{ ...chatSession, id: "archived-send", isTerminated }}
 				onResumeAgent={restore}
 				onSend={send}
@@ -3490,7 +3490,8 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("Waking agent…")).not.toBeInTheDocument();
 		expect(screen.queryByText("Resuming…")).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
-		rerender(view(false, false));
+		// The restore ends once the agent is back.
+		rerender(view(false, false, "ready"));
 		expect(composer).toHaveAttribute("aria-placeholder", "Message the agent");
 		expect(document.querySelector(".cursor-chat-composer")).not.toHaveAttribute("data-starting");
 		expect(send).toHaveBeenCalledOnce();
