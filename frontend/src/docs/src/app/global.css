@@ -1,10 +1,15 @@
 @import "tailwindcss";
 @import "../styles/tokens.css";
 @import "../styles/prose.css";
-@import "fumadocs-ui/style.css";
 @import "fumadocs-ui/css/shadcn.css";
+@import "fumadocs-ui/css/preset.css";
 
 @layer base {
+  /* From fumadocs-ui/css/style.css, which this file replaces. */
+  body {
+    @apply flex min-h-screen flex-col;
+  }
+
   html,
   body,
   #nd-docs-layout,
