@@ -599,6 +599,11 @@ func TestBrowserBatchRedactsTypedValues(t *testing.T) {
 	if got := browserBatchReportArgs([]string{"fill", "e2", "-pa55"}); got[2] != browserBatchRedacted {
 		t.Fatalf("a dash-leading value must be redacted too: %#v", got)
 	}
+	for _, step := range [][]string{{"keyboard", "type", "hunter2"}, {"keyboard", "inserttext", "hunter2"}} {
+		if got := browserBatchReportArgs(step); got[2] != browserBatchRedacted || got[1] != step[1] {
+			t.Fatalf("remote keyboard text must be redacted: %#v", got)
+		}
+	}
 }
 
 func TestBrowserBatchEchoEscapesControlCharacters(t *testing.T) {
