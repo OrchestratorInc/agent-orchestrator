@@ -28,7 +28,7 @@ import {
 	savedPageView,
 } from "./savedConversations";
 import { pairSavedChatMachines, resetSavedChatMachines } from "./savedChatMachines";
-import { disk, interruptedWrites, resetSavedChatFakes, savedFileNames, secrets, undeletable } from "./savedConversations.fakes";
+import { disk, interruptedWrites, resetSavedChatFakes, savedFileNames, secrets, undeletable, unreadableSecrets } from "./savedConversations.fakes";
 import type { ConversationPage } from "./snapshot";
 import { streamingCursorMessageId } from "./timelineModel";
 
@@ -147,6 +147,40 @@ describe("saved chat pages", () => {
 		await save("host.a/other", page("x"));
 		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after" });
 		expect(savedKeys()).toEqual(["host.a/chat", "host.a/other"]);
+	});
+
+	it("keep a whole replacement beside a page that does not open", async () => {
+		await save("host.a/chat", page("whole"));
+		// The `.tmp` is whole; the page beside it no longer opens.
+		const whole = disk.get(fileOf("host.a/chat"))!;
+		disk.set(`${fileOf("host.a/chat")}.tmp`, whole);
+		disk.set(fileOf("host.a/chat"), { bytes: whole.bytes.slice(0, 40), modified: whole.modified });
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "whole" });
+
+		// Another chat's write puts the `.tmp` in the page's place instead of deleting it.
+		await save("host.a/other", page("x"));
+		expect(savedFileNames()).toEqual(["host.a%2Fchat.page", "host.a%2Fother.page"]);
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "whole" });
+	});
+
+	it("make a new key when the stored one does not read back, as after a backup restored onto another phone", async () => {
+		// A fresh module holds no key in memory, so it reads the stored one.
+		vi.resetModules();
+		const fresh = await import("./savedConversations");
+		secrets.set("ao.chat.savedPagesKey", "restored");
+		unreadableSecrets.add("ao.chat.savedPagesKey");
+		disk.set(fileOf("host.a/old"), { bytes: new Uint8Array(64), modified: Date.now() });
+
+		// A load treats it as nothing saved and leaves the key alone.
+		expect(await fresh.loadSavedConversation("host.a/old")).toBeNull();
+		expect(secrets.get("ao.chat.savedPagesKey")).toBe("restored");
+
+		// A save replaces it, and saving goes on.
+		const saver = fresh.createConversationSaver();
+		saver.schedule("host.a/chat", page("after the restore"));
+		await saver.flush();
+		expect(secrets.get("ao.chat.savedPagesKey")).not.toBe("restored");
+		expect((await fresh.loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after the restore" });
 	});
 
 	it("are written once a streaming chat settles, the newest page per chat", async () => {

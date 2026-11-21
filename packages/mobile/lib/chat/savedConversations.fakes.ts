@@ -10,6 +10,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 export const disk = new Map<string, { bytes: Uint8Array; modified: number }>();
 /** The secure store's values, by key. */
 export const secrets = new Map<string, string>();
+/** Secure store keys whose value does not read back, as one restored from another phone's backup without its Keystore key. */
+export const unreadableSecrets = new Set<string>();
 /** Paths whose delete throws, as a file the OS will not let go of. */
 export const undeletable = new Set<string>();
 /** Paths whose next write is cut short: part of it lands, then it throws, as the app killed mid-write. */
@@ -19,6 +21,7 @@ let lastModified = 0;
 export function resetSavedChatFakes() {
 	disk.clear();
 	secrets.clear();
+	unreadableSecrets.clear();
 	undeletable.clear();
 	interruptedWrites.clear();
 	lastModified = 0;
@@ -147,7 +150,16 @@ export const cryptoModule = { AESEncryptionKey, AESSealedData, aesEncryptAsync, 
 
 export const secureStoreModule = {
 	WHEN_UNLOCKED_THIS_DEVICE_ONLY: 5,
-	getItemAsync: async (key: string) => secrets.get(key) ?? null,
-	setItemAsync: async (key: string, value: string) => void secrets.set(key, value),
-	deleteItemAsync: async (key: string) => void secrets.delete(key),
+	getItemAsync: async (key: string) => {
+		if (unreadableSecrets.has(key)) throw new Error(`could not decrypt the value for ${key}`);
+		return secrets.get(key) ?? null;
+	},
+	setItemAsync: async (key: string, value: string) => {
+		unreadableSecrets.delete(key);
+		secrets.set(key, value);
+	},
+	deleteItemAsync: async (key: string) => {
+		unreadableSecrets.delete(key);
+		secrets.delete(key);
+	},
 };
