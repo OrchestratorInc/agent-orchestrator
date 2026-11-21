@@ -48,12 +48,13 @@ export type ProbeOptions = {
 	retryTunnel?: boolean;
 	timeoutMs?: number;
 	/**
-	 * Set by raceWithSlowLinkRetry's quick race, which gives an endpoint that
-	 * ran out its time one longer try of its own. Only then does a timeout end
-	 * the attempt at once; every other caller (pairing, push, manual connect)
-	 * has no slow race behind it and keeps the tunnel propagation retry.
+	 * Whether our own timeout ends the attempt at once instead of earning a
+	 * tunnel propagation retry. Set only by raceWithSlowLinkRetry, which gives
+	 * an endpoint that ran out its time one longer try of its own; every other
+	 * caller (pairing, push, manual connect) has no slow race behind it and
+	 * keeps the retry. A tunnel that fails fast is still retried either way.
 	 */
-	slowRaceFollows?: boolean;
+	endOnTimeout?: boolean;
 };
 
 /**
@@ -75,7 +76,7 @@ export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, opt
 			// When the slow race (raceWithSlowLinkRetry) follows, it gives this
 			// endpoint its one longer try, so retrying a timeout here would only
 			// stretch a dead tunnel's attempt.
-			if (options.slowRaceFollows && e instanceof ProbeTimeoutError) throw e;
+			if (options.endOnTimeout && e instanceof ProbeTimeoutError) throw e;
 			if (options.retryTunnel === false || !shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
 			await waitOrAbort(TUNNEL_PROBE_RETRY_DELAY_MS, signal);
 		}
@@ -230,7 +231,7 @@ export type ConnectOptions = {
  * same identity and version checks.
  */
 export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint): Promise<RaceOutcome> {
-	const quick = await raceEndpoints(endpoints, hostId, (endpoint, signal) => probe(endpoint, signal, { slowRaceFollows: true }));
+	const quick = await raceEndpoints(endpoints, hostId, (endpoint, signal) => probe(endpoint, signal, { endOnTimeout: true }));
 	if (quick.ok || !quick.timedOut?.length) return quick;
 	const slow = await raceEndpoints(quick.timedOut, hostId, (endpoint, signal) =>
 		probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, retryTunnel: false }));

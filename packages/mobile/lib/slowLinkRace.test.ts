@@ -57,10 +57,10 @@ describe("a slow link", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
-	it("ends a timed-out tunnel's attempt at once only when the slow race follows", async () => {
+	it("ends a timed-out tunnel's attempt at once only when asked to", async () => {
 		vi.useFakeTimers();
 		vi.stubGlobal("fetch", slowIdentity(60_000));
-		const probe = probeEndpoint(tunnel, new AbortController().signal, { slowRaceFollows: true });
+		const probe = probeEndpoint(tunnel, new AbortController().signal, { endOnTimeout: true });
 		const caught = probe.catch((error: unknown) => error);
 		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
 		expect(await caught).toBeInstanceOf(ProbeTimeoutError);
