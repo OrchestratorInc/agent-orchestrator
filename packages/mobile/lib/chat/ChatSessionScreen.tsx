@@ -60,6 +60,7 @@ import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { SessionTopbarPills, sessionTopbarToolbarButtons, useSessionTopbarActions } from "../sessionTopbar";
+import { SessionTopbar } from "./SessionTopbar";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePushSettled } from "../usePushSettled";
@@ -441,6 +442,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			},
 		});
 	}, [goBack, headerHarness, headerState, navigation, projectName, title, t, topbarActions.length]);
+	// The desktop's top bar is this screen's own (SessionTopbar); the native bar
+	// comes back for the terminal, which shares the route.
+	useLayoutEffect(() => {
+		navigation.setOptions({ headerShown: false });
+		return () => navigation.setOptions({ headerShown: true });
+	}, [navigation]);
 	// The route keeps its options when it swaps this screen for the terminal,
 	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
 	// stayed on this screen's last state: the Chat controller the switch stopped,
@@ -951,7 +958,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		{/* Not padded for the keyboard: the timeline moves its content with the
 		    keyboard on the UI thread (ChatTimeline's `keyboardOffset`). */}
 		<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
-			{headerItems}
+			{/* The desktop session view's top bar, drawn here: the native bar is hidden while the conversation shows. */}
+			<SessionTopbar
+				title={title}
+				harness={headerHarness}
+				onBack={goBack}
+				onMenu={menuReady ? openActions : undefined}
+				onNewTab={() => void openShell()}
+				actions={topbarActions}
+			/>
 			{CLEAR_HEADER ? null : banners}
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
@@ -1123,11 +1138,9 @@ function Failure({ children }: { children: ReactNode }) {
  * a terminal session does. iOS 26's glass blurred only the status bar over
  * this list, leaving the title over sharp text, and older versions have none.
  */
-// The desktop's session view keeps the conversation below a solid top bar, and
-// iOS does too, rather than scrolling it up behind a clear one. Android's bar
-// floats its back button, title and actions on pills of their own over the
-// page, which need the clear bar.
-const CLEAR_HEADER = Platform.OS === "android";
+// The conversation draws the desktop's top bar itself (SessionTopbar) and
+// starts below it; the native bar, clear or solid, is hidden while it shows.
+const CLEAR_HEADER = false;
 
 /**
  * Android's bar floats its controls on pills over the conversation (see

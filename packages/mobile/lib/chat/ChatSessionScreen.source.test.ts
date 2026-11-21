@@ -174,8 +174,13 @@ describe("the composer and the keyboard", () => {
 // iOS 26's glass blurred only the status bar over the conversation and left
 // the title over sharp text; iOS 27's covers the whole bar.
 describe("the bar over the conversation", () => {
-	it("is the clear glass bar on iOS 27 and later only, and the stack's own bar on every other iOS", () => {
-		expect(screenSource).toContain('const CLEAR_HEADER = Platform.OS === "android";');
+	// The desktop's top bar, drawn by the conversation itself, with the native
+	// bar hidden while it shows and back for the terminal on the same route.
+	it("draws the desktop's top bar itself, over no native bar", () => {
+		expect(screenSource).toContain("const CLEAR_HEADER = false;");
+		expect(screenSource).toContain("navigation.setOptions({ headerShown: false });");
+		expect(screenSource).toContain("return () => navigation.setOptions({ headerShown: true });");
+		expect(screenSource).toContain("<SessionTopbar");
 		expect(screenSource).toContain("if (!CLEAR_HEADER) return;");
 		expect(screenSource).not.toContain("headerBlurEffect");
 	});
