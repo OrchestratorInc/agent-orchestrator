@@ -191,6 +191,7 @@ import {
 	isSavedSignInHidden,
 	readAuthStore,
 	recheckSavedSignIn,
+	setCloudSignInClearedRecorder,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
@@ -4437,6 +4438,10 @@ installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, async () => {
 	});
 	await telemetryIdentity.signOut();
 });
+
+// Each deleted Cloud sign-in leaves its reason in desktop-lifecycle.jsonl, so an
+// unexpected "Sign in" can be explained afterwards. No token or error text.
+setCloudSignInClearedRecorder((cleared) => lifecycleLog("cloud_sign_in_cleared", { ...cleared }));
 
 // Dev-only local (email/password) sign-in against a loopback Docker control
 // plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback
