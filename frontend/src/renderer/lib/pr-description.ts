@@ -73,3 +73,37 @@ export function descriptionMedia(markdown: string): { images: DescriptionImage[]
 	}
 	return { images, tables };
 }
+
+type FooterNode = { type: string; value?: string; children?: FooterNode[]; data?: { hProperties?: Record<string, unknown> } };
+
+// A sign-off is a line or two and a link, never a section.
+const FOOTER_MAX_BLOCKS = 3;
+const FOOTER_MAX_TEXT = 280;
+
+const nodeText = (node: FooterNode): string => node.value ?? (node.children ?? []).map(nodeText).join("");
+
+/**
+ * A remark plugin for a description's sign-off, such as "Generated with …" and
+ * a session link under a closing rule: the paragraphs after the last rule get
+ * the class `pr-description-footer`, so they read small and quiet instead of
+ * as body text. Only a short run of plain paragraphs counts; a heading, list,
+ * table or code block after the rule is a section and stays as it is.
+ */
+export function remarkQuietFooter() {
+	return (tree: FooterNode) => {
+		const blocks = tree.children ?? [];
+		let rule = -1;
+		for (let index = blocks.length - 1; index >= 0; index -= 1) {
+			if (blocks[index]?.type === "thematicBreak") {
+				rule = index;
+				break;
+			}
+		}
+		if (rule < 0) return;
+		const tail = blocks.slice(rule + 1);
+		if (tail.length === 0 || tail.length > FOOTER_MAX_BLOCKS) return;
+		if (tail.some((node) => node.type !== "paragraph")) return;
+		if (tail.map(nodeText).join("").length > FOOTER_MAX_TEXT) return;
+		for (const node of tail) node.data = { ...node.data, hProperties: { ...node.data?.hProperties, className: ["pr-description-footer"] } };
+	};
+}

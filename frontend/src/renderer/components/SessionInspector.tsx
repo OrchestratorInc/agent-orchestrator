@@ -1236,6 +1236,7 @@ function PRViewSummaryCard({
 	// A local PR opens in its own tab, where its description, conversation and changes live.
 	const opensTab = !cloudOrgId && !guest && Boolean(pr.url);
 	const tabShowing = activeTabUrl === pr.url;
+	const hasGitStep = Boolean(work?.git && (work.git.primary || work.git.menu.length > 0 || work.git.pending || work.git.error));
 	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
 	const titleLabel = (
 		<>
@@ -1280,13 +1281,16 @@ function PRViewSummaryCard({
 					title={pr.title}
 				/>
 			)}
-			{cardView}
+			{/* While the PR's tab is showing, it holds the same facts and its own merge
+			    button: the card folds to its title row instead of saying it all twice. */}
+			{tabShowing ? null : cardView}
 
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
 			) : elsewhere}
-			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
-			{!cloudOrgId && !guest && pr.state !== "merged" ? (
+			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own.
+			    The tab's button has no git step, so with the tab showing this one stays only for that. */}
+			{!cloudOrgId && !guest && pr.state !== "merged" && (!tabShowing || hasGitStep) ? (
 				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
 					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
 				</div>
