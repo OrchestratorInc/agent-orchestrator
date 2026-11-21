@@ -65,12 +65,16 @@ type serviceSpec struct {
 
 // serviceStatus is the `ao service ... --json` output. Only add fields.
 type serviceStatus struct {
-	Manager   string        `json:"manager"`
-	Name      string        `json:"name"`
-	File      string        `json:"file"`
-	Installed bool          `json:"installed"`
-	Loaded    bool          `json:"loaded"`
-	Daemon    *daemonStatus `json:"daemon,omitempty"`
+	Manager   string `json:"manager"`
+	Name      string `json:"name"`
+	File      string `json:"file"`
+	Installed bool   `json:"installed"`
+	Loaded    bool   `json:"loaded"`
+	// ExistingDaemon is set by install when a daemon was already serving
+	// this data dir. The service then watches it and starts its own if it
+	// stops with the app or crashes.
+	ExistingDaemon bool          `json:"existingDaemon,omitempty"`
+	Daemon         *daemonStatus `json:"daemon,omitempty"`
 }
 
 func newServiceCommand(ctx *commandContext) *cobra.Command {
@@ -165,6 +169,9 @@ func writeServiceStatus(w io.Writer, st serviceStatus, asJSON bool, action strin
 		fmt.Fprintf(&b, "Orchestrator service (%s %s)\n", st.Manager, st.Name)
 	}
 	fmt.Fprintf(&b, "  file: %s\n  installed: %t\n  loaded: %t\n", st.File, st.Installed, st.Loaded)
+	if st.ExistingDaemon {
+		b.WriteString("  note: a daemon was already running, so the service watches it and starts its own if it crashes or quits with the app\n")
+	}
 	if st.Daemon != nil {
 		fmt.Fprintf(&b, "  daemon: %s", st.Daemon.State)
 		if st.Daemon.Port != 0 {
@@ -270,6 +277,9 @@ func renderLaunchdPlist(spec serviceSpec) string {
 	b.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n")
 	b.WriteString("\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n")
 	b.WriteString("\t<key>ThrottleInterval</key>\n\t<integer>10</integer>\n")
+	// Like KillMode=process below: stopping the service must not kill session
+	// processes the next daemon adopts.
+	b.WriteString("\t<key>AbandonProcessGroup</key>\n\t<true/>\n")
 	b.WriteString("</dict>\n</plist>\n")
 	return b.String()
 }
@@ -288,7 +298,9 @@ func renderSystemdUnit(spec serviceSpec) string {
 	for _, k := range sortedKeys(spec.Env) {
 		fmt.Fprintf(&b, "Environment=%s\n", systemdQuote(k+"="+spec.Env[k]))
 	}
-	b.WriteString("Restart=on-failure\nRestartSec=10\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n")
+	// KillMode=process, as in scripts/setup-self-hosted.sh: a cgroup kill
+	// would stop sessions the next daemon must adopt.
+	b.WriteString("KillMode=process\nRestart=on-failure\nRestartSec=10\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n")
 	return b.String()
 }
 
@@ -362,6 +374,10 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if exists && !owned {
 		return serviceStatus{}, fmt.Errorf("%s exists and was not written by `ao service install`; leaving it alone", spec.File)
 	}
+	before, err := c.inspectDaemon(ctx)
+	if err != nil {
+		return serviceStatus{}, err
+	}
 	content := renderLaunchdPlist(spec)
 	if spec.Manager == serviceManagerSystemd {
 		content = renderSystemdUnit(spec)
@@ -378,7 +394,11 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	rollback := func(cause error) (serviceStatus, error) {
 		if !exists {
 			if enabled {
-				_ = c.serviceCmd(ctx, "systemctl", "--user", "disable", spec.Name+".service")
+				// Keep the unit when its enablement links cannot be removed,
+				// so `ao service uninstall` can still clean them up.
+				if err := c.serviceCmd(ctx, "systemctl", "--user", "disable", spec.Name+".service"); err != nil {
+					return serviceStatus{}, fmt.Errorf("%w; rollback also failed, so %s was kept for `ao service uninstall`: %w", cause, spec.File, err)
+				}
 			}
 			_ = os.Remove(spec.File)
 		}
@@ -390,7 +410,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 			// Reload so a changed binary path, port or env takes effect.
 			_ = c.serviceCmd(ctx, "launchctl", "bootout", launchdDomain()+"/"+spec.Name)
 		}
-		if err := c.serviceCmd(ctx, "launchctl", "bootstrap", launchdDomain(), spec.File); err != nil {
+		if err := c.launchdBootstrap(ctx, spec); err != nil {
 			return rollback(err)
 		}
 	case serviceManagerSystemd:
@@ -405,7 +425,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 			return rollback(err)
 		}
 	}
-	st := serviceStatus{Manager: spec.Manager, Name: spec.Name, File: spec.File, Installed: true, Loaded: true}
+	st := serviceStatus{Manager: spec.Manager, Name: spec.Name, File: spec.File, Installed: true, Loaded: true, ExistingDaemon: before.State == stateReady}
 	if opts.noWait {
 		return st, nil
 	}
@@ -422,6 +442,31 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	}
 	st.Daemon = &ds
 	return st, nil
+}
+
+// launchdServiceGoneWait bounds how long install waits for launchd to tear a
+// booted-out job down; launchd allows a job 20 s to exit before killing it.
+const launchdServiceGoneWait = 30 * time.Second
+
+// launchdBootstrap loads the plist. `launchctl bootout` returns before launchd
+// has removed a running job, and bootstrapping the same label meanwhile fails
+// with "Bootstrap failed: 5", so it waits for the old job to go first and
+// retries a refused bootstrap a few times.
+func (c *commandContext) launchdBootstrap(ctx context.Context, spec serviceSpec) error {
+	deadline := c.deps.Now().Add(launchdServiceGoneWait)
+	for c.serviceLoaded(ctx, spec) && c.deps.Now().Before(deadline) {
+		c.deps.Sleep(250 * time.Millisecond)
+	}
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			c.deps.Sleep(time.Second)
+		}
+		if err = c.serviceCmd(ctx, "launchctl", "bootstrap", launchdDomain(), spec.File); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 func (c *commandContext) serviceStatus(ctx context.Context) (serviceStatus, error) {

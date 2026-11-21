@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,11 +27,6 @@ import (
 // installed agents, so it is generous.
 const defaultServeReadyTimeout = 2 * time.Minute
 
-// serveOwner is the run-file owner `ao serve` stamps on its daemon. The desktop
-// app keeps a "persistent" daemon alive on attach and on quit instead of
-// replacing it (frontend/src/shared/daemon-takeover.ts).
-const serveOwner = "persistent"
-
 // servePostHogKey is the public PostHog project key the desktop app stamps on
 // the daemons it starts. Keep it equal to DEFAULT_POSTHOG_PROJECT_KEY in
 // frontend/src/shared/posthog-config.ts (serve_test.go checks this).
@@ -46,6 +40,7 @@ const (
 type serveOptions struct {
 	port       int
 	foreground bool
+	background bool
 	json       bool
 	timeout    time.Duration
 }
@@ -89,6 +84,9 @@ func newServeCommand(ctx *commandContext) *cobra.Command {
 			if opts.timeout <= 0 {
 				return usageError{fmt.Errorf("invalid --timeout %s: must be positive", opts.timeout)}
 			}
+			if opts.background && opts.foreground {
+				return usageError{errors.New("--background and --foreground cannot be used together")}
+			}
 			res, err := ctx.serve(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
 			if err != nil {
 				return err
@@ -102,6 +100,7 @@ func newServeCommand(ctx *commandContext) *cobra.Command {
 	}
 	cmd.Flags().IntVar(&opts.port, "port", 0, "Loopback port for a new daemon (default: AO_PORT, else 3001)")
 	cmd.Flags().BoolVar(&opts.foreground, "foreground", false, "Run (or watch) the daemon in this process until no daemon is left")
+	cmd.Flags().BoolVar(&opts.background, "background", false, "Start the daemon in the background and return once it is ready (the default)")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output the result as JSON")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", defaultServeReadyTimeout, "How long to wait for a new daemon to become ready")
 	return cmd
@@ -176,24 +175,26 @@ func (c *commandContext) existingDaemon(ctx context.Context, errOut io.Writer, c
 // another data dir, as when only AO_DATA_DIR was changed and the default run
 // file still points at the main daemon.
 func checkDaemonDataDir(st daemonStatus, dataDir string) error {
-	if st.workingDirectory == "" || sameDir(st.workingDirectory, dataDir) {
+	if st.workingDirectory == "" {
+		// Every daemon since v0.10.0 reports it; without it the data dir
+		// cannot be verified, and starting a second daemon is no safer.
+		return fmt.Errorf("the daemon in %s (pid %d, port %d) does not report its data dir, so serve cannot tell whether it serves %s; stop it with `ao stop` or update Orchestrator", st.RunFile, st.PID, st.Port, dataDir)
+	}
+	if sameDir(st.workingDirectory, dataDir) {
 		return nil
 	}
 	return fmt.Errorf("the daemon in %s (pid %d, port %d) serves data dir %s, not %s; set AO_RUN_FILE and AO_PORT too to run a separate daemon", st.RunFile, st.PID, st.Port, st.workingDirectory, dataDir)
 }
 
+// sameDir compares filesystem identity, so symlinks and case-insensitive
+// volumes match while distinct directories on a case-sensitive one do not.
 func sameDir(a, b string) bool {
-	norm := func(p string) string {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			p = r
-		}
-		return filepath.Clean(p)
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	if errA == nil && errB == nil {
+		return os.SameFile(ai, bi)
 	}
-	a, b = norm(a), norm(b)
-	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // serveForegroundDaemon runs the daemon in this process; tests replace it.
@@ -251,6 +252,7 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 // this data dir. It returns nil, nil when none does.
 func (c *commandContext) waitForReplacement(ctx context.Context, cfg config.Config) (*serveResult, error) {
 	deadline := c.deps.Now().Add(serveReplacementWait)
+	var last daemonStatus
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -266,7 +268,12 @@ func (c *commandContext) waitForReplacement(ctx context.Context, cfg config.Conf
 			res := newServeResult(st, true)
 			return &res, nil
 		}
+		last = st
 		if !c.deps.Now().Before(deadline) {
+			if last.State == stateStale {
+				// A replacement started, wrote its run file and died.
+				return nil, fmt.Errorf("the replacement daemon (pid %d) exited without shutting down; exiting so the service manager restarts it", last.PID)
+			}
 			return nil, nil
 		}
 		c.deps.Sleep(500 * time.Millisecond)
@@ -288,6 +295,9 @@ func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid
 		switch st.State {
 		case stateReady:
 			if st.PID != pid {
+				if err := checkDaemonDataDir(st, cfg.DataDir); err != nil {
+					return err
+				}
 				pid, owner = st.PID, runFileOwner(cfg.RunFilePath, st.PID)
 			}
 		case stateStale:
@@ -388,14 +398,20 @@ func telemetryOptedOut(dataDir string) bool {
 	return err == nil
 }
 
-// serveEnv builds the daemon's environment from the caller's. It marks the
-// daemon persistent, applies --port, and turns usage analytics on the way the
+// serveEnv builds the daemon's environment from the caller's. It leaves the
+// daemon unowned (headless), applies --port, and turns usage analytics on the way the
 // desktop app does (frontend/src/main.ts telemetryOverrides), unless the user
 // opted out in the app, set AO_TELEMETRY_REMOTE themselves, or set
 // DO_NOT_TRACK. Any other explicit AO_TELEMETRY_* value wins.
 func serveEnv(base []string, port int, optedOut bool, version string) []string {
 	env := envMap(base)
-	env["AO_OWNER"] = serveOwner
+	// No AO_OWNER: an empty run-file owner is the headless convention. The
+	// desktop app keeps such a daemon's replacement alive after it quits, just
+	// as for "persistent" (frontend/src/shared/daemon-takeover.ts), and the
+	// daemon does not tell sessions they run under the desktop app
+	// (session_manager.desktopOwnedDaemon), which would send macOS permission
+	// prompts to the wrong app.
+	delete(env, "AO_OWNER")
 	if port != 0 {
 		env["AO_PORT"] = strconv.Itoa(port)
 	}

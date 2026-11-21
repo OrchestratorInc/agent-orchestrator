@@ -19,21 +19,10 @@ import (
 )
 
 // fakeServeDaemon answers /healthz and /readyz as the Orchestrator daemon
-// with the given PID.
+// with the given PID, serving the configured AO_DATA_DIR.
 func fakeServeDaemon(t *testing.T, pid int) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/healthz":
-			_, _ = fmt.Fprintf(w, `{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, pid)
-		case "/readyz":
-			_, _ = fmt.Fprintf(w, `{"status":"ready","service":%q,"pid":%d}`, daemonmeta.ServiceName, pid)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	return fakeServeDaemonIn(t, pid, os.Getenv("AO_DATA_DIR"))
 }
 
 func decodeServeResult(t *testing.T, out string) serveResult {
@@ -101,8 +90,8 @@ func TestServeStartsDetachedDaemonAndWaitsForReady(t *testing.T) {
 		t.Fatalf("started %q %v, want the hidden `ao daemon`", got.Path, got.Args)
 	}
 	env := envMap(got.Env)
-	if env["AO_OWNER"] != "persistent" {
-		t.Fatalf("AO_OWNER = %q, want persistent", env["AO_OWNER"])
+	if _, ok := env["AO_OWNER"]; ok {
+		t.Fatalf("AO_OWNER = %q, want unset (headless daemon)", env["AO_OWNER"])
 	}
 	if env["AO_PORT"] != "4123" {
 		t.Fatalf("AO_PORT = %q, want the --port value", env["AO_PORT"])
@@ -154,7 +143,7 @@ func TestServeTimesOutWaitingForReady(t *testing.T) {
 
 func TestServeRejectsBadFlags(t *testing.T) {
 	setConfigEnv(t)
-	for _, args := range [][]string{{"serve", "--port", "70000"}, {"serve", "--timeout", "0s"}, {"serve", "extra"}} {
+	for _, args := range [][]string{{"serve", "--port", "70000"}, {"serve", "--timeout", "0s"}, {"serve", "extra"}, {"serve", "--background", "--foreground"}} {
 		_, _, err := executeCLI(t, Deps{}, args...)
 		if ExitCode(err) != 2 {
 			t.Fatalf("%v: exit code = %d (err %v), want usage error 2", args, ExitCode(err), err)
@@ -192,13 +181,13 @@ func TestServeEnvTelemetry(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := serveEnv(append([]string{"PATH=/bin"}, tc.base...), 0, tc.optedOut, tc.version)
+			env := serveEnv(append([]string{"PATH=/bin", "AO_OWNER=app"}, tc.base...), 0, tc.optedOut, tc.version)
 			m := envMap(env)
 			if m["AO_TELEMETRY_REMOTE"] != tc.wantRemote {
 				t.Fatalf("AO_TELEMETRY_REMOTE = %q, want %q", m["AO_TELEMETRY_REMOTE"], tc.wantRemote)
 			}
-			if m["AO_OWNER"] != "persistent" || m["PATH"] != "/bin" {
-				t.Fatalf("env lost owner or caller values: %v", m)
+			if _, ok := m["AO_OWNER"]; ok || m["PATH"] != "/bin" {
+				t.Fatalf("env kept an inherited AO_OWNER or lost caller values: %v", m)
 			}
 			if _, ok := m["AO_PORT"]; ok {
 				t.Fatalf("AO_PORT set without --port: %v", m)
@@ -427,4 +416,94 @@ func (h *foregroundHarness) runWithDaemon(replace func()) (string, error) {
 		},
 	}, "serve", "--foreground")
 	return out, err
+}
+
+func TestServeRefusesDaemonThatDoesNotReportItsDataDir(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemonIn(t, 4242, "")
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	started := false
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive:  func(pid int) bool { return pid == 4242 },
+		StartDetached: func(processStartConfig) (startedProcess, error) { started = true; return startedProcess{}, nil },
+	}, "serve")
+	if err == nil || !strings.Contains(err.Error(), "does not report its data dir") {
+		t.Fatalf("err = %v, want an unverifiable-identity error", err)
+	}
+	if started {
+		t.Fatal("started a second daemon beside one it could not verify")
+	}
+}
+
+func TestSameDirComparesFilesystemIdentity(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	for _, d := range []string{a, b} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !sameDir(a, a+string(filepath.Separator)) {
+		t.Fatal("the same directory did not match itself")
+	}
+	if sameDir(a, b) {
+		t.Fatal("two distinct directories matched")
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(a, link); err == nil && !sameDir(link, a) {
+		t.Fatal("a symlink did not match its target")
+	}
+}
+
+func TestServeForegroundRefusesReplacementForAnotherDataDir(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "persistent")
+	h.onTick = func() {
+		// The run file now names a ready daemon that serves another data dir.
+		srv := fakeServeDaemonIn(h.t, 7070, h.t.TempDir())
+		if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: 7070, Port: serverPort(h.t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+			h.t.Fatal(err)
+		}
+		h.alive[4242], h.alive[7070] = false, true
+	}
+	_, err := h.run()
+	if err == nil || !strings.Contains(err.Error(), "serves data dir") {
+		t.Fatalf("err = %v, want a data-dir conflict instead of following pid 7070", err)
+	}
+}
+
+func TestServeForegroundRestartsWhenReplacementCrashes(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.atTick = 2
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	// The in-process daemon is shut down; the app's replacement writes its run
+	// file and dies before it is ready.
+	_, err := h.runWithDaemon(func() {
+		if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: 8080, Port: 1, StartedAt: time.Unix(100, 0).UTC(), Owner: "persistent"}); err != nil {
+			h.t.Fatal(err)
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "replacement daemon (pid 8080) exited without shutting down") {
+		t.Fatalf("err = %v, want a restart error for the crashed replacement", err)
+	}
+}
+
+// `ao setup` and the installer call `ao serve --background`; it is the default.
+func TestServeAcceptsBackgroundFlag(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemon(t, 4242)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(pid int) bool { return pid == 4242 }}, "serve", "--background", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := decodeServeResult(t, out); res.Status != "ready" {
+		t.Fatalf("result = %#v", res)
+	}
 }

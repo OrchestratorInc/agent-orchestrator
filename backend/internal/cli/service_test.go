@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
 func TestBuildServiceSpec(t *testing.T) {
@@ -54,13 +57,13 @@ func TestBuildServiceSpec(t *testing.T) {
 func TestRenderServiceFilesEscapeValues(t *testing.T) {
 	spec := serviceSpec{Name: "dev.agent-orchestrator.serve", Args: []string{"/Apps/A & B/ao", "serve", "--foreground"}, Env: map[string]string{"PATH": `/a:/b"c%d$e`}}
 	plist := renderLaunchdPlist(spec)
-	for _, want := range []string{serviceMarker, "<string>/Apps/A &amp; B/ao</string>", "<key>SuccessfulExit</key>\n\t\t<false/>", "<key>RunAtLoad</key>\n\t<true/>"} {
+	for _, want := range []string{serviceMarker, "<string>/Apps/A &amp; B/ao</string>", "<key>SuccessfulExit</key>\n\t\t<false/>", "<key>RunAtLoad</key>\n\t<true/>", "<key>AbandonProcessGroup</key>\n\t<true/>"} {
 		if !strings.Contains(plist, want) {
 			t.Fatalf("plist missing %q:\n%s", want, plist)
 		}
 	}
 	unit := renderSystemdUnit(spec)
-	for _, want := range []string{"# " + serviceMarker, `ExecStart="/Apps/A & B/ao" "serve" "--foreground"`, `Environment="PATH=/a:/b\"c%%d$e"`, "Restart=on-failure", "WantedBy=default.target"} {
+	for _, want := range []string{"# " + serviceMarker, `ExecStart="/Apps/A & B/ao" "serve" "--foreground"`, `Environment="PATH=/a:/b\"c%%d$e"`, "Restart=on-failure", "KillMode=process", "WantedBy=default.target"} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
@@ -73,9 +76,12 @@ type serviceCall struct {
 }
 
 func serviceTestDeps(calls *[]serviceCall, fail map[string]bool) Deps {
+	now := time.Unix(1000, 0)
 	return Deps{
 		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
 		ProcessAlive: func(int) bool { return false },
+		Now:          func() time.Time { return now },
+		Sleep:        func(d time.Duration) { now = now.Add(d) },
 		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			*calls = append(*calls, serviceCall{name, args})
 			if fail[name+" "+args[0]] || (len(args) > 1 && fail[name+" "+args[0]+" "+args[1]]) {
@@ -298,5 +304,107 @@ func TestServiceSystemdUninstallKeepsUnitWhenStopFails(t *testing.T) {
 	}
 	if _, err := os.Stat(st.File); err != nil {
 		t.Fatalf("unit removed although the service could not be stopped: %v", err)
+	}
+}
+
+func TestServiceSystemdRollbackKeepsUnitWhenDisableFails(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, map[string]bool{"systemctl --user restart": true, "systemctl --user disable": true})
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "kept for `ao service uninstall`") {
+		t.Fatalf("err = %v, want the kept-unit rollback error", err)
+	}
+	spec, err := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(spec.File); err != nil {
+		t.Fatalf("unit removed although its enablement could not be undone: %v", err)
+	}
+}
+
+// launchctl bootout returns before the job is gone, and a bootstrap of the
+// same label meanwhile fails; a reinstall must wait it out.
+func TestServiceLaunchdReinstallWaitsForBootout(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+
+	loaded, gonePrints, bootstrapFails := false, 0, 0
+	var log []string
+	now := time.Unix(1000, 0)
+	deps := Deps{
+		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
+		ProcessAlive: func(int) bool { return false },
+		Now:          func() time.Time { return now },
+		Sleep:        func(d time.Duration) { now = now.Add(d) },
+		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			log = append(log, args[0])
+			switch args[0] {
+			case "print":
+				if loaded {
+					if gonePrints > 0 {
+						gonePrints--
+						if gonePrints == 0 {
+							loaded = false
+						}
+					}
+					return nil, nil
+				}
+				return []byte("Could not find service"), errors.New("exit status 113")
+			case "bootout":
+				gonePrints = 3 // still listed for a few polls
+			case "bootstrap":
+				if loaded || bootstrapFails > 0 {
+					if bootstrapFails > 0 {
+						bootstrapFails--
+					}
+					return []byte("Bootstrap failed: 5: Input/output error"), errors.New("exit status 5")
+				}
+				loaded = true
+			}
+			return nil, nil
+		},
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
+	log = nil
+	bootstrapFails = 1 // and the first bootstrap after teardown is refused once
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err != nil {
+		t.Fatalf("reinstall failed: %v (calls %v)", err, log)
+	}
+	if !loaded {
+		t.Fatalf("service not loaded after reinstall (calls %v)", log)
+	}
+}
+
+func TestServiceInstallReportsExistingDaemon(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	srv := fakeServeDaemon(t, 4242)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	out, _, err := executeCLI(t, deps, "service", "install")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "a daemon was already running") {
+		t.Fatalf("install did not say it watches the existing daemon:\n%s", out)
 	}
 }
