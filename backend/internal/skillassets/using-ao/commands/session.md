@@ -152,8 +152,9 @@ ao session get mer-3 --transcript 1 --before 142 --cap 0
 
 ### ao session history
 
-Print a session's turns, newest first, in full. Use it after taking over a
-session to read what the handoff note left out.
+Print a session's completed turns, newest first, in full. Use it after taking
+over a session to read what the handoff note left out. A turn that is still
+running is not listed; `ao session get <id>` shows whether the session is working.
 
 **Syntax:**
 ```
