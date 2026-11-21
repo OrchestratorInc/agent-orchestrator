@@ -1,4 +1,5 @@
 import { AppLink } from "./AppLink";
+import { CloudMark } from "./CloudMark";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useParams } from "@tanstack/react-router";
@@ -1198,7 +1199,7 @@ const cloudRowKey = (id: string) => `cloud:${id}`;
 
 /**
  * Cloud rows mirror NotificationItem exactly (open, restore, clear, meta line,
- * motion), plus a small "Cloud" tag. A cloud row opens only once its session is
+ * motion), plus a small cloud mark. A cloud row opens only once its session is
  * in the workspace tree; otherwise the route would have nothing to render.
  */
 const CloudNotificationItem = memo(function CloudNotificationItem({
@@ -1285,9 +1286,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						>
 							{notification.title}
 						</span>
-						<span className="mt-0.5 shrink-0 rounded-sm border border-border bg-surface px-1 py-0.5 text-caption leading-none text-muted-foreground">
-							{t("notify.cloud")}
-						</span>
+						<CloudMark className="h-5" />
 					</div>
 					{notification.body ? (
 						<p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">

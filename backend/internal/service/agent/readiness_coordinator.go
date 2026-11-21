@@ -27,10 +27,13 @@ const (
 	hermesInstallCheckTimeout = 60 * time.Second
 	// The Hermes auth check resolves the binary, then runs `hermes status`,
 	// which inspects every provider and takes several seconds even when warm.
-	hermesAuthCheckTimeout     = 45 * time.Second
-	opencodeV2MigrationTimeout = 30 * time.Minute
-	defaultAuthCheckTimeout    = 10 * time.Second
-	defaultReadinessWorkers    = 4
+	hermesAuthCheckTimeout = 45 * time.Second
+	// The Docker Agent auth check runs `docker-agent doctor`, then asks the
+	// provider to list models with the key; each has its own bound.
+	dockerAgentAuthCheckTimeout = 30 * time.Second
+	opencodeV2MigrationTimeout  = 30 * time.Minute
+	defaultAuthCheckTimeout     = 10 * time.Second
+	defaultReadinessWorkers     = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -164,8 +167,10 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		if label == "" {
 			label = id
 		}
+		interrupt, canInterrupt := item.Agent.(ports.TurnInterruptKey)
+		canInterrupt = canInterrupt && interrupt.InterruptKey() != ""
 		c.entries[id] = &readinessEntry{snapshot: domain.AgentReadinessSnapshot{
-			ID: id, Label: label,
+			ID: id, Label: label, CanStopTurn: canInterrupt,
 			Installation: domain.AgentInstallationObservation{
 				State: domain.AgentInstallationUnknown, Freshness: domain.AgentReadinessStale,
 				ReasonCode: domain.AgentReadinessReasonNotChecked, Reason: "Installation has not been checked yet.",
@@ -625,8 +630,15 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 			timeout = opencodeV2MigrationTimeout
 		case domain.HarnessHermes:
 			timeout = hermesAuthCheckTimeout
+		case domain.HarnessDockerAgent:
+			// `docker-agent doctor` (15s) then the provider key check (10s).
+			timeout = dockerAgentAuthCheckTimeout
 		case domain.HarnessMiMoCode:
 			// Allow separate 20-second credential detection and verification budgets.
+			timeout = 40 * time.Second
+		case domain.HarnessMiniMaxCode:
+			// `mcode provider list` has its own 20-second budget after the
+			// binary is resolved and its version probed.
 			timeout = 40 * time.Second
 		}
 	}

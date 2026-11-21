@@ -71,3 +71,14 @@ it("cannot be tapped while it cannot dictate", () => {
 	expect(key.props.disabled).toBe(true);
 	expect(key.props.accessibilityLabel).toBe("Dictation unavailable on this device");
 });
+
+// Denied is not a dead end: the tap goes to Settings, where it can be turned on.
+it("stays tappable while microphone access is off, and says where the tap goes", () => {
+	const onToggleLatched = vi.fn();
+	const { key } = render({ state: "denied", onToggleLatched });
+	expect(key.props.disabled).toBe(false);
+	expect(key.props.accessibilityLabel).toBe("Turn on microphone access in Settings");
+	expect(renderer!.root.findByProps({ name: "micOff" })).toBeTruthy();
+	act(() => key.props.onPress());
+	expect(onToggleLatched).toHaveBeenCalledOnce();
+});

@@ -8,6 +8,7 @@ import { fetch as expoFetch } from "expo/fetch";
 import { router } from "expo-router";
 import { forgetCloudAccountCaches } from "./accountCaches";
 import { forgetCloudDrafts } from "./drafts";
+import { forgetAccountState } from "../forgetLocalState";
 import { collectPages, createCloudClient, type CloudClient } from "./client";
 import { CLOUD_API_BASE_URL } from "./config";
 import { CloudAuthError, cloudErrorMessage } from "./errors";
@@ -253,7 +254,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	const adopt = useCallback((next: Account | null) => {
 		const previous = adopted.current;
 		adopted.current = next;
-		if (previous && previous.id !== next?.id) draftsCleared.current = forgetCloudDrafts().catch(() => {});
+		// So does what the app kept across being closed while it was signed in
+		// (the New task draft, Cloud review comments, the last screen).
+		if (previous && previous.id !== next?.id) draftsCleared.current = Promise.all([forgetCloudDrafts(), forgetAccountState(previous.id)]).then(() => {}, () => {});
 		signingOut.current = false;
 		reset();
 		setAccount(next);

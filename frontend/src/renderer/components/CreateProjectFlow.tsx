@@ -913,6 +913,10 @@ export function CreateProjectFlow({
 								setCloneDialogOpen(false);
 								onCreateStandaloneAgent?.();
 							}}
+							onChatsImported={firstRunClone ? () => {
+								onFirstRunDismiss?.("import");
+								setCloneDialogOpen(false);
+							} : undefined}
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}

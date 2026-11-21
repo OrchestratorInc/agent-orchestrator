@@ -21,22 +21,30 @@ export function OrchestratorReplyIcon({ reply, surface, ...props }: SVGProps<SVG
 	reply: OrchestratorReplyState;
 	surface: keyof typeof SURFACE;
 }) {
-	const tone = SURFACE[surface];
 	return (
 		<span className="relative inline-flex">
 			<OrchestratorIcon aria-hidden="true" {...props} />
-			{reply ? (
-				<span
-					aria-hidden="true"
-					className={cn(
-						"pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full ring-2",
-						tone.ring,
-						reply === "unread" ? tone.unread : cn(tone.working, "animate-status-pulse motion-reduce:animate-none"),
-					)}
-					data-orchestrator-reply={reply}
-				/>
-			) : null}
+			{reply ? <ReplyBadge data-orchestrator-reply={reply} reply={reply} surface={surface} /> : null}
 		</span>
+	);
+}
+
+/** The corner dot on its own, for any icon in a `relative` box. */
+export function ReplyBadge({ reply, surface, ...rest }: {
+	reply: NonNullable<OrchestratorReplyState>;
+	surface: keyof typeof SURFACE;
+} & Record<`data-${string}`, string | undefined>) {
+	const tone = SURFACE[surface];
+	return (
+		<span
+			aria-hidden="true"
+			className={cn(
+				"pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full ring-2",
+				tone.ring,
+				reply === "unread" ? tone.unread : cn(tone.working, "animate-status-pulse motion-reduce:animate-none"),
+			)}
+			{...rest}
+		/>
 	);
 }
 

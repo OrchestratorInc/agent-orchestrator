@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -671,6 +672,7 @@ type fakeRuntime struct {
 	outputErr          error
 	interruptErr       error
 	interrupts         []string
+	inputs             []string
 	onInterrupt        func(ports.RuntimeHandle)
 	// aliveByHandle maps a RuntimeHandle.ID to its liveness; missing = false.
 	aliveByHandle           map[string]bool
@@ -692,6 +694,11 @@ func (r *fakeRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) e
 		r.onInterrupt(handle)
 	}
 	return r.interruptErr
+}
+
+func (r *fakeRuntime) SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error {
+	r.inputs = append(r.inputs, input)
+	return r.Interrupt(ctx, handle)
 }
 
 type fakePreviewLifecycle struct {
@@ -896,6 +903,8 @@ func (r *fakeRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeH
 }
 
 type fakeAgent struct{}
+
+func (fakeAgent) InterruptKey() string { return "\x03" }
 
 func (fakeAgent) GetConfigSpec(context.Context) (ports.ConfigSpec, error) {
 	return ports.ConfigSpec{}, nil
@@ -1236,6 +1245,9 @@ type fakeWorkspace struct {
 	resolves    []resolveDefaultBranchCall
 	resolved    map[string]ports.WorkspaceDefaultBranch
 	fetchFunc   func(context.Context, string, ports.WorkspaceDefaultBranch) error
+	// resolveRemoteFunc stands in for a live remote lookup during resolution;
+	// it gets the caller's shared network deadline.
+	resolveRemoteFunc func(remoteCtx context.Context, repoPath string) error
 	// createRepoPath, when set, is returned as the RepoPath of a single-repo
 	// Create so tests can assert it survives the spawn->teardown metadata round
 	// trip (production Create resolves this path; the zero default keeps every
@@ -1272,7 +1284,8 @@ type fakeWorkspace struct {
 	calls []string
 	// sharedLog, when non-nil, receives entries alongside calls so ordering
 	// tests can compare workspace calls against store calls in one sequence.
-	sharedLog *[]string
+	sharedLog      *[]string
+	restoredBranch string
 }
 
 type fetchDefaultBranchCall struct {
@@ -1301,6 +1314,14 @@ func (w *fakeWorkspace) ResolveDefaultBranch(_ context.Context, repoPath, config
 		Branch:  branch,
 		BaseRef: "refs/remotes/origin/" + branch,
 	}, nil
+}
+
+func (w *fakeWorkspace) ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	if w.resolveRemoteFunc != nil {
+		// A lookup that hit the deadline still answers from local refs.
+		_ = w.resolveRemoteFunc(remoteCtx, repoPath)
+	}
+	return w.ResolveDefaultBranch(ctx, repoPath, configuredBranch)
 }
 
 func (w *fakeWorkspace) FetchDefaultBranch(ctx context.Context, repoPath string, target ports.WorkspaceDefaultBranch) error {
@@ -1426,7 +1447,11 @@ func (w *fakeWorkspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) 
 		w.calls = append(w.calls, entry)
 		return ports.WorkspaceInfo{Path: cfg.Path, Branch: cfg.Branch, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: cfg.RepoPath}, nil
 	}
-	return w.Create(ctx, cfg)
+	info, err := w.Create(ctx, cfg)
+	if w.restoredBranch != "" {
+		info.Branch = w.restoredBranch
+	}
+	return info, err
 }
 func (w *fakeWorkspace) ForceDestroy(_ context.Context, info ports.WorkspaceInfo) error {
 	entry := "ForceDestroy:" + string(info.SessionID)
@@ -4243,9 +4268,18 @@ func TestKill_ReviewerTeardownFailureLeavesSessionActive(t *testing.T) {
 // AFTER.
 type fakeShellTerminalCloser struct {
 	began     []domain.SessionID
+	suspended []domain.SessionID
 	ended     []domain.SessionID
 	err       error
 	sharedLog *[]string
+}
+
+func (f *fakeShellTerminalCloser) SuspendSessionShells(_ context.Context, id domain.SessionID) (func(), error) {
+	f.suspended = append(f.suspended, id)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return func() { f.ended = append(f.ended, id) }, nil
 }
 
 func (f *fakeShellTerminalCloser) BeginSessionTeardown(_ context.Context, id domain.SessionID) (func(), error) {
@@ -4387,6 +4421,34 @@ func TestKill_RefusesWorkspaceTeardownWhenShellTerminalsWontClose(t *testing.T) 
 
 // A nil closer (SetShellTerminalCloser never called, e.g. a daemon boot path
 // that skips shellterm) must be a no-op, not a nil-pointer panic.
+type fakeBranchStateRecorder struct {
+	st    *fakeStore
+	ws    *fakeWorkspace
+	calls []string
+}
+
+func (f *fakeBranchStateRecorder) ReconcileSessionBranchState(_ context.Context, id domain.SessionID) error {
+	f.calls = append(f.calls, fmt.Sprintf("%s terminated=%v destroyed=%d", id, f.st.sessions[id].IsTerminated, f.ws.destroyed))
+	return nil
+}
+
+func TestKill_RecordsTheWorktreeBranchBeforeTeardown(t *testing.T) {
+	m, st, _, ws := newManager()
+	recorder := &fakeBranchStateRecorder{st: st, ws: ws}
+	m.SetBranchStateRecorder(recorder)
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if want := []string{"mer-1 terminated=false destroyed=0"}; !reflect.DeepEqual(recorder.calls, want) {
+		t.Fatalf("branch records = %v, want %v", recorder.calls, want)
+	}
+	if ws.destroyed != 1 || !st.sessions["mer-1"].IsTerminated {
+		t.Fatalf("destroyed=%d terminated=%v, want the kill to finish", ws.destroyed, st.sessions["mer-1"].IsTerminated)
+	}
+}
+
 func TestKill_NilShellTerminalCloserIsNoop(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4852,6 +4914,44 @@ func TestRestore_ReopensTerminal(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Fatal("restore should relaunch")
+	}
+}
+
+func TestRestorePassesTheLastCheckedOutBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state *domain.SessionBranchState
+		want  string
+	}{
+		{"recorded branch", &domain.SessionBranchState{Branch: "b/pr", RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"pushed before the branch was recorded", &domain.SessionBranchState{RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"never observed", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+			rec := st.sessions["mer-1"]
+			rec.BranchState = tc.state
+			st.sessions["mer-1"] = rec
+			if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+				t.Fatal(err)
+			}
+			if got := ws.restoreConfigs[0]; got.Branch != "b" || got.LastBranch != tc.want {
+				t.Fatalf("workspace restore branch %q, last branch %q; want %q and %q", got.Branch, got.LastBranch, "b", tc.want)
+			}
+		})
+	}
+}
+
+func TestRestoreOnTheLastBranchKeepsTheSessionBranch(t *testing.T) {
+	m, st, _, ws := newManager()
+	ws.restoredBranch = "b/pr"
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b/root", AgentSessionID: "agent-x"})
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Branch; got != "b/root" {
+		t.Fatalf("session branch after restore = %q, want b/root", got)
 	}
 }
 
@@ -5920,12 +6020,6 @@ func TestSpawn_SkipsNeedsInitWorkspaceChildrenDuringRefreshAndCreate(t *testing.
 	if got, want := ws.lastProjectCfg.Repos[0].Name, "api"; got != want {
 		t.Fatalf("materialized child = %q, want %q", got, want)
 	}
-	if got, want := len(ws.lastProjectCfg.Assets), 1; got != want {
-		t.Fatalf("materialized asset configs = %d, want %d", got, want)
-	}
-	if got, want := ws.lastProjectCfg.Assets[0].RelativePath, "assets"; got != want {
-		t.Fatalf("materialized asset = %q, want %q", got, want)
-	}
 }
 
 func TestRefreshDefaultBranchesUsesOneOverallFetchBudget(t *testing.T) {
@@ -5977,6 +6071,130 @@ func TestSpawn_FetchesQualifiedDefaultBranchRemote(t *testing.T) {
 	}
 	if got, want := ws.lastCfg.BaseRef, "refs/remotes/upstream/main"; got != want {
 		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestSpawn_SkipsFetchWhenResolutionAlreadyFetched(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	ws.resolved = map[string]ports.WorkspaceDefaultBranch{
+		"/repo/mer": {Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main", Fetched: true},
+	}
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none after a resolution that fetched", ws.fetches)
+	}
+
+	// The resolution's fetch also counts for the next start in the window.
+	ws.resolved["/repo/mer"] = ports.WorkspaceDefaultBranch{Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main"}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none within the fetch window", ws.fetches)
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestRefreshDefaultBranchesSharesOneBudgetAcrossResolution(t *testing.T) {
+	m, st, _, ws := newManager()
+	project := domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	for i := 0; i < 3; i++ {
+		name := fmt.Sprintf("child-%d", i)
+		st.workspaceRepo["mer"] = append(st.workspaceRepo["mer"], domain.WorkspaceRepoRecord{Name: name, RelativePath: name})
+	}
+	m.defaultBranchRefreshTimeout = 25 * time.Millisecond
+	// Every repository's live HEAD lookup hangs until the deadline it is given.
+	var deadlines []time.Time
+	ws.resolveRemoteFunc = func(remoteCtx context.Context, _ string) error {
+		deadline, ok := remoteCtx.Deadline()
+		if !ok {
+			t.Error("lookup got no deadline")
+		}
+		deadlines = append(deadlines, deadline)
+		<-remoteCtx.Done()
+		return remoteCtx.Err()
+	}
+
+	started := time.Now()
+	baseRefs := m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	elapsed := time.Since(started)
+
+	// Separate budgets would each get their own deadline, one after another.
+	if got, want := len(deadlines), 4; got != want {
+		t.Fatalf("lookups = %d, want root plus three children (%d)", got, want)
+	}
+	for i, deadline := range deadlines {
+		if !deadline.Equal(deadlines[0]) {
+			t.Fatalf("lookup %d deadline = %s, want the shared deadline %s", i, deadline, deadlines[0])
+		}
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("resolving four stalled repositories took %s, want one shared 25ms budget", elapsed)
+	}
+	if got, want := len(baseRefs), 4; got != want {
+		t.Fatalf("resolved base refs = %d, want root plus three children (%d) from local refs", got, want)
+	}
+}
+
+func TestSpawn_FreshBaseIsRefreshedInBackground(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+
+	// No fetch has succeeded yet, so the first start waits for one.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 1 {
+		t.Fatalf("fetches = %d, want the first start to fetch", len(ws.fetches))
+	}
+
+	// Past the skip window but inside the fresh window: the start goes ahead
+	// with the local base while the fetch is still running.
+	now = now.Add(time.Minute)
+	release := make(chan struct{})
+	var finished atomic.Bool
+	ws.fetchFunc = func(fetchCtx context.Context, _ string, _ ports.WorkspaceDefaultBranch) error {
+		defer finished.Store(true)
+		select {
+		case <-release:
+			return nil
+		case <-fetchCtx.Done():
+			return fetchCtx.Err()
+		}
+	}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Load() {
+		t.Fatal("the start waited for a fetch of a base fetched a minute ago")
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+	close(release)
+	if err := m.WaitBackgroundWorkers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 2 {
+		t.Fatalf("fetches = %d, want the background refresh too", len(ws.fetches))
+	}
+
+	// A base last fetched longer ago than the fresh window is waited for again.
+	ws.fetchFunc = nil
+	now = now.Add(defaultBranchFreshWindow + time.Second)
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 3 {
+		t.Fatalf("fetches = %d, want a start after the fresh window to fetch", len(ws.fetches))
 	}
 }
 
@@ -6418,6 +6636,7 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"Use `ao send` for session communication",
 		"`ao session ls --project mer`",
 		"`ao session get <worker-session-id>`",
+		"`ao session interrupt <session-id>`",
 		"Delegate implementation, fixes, tests, and PR ownership to worker sessions",
 		filepath.ToSlash(filepath.Join("skills", "using-ao", "SKILL.md")),
 		"Orchestrator desktop Browser panel",
@@ -8147,6 +8366,95 @@ func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	}
 	if stored.Metadata.Effort != "high" {
 		t.Fatalf("persisted effort = %q, want high (explicit override must be durable for a TUI rebuild)", stored.Metadata.Effort)
+	}
+}
+
+// TestSpawn_TUIPiInheritedEffortIsValidated asserts a Pi or Prime Agent TUI
+// spawn validates an effort inherited from role settings: a level the model
+// advertises reaches the adapter, and a stale one is cleared before --thinking.
+func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for inherited, want := range map[string]string{"high": "high", "max": ""} {
+			m, st, _, _ := newManager()
+			agent := &recordingAgent{}
+			m.agents = singleAgent{agent: agent}
+			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+			}}})
+			project := st.projects["mer"]
+			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: inherited}}
+			st.projects["mer"] = project
+
+			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+				RequestedMode: domain.SessionModeTUI, Prompt: "do the work",
+			}); err != nil {
+				t.Fatalf("harness %q inherited %q spawn: %v", harness, inherited, err)
+			}
+			if agent.lastConfig.Effort != want {
+				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, inherited, agent.lastConfig.Effort, want)
+			}
+		}
+	}
+}
+
+func TestSpawn_TUIPiInheritedEffortWithoutModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for _, source := range []string{"project", "role"} {
+			for _, mode := range []domain.SessionMode{"", domain.SessionModeTUI} {
+				for _, tc := range []struct {
+					name    string
+					catalog *tuningCatalog
+					want    string
+				}{
+					{name: "no catalog", want: "high"},
+					{name: "no saved models", catalog: &tuningCatalog{}, want: "high"},
+					{name: "no default", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/other", Efforts: []string{"low"}},
+					}}}, want: "high"},
+					{name: "catalog read error", catalog: &tuningCatalog{err: errors.New("saved catalog unavailable")}, want: "high"},
+					{name: "default supports effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low", "high"}},
+					}}}, want: "high"},
+					{name: "default rejects effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low"}},
+					}}}},
+				} {
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", harness, source, mode, tc.name), func(t *testing.T) {
+						m, st, rt, _ := newManager()
+						m.dataDir = t.TempDir()
+						agent := &recordingAgent{}
+						m.agents = singleAgent{agent: agent}
+						if tc.catalog != nil {
+							m.SetModelCatalog(tc.catalog)
+						}
+						project := st.projects["mer"]
+						project.Config = domain.ProjectConfig{Worker: domain.RoleOverride{Harness: harness}}
+						if source == "project" {
+							project.Config.AgentConfig.Effort = "high"
+						} else {
+							project.Config.Worker.AgentConfig.Effort = "high"
+						}
+						st.projects["mer"] = project
+
+						rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+							ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+							RequestedMode: mode, Prompt: "do the work",
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if agent.lastConfig.Effort != tc.want || agent.launchCalls != 1 || rt.created != 1 {
+							t.Fatalf("launch effort=%q, launches=%d, runtimes=%d; want %q, 1, 1", agent.lastConfig.Effort, agent.launchCalls, rt.created, tc.want)
+						}
+						if got := st.sessions[rec.ID].Metadata.Effort; got != tc.want {
+							t.Fatalf("saved effort=%q, want %q", got, tc.want)
+						}
+					})
+				}
+			}
+		}
 	}
 }
 
@@ -11368,6 +11676,168 @@ func TestSendSemanticTUIRejectsMissingReceiptStore(t *testing.T) {
 	}
 }
 
+// The report coordinator interrupts before delivering a --stuck batch. If the
+// harness cannot confirm delivery the batch is retried, so an interrupt sent
+// anyway would hit the orchestrator again on every retry.
+func TestInterruptTUIRequiresSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.InterruptTUI(context.Background(), "s1"); !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
+		t.Fatalf("InterruptTUI error = %v, want unsupported", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("runtime interrupts = %v, want none", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWithoutSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.StopTUITurn(context.Background(), "s1"); err != nil {
+		t.Fatalf("StopTUITurn: %v", err)
+	}
+	if got := rt.interrupts; !reflect.DeepEqual(got, []string{"runtime-1"}) {
+		t.Fatalf("runtime interrupts = %v", got)
+	}
+}
+
+// Ctrl+C on an idle Claude Code, Codex or Gemini prompt arms "press again to
+// exit", so a second stop request could quit the agent.
+func TestStopTUITurnRefusesIdleSession(t *testing.T) {
+	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityBlocked, ""} {
+		m, st, rt, _ := newManager()
+		st.sessions["s1"] = domain.SessionRecord{
+			ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+			Activity: domain.Activity{State: state},
+			Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+		}
+		if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrNoActiveTurn) {
+			t.Fatalf("StopTUITurn(%q) error = %v, want no active turn", state, err)
+		}
+		if len(rt.interrupts) != 0 {
+			t.Fatalf("StopTUITurn(%q) interrupts = %v, want none", state, rt.interrupts)
+		}
+	}
+}
+
+// A stopped turn can still read active until the agent reports its next state.
+// A repeat in that window would send a second Ctrl+C to an idle prompt.
+func TestStopTUITurnSendsOneInterruptPerTurn(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+	if err := m.StopTUITurn(ctx, "s1"); !errors.Is(err, ErrTurnStopPending) {
+		t.Fatalf("repeat StopTUITurn error = %v, want stop pending", err)
+	}
+	if len(rt.interrupts) != 1 {
+		t.Fatalf("interrupts after repeat = %v, want one", rt.interrupts)
+	}
+
+	// A new active turn can be stopped again.
+	rec := st.sessions["s1"]
+	rec.Activity.LastActivityAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn on next turn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts after next turn = %v, want two", rt.interrupts)
+	}
+}
+
+// A stopped turn can stay active (Claude Code sends no hook on Ctrl+C), and a
+// prompt submitted then keeps active without moving LastActivityAt. The new
+// prompt still starts a new turn that must be stoppable.
+func TestStopTUITurnStopsPromptSubmittedWithoutIdle(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{
+			RuntimeHandleID:    "runtime-1",
+			LatestUserPrompt:   "run the tests",
+			LatestUserPromptAt: turn,
+		},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+
+	rec := st.sessions["s1"]
+	rec.Metadata.LatestUserPrompt = "fix the lint instead"
+	rec.Metadata.LatestUserPromptAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a new prompt: %v", err)
+	}
+
+	// A coordination turn changes only the checkpoint turn ID.
+	rec = st.sessions["s1"]
+	rec.Metadata.ConversationCheckpointTurnID = "coord-1"
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a coordination prompt: %v", err)
+	}
+	if len(rt.interrupts) != 3 {
+		t.Fatalf("interrupts = %v, want three", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnRetriesAfterFailedDelivery(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Now()},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	rt.interruptErr = errors.New("pane gone")
+	if err := m.StopTUITurn(ctx, "s1"); err == nil {
+		t.Fatal("StopTUITurn error = nil, want delivery failure")
+	}
+	rt.interruptErr = nil
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("retry StopTUITurn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts = %v, want two attempts", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWaitsForExclusiveOperation(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	m.agentOperations["s1"] = agentOperationKill
+	if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("StopTUITurn error = %v, want operation in progress", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("interrupts = %v, want none during kill", rt.interrupts)
+	}
+}
+
 func TestSend_RecordsDeliveredUserInput(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
@@ -12218,6 +12688,57 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 }
 
+// Archiving a session while its wake holds the resume must wait for the wake
+// and then archive, not fail with ErrOperationInProgress (#8645).
+func TestKill_WaitsForAnInFlightWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	killed := make(chan error, 1)
+	go func() {
+		_, err := m.Kill(ctx, "mer-1")
+		killed <- err
+	}()
+	select {
+	case err := <-killed:
+		m.endAgentResume("mer-1")
+		t.Fatalf("Kill returned while the wake held the session: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	m.endAgentResume("mer-1")
+	if err := <-killed; err != nil {
+		t.Fatalf("Kill after the wake finished: %v", err)
+	}
+	if !st.sessions["mer-1"].IsTerminated || rt.destroyed != 1 || ws.destroyed != 1 {
+		t.Fatalf("terminated=%v runtime=%d workspace=%d, want a full teardown",
+			st.sessions["mer-1"].IsTerminated, rt.destroyed, ws.destroyed)
+	}
+}
+
+// A wake that outlasts the limit leaves Kill's refusal in place and the
+// session untouched.
+func TestKill_GivesUpOnAWedgedWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.killResumeWait = 50 * time.Millisecond
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	defer m.endAgentResume("mer-1")
+	started := time.Now()
+	if _, err := m.Kill(ctx, "mer-1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("Kill = %v, want ErrOperationInProgress", err)
+	}
+	if waited := time.Since(started); waited < m.killResumeWait {
+		t.Fatalf("Kill refused after %v, want a wait of at least %v", waited, m.killResumeWait)
+	}
+	if st.sessions["mer-1"].IsTerminated || rt.destroyed != 0 || ws.destroyed != 0 {
+		t.Fatal("a refused kill touched the session")
+	}
+}
+
 func TestSpawn_ArtifactDirWriteFailureRollsBackSeedRowAndDir(t *testing.T) {
 	m, st, _, _ := newManager()
 	dataDir := t.TempDir()
@@ -12440,6 +12961,24 @@ func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
 				t.Fatalf("existing work changed: %q, %v", content, err)
 			}
 		})
+	}
+}
+
+func TestSpawn_RequiredComposerTimeoutNeverDeliversPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{outputs: []string{"Sign in to continue"}}
+	msg := &fakeMessenger{}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: readinessAgent{
+		afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}},
+		hints:           ports.PromptReadinessHints{RequireReady: true, Patterns: []string{`Try "debug this error"`}, PollInterval: time.Millisecond, Timeout: time.Millisecond},
+	}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "--help is task data"})
+	if err == nil {
+		t.Fatal("missing required composer did not fail spawn")
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("typed task into startup dialog: %#v", msg.msgs)
 	}
 }
 

@@ -1,7 +1,7 @@
 import { LoaderCircle } from "@/components/app-icons";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderFor, agentAccountUsable, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { cloudAgentAccountName, CLOUD_ACCOUNT_SWITCH_HARNESSES, useCloudAgentAccountActions, useCloudAgentAccounts, useCloudSessionAgentAccount } from "../hooks/useCloudAgentAccounts";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -43,7 +43,7 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 
 	const currentId = provider ? current.data?.[provider] : undefined;
 	const options = useMemo(() => provider
-		? withoutSameLogins((accounts.data ?? []).filter((account) => account.provider === provider), currentId)
+		? oneRowPerLogin((accounts.data ?? []).filter((account) => account.provider === provider), currentId)
 		: [], [accounts.data, currentId, provider]);
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";
@@ -79,11 +79,12 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 
 	const moveRef = useRef(move);
 	moveRef.current = move;
-	// Only a subscription takes a session: the daemon refuses a move to an API-key login.
+	// A signed-in subscription or an API key account with its key takes a session;
+	// the daemon refuses a move to a folder logged in some other way.
 	const choice = useMemo<AccountChoice | undefined>(() => {
 		if (!shown || !provider) return undefined;
 		return {
-			options: options.map((option) => ({ id: option.id, label: agentAccountLabel(option, options, t), disabled: !option.signedIn })),
+			options: options.map((option) => ({ id: option.id, label: agentAccountLabel(option, options, t), disabled: !agentAccountUsable(option) })),
 			value: currentId,
 			onPick: (id) => void moveRef.current(id),
 			disabled: moving || options.length < 2,
@@ -120,12 +121,14 @@ function LocalSessionAccountSummary({ session, hostId }: { session: WorkspaceSes
 			<p className="text-xs text-muted-foreground">{t("settings.agentAccounts.sessionAccount")}</p>
 			<div className="flex min-w-0 items-center gap-2">
 				{moving ? <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
-				<Select value={choice.value ?? ""} disabled={choice.disabled} onValueChange={choice.onPick}>
-					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
-					<SelectContent align="end">
-						{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>{option.label}</SelectItem>)}
-					</SelectContent>
-				</Select>
+				{choice.options.length < 2
+					? <p className="max-w-56 truncate text-sm text-secondary-foreground">{choice.options.find((option) => option.id === choice.value)?.label}</p>
+					: <Select value={choice.value ?? ""} disabled={choice.disabled} onValueChange={choice.onPick}>
+						<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
+						<SelectContent align="end">
+							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>{option.label}</SelectItem>)}
+						</SelectContent>
+					</Select>}
 			</div>
 		</div>
 		{error ? <p className="mt-2 text-xs text-muted-foreground" role="status">{error}</p> : null}
@@ -225,12 +228,14 @@ function SessionAccountPicker({ session, transition, currentId, options, label, 
 			<p className="text-xs text-muted-foreground">{t("settings.agentAccounts.sessionAccount")}</p>
 			<div className="flex min-w-0 items-center gap-2">
 				{moving ? <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
-				<Select value={currentId ?? ""} disabled={moving || options.length < 2} onValueChange={(value) => void move(value)}>
-					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
-					<SelectContent align="end">
-						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.selectable}>{option.name}</SelectItem>)}
-					</SelectContent>
-				</Select>
+				{options.length < 2
+					? <p className="max-w-56 truncate text-sm text-secondary-foreground">{options.find((option) => option.id === currentId)?.name}</p>
+					: <Select value={currentId ?? ""} disabled={moving} onValueChange={(value) => void move(value)}>
+						<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
+						<SelectContent align="end">
+							{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.selectable}>{option.name}</SelectItem>)}
+						</SelectContent>
+					</Select>}
 			</div>
 		</div>
 		{status ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}
