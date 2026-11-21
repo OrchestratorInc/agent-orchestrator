@@ -42,6 +42,7 @@ it("preserves agents when the draft dialog confirms after the outside-quit deadl
 		},
 		dialog: { showMessageBoxSync: vi.fn() },
 		cancelDaemonAutoRestart: vi.fn(),
+		lifecycleLog: vi.fn(),
 		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null,
 		requestDesktopShutdown, keepDaemonAlive: () => false, appRunId: "test-run",
 		daemonStatus: { state: "ready", port: 3002 }, daemonProcess: null,
