@@ -156,17 +156,7 @@ func (c *MobileController) RequireDeviceCredentials(w http.ResponseWriter, r *ht
 		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "DEVICE_PAIRING", "device pairing is unavailable", nil)
 		return
 	}
-	var req SetRequireDeviceCredentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
-		return
-	}
-	res, err := setter.SetRequireDeviceCredentials(req.Enabled)
-	if err != nil {
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_REQUIRE_DEVICE_CREDENTIALS", err.Error(), nil)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, withWarning(res))
+	writeSwitch(w, r, setter.SetRequireDeviceCredentials, "MOBILE_REQUIRE_DEVICE_CREDENTIALS")
 }
 
 // LoopbackTunnel handles POST /api/v1/mobile/loopback-tunnel.
@@ -178,14 +168,20 @@ func (c *MobileController) LoopbackTunnel(w http.ResponseWriter, r *http.Request
 		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "LOOPBACK_TUNNEL", "the localhost tunnel is unavailable", nil)
 		return
 	}
-	var req SetLoopbackTunnelRequest
+	writeSwitch(w, r, setter.SetLoopbackTunnel, "MOBILE_LOOPBACK_TUNNEL")
+}
+
+func writeSwitch(w http.ResponseWriter, r *http.Request, set func(bool) (MobileStatusResponse, error), code string) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	res, err := setter.SetLoopbackTunnel(req.Enabled)
+	res, err := set(req.Enabled)
 	if err != nil {
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_LOOPBACK_TUNNEL", err.Error(), nil)
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", code, err.Error(), nil)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, withWarning(res))

@@ -398,7 +398,7 @@ export function registerRemotesIpc(
 		const forward = await tunnels.forward(hostId, port).catch((error: unknown) => {
 			throw new ExpectedIpcError(error instanceof Error ? error.message : String(error));
 		});
-		if (await accountID() !== account) {
+		if (await accountID().catch(() => undefined) !== account) {
 			tunnels.stop(hostId, port);
 			throw new ExpectedIpcError("Account changed during remote connection.");
 		}

@@ -146,3 +146,27 @@ func TestLoopbackTunnelClosesWhenTurnedOffOrRevoked(t *testing.T) {
 		})
 	}
 }
+
+func TestLoopbackTunnelRefusesAClientExpectingAnotherHost(t *testing.T) {
+	m := NewMobileLAN(http.NotFoundHandler(), "h_this", 0, slog.Default(), nil)
+	m.SetPasswordHash(mobilebridge.HashPassword("secret12"))
+	lanPort, err := m.Start(0)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+	echo := startEcho(t)
+	for _, tc := range []struct {
+		expected string
+		status   int
+	}{{"h_other", http.StatusMisdirectedRequest}, {"h_this", http.StatusSwitchingProtocols}} {
+		header := http.Header{"Authorization": {"Bearer secret12"}, "X-Ao-Expected-Host-Id": {tc.expected}}
+		ws, resp, err := websocket.Dial(context.Background(), fmt.Sprintf("ws://127.0.0.1:%d%s?port=%d", lanPort, loopbackTunnelPath, echo), &websocket.DialOptions{HTTPHeader: header})
+		if ws != nil {
+			_ = ws.CloseNow()
+		}
+		if resp == nil || resp.StatusCode != tc.status {
+			t.Fatalf("expecting %s: resp=%v err=%v, want %d", tc.expected, resp, err, tc.status)
+		}
+	}
+}

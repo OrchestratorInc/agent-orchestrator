@@ -41,11 +41,11 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer func() { _ = upstream.Close() }()
+	defer m.untrackLoopback(upstream)
 	if !m.trackLoopback(upstream) {
 		refuseLoopback(w, loopbackDisabledHeader, "The localhost tunnel is turned off on this host.")
 		return
 	}
-	defer m.untrackLoopback(upstream)
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
 	if err != nil {
 		return

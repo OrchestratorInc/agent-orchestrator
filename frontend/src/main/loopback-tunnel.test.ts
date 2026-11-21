@@ -137,6 +137,15 @@ describe("loopback tunnels", () => {
 		await expect(tunnels.forward("h_box", 0)).rejects.toThrow(/1 to 65535/);
 	});
 
+	it("drops a forward still starting when its host is removed", async () => {
+		const echo = await echoServer();
+		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: { [echo]: echo } } }));
+		const starting = tunnels.forward("h_box", echo);
+		tunnels.stopHost("h_box");
+		await expect(starting).rejects.toThrow(/removed/);
+		expect(tunnels.list()).toEqual([]);
+	});
+
 	it.each(["::1", "::"])("moves a forward off a port another server holds on %s", async (address) => {
 		const taken = net.createServer();
 		const port = await new Promise<number>((resolve) => {
