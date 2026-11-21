@@ -23,6 +23,8 @@ import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
+import { Sidebar } from "../lib/sidebar/Sidebar";
+import { SidebarDrawer } from "../lib/sidebar/SidebarDrawer";
 import { CloudProvider } from "../lib/cloud/CloudProvider";
 import { appFonts } from "../lib/appFonts";
 import { symbolFonts } from "../lib/symbolFonts";
@@ -150,6 +152,9 @@ export default function RootLayout() {
 	);
 }
 
+/** Module-level, so the drawer keeps one sidebar element across renders. */
+const renderSidebar = (close: () => void) => <Sidebar close={close} />;
+
 function Shell() {
 	// Unsent review comments survive the phone closing the app (see reviewPersistence).
 	useEffect(() => { void startReviewPersistence(); }, []);
@@ -193,6 +198,8 @@ function Shell() {
 			    the page mid-transition — so the theme carries our palette into the
 			    native layer instead. */}
 			<NavigationThemeProvider value={navigationTheme}>
+			{/* The desktop's left sidebar, as a drawer over every page. */}
+			<SidebarDrawer sidebar={renderSidebar}>
 			<Stack screenOptions={stackScreenOptions(t)}>
 				{/* A hidden header still needs a title: iOS lists the pages under the
 				    current one by title in the back button's long-press menu, and an
@@ -345,6 +352,7 @@ function Shell() {
 					}}
 				/>
 			</Stack>
+			</SidebarDrawer>
 			</NavigationThemeProvider>
 		</View>
 	);

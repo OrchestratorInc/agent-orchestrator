@@ -18,6 +18,8 @@ import {
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
 import { HostScope, useApp } from "../../lib/store";
+import { changedAt, markRead } from "../../lib/sidebar/readState";
+import { sidebarSessionKey } from "../../lib/sidebar/sidebarModel";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import type { Theme } from "../../lib/theme";
 import { Button, EmptyState } from "../../lib/ui";
@@ -48,6 +50,12 @@ function SessionRouteContent() {
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
+	// Having the session open reads it, including anything that lands while it
+	// is open: the sidebar's dot goes from filled to hollow, as on the desktop.
+	const listedChangedAt = listed ? changedAt(listed) : NaN;
+	useEffect(() => {
+		if (Number.isFinite(listedChangedAt)) markRead(sidebarSessionKey({ id, hostId: routeHostId ?? currentHostId }), listedChangedAt);
+	}, [currentHostId, id, listedChangedAt, routeHostId]);
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
 	const [attempt, setAttempt] = useState(0);

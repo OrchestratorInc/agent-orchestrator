@@ -14,7 +14,6 @@ import { useCloud } from "../../lib/cloud/CloudProvider";
 import { isCloudHost } from "../../lib/cloud/mapping";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { useBoardTabBeneath } from "../../lib/useBoardTabBeneath";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { useRefreshActions } from "../../lib/useRefreshActions";
 import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
@@ -25,6 +24,7 @@ import { useFabExpanded } from "../../lib/useFabExpanded";
 import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { AddFab, addFabClearance } from "../../lib/AddFab";
 import { space } from "../../lib/tokens";
+import { useSidebarMaybe } from "../../lib/sidebar/sidebarContext";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -45,6 +45,7 @@ function ProjectScreenContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const sidebar = useSidebarMaybe();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
 	const glassInset = useGlassBarInset();
@@ -69,9 +70,6 @@ function ProjectScreenContent() {
 	// The native header's title, and this page's name in the back-history menu
 	// of a page opened from here.
 	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
-	// Back always lands on Projects, the list this page is opened from, even when
-	// a cold link opened it over the board's Workers tab.
-	useBoardTabBeneath("(projects)");
 	const projectSessions = useMemo(() => hostMatches ? projectDetailSessions(id ?? "", sessions) : [], [hostMatches, id, sessions]);
 	// The archive is counted, not listed, by a machine that pages it.
 	const pagedArchived = hostMatches && id ? archive?.byProject[id] ?? 0 : 0;
@@ -156,7 +154,7 @@ function ProjectScreenContent() {
 						message="Open it from that machine's project list."
 						// Back down to the board already beneath this page: navigating from
 						// here would stack a second board on top of it.
-						action={<Button title="Open projects" icon="folder" onPress={() => router.dismissTo("/projects")} />}
+						action={<Button title="Open projects" icon="folder" onPress={() => { router.dismissTo("/"); sidebar?.open(); }} />}
 					/>
 				)
 			) : !row ? (

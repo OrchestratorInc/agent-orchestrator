@@ -1,8 +1,6 @@
-import { useId, type ReactElement } from "react";
+import { useId } from "react";
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
-import { boardBarFootprint } from "./board-bar-layout";
 import { useTheme } from "./ThemeProvider";
 
 /**
@@ -102,24 +100,3 @@ export function Frost({ stops, from, style }: { stops: readonly FrostStop[]; fro
  */
 export const BAR_SEAM = 16;
 export const SEAM_STOPS: readonly FrostStop[] = [[0, 0.9], [0.3, 0.55], [0.6, 0.2], [0.85, 0.05], [1, 0]];
-
-/**
- * A tab page's footing on Android, where the board bar floats over the page
- * and the page runs on under it: how far the page's content has to stay clear
- * of the bar, and the frost that is the bar's backdrop. The page lays the
- * frost over its content, last, so the rows dissolve into the bar as they pass
- * under it.
- *
- * iOS's tab bar is the system's glass, which insets the page itself, so there
- * this is nothing.
- */
-export function useTabBarFrost(): { inset: number; frost: ReactElement | null } {
-	const insets = useSafeAreaInsets();
-	if (Platform.OS !== "android") return { inset: 0, frost: null };
-	const inset = boardBarFootprint(insets.bottom);
-	return { inset, frost: <Frost from="bottom" stops={frostStops(inset)} style={[styles.footer, { height: inset + FROST_TAIL }]} /> };
-}
-
-const styles = StyleSheet.create({
-	footer: { position: "absolute", left: 0, right: 0, bottom: 0 },
-});

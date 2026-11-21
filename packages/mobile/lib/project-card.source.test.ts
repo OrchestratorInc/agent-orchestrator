@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 const card = readFileSync(new URL("./project-card.tsx", import.meta.url), "utf8");
 const page = readFileSync(new URL("../app/project/[id].tsx", import.meta.url), "utf8");
-const projects = readFileSync(new URL("../app/(tabs)/(projects)/projects.tsx", import.meta.url), "utf8");
 
 describe("project row", () => {
 	// Matches a worker row: a divider, not a filled card with initials.
@@ -33,8 +32,6 @@ describe("project row", () => {
 
 	it("opens the project from the row and the orchestrator from the pill", () => {
 		expect(card).toContain("onPress={() => onOpenProject(row)}");
-		expect(projects).toContain('pathname: "/project/[id]"');
-		expect(projects).toContain("onOrchestrator={openOrchestrator}");
 	});
 });
 
@@ -54,10 +51,11 @@ describe("project page", () => {
 
 	// Navigating to a tab from a pushed page stacks a second board over the first;
 	// going back down to the one beneath does not.
-	it("returns to the Projects board beneath it rather than pushing another", () => {
-		expect(page).toContain('useBoardTabBeneath("(projects)");');
-		expect(page).toContain('onPress={() => router.dismissTo("/projects")}');
-		expect(page).not.toContain('router.navigate("/projects")');
+	// Projects live in the sidebar now: a project from another machine sends
+	// the user back to the board with the sidebar open on its project list.
+	it("returns to the board and opens the sidebar's project list rather than pushing another page", () => {
+		expect(page).toContain('onPress={() => { router.dismissTo("/"); sidebar?.open(); }}');
+		expect(page).not.toContain('"/projects"');
 	});
 
 	// Reuses the board rather than copying it, so the two cannot drift.

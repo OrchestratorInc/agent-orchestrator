@@ -81,6 +81,17 @@ import Terminal from "lucide-react-native/icons/terminal";
 import Wrench from "lucide-react-native/icons/wrench";
 import WifiOff from "lucide-react-native/icons/wifi-off";
 import X from "lucide-react-native/icons/x";
+import Bell from "lucide-react-native/icons/bell";
+import ChevronRight from "lucide-react-native/icons/chevron-right";
+import Cloud from "lucide-react-native/icons/cloud";
+import EllipsisVertical from "lucide-react-native/icons/ellipsis-vertical";
+import FolderOpen from "lucide-react-native/icons/folder-open";
+import LayoutGrid from "lucide-react-native/icons/layout-grid";
+import LoaderCircle from "lucide-react-native/icons/loader-circle";
+import LogIn from "lucide-react-native/icons/log-in";
+import PanelLeft from "lucide-react-native/icons/panel-left";
+import PinOff from "lucide-react-native/icons/pin-off";
+import SquarePen from "lucide-react-native/icons/square-pen";
 import { useTheme } from "./ThemeProvider";
 
 /**
@@ -100,10 +111,13 @@ export const glyphs = {
 	"arrow-up-from-line": ArrowUpFromLine,
 	"arrow-right": ArrowRight,
 	"bar-chart": ChartBar,
+	"bell": Bell,
 	"check": Check,
 	"check-circle": CircleCheck,
+	"chevron-right": ChevronRight,
 	"circle": Circle,
 	"clipboard-check": ClipboardCheck,
+	"cloud": Cloud,
 	"clock": Clock,
 	"code": Code,
 	"copy": Copy,
@@ -112,12 +126,14 @@ export const glyphs = {
 	"disc": Disc,
 	"download-cloud": CloudDownload,
 	"edit-3": PenLine,
+	"edit": SquarePen,
 	"external-link": ExternalLink,
 	"eye": Eye,
 	"file": File,
 	"file-diff": FileDiff,
 	"file-text": FileText,
 	"folder": Folder,
+	"folder-open": FolderOpen,
 	"git-branch": GitBranch,
 	"git-commit": GitCommitHorizontal,
 	"git-merge": GitMerge,
@@ -127,10 +143,13 @@ export const glyphs = {
 	"image": Image,
 	"key": KeyRound,
 	"layers": Layers,
+	"layout-grid": LayoutGrid,
 	"link": Link,
 	"list": List,
 	"list-checks": ListChecks,
 	"list-tree": ListTree,
+	"loader": LoaderCircle,
+	"log-in": LogIn,
 	"message-circle": MessageCircle,
 	"message-square": MessageSquare,
 	"message-square-plus": MessageSquarePlus,
@@ -139,11 +158,14 @@ export const glyphs = {
 	"monitor-cog": MonitorCog,
 	"monitor-off": MonitorOff,
 	"monitor-smartphone": MonitorSmartphone,
+	"more-vertical": EllipsisVertical,
 	"moon": Moon,
 	"music": Music,
+	"panel-left": PanelLeft,
 	"mouse-pointer": MousePointer2,
 	"pause": Pause,
 	"pin": Pin,
+	"pin-off": PinOff,
 	"play": Play,
 	"plus": Plus,
 	"power": Power,

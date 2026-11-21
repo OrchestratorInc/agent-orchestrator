@@ -213,7 +213,5 @@ describe("retained-stack host routes", () => {
 		const rows = source("./hostedRows.ts");
 		expect(rows).not.toMatch(CLOSED_CONNECTION_CHECK);
 		expect(rows).toContain("hostName: host.name,");
-		const projects = source("../app/(tabs)/(projects)/projects.tsx");
-		expect(projects).toContain("freshness={showMachine ? freshness.get(item.project.hostId) : undefined}");
 	});
 });

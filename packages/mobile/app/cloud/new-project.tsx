@@ -54,7 +54,7 @@ export default function NewProjectScreen() {
 	// in the stack under it, out of sight, and on Android back from the project
 	// should not return to a form already used. On iOS the page waits for the
 	// sheet to finish closing (see useLeaveSheetThen).
-	const leave = useCallback(() => backOr(router, "/projects"), [router]);
+	const leave = useCallback(() => backOr(router, "/"), [router]);
 	const leaveFor = useLeaveSheetThen(leave);
 	const openProject = useCallback((hostId: string, id: string) => {
 		leaveFor(() => router.push({ pathname: "/project/[id]", params: { id, hostId } }));

@@ -8,12 +8,10 @@ vi.mock("react-native", () => ({
 	StyleSheet: { create: (styles: object) => styles },
 	View: "View",
 }));
-vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Defs: "Defs", LinearGradient: "LinearGradient", Rect: "Rect", Stop: "Stop" }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ bgBase: "#bgBase" }) }));
 
-import { BOARD_BAR_HEIGHT, BOARD_BAR_MARGIN } from "./board-bar-layout";
-import { Frost, FROST_BAR, FROST_EDGE, FROST_TAIL, frostStops, useTabBarFrost } from "./frost";
+import { Frost, FROST_BAR, FROST_EDGE, FROST_TAIL, frostStops } from "./frost";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -45,29 +43,5 @@ describe("Frost", () => {
 	it("takes no touches", () => {
 		act(() => { renderer = create(<Frost from="bottom" stops={[[0, 1], [1, 0]]} />); });
 		expect(renderer!.root.findByType("View" as never).props.pointerEvents).toBe("none");
-	});
-});
-
-describe("useTabBarFrost", () => {
-	function renderHook() {
-		const ref = { current: undefined as unknown as ReturnType<typeof useTabBarFrost> };
-		function Probe() {
-			ref.current = useTabBarFrost();
-			return null;
-		}
-		act(() => { renderer = create(<Probe />); });
-		return ref.current;
-	}
-
-	// The board bar floats its margin above the system navigation.
-	it("clears Android's board bar and the system navigation under it, and frosts both", () => {
-		const { inset, frost } = renderHook();
-		expect(inset).toBe(BOARD_BAR_HEIGHT + BOARD_BAR_MARGIN + 24);
-		expect(frost).not.toBeNull();
-	});
-
-	it("leaves iOS to the system's glass", () => {
-		fixtures.platform = "ios";
-		expect(renderHook()).toEqual({ inset: 0, frost: null });
 	});
 });

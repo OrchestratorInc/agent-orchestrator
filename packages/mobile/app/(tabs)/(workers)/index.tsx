@@ -1,9 +1,8 @@
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useIsFocused, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import { useLargeTitle } from "../../../lib/largeTitle";
-import { useTabBarFrost } from "../../../lib/frost";
-import { boardTitle } from "../../../lib/board-tabs";
+import { boardTitle, workersNeedingYou } from "../../../lib/board-tabs";
 import { FreshnessLine } from "../../../lib/FreshnessLine";
 import { useMachineFreshness } from "../../../lib/useMachineFreshness";
 import { useApp } from "../../../lib/store";
@@ -15,8 +14,6 @@ import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { useHeaderOverlap } from "../../../lib/useHeaderOverlap";
-import { setNewTaskHandler } from "../../../lib/newTaskAction";
-import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import { useMenuRowWidths } from "../../../lib/useMenuRowWidth";
@@ -44,6 +41,7 @@ import {
 	workerProjectOptions,
 } from "../../../lib/worker-controls";
 import { space } from "../../../lib/tokens";
+import { useSidebarEdgeSwipe } from "../../../lib/sidebar/sidebarContext";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -52,7 +50,8 @@ export default function FleetScreen() {
 	const styles = useThemedStyles(makeStyles);
 
 	const router = useRouter();
-	const tabBar = useTabBarFrost();
+	// The board is the root page: a swipe from its left edge opens the sidebar.
+	useSidebarEdgeSwipe(useIsFocused());
 	const headerOverlap = useHeaderOverlap();
 	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, cloud, notificationsUnread, phoneNetwork } = useApp();
 	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, sessionsLoaded: cloudSessionsLoaded, sessionsError: cloudSessionsError, refreshSessions: refreshCloudSessions } = useCloud();
@@ -107,11 +106,7 @@ export default function FleetScreen() {
 		const selectedHostId = workerEnvironmentId === ALL_WORKER_ENVIRONMENTS ? undefined : workerEnvironmentId;
 		router.push({ pathname: "/spawn", params: { hostId: project?.hostId ?? selectedHostId ?? connectedHostId ?? config?.hostId, ...project } });
 	}, [allProjects, config?.hostId, connection, openHostId, router, signedInToCloud, workerEnvironmentId, workerProjectId]);
-	// The tab bar's New task button starts a task on the board's own machine
-	// and project filters while the board is the page in front.
-	useFocusEffect(useCallback(() => setNewTaskHandler(spawnWorker), [spawnWorker]));
 	const listRef = useRef<FlatList<BoardRow>>(null);
-	useScrollToTopOnReselect("(workers)", listRef);
 
 	const projectSessions = useMemo(
 		() => filterWorkersByEnvironmentAndProject(allSessions, workerEnvironmentId, workerProjectId, allProjects),
@@ -275,10 +270,7 @@ export default function FleetScreen() {
 				identityKey={boardIdentityKey}
 				showMachine={!boardMachine}
 				listRef={listRef}
-				// iOS insets the list by the tab bar already. Android pads it clear
-				// of the floating New button, and of the clear tab bar it runs
-				// on under.
-				contentBottomInset={space.xxl + tabBar.inset}
+				contentBottomInset={space.xxl}
 				contentInsetAdjustmentBehavior="automatic"
 				overlayTopInset={headerOverlap + largeTitle.topInset}
 				refreshing={refreshing}
@@ -348,17 +340,14 @@ export default function FleetScreen() {
 
 			{/* Over the rows and under what floats: the bars' frost. */}
 			{largeTitle.edge}
-			{tabBar.frost}
-			{unpaired ? (
-				// Settings is where pairing starts; there is nothing yet to filter
-				// or spawn.
-				<BoardHeaderItems unread={0} notifications={false} />
-			) : (
-				// New task is the round button beside the tab bar (see
-				// app/(tabs)/_layout), which starts it on this page's filters through
-				// `setNewTaskHandler`; the header keeps settings and alerts.
-				<BoardHeaderItems unread={unreadCount} filter={filterMenu} />
-			)}
+			{/* The sidebar holds Settings, Pull requests and Notifications, as on
+			    the desktop; its button carries what needs you. New task starts on
+			    this board's filters. */}
+			<BoardHeaderItems
+				badge={unpaired ? 0 : workersNeedingYou(allSessions) + unreadCount}
+				filter={unpaired ? null : filterMenu}
+				onNewTask={unpaired ? undefined : spawnWorker}
+			/>
 		</View>
 	);
 }

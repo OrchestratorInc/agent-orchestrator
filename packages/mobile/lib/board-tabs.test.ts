@@ -1,23 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
-import { boardTabs, boardTitle, workersNeedingYou } from "./board-tabs";
+import { boardTitle, workersNeedingYou } from "./board-tabs";
 
-describe("board tabs", () => {
-	// The groups add a stack to each tab without changing its URL, so every link,
-	// push and notification that opens a tab still lands on it.
-	it("keeps each tab on the URL it always had", () => {
-		expect(boardTabs.map(({ name, href }) => [name, href])).toEqual([
-			["(workers)", "/"],
-			["(projects)", "/projects"],
-		]);
-	});
-
-	it.each([
-		[undefined, "Workers"],
-		["(workers)", "Workers"],
-		["(projects)", "Projects"],
-	])("names the board after its %s tab", (tab, expected) => {
-		expect(boardTitle(tab)).toBe(expected);
+describe("boardTitle", () => {
+	// The board is the Workers page alone; Projects moved into the sidebar.
+	it.each([undefined, "(workers)", "(projects)"])("names the board Workers for %s", (route) => {
+		expect(boardTitle(route)).toBe("Workers");
 	});
 });
 
