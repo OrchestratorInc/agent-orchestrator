@@ -189,12 +189,13 @@ function SandboxSwitchRow({ project, readOnly, configKey, id, label, description
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
-	const [saved, setSaved] = useState(() => checkedOf(project.config));
+	// The confirmed value is the current project's: a save or refetch puts the
+	// server's answer there.
+	const saved = checkedOf(project.config);
 	const [unsupported, setUnsupported] = useState(false);
 	const save = useMutation({
 		mutationFn: (value: boolean) => client.updateProjectSettings(project.orgId, project.id, { config: { [configKey]: value } }),
 		onSuccess: (response) => {
-			setSaved(checkedOf(response.project.config));
 			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
 			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		},
