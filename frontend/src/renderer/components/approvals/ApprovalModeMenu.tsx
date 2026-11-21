@@ -44,13 +44,19 @@ export function ApprovalModeMenuRow({ sessionId, hostId, onOpen }: { sessionId: 
 			}}
 		>
 			<ShieldCheck aria-hidden="true" className="size-icon-base shrink-0" />
-			{/* The label stays on one line; the mode gives way, as the Profile row's value does. */}
-			<span className="flex-1 whitespace-nowrap">{t("browser.approvals.label")}</span>
-			{mode ? (
-				<span className="min-w-0 max-w-20 truncate text-caption text-passive" title={t(`approvals.mode.${mode}`)}>
-					{t(`approvals.mode.${mode}`)}
+			{/* The label keeps its width and the mode gives way first; a label longer
+			    than the whole space (some translations) ellipsizes instead of
+			    pushing the mode and chevron out of the menu. */}
+			<span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+				<span className="max-w-full shrink-0 truncate" title={t("browser.approvals.label")}>
+					{t("browser.approvals.label")}
 				</span>
-			) : null}
+				{mode ? (
+					<span className="ml-auto min-w-0 max-w-20 truncate text-caption text-passive" title={t(`approvals.mode.${mode}`)}>
+						{t(`approvals.mode.${mode}`)}
+					</span>
+				) : null}
+			</span>
 			<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 		</DropdownMenuItem>
 	);

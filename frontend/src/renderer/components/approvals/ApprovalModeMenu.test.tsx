@@ -62,7 +62,7 @@ describe("ApprovalModeMenu", () => {
 		expect(approvalPolicyQueryKey("ao-9", "box")).not.toEqual(approvalPolicyQueryKey("ao-9"));
 	});
 
-	it("keeps the root row's label on one line and truncates the mode instead", async () => {
+	it("fits the root row in the menu: the mode gives way first, then the label ellipsizes", async () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue(policy("every-submit") as never);
 		render(
 			<DropdownMenu open>
@@ -74,9 +74,17 @@ describe("ApprovalModeMenu", () => {
 		);
 		const value = await screen.findByText("Every form submission");
 		const label = screen.getByText("Ask before acting");
-		expect(label).toHaveClass("whitespace-nowrap");
-		expect(value).toHaveClass("min-w-0", "truncate", "max-w-20");
-		// The full mode stays readable when truncated.
+		// Label and mode share one box that takes the space between the icon
+		// and the chevron and clips anything past it, so nothing overflows the menu.
+		const box = label.parentElement!;
+		expect(value.parentElement).toBe(box);
+		expect(box).toHaveClass("flex", "min-w-0", "flex-1", "overflow-hidden");
+		// The label keeps its full width when it fits and never grows past the
+		// box; a longer translation ellipsizes and stays readable on hover.
+		expect(label).toHaveClass("shrink-0", "max-w-full", "truncate");
+		expect(label).toHaveAttribute("title", "Ask before acting");
+		// The mode takes what is left.
+		expect(value).toHaveClass("min-w-0", "max-w-20", "truncate");
 		expect(value).toHaveAttribute("title", "Every form submission");
 	});
 });
