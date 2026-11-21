@@ -74,6 +74,8 @@ export type SidebarTreeInput = {
 	isCloudHost(hostId: string | undefined): boolean;
 	/** Lower-cased filter text; empty lists everything. */
 	query?: string;
+	/** Only this machine's (or Cloud's) sessions and projects; absent lists every device. */
+	hostId?: string;
 };
 
 export function sidebarSessionKey(session: { id: string; hostId?: string }): string {
@@ -140,7 +142,8 @@ export function buildSidebarTree(input: SidebarTreeInput): SidebarTree {
 		};
 	};
 
-	const workers = input.sessions.filter(isSidebarWorker).slice().sort(newestFirst);
+	const onDevice = (hostId: string | undefined) => !input.hostId || (hostId ?? "") === input.hostId;
+	const workers = input.sessions.filter((session) => isSidebarWorker(session) && onDevice(session.hostId)).slice().sort(newestFirst);
 	const rows = workers.map(row);
 	const visible = (item: SidebarSessionRow) => !query || matches(item.title, query);
 
@@ -153,8 +156,11 @@ export function buildSidebarTree(input: SidebarTreeInput): SidebarTree {
 
 	const projects: SidebarProjectNode[] = [];
 	for (const project of input.projects) {
-		if (project.kind === "scratch") continue;
-		const own = rows.filter((item) => item.session.projectId === project.id && (item.session.hostId ?? "") === (project.hostId ?? ""));
+		if (project.kind === "scratch" || !onDevice(project.hostId)) continue;
+		// The project row names the machine; its sessions don't repeat it (desktop).
+		const own = rows
+			.filter((item) => item.session.projectId === project.id && (item.session.hostId ?? "") === (project.hostId ?? ""))
+			.map((item) => (item.hostLabel ? { ...item, hostLabel: undefined } : item));
 		const projectMatches = !query || matches(project.name, query);
 		const listed = projectMatches ? own : own.filter(visible);
 		if (query && !projectMatches && listed.length === 0) continue;

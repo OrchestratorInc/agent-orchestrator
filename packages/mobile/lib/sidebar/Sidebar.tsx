@@ -20,6 +20,9 @@ import { useOpenPage } from "../pageNavigation";
 import { STANDALONE_PROJECT } from "../projectFilter";
 import { reviewRouteForSession } from "../reviewView";
 import { useApp } from "../store";
+import type { MachineFreshness } from "../machineFreshness";
+import { useMachineFreshness } from "../useMachineFreshness";
+import { sortWorkerEnvironments } from "../worker-controls";
 import { refreshControlColors } from "../refreshControlColors";
 import { UnpairedState } from "../UnpairedState";
 import { useRefreshActions } from "../useRefreshActions";
@@ -107,8 +110,9 @@ function withAlpha(hex: string, alpha: number): string {
 
 const PREFS_KEY = "ao.sidebar.prefs.v2";
 /** `collapsed`: projects the user folded. Home shows every project's dropdown until then. */
-type Prefs = { collapsed: string[]; pinnedProjects: string[]; closedSections: string[] };
-const EMPTY_PREFS: Prefs = { collapsed: [], pinnedProjects: [], closedSections: [] };
+type Prefs = { collapsed: string[]; pinnedProjects: string[]; closedSections: string[]; device: string };
+/** `device`: the devices bar's choice, a host id; empty shows every device. */
+const EMPTY_PREFS: Prefs = { collapsed: [], pinnedProjects: [], closedSections: [], device: "" };
 
 function useSidebarPrefs() {
 	const [prefs, setPrefs] = useState<Prefs>(EMPTY_PREFS);
@@ -126,11 +130,12 @@ function useSidebarPrefs() {
 			return value;
 		});
 	}, []);
-	const toggleIn = useCallback((field: keyof Prefs, key: string) => update((prev) => ({
+	const setDevice = useCallback((device: string) => update((prev) => ({ ...prev, device })), [update]);
+	const toggleIn = useCallback((field: "collapsed" | "pinnedProjects" | "closedSections", key: string) => update((prev) => ({
 		...prev,
 		[field]: prev[field].includes(key) ? prev[field].filter((item) => item !== key) : [...prev[field], key],
 	})), [update]);
-	return { prefs, toggleIn };
+	return { prefs, toggleIn, setDevice };
 }
 
 // ── The sidebar ───────────────────────────────────────────────────────────────
@@ -156,7 +161,8 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 	const app = useApp();
 	const cloudState = useCloud();
 	const read = useReadState();
-	const { prefs, toggleIn } = useSidebarPrefs();
+	const { prefs, toggleIn, setDevice } = useSidebarPrefs();
+	const freshness = useMachineFreshness();
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const openPage = useOpenPage();
 	const [query, setQuery] = useState<string | null>(null);
@@ -170,16 +176,22 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 	const activeKey = onSession && params.id ? sidebarSessionKey({ id: String(params.id), hostId: params.hostId ? String(params.hostId) : undefined }) : undefined;
 	const { refreshing, onRefresh } = useRefreshActions(app.refreshAll);
 	const environments = app.hostStates.length + (app.cloud ? 1 : 0);
+	// The devices bar: every paired machine and Orchestrator Cloud, in name order.
+	const devices = useMemo(() => sortWorkerEnvironments([...app.hostStates, ...(app.cloud ? [app.cloud] : [])]
+		.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance }))), [app.cloud, app.hostStates]);
+	// A device that has gone (forgotten, signed out) shows everything again.
+	const device = devices.some((item) => item.id === prefs.device) ? prefs.device : "";
 
 	const tree = useMemo(() => buildSidebarTree({
 		sessions: app.allSessions,
 		projects: app.allProjects,
-		showHosts: environments > 1,
+		showHosts: !device && environments > 1,
+		hostId: device || undefined,
 		activeKey,
 		isUnread: (session) => isUnread(read, sidebarSessionKey(session), changedAt(session)),
 		isCloudHost,
 		query: query ?? "",
-	}), [activeKey, app.allProjects, app.allSessions, environments, query, read]);
+	}), [activeKey, app.allProjects, app.allSessions, device, environments, query, read]);
 
 	// Each project's orchestrator, as the Projects page found it.
 	const projectRows = useMemo(() => {
@@ -332,6 +344,9 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 				<Text accessibilityRole="header" style={[styles.brandLabel, styles.homeTitle]} numberOfLines={1}>Orchestrator</Text>
 				<HeaderButton icon={searching ? "x" : "search"} label={searching ? "Close search" : "Search"} onPress={() => setQuery(searching ? null : "")} colors={colors} />
 			</View>
+			{devices.length > 0 ? (
+				<DevicesBar devices={devices} selected={device} freshness={freshness} onSelect={setDevice} colors={colors} styles={styles} />
+			) : null}
 			{searching ? (
 				<View style={styles.fixed}>
 					<View style={[styles.navRow, styles.searchRow]}>
@@ -352,28 +367,6 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 			) : null}
 
 			<ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { paddingBottom: FAB_HEIGHT + 32 + insets.bottom }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}>
-				{tree.standalone.length > 0 || !searching ? (
-					<Section
-						label="Sessions"
-						open={sectionOpen("standalone")}
-						onToggle={() => toggleIn("closedSections", "standalone")}
-						trailing={paired ? <SectionAction icon="plus" label="New standalone agent" onPress={() => newTask(STANDALONE_PROJECT)} colors={colors} /> : null}
-						styles={styles}
-						colors={colors}
-					>
-						{standalone.listed.map((row) => sessionRow(row, false))}
-						{standalone.hiddenCount > 0 ? (
-							<ShowMore
-								expanded={showAll.standalone === true}
-								label={showAll.standalone ? "Show less" : `Show ${standalone.hiddenCount} more`}
-								onPress={() => setShowAll((prev) => ({ ...prev, standalone: !prev.standalone }))}
-								styles={styles}
-								colors={colors}
-							/>
-						) : null}
-					</Section>
-				) : null}
-
 				<Section
 					label="Projects"
 					open={sectionOpen("projects")}
@@ -449,6 +442,28 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 						/>
 					) : null}
 				</Section>
+
+				{tree.standalone.length > 0 || !searching ? (
+					<Section
+						label="Sessions"
+						open={sectionOpen("standalone")}
+						onToggle={() => toggleIn("closedSections", "standalone")}
+						trailing={paired ? <SectionAction icon="plus" label="New standalone agent" onPress={() => newTask(STANDALONE_PROJECT)} colors={colors} /> : null}
+						styles={styles}
+						colors={colors}
+					>
+						{standalone.listed.map((row) => sessionRow(row, false))}
+						{standalone.hiddenCount > 0 ? (
+							<ShowMore
+								expanded={showAll.standalone === true}
+								label={showAll.standalone ? "Show less" : `Show ${standalone.hiddenCount} more`}
+								onPress={() => setShowAll((prev) => ({ ...prev, standalone: !prev.standalone }))}
+								styles={styles}
+								colors={colors}
+							/>
+						) : null}
+					</Section>
+				) : null}
 			</ScrollView>
 
 			{/* New chat, floating at the bottom right over the list. */}
@@ -501,6 +516,54 @@ function OrchestratorRow({ action, busy, workers, active, colors, styles, onPres
 			<Text style={styles.age}>{detail}</Text>
 		</Pressable>
 	);
+}
+
+/**
+ * The devices bar: a thin row of chips under home's header, one per paired
+ * machine and Orchestrator Cloud, each with its connection dot. Choosing one
+ * shows only that device's projects and sessions; All shows every device.
+ */
+function DevicesBar({ devices, selected, freshness, onSelect, colors, styles }: {
+	devices: readonly { id: string; name: string }[];
+	selected: string;
+	freshness: ReadonlyMap<string, MachineFreshness>;
+	onSelect(id: string): void;
+	colors: Palette;
+	styles: Styles;
+}) {
+	const chip = (id: string, label: string, dot?: string) => {
+		const on = selected === id;
+		return (
+			<Pressable
+				key={id || "all"}
+				accessibilityRole="button"
+				accessibilityState={{ selected: on }}
+				accessibilityLabel={id ? `${label}, ${freshnessLabel(freshness.get(id))}` : "All devices"}
+				onPress={() => { haptics.select(); onSelect(on && id ? "" : id); }}
+				hitSlop={{ top: 8, bottom: 8 }}
+				style={[styles.deviceChip, on && { backgroundColor: colors.active, borderColor: colors.active }]}
+				testID={`device-${id || "all"}`}
+			>
+				{dot ? <View style={[styles.deviceDot, { backgroundColor: dot }]} /> : null}
+				<Text style={[styles.deviceLabel, on && styles.navLabelActive]} numberOfLines={1}>{label}</Text>
+			</Pressable>
+		);
+	};
+	return (
+		<ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.devicesBar} contentContainerStyle={styles.devicesContent} testID="devices-bar">
+			{chip("", "All")}
+			{devices.map((item) => chip(item.id, item.name, freshnessColor(freshness.get(item.id), colors)))}
+		</ScrollView>
+	);
+}
+
+// The freshness map lists only machines that are not live; a missing entry is live.
+function freshnessColor(state: MachineFreshness | undefined, colors: Palette): string {
+	return state === "unreachable" ? colors.passive : state === "lagging" ? colors.review : colors.ready;
+}
+
+function freshnessLabel(state: MachineFreshness | undefined): string {
+	return state === "unreachable" ? "can't be reached" : state === "lagging" ? "slow to answer" : "connected";
 }
 
 /** A 36pt square header control, the desktop sidebar's icon-button size. */
@@ -943,6 +1006,11 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 	drawerRoot: { borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.border },
 	homeHeader: { height: 52, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8 },
 	homeTitle: { flex: 1, paddingHorizontal: 6 },
+	devicesBar: { flexGrow: 0, flexShrink: 0 },
+	devicesContent: { paddingHorizontal: 12, paddingBottom: 6, gap: 5, alignItems: "center" },
+	deviceChip: { height: 22, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, borderRadius: 11, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+	deviceDot: { width: 6, height: 6, borderRadius: 3 },
+	deviceLabel: { fontFamily: font.medium, fontSize: 11, color: c.muted, maxWidth: 140 },
 	fab: { position: "absolute", right: 16, height: FAB_HEIGHT, borderRadius: FAB_HEIGHT / 2, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 8, shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
 	fabLabel: { fontFamily: font.medium, fontSize: 15 },
 	fabPressed: { opacity: 0.85 },

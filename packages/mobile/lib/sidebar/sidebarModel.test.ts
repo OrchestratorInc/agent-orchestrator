@@ -137,6 +137,20 @@ describe("buildSidebarTree", () => {
 		const many = buildSidebarTree(input({ sessions, projects, showHosts: true }));
 		expect(many.projects.map((node) => [node.hostLabel, node.cloud])).toEqual([["Mac", false], [undefined, true]]);
 		expect(many.projects[1].sessions[0].cloud).toBe(true);
+		// The project row names the machine; its sessions don't repeat it, as on the desktop.
+		expect(many.projects[0].sessions[0].hostLabel).toBeUndefined();
+	});
+
+	// The devices bar: one machine (or Cloud) at a time, its sessions and projects alone.
+	it("lists one device's sessions and projects when filtered to it", () => {
+		const tree = buildSidebarTree(input({
+			projects: [project("app"), project("app", { hostId: "pc", hostName: "PC" })],
+			sessions: [session({ id: "mac-1" }), session({ id: "pc-1", hostId: "pc", hostName: "PC" }), session({ id: "pc-solo", projectId: "", hostId: "pc", hostName: "PC" })],
+			hostId: "pc",
+		}));
+		expect(tree.projects.map((node) => node.key)).toEqual(["pc:app"]);
+		expect(tree.projects[0].sessions.map((row) => row.session.id)).toEqual(["pc-1"]);
+		expect(tree.standalone.map((row) => row.session.id)).toEqual(["pc-solo"]);
 	});
 
 	it("searches session titles and project names", () => {
