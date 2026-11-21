@@ -1327,6 +1327,15 @@ describe("ChatMarkdown block streaming", () => {
 		copy.mockRestore();
 	});
 
+	it("copies an indented code block's current source as it grows", async () => {
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const { rerender } = render(<ChatMarkdown text={"Run:\n\n    echo one"} streaming />);
+		rerender(<ChatMarkdown text={"Run:\n\n    echo one\n    echo two"} streaming />);
+		await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith("echo one\necho two");
+		copy.mockRestore();
+	});
+
 	it("resolves late reference definitions and keeps footnote IDs document-wide", () => {
 		const text = "First [docs][ref]\n\nSecond\n\nThird";
 		const { container, rerender } = render(<ChatMarkdown text={text} streaming />);

@@ -363,8 +363,7 @@ const StreamCode = memo(function StreamCode({ text }: { text: string }) {
 
 const StreamCopy = memo(function StreamCopy() {
 	const ref = useRef<HTMLSpanElement>(null);
-	const [code, setCode] = useState("");
-	useLayoutEffect(() => setCode(ref.current?.closest('[data-markdown="code-block"]')?.querySelector("pre code")?.textContent?.replace(/\n$/, "") ?? ""), []);
+	const code = () => ref.current?.closest('[data-markdown="code-block"]')?.querySelector("pre code")?.textContent?.replace(/\n$/, "") ?? "";
 	return <span ref={ref}><CopyButton text={code} label="Copy code" /></span>;
 });
 
