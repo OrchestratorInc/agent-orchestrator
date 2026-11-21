@@ -1,14 +1,16 @@
 type QuitEvent = { preventDefault(): void };
 
 // How long an outside quit may spend on cleanup before the process exits anyway.
-// Homebrew's `uninstall quit:` and logout give up on an app within seconds.
+// Homebrew's `uninstall quit:` gives up on an app within seconds.
 export const EXTERNAL_QUIT_DEADLINE_MS = 5_000;
 
 /**
  * Controls macOS quit requests while the tray and daemon keep running.
- * AO's own Quit (app menu, ⌘Q, the Quit command) closes the window and leaves
- * the Dock. Every other quit request — an Apple Event from `osascript`,
- * Homebrew, the Dock menu or logout, and SIGTERM — exits the process.
+ * Orchestrator's own Quit (app menu, ⌘Q, the Quit command) closes the window
+ * and leaves the Dock. Every other quit request (a quit Apple Event from
+ * `osascript`, Homebrew or the Dock menu, and SIGTERM) exits the process.
+ * Logout and shutdown are handled by the powerMonitor "shutdown" listener,
+ * which calls quitCompletely().
  * Electron routes them all through `before-quit`, so the in-app Quit marks
  * itself before app.quit() and anything unmarked counts as an outside quit.
  */
@@ -21,7 +23,7 @@ export function createDesktopQuitController(options: {
 	hideDock(): void;
 	quit(): void;
 	/** An outside quit is about to exit the process (agents should be kept). */
-	externalQuitStarted?(): void;
+	externalQuitStarted(): void;
 	/** Ends the process without waiting for cleanup. */
 	exit(): void;
 	externalQuitDeadlineMs?: number;
@@ -47,10 +49,10 @@ export function createDesktopQuitController(options: {
 			) return false;
 
 			if (!backgroundQuitRequested) {
-				// Not AO's own Quit: really exit, and never hang the caller.
+				// Not Orchestrator's own Quit: really exit, and never hang the caller.
 				quitCompletelyRequested = true;
 				externalQuitRequested = true;
-				options.externalQuitStarted?.();
+				options.externalQuitStarted();
 				return false;
 			}
 			backgroundQuitRequested = false;
@@ -74,7 +76,7 @@ export function createDesktopQuitController(options: {
 				options.exit();
 			}, options.externalQuitDeadlineMs ?? EXTERNAL_QUIT_DEADLINE_MS);
 		},
-		/** AO's own Quit: on macOS with the tray this only closes the window. */
+		/** Orchestrator's own Quit: on macOS with the tray this only closes the window. */
 		backgroundQuit(): void {
 			backgroundQuitRequested = true;
 			try {
@@ -92,6 +94,9 @@ export function createDesktopQuitController(options: {
 		},
 		windowCloseCanceled(): void {
 			hideDockOnWindowClosed = false;
+			// The draft guard on the window can still cancel an outside quit after
+			// the cleanup deadline started; never force an exit the person declined.
+			clearDeadline();
 		},
 		quitCompletely(): void {
 			quitCompletelyRequested = true;

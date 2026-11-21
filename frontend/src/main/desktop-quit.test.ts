@@ -29,7 +29,7 @@ function setup(overrides: Partial<QuitOptions> = {}) {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("desktop quit", () => {
-	it("closes the macOS window on AO's own Quit without quitting the tray or daemon owner", () => {
+	it("closes the macOS window on Orchestrator's own Quit without quitting the tray or daemon owner", () => {
 		const { options, event, inAppQuit } = setup();
 		expect(inAppQuit()).toBe(true);
 		expect(event.preventDefault).toHaveBeenCalledOnce();
@@ -60,7 +60,7 @@ describe("desktop quit", () => {
 		expect(options.hideDock).not.toHaveBeenCalled();
 	});
 
-	it("leaves the Dock right away when AO's own Quit runs with no window, without exiting", () => {
+	it("leaves the Dock right away when Orchestrator's own Quit runs with no window, without exiting", () => {
 		const { options, event, inAppQuit } = setup({ hasWindow: () => false });
 		expect(inAppQuit()).toBe(true);
 		expect(event.preventDefault).toHaveBeenCalledOnce();
@@ -80,7 +80,7 @@ describe("desktop quit", () => {
 		expect(options.externalQuitStarted).toHaveBeenCalledOnce();
 	});
 
-	it("exits on an outside quit even after AO's own Quit has backgrounded the app", () => {
+	it("exits on an outside quit even after Orchestrator's own Quit has backgrounded the app", () => {
 		const { options, controller, event, inAppQuit } = setup({ hasWindow: () => false });
 		expect(inAppQuit()).toBe(true);
 		event.preventDefault.mockClear();
@@ -137,6 +137,18 @@ describe("desktop quit", () => {
 		expect(options.exit).not.toHaveBeenCalled();
 		expect(inAppQuit()).toBe(true);
 		expect(options.closeWindow).toHaveBeenCalledOnce();
+	});
+
+	it("never forces an exit after the window's draft guard declines an outside quit", () => {
+		vi.useFakeTimers();
+		const { options, controller, event } = setup({ externalQuitDeadlineMs: 5_000 });
+		controller.handleBeforeQuit(event);
+		controller.startCleanupDeadline();
+		vi.advanceTimersByTime(2_000);
+		// Electron closes the window during the quit; the draft guard cancels it.
+		controller.windowCloseCanceled();
+		vi.advanceTimersByTime(60_000);
+		expect(options.exit).not.toHaveBeenCalled();
 	});
 
 	it("does not arm a canceled outside quit when later full-quit cleanup starts", () => {

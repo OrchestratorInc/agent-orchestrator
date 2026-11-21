@@ -517,8 +517,8 @@ const desktopQuit = createDesktopQuitController({
 	},
 	hideDock: () => app.dock?.hide(),
 	quit: () => app.quit(),
-	// An outside quit (Homebrew, osascript, the Dock, SIGTERM) exits the app but
-	// keeps agents, like an update restart: nothing asked to stop them.
+	// An outside quit keeps agents, like an update restart: nothing asked to
+	// stop them.
 	externalQuitStarted: () => { preserveAgentsOnQuit = true; },
 	exit: () => {
 		console.warn("AO: quit cleanup exceeded the outside-quit deadline; exiting");
@@ -4987,10 +4987,10 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// AO's own macOS Quit (menu, ⌘Q) closes the window and leaves the Dock; the
-// tray stays. A quit from outside (Apple Event from Homebrew/osascript/the Dock,
-// logout, SIGTERM) exits within a few seconds and keeps agents. Full exit drops the supervisor socket, stopping the app-owned daemon after
-// its grace period and stopping agents. Planned updates explicitly detach.
+// On macOS with the tray, Orchestrator's own Quit backgrounds the app and an
+// outside quit exits it (see createDesktopQuitController). Full exit drops the
+// supervisor socket, stopping the app-owned daemon after its grace period and
+// stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
