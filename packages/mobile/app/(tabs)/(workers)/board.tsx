@@ -41,6 +41,8 @@ import {
 	workerProjectOptions,
 } from "../../../lib/worker-controls";
 import { space } from "../../../lib/tokens";
+import { KanbanLaneSwitcher, useKanbanLane } from "../../../lib/kanban-lane-switcher";
+import { laneLabel, sessionsForLane } from "../../../lib/kanbanLanes";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -122,6 +124,13 @@ export default function FleetScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- archiveSourcesKey covers every field read here
 	}, [archiveSourcesKey]);
 	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;
+	// The desktop board's lanes, one at a time: the switcher's lane filters the
+	// live cards, and the board's Archive keeps every archived one.
+	const kanban = useKanbanLane(projectSessions, boardIdentityKey);
+	const showLanes = !projectSessions.every(isArchived);
+	const laneSessions = useMemo(() => (showLanes ? sessionsForLane(projectSessions, kanban.lane) : projectSessions), [kanban.lane, projectSessions, showLanes]);
+	const laneEmpty = showLanes && kanban.counts[kanban.lane] === 0;
+	const listKey = showLanes ? `${boardIdentityKey}|${kanban.lane}` : boardIdentityKey;
 	const rowWidths = useMenuRowWidths();
 	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
 	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
@@ -243,6 +252,7 @@ export default function FleetScreen() {
 					onSelectEnvironment={selectEnvironment}
 				/>
 			) : null}
+			{showLanes ? <KanbanLaneSwitcher lane={kanban.lane} counts={kanban.counts} onSelect={kanban.setLane} /> : null}
 		</>
 	);
 
@@ -254,14 +264,14 @@ export default function FleetScreen() {
 			    tracking a view that was gone, so it stayed expanded over the rows. */}
 			<WorkerBoardList
 				onScroll={largeTitle.onScroll}
-				key={boardIdentityKey}
+				key={listKey}
 				// Held here, above the key, so the board rebuilt for a new filter
 				// starts its rows at the width the last board's rows measured.
 				rowWidths={rowWidths}
-				sessions={projectSessions}
+				sessions={laneSessions}
 				archiveSources={archiveSources}
 				archiveFooter
-				identityKey={boardIdentityKey}
+				identityKey={listKey}
 				showMachine={!boardMachine}
 				listRef={listRef}
 				contentBottomInset={space.xxl}
@@ -272,7 +282,9 @@ export default function FleetScreen() {
 				ListHeaderComponent={listHeader}
 				onEmptyChange={setBoardEmpty}
 				ListEmptyComponent={
-					emptyView === "unpaired" ? (
+					laneEmpty ? (
+						<EmptyState icon="layers" title={`Nothing in ${laneLabel(kanban.lane)}`} message="The other lanes have this board's sessions." />
+					) : emptyView === "unpaired" ? (
 						<UnpairedState />
 					) : emptyView === "loading" ? (
 						<View style={styles.center}>

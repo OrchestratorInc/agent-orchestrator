@@ -24,6 +24,9 @@ import { useFabExpanded } from "../../lib/useFabExpanded";
 import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { AddFab, addFabClearance } from "../../lib/AddFab";
 import { space } from "../../lib/tokens";
+import { isArchived } from "../../lib/agentsView";
+import { KanbanLaneSwitcher, useKanbanLane } from "../../lib/kanban-lane-switcher";
+import { laneLabel, sessionsForLane } from "../../lib/kanbanLanes";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -72,6 +75,11 @@ function ProjectScreenContent() {
 	// The archive is counted, not listed, by a machine that pages it.
 	const pagedArchived = hostMatches && id ? archive?.byProject[id] ?? 0 : 0;
 	const stats = useMemo(() => projectPageStats(projectSessions, row?.link, pagedArchived), [projectSessions, row?.link, pagedArchived]);
+	// The desktop board's lanes, one at a time; the Archive keeps every archived worker.
+	const kanban = useKanbanLane(projectSessions, `${currentHostId ?? ""}|${id ?? ""}`);
+	const showLanes = !projectSessions.every(isArchived);
+	const laneSessions = useMemo(() => (showLanes ? sessionsForLane(projectSessions, kanban.lane) : projectSessions), [kanban.lane, projectSessions, showLanes]);
+	const laneEmpty = showLanes && kanban.counts[kanban.lane] === 0;
 	const archiveSources = useMemo<ArchiveSource[]>(
 		() => hostMatches && id && archive && currentHostId ? [{ hostId: currentHostId, projectId: id, summary: archive }] : [],
 		[hostMatches, id, archive, currentHostId],
@@ -175,7 +183,9 @@ function ProjectScreenContent() {
 				<WorkerBoardList
 					onScroll={fab.onScroll}
 					contentInsetAdjustmentBehavior="automatic"
-					sessions={projectSessions}
+					key={showLanes ? kanban.lane : "all"}
+					identityKey={showLanes ? kanban.lane : "all"}
+					sessions={laneSessions}
 					archiveSources={archiveSources}
 					onEmptyChange={setNoWorkersShown}
 					showProject={false}
@@ -196,9 +206,12 @@ function ProjectScreenContent() {
 							busy={busyProjects.has(hostedRowKey(currentHostId ?? "", row.project.id))}
 							onPress={openOrchestrator}
 						/>
+						{showLanes ? <KanbanLaneSwitcher lane={kanban.lane} counts={kanban.counts} onSelect={kanban.setLane} /> : null}
 						</>
 					}
-					ListEmptyComponent={
+					ListEmptyComponent={laneEmpty ? (
+						<EmptyState icon="layers" title={`Nothing in ${laneLabel(kanban.lane)}`} message="The other lanes have this project's workers." />
+					) : (
 						<View>
 							<ListSectionHeader label="Workers" count={0} />
 							<EmptyState
@@ -208,7 +221,7 @@ function ProjectScreenContent() {
 								action={<Button title="Start task" icon="plus" onPress={startTask} />}
 							/>
 						</View>
-					}
+					)}
 				/>
 			)}
 			{offerNewTask ? <AddFab expanded={fab.expanded} label="New task" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}

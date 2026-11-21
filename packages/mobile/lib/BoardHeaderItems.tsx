@@ -10,9 +10,8 @@ const NEW_TASK_ICON = toolbarIcon({ ios: "square.and.pencil", android: "edit_squ
 export type BoardHeaderItemsProps = {
 	/**
 	 * The page's filter: a `Stack.Toolbar.Menu` element, memoised by the page.
-	 * iOS leads the bar with it, across from New task; Android's top app bar
-	 * has no leading actions (its back button is there), so it heads the
-	 * trailing ones.
+	 * It heads the trailing items on both platforms: the board is pushed from
+	 * the side bar, and its leading slot is the back button's.
 	 */
 	filter?: ReactElement | null;
 	/** New task, ending the bar. Absent when there is nowhere to start one. */
@@ -31,19 +30,11 @@ export function BoardHeaderItems({ filter = null, onNewTask }: BoardHeaderItemsP
 	const t = useTheme();
 	const ios = Platform.OS === "ios";
 	const ink = ios ? t.textPrimary : undefined;
-	const leading = useMemo(() => (
-		ios && filter ? <Stack.Toolbar placement="left">{filter}</Stack.Toolbar> : null
-	), [filter, ios]);
 	const trailing = useMemo(() => (
 		<Stack.Toolbar placement="right">
-			{!ios ? filter : null}
+			{filter}
 			{onNewTask ? <Stack.Toolbar.Button icon={NEW_TASK_ICON} tintColor={ink} hidesSharedBackground accessibilityLabel="New task" onPress={onNewTask} /> : null}
 		</Stack.Toolbar>
-	), [filter, ink, ios, onNewTask]);
-	return (
-		<>
-			{leading}
-			{trailing}
-		</>
-	);
+	), [filter, ink, onNewTask]);
+	return trailing;
 }

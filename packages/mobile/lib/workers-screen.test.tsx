@@ -140,7 +140,8 @@ function toolbar(placement: "left" | "right"): ReactTestInstance | undefined {
 }
 /** The filter menu: leading on iOS, the first trailing item on Android. */
 function filterMenu(): ReactTestInstance {
-	const bar = fixtures.platform === "ios" ? toolbar("left")! : toolbar("right")!;
+	// Both platforms head the trailing items with it: the board's leading slot is its back button.
+	const bar = toolbar("right")!;
 	// Depth first, so the root menu comes before the submenus inside it.
 	return bar.findAllByType("StackToolbarMenu" as never)[0];
 }
@@ -240,7 +241,7 @@ describe("Workers header", () => {
 describe("Workers filter menu", () => {
 	// iOS leads the bar with the filter, across from the actions. It holds the
 	// projects alone: machines are the chip row's.
-	it("leads the iOS bar with the project choices, the current one checked, and no machines", () => {
+	it("heads the iOS bar's trailing items with the project choices, the current one checked, and no machines", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers");
@@ -354,12 +355,12 @@ describe("Workers filter menu", () => {
 	it("keeps the header items across polls that change only machine state", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
-		const menu = toolbar("left")!.props.children;
 		const trailing = toolbar("right")!.props;
 		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, lastSyncAt: host.lastSyncAt + 8_000, sessions: [...host.sessions] }));
 		act(() => renderer.update(<FleetScreen />));
-		expect(toolbar("left")!.props.children).toBe(menu);
 		expect(toolbar("right")!.props).toBe(trailing);
+		// The leading slot stays the back button's.
+		expect(toolbar("left")).toBeUndefined();
 	});
 });
 
