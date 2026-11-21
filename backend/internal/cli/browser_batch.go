@@ -74,8 +74,10 @@ func newBrowserBatchCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comman
 			"(blank lines and # comments are ignored), or a JSON array whose items are\n" +
 			"argument arrays or command-line strings. Steps come from --steps, a file,\n" +
 			"or standard input (the default, or `-`; a terminal is refused).\n\n" +
-			"Every step is checked for a known command, valid flags, and argument count\n" +
-			"before any step runs. Steps then run in order through the same path as the\n" +
+			"For the desktop browser and Chrome mode, every step is checked for a known\n" +
+			"command, valid flags, and argument count before any step runs. On a remote\n" +
+			"host (AO_AGENT_BROWSER_URL) the service checks each step's syntax when it\n" +
+			"runs, so a typo fails after earlier steps ran. Steps then run in order through the same path as the\n" +
 			"single command, and the batch stops at the first failure: a command error,\n" +
 			"an `act` that is ambiguous or matches nothing, or an `act` postcondition that\n" +
 			"is unmet or cancelled.\n\n" +

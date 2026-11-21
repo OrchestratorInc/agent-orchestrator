@@ -25,9 +25,11 @@ ao browser --help
 To run several commands in one call, use `ao browser batch` with one
 `agent-browser` command per line (see "Do a multi-step task in one call" in
 [browser.md](browser.md)). Orchestrator forwards each line as its own command and stops at
-the first one that fails; on a remote host a step fails only when the command
-itself reports an error, so add a `wait` after steps that should change the
-page.
+the first one that fails. Steps are not checked for syntax before the batch
+starts here (the remote service checks each one as it runs), so a typo stops
+the batch after the earlier lines have run. A remote step fails only when the
+command itself reports an error, so add a `wait` after steps that should change
+the page.
 
 ```bash
 ao browser batch --steps 'open http://localhost:5173/search

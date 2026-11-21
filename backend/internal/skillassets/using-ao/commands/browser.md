@@ -72,8 +72,11 @@ with shell-style quoting (no variables or globs; `#` lines are comments). A JSON
 array of argument arrays or command strings also works, and `--steps '<text>'`
 or a file path replaces stdin. At most 50 steps.
 
-- Every step is checked (known command, valid flags, argument count) before any
-  step runs, so a typo never leaves the page half-done.
+- In the desktop Browser panel and Chrome mode, every step is checked (known
+  command, valid flags, argument count) before any step runs, so a typo never
+  leaves the page half-done. On a remote host (`AO_AGENT_BROWSER_URL`), the
+  remote service checks each step's syntax only when that step runs, so a typo
+  fails after the earlier steps have already run.
 - Steps run in order through the same path as the single command: same
   postconditions, ref checks, untrusted-content markers, and the same Chrome
   mode or remote browser.
