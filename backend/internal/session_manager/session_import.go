@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -427,6 +428,17 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64, v
 // live-session registry, and their ACP session/load does not refuse a second
 // writer. See importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
+	return writableTranscriptOwnerMatching(ctx, path, func(_ context.Context, _ int, command string) bool {
+		for _, name := range importedProcessNames {
+			if strings.Contains(command, name) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func writableTranscriptOwnerMatching(ctx context.Context, path string, match func(context.Context, int, string) bool) bool {
 	if path == "" {
 		return false
 	}
@@ -434,18 +446,18 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 	defer cancel()
 	out, _ := process.CommandContext(probeCtx, "lsof", "-F", "pcfa", "--", path).Output()
 	command := ""
+	pid := 0
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "p") {
 			command = ""
+			pid, _ = strconv.Atoi(line[1:])
 		}
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
 		if line == "aw" || line == "au" {
-			for _, name := range importedProcessNames {
-				if strings.Contains(command, name) {
-					return true
-				}
+			if match(probeCtx, pid, command) {
+				return true
 			}
 		}
 	}
@@ -879,12 +891,27 @@ func importChanges(ctx context.Context, repo string) ([]string, error) {
 	var paths []string
 	for _, path := range strings.Split(string(tracked)+string(untracked), "\x00") {
 		// A nested repository is listed as a directory.
-		if path != "" && !strings.HasSuffix(path, "/") {
+		if path != "" && !strings.HasSuffix(path, "/") && !importNativeDatabasePath(path) {
 			paths = append(paths, filepath.FromSlash(path))
 		}
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths), nil
+}
+
+// Native Crush databases are prepared separately, selecting one conversation.
+// Transferring the raw store would leak unrelated history and block preparation.
+func importNativeDatabasePath(path string) bool {
+	path = filepath.FromSlash(path)
+	if filepath.Base(filepath.Dir(path)) != ".crush" {
+		return false
+	}
+	switch filepath.Base(path) {
+	case "crush.db", "crush.db-wal", "crush.db-shm", "crush.db-journal":
+		return true
+	default:
+		return false
+	}
 }
 
 // importFacts records each changed path as it is now; a path missing from the
@@ -1017,7 +1044,9 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		if err != nil {
 			return err
 		}
-		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD")
+		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD", "--", ".",
+			":(glob,exclude)**/.crush/crush.db", ":(glob,exclude)**/.crush/crush.db-wal",
+			":(glob,exclude)**/.crush/crush.db-shm", ":(glob,exclude)**/.crush/crush.db-journal")
 		if err != nil {
 			return err
 		}

@@ -74,6 +74,7 @@ func readWitness(data, session, generation string) (witness, error) {
 
 // AugmentRuntimeLaunchEnv implements the native TUI adapter contract.
 func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, data string, id domain.SessionID, generation string) {
+	prepareMemcodeRuntimeEnv(env)
 	env["AO_MEMCODE_DATA_DIR"] = data
 	env["AO_MEMCODE_GENERATION"] = generation
 	env["AO_MEMCODE_SESSION"] = string(id)
@@ -127,6 +128,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	if cfg.Config.Model != "" && cfg.Env["MEMCODE_ENDPOINT_URL"] != "" {
 		return errors.New("memcode custom endpoint models must be selected in the native TUI")
+	}
+	if cfg.Config.Model == "sol" {
+		if err := pinMemcodeSol(ctx, cfg.WorkspacePath); err != nil {
+			return err
+		}
 	}
 	instructions := []byte(cfg.SystemPrompt)
 	if cfg.SystemPromptFile != "" {

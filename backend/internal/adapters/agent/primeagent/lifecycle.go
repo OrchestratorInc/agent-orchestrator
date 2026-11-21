@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func (p *Plugin) executePrimeCommand(ctx context.Context, dataDir string, args .
 	if err != nil {
 		return nil, err
 	}
-	env := map[string]string{primeAgentCodingAgentDirEnv: dir}
+	env := map[string]string{primeAgentCodingAgentDirEnv: dir, "PRIME_AGENT_DAEMON_SOCKET": filepath.Join(dir, "daemon.sock")}
 	runner := p.runCommand
 	if runner == nil {
 		runner = runPrimeCommand

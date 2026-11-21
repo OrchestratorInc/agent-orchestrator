@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -26,8 +28,9 @@ type Plugin struct {
 	resolvedBinary string
 	runCommand     primeCommandRunner
 	// extensionFlag remembers, per binary, whether it accepts --extension.
-	extensionMu   sync.Mutex
-	extensionFlag map[string]bool
+	extensionMu      sync.Mutex
+	extensionFlag    map[string]bool
+	daemonSocketFlag map[string]bool
 }
 
 // New returns a ready-to-register Prime Agent adapter.
@@ -43,11 +46,13 @@ func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 // daemon/config state stays under AO_DATA_DIR instead of the user's normal
 // ~/.prime/agent profile.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
+	providerenv.Capture(env)
 	dir, err := primeDataDir(dataDir)
 	if err != nil {
 		return
 	}
 	env[primeAgentCodingAgentDirEnv] = dir
+	env["PRIME_AGENT_DAEMON_SOCKET"] = filepath.Join(dir, "daemon.sock")
 }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -102,7 +107,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if cfg.Prompt != "" {
 		cmd = append(cmd, "--", cfg.Prompt)
 	}
-	return cmd, nil
+	return providerenv.Command(cmd, cfg.Env), nil
 }
 
 func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemPromptFile string, cfg ports.AgentConfig) ([]string, error) {
@@ -119,7 +124,7 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 		return nil, err
 	}
 
-	cmd := []string{binary, "--session-dir", sessions}
+	cmd := []string{binary, "--session-dir", sessions, "--daemon-socket", filepath.Join(filepath.Dir(sessions), "daemon.sock")}
 	if p.acceptsExtension(ctx, binary) {
 		cmd = append(cmd, "--extension", extensionPath)
 	}
@@ -173,11 +178,14 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if agentSessionID == "" {
 		return nil, false, nil
 	}
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		return p.importedRestoreCommand(ctx, cfg, agentSessionID)
+	}
 	cmd, err := p.baseCommand(ctx, cfg.DataDir, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Config)
 	if err != nil {
 		return nil, false, err
 	}
-	return append(cmd, "--resume", agentSessionID), true, nil
+	return providerenv.Command(append(cmd, "--resume", agentSessionID), cfg.Env), true, nil
 }
 
 // SteersActiveTurn reports that Prime queues input submitted during a turn as
@@ -248,6 +256,7 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	// A binary replaced in place may have changed its flags too.
 	p.extensionMu.Lock()
 	p.extensionFlag = nil
+	p.daemonSocketFlag = nil
 	p.extensionMu.Unlock()
 }
 
