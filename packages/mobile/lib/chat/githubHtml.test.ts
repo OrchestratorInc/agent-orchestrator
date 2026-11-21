@@ -142,6 +142,19 @@ describe("githubSegments", () => {
 		expect(githubSegments("```\n<!--\n```\nshown")).toEqual([{ kind: "markdown", text: "```\n<!--\n```\nshown" }]);
 	});
 
+	it("reads a backslash-escaped tag as text, keeping what follows it visible", () => {
+		expect(githubSegments("Avoid \\<details\\> in this file.\n\nPlease rename the helper before merging.")).toEqual([
+			{ kind: "markdown", text: "Avoid <details> in this file.\n\nPlease rename the helper before merging." },
+		]);
+		expect(githubSegments("\\<!-- shown --\\> and \\<b>plain\\</b>")).toEqual([{ kind: "markdown", text: "<!-- shown --> and <b>plain</b>" }]);
+		// An escaped `&` keeps the entity after it as written.
+		expect(githubSegments("\\&lt;b&gt;")).toEqual([{ kind: "markdown", text: "&lt;b>" }]);
+		// Other escapes are left as written, and an escaped backtick opens no code span.
+		expect(githubSegments("\\*not bold\\* and \\`<b>x</b>\\`")).toEqual([{ kind: "markdown", text: "\\*not bold\\* and \\`**x**\\`" }]);
+		// Inside code, a backslash is code too.
+		expect(githubSegments("`\\<details>` stays")).toEqual([{ kind: "markdown", text: "`\\<details>` stays" }]);
+	});
+
 	it("keeps code spans inside HTML code as written", () => {
 		expect(githubSegments("<pre><code>const name = `world`;</code></pre>")).toEqual([{ kind: "markdown", text: "```\nconst name = `world`;\n```" }]);
 		expect(githubSegments("<pre>```\nfence\n```</pre>")).toEqual([{ kind: "markdown", text: "````\n```\nfence\n```\n````" }]);

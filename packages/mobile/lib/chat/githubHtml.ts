@@ -10,9 +10,10 @@
  * image without alt text is dropped and any other image becomes its alt text,
  * inline and block tags become their Markdown, and each `<details>` becomes a
  * section folded under its summary. Only tags on GitHub's allowlist are read as
- * tags, so prose such as `Array<string>` is left as written, and code (fences,
- * spans) is never touched. The Markdown this returns is not yet safe to draw:
- * callers still pass it through `safeMarkdown`.
+ * tags, so prose such as `Array<string>` is left as written, a backslash-escaped
+ * tag (`\<details\>`) stays text, and code (fences, spans) is never touched. The
+ * Markdown this returns is not yet safe to draw: callers still pass it through
+ * `safeMarkdown`.
  */
 
 export type GitHubSegment =
@@ -32,6 +33,8 @@ const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\1`*[ \t
 const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n|\n {0,3}(?:`{3,}[^`\n]*|~{3,}[^\n]*)\n)[\s\S])*?[^`])\1(?!`)/g;
 // An unterminated comment hides the rest of the text, as it does on GitHub.
 const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/g;
+// A backslash before ASCII punctuation (CommonMark): `\<details\>` names the tag and opens nothing.
+const ESCAPE = /\\[!-/:-@[-`{-~]/g;
 const DETAILS = /<details\b[^>]*>|<\/details\s*>/gi;
 const SUMMARY = /^\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i;
 
@@ -72,13 +75,21 @@ const shelve = (shelf: Shelf, code: string) => `\u0000${shelf.push(code) - 1}\u0
 const unshelve = (shelf: Shelf, text: string) => text.replace(/\u0000(\d+)\u0000/g, (_token, index: string) => shelf[Number(index)] ?? "");
 
 /**
- * Drops comments and sets code aside in one pass, left to right, with one rule:
- * whichever starts first wins. A backtick or a fence line inside a closed comment
- * is part of it and cannot reach past its `-->`; a fence or span that opens before
- * `<!--` keeps it as code. A fence wins a tie with a span at the same spot.
+ * Drops comments and sets code and escapes aside in one pass, left to right, with
+ * one rule: whichever starts first wins. A backtick or a fence line inside a closed
+ * comment is part of it and cannot reach past its `-->`; a fence or span that opens
+ * before `<!--` keeps it as code; an escaped `<` or backtick opens nothing, and a
+ * backslash inside code is code. A fence wins a tie with a span at the same spot.
  */
+/**
+ * What an escape draws as: `<`, `>` and `&` as themselves, since nothing after this
+ * reads HTML, and an `&` set aside cannot start an entity. Any other escape stays as
+ * written for the Markdown renderer. Code and fences come back unchanged.
+ */
+const escaped = (match: string) => /^\\[<>&]$/.test(match) ? match[1]! : match;
+
 function setAside(text: string, shelf: Shelf): string {
-	const readers = [FENCE, COMMENT, CODE_SPAN];
+	const readers = [FENCE, COMMENT, CODE_SPAN, ESCAPE];
 	// Each reader's next match from where the scan stands; a reader is searched again only once the scan passes it.
 	const next: Array<RegExpExecArray | null | undefined> = readers.map(() => undefined);
 	let out = "";
@@ -95,7 +106,7 @@ function setAside(text: string, shelf: Shelf): string {
 		});
 		if (!first) return out + text.slice(at);
 		const match: RegExpExecArray = first;
-		out += text.slice(at, match.index) + (match[0].startsWith("<!--") ? "" : shelve(shelf, match[0]));
+		out += text.slice(at, match.index) + (match[0].startsWith("<!--") ? "" : shelve(shelf, escaped(match[0])));
 		at = match.index + match[0].length;
 	}
 }
