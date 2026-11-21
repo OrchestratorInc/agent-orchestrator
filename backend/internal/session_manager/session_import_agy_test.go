@@ -12,10 +12,12 @@ import (
 
 type agyImportBridgeAgent struct {
 	transitionAgent
-	env chan map[string]string
+	env      chan map[string]string
+	probeEnv map[string]string
 }
 
-func (*agyImportBridgeAgent) NativeConversationExists(context.Context, ports.SessionRef, string, map[string]string) (bool, error) {
+func (a *agyImportBridgeAgent) NativeConversationExists(_ context.Context, _ ports.SessionRef, _ string, env map[string]string) (bool, error) {
+	a.probeEnv = maps.Clone(env)
 	return true, nil
 }
 
@@ -46,6 +48,13 @@ func TestAgyHandoffBridgeUsesPreparedImportHome(t *testing.T) {
 			settled := awaitTransition(t, store, transition.ID)
 			if settled.ErrorCode != "HANDOFF_STORAGE_BRIDGE_FAILED" {
 				t.Fatalf("transition = %+v", settled)
+			}
+			want := original
+			if imported {
+				want = prepared
+			}
+			if agent.probeEnv["GEMINI_HOME"] != want {
+				t.Fatalf("readiness home = %q, want %q", agent.probeEnv["GEMINI_HOME"], want)
 			}
 			select {
 			case env := <-agent.env:

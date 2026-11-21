@@ -22,6 +22,7 @@ type agyChatImportFixture struct {
 	manager     *Manager
 	store       *transitionStore
 	runtime     *transitionRuntime
+	chat        *transitionChat
 	agent       *agy.Plugin
 	prepared    ports.NativeSessionRef
 	source      string
@@ -29,7 +30,7 @@ type agyChatImportFixture struct {
 	events      *[]string
 }
 
-func newAgyChatImportFixture(t *testing.T) agyChatImportFixture {
+func newAgyImportFixture(t *testing.T, sourceStore string, mode domain.SessionMode) agyChatImportFixture {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("synthetic POSIX Agy version responder")
@@ -54,7 +55,7 @@ func newAgyChatImportFixture(t *testing.T) agyChatImportFixture {
 	}
 	t.Setenv("GEMINI_HOME", root)
 	id := "00000000-0000-4000-8000-000000000519"
-	source := filepath.Join(root, agy.ACPStorageDir, "conversations", id+".db")
+	source := filepath.Join(root, sourceStore, "conversations", id+".db")
 	if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -109,12 +110,12 @@ func newAgyChatImportFixture(t *testing.T) agyChatImportFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, store, rt, _, events := newTransitionManager(t, domain.SessionModeChat)
+	manager, store, rt, chat, events := newTransitionManager(t, mode)
 	useFastInterfaceTransitionTimings(manager)
 	manager.dataDir = t.TempDir()
 	manager.runFilePath = filepath.Join(manager.dataDir, "running.json")
 	plugin := agy.New()
-	prepared, err := plugin.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: id, ConfigDir: root, TranscriptPath: source, SourceCWD: cwd, LaunchCWD: workspace, DataDir: manager.dataDir, SourceFingerprint: fingerprint, Chat: true})
+	prepared, err := plugin.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: id, ConfigDir: root, TranscriptPath: source, SourceCWD: cwd, LaunchCWD: workspace, DataDir: manager.dataDir, SourceFingerprint: fingerprint, Chat: mode == domain.SessionModeChat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,11 +128,11 @@ func newAgyChatImportFixture(t *testing.T) agyChatImportFixture {
 	rec.Metadata.NativeTranscriptPath = prepared.TranscriptPath
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: id, ConfigDir: root, CWD: cwd, Fingerprint: fingerprint, Transferred: true, Prepared: true, Adopted: true, ResumeNativeID: id, ResumeConfigDir: prepared.ConfigDir, ResumeCwd: workspace, ResumeTranscriptPath: prepared.TranscriptPath}
 	store.sessions[rec.ID] = rec
-	return agyChatImportFixture{manager: manager, store: store, runtime: rt, agent: plugin, prepared: prepared, source: source, sourceBytes: before, events: events}
+	return agyChatImportFixture{manager: manager, store: store, runtime: rt, chat: chat, agent: plugin, prepared: prepared, source: source, sourceBytes: before, events: events}
 }
 
 func TestImportedAgyFirstChatToTerminalHandoffUsesRealAdapter(t *testing.T) {
-	f := newAgyChatImportFixture(t)
+	f := newAgyImportFixture(t, agy.ACPStorageDir, domain.SessionModeChat)
 	ctx := context.Background()
 	rec := f.store.sessions["session-1"]
 	terminal := filepath.Join(f.prepared.ConfigDir, agy.CLIStorageDir, "conversations", f.prepared.NativeSessionID+".db")
@@ -182,10 +183,80 @@ func TestImportedAgyFirstChatToTerminalHandoffUsesRealAdapter(t *testing.T) {
 	}
 }
 
+func TestImportedAgyHandoffReadinessUsesPreparedHome(t *testing.T) {
+	for _, tc := range []struct {
+		name, sourceStore string
+		mode              domain.SessionMode
+	}{
+		{"CLI-only original opened in Chat", agy.CLIStorageDir, domain.SessionModeChat},
+		{"ACP-only original opened in Terminal", agy.ACPStorageDir, domain.SessionModeTUI},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, removeOriginal := range []bool{false, true} {
+				t.Run(map[bool]string{false: "original retained", true: "original removed"}[removeOriginal], func(t *testing.T) {
+					f := newAgyImportFixture(t, tc.sourceStore, tc.mode)
+					ctx := context.Background()
+					rec := f.store.sessions["session-1"]
+					currentStore, targetStore := agy.ACPStorageDir, agy.CLIStorageDir
+					if tc.mode == domain.SessionModeTUI {
+						currentStore, targetStore = targetStore, currentStore
+					}
+					originalCurrent := filepath.Join(rec.Metadata.ImportSource.ConfigDir, currentStore, "conversations", f.prepared.NativeSessionID+".db")
+					if _, err := os.Stat(originalCurrent); !os.IsNotExist(err) {
+						t.Fatalf("fixture must lack current-interface history in original home: %v", err)
+					}
+					if removeOriginal {
+						if err := os.Remove(f.source); err != nil {
+							t.Fatal(err)
+						}
+					}
+					id, err := f.manager.handoffNativeConversationID(ctx, rec)
+					if err != nil || id != f.prepared.NativeSessionID {
+						t.Fatalf("prepared readiness id=%q err=%v", id, err)
+					}
+					status, err := f.manager.InterfaceTransitionStatus(ctx, rec.ID)
+					if err != nil || !status.Supported {
+						t.Fatalf("prepared handoff status=%+v err=%v", status, err)
+					}
+					target := oppositeSessionMode(tc.mode)
+					transition, err := f.manager.StartInterfaceTransition(ctx, rec.ID, target, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+					if err != nil {
+						t.Fatal(err)
+					}
+					settled := awaitTransition(t, f.store, transition.ID)
+					rec = f.store.sessions[rec.ID]
+					if settled.Phase != domain.SessionInterfaceTransitionCompleted || rec.Mode != target || rec.Metadata.AgentSessionID != id || rec.Metadata.ProviderConversationID != id {
+						t.Fatalf("handoff phase=%s error=%s mode=%s native=%s provider=%s", settled.Phase, settled.ErrorDetail, rec.Mode, rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID)
+					}
+					launchEnv := f.runtime.lastCfg.Env
+					if target == domain.SessionModeChat {
+						launchEnv = f.chat.start.Env
+					}
+					if launchEnv["GEMINI_HOME"] != f.prepared.ConfigDir {
+						t.Fatalf("target home=%q, want prepared home %q", launchEnv["GEMINI_HOME"], f.prepared.ConfigDir)
+					}
+					bridged := filepath.Join(f.prepared.ConfigDir, targetStore, "conversations", id+".db")
+					if _, err := agy.ReadImportArchive(ctx, f.prepared.ConfigDir, bridged); err != nil {
+						t.Fatalf("private target history invalid: %v", err)
+					}
+					after, err := os.ReadFile(f.source)
+					if removeOriginal {
+						if !os.IsNotExist(err) {
+							t.Fatalf("handoff recreated original history: %v", err)
+						}
+					} else if err != nil || !bytes.Equal(f.sourceBytes, after) {
+						t.Fatalf("original history changed: %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestImportedAgyHandoffRefusesInvalidSourceBeforeStoppingChat(t *testing.T) {
 	for _, kind := range []string{"missing history", "corrupt history", "invalid proof"} {
 		t.Run(kind, func(t *testing.T) {
-			f := newAgyChatImportFixture(t)
+			f := newAgyImportFixture(t, agy.ACPStorageDir, domain.SessionModeChat)
 			switch kind {
 			case "missing history":
 				if err := os.Remove(f.prepared.TranscriptPath); err != nil {
