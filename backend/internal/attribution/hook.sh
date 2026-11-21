@@ -77,15 +77,15 @@ comment_awk() {
 # commit_args prints the arguments of the `git commit` that runs this hook,
 # one per line, or nothing when they cannot be read. On Linux they come from
 # /proc exactly (args_exact=1). Elsewhere they come from ps, split at spaces:
-# a flag that is absent there is certainly absent, but with a -m or -F message
-# one that is present may be a word of the message, so its value is not
-# trusted then.
+# a flag that is absent there is certainly absent, but one that is present
+# may be a word of a value holding a space, so its value is not trusted.
+# The first line is "commit" itself when the arguments could be read.
 commit_args() {
 	if [ -r "/proc/$PPID/cmdline" ]; then
 		tr '\0' '\n' <"/proc/$PPID/cmdline"
 	else
 		ps -o args= -p "$PPID" 2>/dev/null | tr ' ' '\n'
-	fi | awk 'seen { print } $0 == "commit" { seen = 1 }'
+	fi | awk '$0 == "commit" { seen = 1 } seen { print }'
 }
 
 # commit_option prints the value of `git commit` option $1 (--cleanup or
@@ -93,11 +93,10 @@ commit_args() {
 # Returns 0 with the value when it was given, 1 when it certainly was not,
 # and 2 when that cannot be told.
 commit_option() {
-	[ -n "$args" ] || return 2
-	# Free text (a -m or -F message, split by ps) can spell anything; without
-	# it every word ps shows is an option or its value.
-	if [ "$args_exact" != 1 ] &&
-		printf '%s\n' "$args" | grep -Eq -- '^(--message|--file)(=|$)|^-[A-Za-z]*[mF]'; then
+	[ "$args_read" = 1 ] || return 2
+	# Split by ps, any value holding a space (a message, a path) can spell
+	# an option, so one that ps shows is not trusted.
+	if [ "$args_exact" != 1 ]; then
 		case $1 in
 		--cleanup) pattern='^--cleanup(=|$)' ;;
 		*) pattern='^(--template(=|$)|-[A-Za-z]*t)' ;;
@@ -133,8 +132,25 @@ cleanup_mode() {
 # message (-e or --edit), or whether that cannot be told. A short option
 # cluster holding an "e" counts, so a doubt never adds the trailer early.
 editor_maybe() {
-	[ -n "$args" ] || return 0
-	printf '%s\n' "$args" | grep -Eq -- '^(--edit|-[A-Za-z]*e[A-Za-z]*)$'
+	[ "$args_read" = 1 ] || return 0
+	# Short options are read like git does: letters up to one that takes a
+	# value (m, F, t, c, C), which is the rest of the word or the next one,
+	# so -em'...' asks for the editor and an "e" inside a value does not.
+	printf '%s\n' "$args" | awk '
+		skip { skip = 0; next }
+		$0 == "--" { exit }
+		$0 == "--edit" { found = 1; exit }
+		$0 ~ /^--(message|file|template|cleanup|author|date|trailer|reuse-message|reedit-message|fixup|squash|pathspec-from-file)$/ { skip = 1; next }
+		/^--/ { next }
+		/^-./ {
+			for (i = 2; i <= length($0); i++) {
+				c = substr($0, i, 1)
+				if (c == "e") { found = 1; exit }
+				if (index("mFtcC", c)) { if (i == length($0)) skip = 1; break }
+			}
+		}
+		END { exit !found }
+	'
 }
 
 # strips_comments reports whether git drops comment lines from an edited
@@ -439,6 +455,9 @@ prepare-commit-msg | commit-msg)
 	args_exact=0
 	[ -r "/proc/$PPID/cmdline" ] && args_exact=1
 	args=$(commit_args)
+	args_read=0
+	[ "$(printf '%s\n' "$args" | sed -n 1p)" = commit ] && args_read=1
+	args=$(printf '%s\n' "$args" | sed 1d)
 	if [ "$hook" = prepare-commit-msg ]; then
 		snapshot_template "$1" "$2"
 	fi
