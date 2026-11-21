@@ -62,6 +62,12 @@ type commandSpec struct {
 	// retryEmpty reruns a listing that exits cleanly with no output once.
 	// OpenCode 2 prints nothing the first time it runs in a new folder.
 	retryEmpty bool
+	// loginFailureSignIn is set for CLIs whose model command is the first call
+	// that sends the saved login to the provider. A failed run whose output
+	// says the login is missing or rejected is reported as sign-in required, so
+	// the saved catalog stays listed with a sign-in warning instead of being
+	// replaced by the raw error and retried on a timer.
+	loginFailureSignIn bool
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -130,7 +136,9 @@ var commandSpecs = map[string]commandSpec{
 	"opencode":    {args: []string{"models"}, parser: parseProviderIDLines},
 	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines, retryEmpty: true},
 	"grok":        {args: []string{"models"}, parser: parseGrokModels},
-	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
+	// `cursor-agent status` only reads the local login, so `models` is the
+	// first call that can learn Cursor rejected it ("Authentication required").
+	"cursor":      {args: []string{"models"}, parser: parseCursorModels, loginFailureSignIn: true},
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
 	"kilocode":    {args: []string{"models"}, parser: parseProviderIDLines},
 	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
@@ -511,6 +519,9 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
 	}
 	if err != nil {
+		if spec.loginFailureSignIn && runCtx.Err() == nil && authprobe.StatusFromText(string(output)) == ports.AgentAuthStatusUnauthorized {
+			return base, fmt.Errorf("%s model discovery: %w: %s", agentID, ports.ErrAgentModelDiscoverySignInRequired, discoveryErrorDetail(output))
+		}
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
 	}
 	models, err := spec.parser(output)
