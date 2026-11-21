@@ -2590,6 +2590,32 @@ type ComputerUseAgentToolsResponse struct {
 	Tools []computeruse.AgentTool `json:"tools"`
 }
 
+// ComputerUseRemoteSettings is the body of GET /api/v1/computer-use/remote and
+// of every change to it. It never carries the stored credential.
+type ComputerUseRemoteSettings = computeruse.RemoteSettings
+
+// UpdateComputerUseRemoteAllowRequest turns "Let agents on your other
+// computers use this computer" on or off.
+type UpdateComputerUseRemoteAllowRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// SetComputerUseRemoteTargetRequest is the body of PUT
+// /api/v1/computer-use/remote/target.
+type SetComputerUseRemoteTargetRequest = computeruse.SetRemoteTargetRequest
+
+// RemoteComputerUseOfferResponse is the body of GET
+// /api/v1/remote-computer-use/status.
+type RemoteComputerUseOfferResponse = computeruse.RemoteOffer
+
+// RemoteComputerUseCallRequest is the body of POST
+// /api/v1/remote-computer-use/call.
+type RemoteComputerUseCallRequest = computeruse.RemoteCallRequest
+
+// RemoteComputerUseCallResponse is the body of POST
+// /api/v1/remote-computer-use/call.
+type RemoteComputerUseCallResponse = computeruse.RemoteCallResult
+
 // StartInstallResponse is the body of POST /api/v1/system/install/{target} (202).
 type StartInstallResponse = systeminstall.Job
 

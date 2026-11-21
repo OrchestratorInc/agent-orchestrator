@@ -144,3 +144,40 @@ func TestBuildSystemPromptMacPrivacySection(t *testing.T) {
 		}
 	}
 }
+
+// With computer use running on another of the user's computers, the agent is
+// told which one, and that its tools do not act on the machine it runs on.
+func TestBuildSystemPromptNamesTheRemoteComputer(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(),
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+	m.SetComputerUseEnabled(func(context.Context) bool { return true })
+	label := ""
+	m.SetComputerUseRemote(func(context.Context) string { return label })
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if !strings.Contains(sp, "this computer has Cua Driver") || strings.Contains(sp, "another of their computers") {
+		t.Fatal("local computer use prompt changed")
+	}
+
+	label = "Studio Mac"
+	sp, err = m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	for _, want := range []string{`another of their computers, "Studio Mac"`, `act on "Studio Mac", not on the machine you run on`, "`get_window_state`", "commands/cua.md", "browser on that computer"} {
+		if !strings.Contains(sp, want) {
+			t.Fatalf("remote prompt missing %q", want)
+		}
+	}
+	if strings.Contains(sp, "this computer has Cua Driver") {
+		t.Fatal("remote prompt still says this computer has Cua Driver")
+	}
+}

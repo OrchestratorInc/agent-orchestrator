@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"runtime"
 	"strings"
@@ -164,6 +165,9 @@ type Service struct {
 	agentTools  agentToolCache
 	// enabled reports "Let agents use this computer"; nil is off.
 	enabled func(context.Context) bool
+	// remote holds the remote computer-use settings (remote.go), guarded by mu.
+	remote       remoteStore
+	remoteClient *http.Client
 }
 
 // SetEnabled supplies the "Let agents use this computer" setting, which Call
@@ -192,6 +196,10 @@ func New(driver Driver, dataDir string) *Service {
 		stop:        stop,
 		sessionless: map[string]bool{},
 		snapshots:   snapshotWindows{windows: map[string]window{}},
+		remote:      newRemoteStore(dataDir),
+		// A remote host's address is fixed by the user's own pairing; a
+		// redirect would send the credential somewhere else.
+		remoteClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
@@ -321,8 +329,26 @@ func (s *Service) Doctor(ctx context.Context) (string, error) {
 }
 
 // Call runs one driver tool and returns its output with images saved to
-// files. A stopped service is started once and the call retried.
+// files. With "Run computer use on" set to another computer, the call runs
+// there instead (remote.go). A stopped service is started once and the call
+// retried.
 func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, error) {
+	tool := strings.TrimSpace(request.Tool)
+	if !toolNamePattern.MatchString(tool) {
+		return CallResult{}, invalidTool(tool)
+	}
+	target, credential, caller, err := s.forwarding()
+	if err != nil {
+		return CallResult{}, err
+	}
+	if target != nil {
+		return s.callRemote(ctx, *target, credential, caller, request)
+	}
+	return s.callHere(ctx, request)
+}
+
+// callHere runs one driver tool on this computer.
+func (s *Service) callHere(ctx context.Context, request CallRequest) (CallResult, error) {
 	tool := strings.TrimSpace(request.Tool)
 	if !toolNamePattern.MatchString(tool) {
 		return CallResult{}, invalidTool(tool)

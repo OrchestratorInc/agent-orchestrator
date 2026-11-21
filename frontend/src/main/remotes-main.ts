@@ -52,6 +52,10 @@ export type RemotesIpcDeps = {
 	cloudRequest: (method: string, path: string, options?: { body?: unknown; signal?: AbortSignal }) => Promise<{ status: number; body: string }>;
 	/** How long reading the account's machines from AO Cloud may take. */
 	accountDirectoryTimeoutMs?: number;
+	/** The local daemon's loopback address, or null while it is not ready. */
+	localDaemonBase?: () => string | null;
+	/** Sends a request to the local daemon; injectable for tests. */
+	daemonFetch?: typeof fetch;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
 	pair?: (entry: Pick<RemoteEntry, "url" | "hostId">, secret: string, device: { name: string; platform: string }) => Promise<PairDeviceResult>;
@@ -75,6 +79,7 @@ export function registerRemotesIpc(
 	{
 		file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
 		probe = probeRemote, identity = readRemoteIdentity, pair = pairDevice, authErrorCode = readAuthErrorCode, deviceName = computerName,
+		localDaemonBase = () => null, daemonFetch = fetch,
 	}: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
@@ -359,6 +364,38 @@ export function registerRemotesIpc(
 		// take more than a minute.
 		await accountHosts("PUT", `/${encodeURIComponent(issued.hostId)}`, { body: issued.registration });
 	});
+	// "Run computer use on": the local daemon forwards this computer's
+	// computer-use calls to the chosen machine, so it needs the credential this
+	// desktop holds for it. It goes from here straight to the daemon's
+	// loopback-only route; the renderer only ever names the machine.
+	ipcMain.handle("remotes:setComputerUseTarget", async (_event, hostId: string) => ordered(async () => {
+		const account = await accountID();
+		const entry = (await owned()).find((saved) => saved.hostId === hostId);
+		if (!entry?.hostId) throw new ExpectedIpcError("That computer is not one of your remote hosts.");
+		if (!entry.password) throw new ExpectedIpcError(`Connect to ${entry.label} again before running computer use on it.`);
+		const localHostId = await requireLocalIdentity();
+		refuseSelf(entry.hostId, localHostId);
+		let actual: string;
+		try {
+			actual = await identity(entry);
+		} catch {
+			throw new ExpectedIpcError(`${entry.label} did not answer. Check that it is on and Orchestrator is running there.`);
+		}
+		if (actual !== entry.hostId) throw new ExpectedIpcError(`Another computer now answers at ${entry.label}'s address; connection refused.`);
+		await checkConnectionContext(localHostId, account);
+		const base = localDaemonBase();
+		if (!base) throw new LocalIdentityUnavailableError();
+		const response = await daemonFetch(`${base}/api/v1/computer-use/remote/target`, {
+			method: "PUT",
+			redirect: "error",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ hostId: entry.hostId, label: entry.label, url: entry.url, credential: entry.password }),
+			signal: AbortSignal.timeout(8_000),
+		});
+		const body = await response.json().catch(() => ({})) as { message?: string };
+		if (!response.ok) throw new ExpectedIpcError(body.message || `Orchestrator could not save the computer (${response.status}).`);
+		return body;
+	}));
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
 	ipcMain.handle("remotes:computerName", () => computerName());
 	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) => {

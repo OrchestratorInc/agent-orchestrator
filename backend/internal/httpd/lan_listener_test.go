@@ -306,6 +306,9 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		"/api/v1/system/install/cua-driver",
 		"/api/v1/computer-use/status",
 		"/api/v1/computer-use/call",
+		"/api/v1/computer-use/remote",
+		"/api/v1/computer-use/remote/target",
+		"/api/v1/computer-use/remote/allow",
 		"/api/v1/settings/computer-use",
 		"/api/v1/sessions/ao-1/preview/server",
 		"/api/v1/agents/codex/accounts",
@@ -634,6 +637,31 @@ func TestLANBlocksTheComputerUseSwitchOnly(t *testing.T) {
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(`{"enabled":true}`)))
 		if got := recorder.Code == http.StatusNotFound && !reached; got != blocked {
 			t.Fatalf("PATCH %s: status %d, reached %v; want blocked=%v", path, recorder.Code, reached, blocked)
+		}
+	}
+}
+
+// The user's other computers reach Cua Driver only through
+// /api/v1/remote-computer-use, which the service refuses until the user lets
+// them. Choosing where this computer's computer use runs, and letting others
+// use it, stay loopback-only: a paired device must not turn either on.
+func TestLANServesOnlyTheRemoteComputerUseRoutes(t *testing.T) {
+	reached := false
+	handler := lanControlBlock(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	for path, blocked := range map[string]bool{
+		"/api/v1/remote-computer-use/status":      false,
+		"/api/v1/remote-computer-use/agent-tools": false,
+		"/api/v1/remote-computer-use/call":        false,
+		"/api/v1/computer-use/remote":             true,
+		"/api/v1/computer-use/remote/allow":       true,
+		"/api/v1/computer-use/remote/target":      true,
+		"/api/v1/computer-use/call":               true,
+	} {
+		reached = false
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
+		if got := recorder.Code == http.StatusNotFound && !reached; got != blocked {
+			t.Fatalf("POST %s: status %d, reached %v; want blocked=%v", path, recorder.Code, reached, blocked)
 		}
 	}
 }

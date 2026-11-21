@@ -334,7 +334,8 @@ func (a *API) Register(root chi.Router) {
 					// A run_steps batch may run for the driver's full 60 s before
 					// its step report and closing window read, and an action is
 					// followed by its own read: either outlasts the REST budget.
-					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/computer-use/call" ||
+						pattern == "/api/v1/remote-computer-use/call" {
 						computerUse.ServeHTTP(w, req)
 						return
 					}

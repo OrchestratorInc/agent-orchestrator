@@ -57,8 +57,21 @@ type agentToolCache struct {
 
 // AgentTools returns the MCP tools AO offers agents, with each tool's
 // description and input schema read from the installed driver, so they match
-// its release. They are read once per driver version.
+// its release. They are read once per driver version. With "Run computer use
+// on" set to another computer, they are that computer's tools.
 func (s *Service) AgentTools(ctx context.Context) ([]AgentTool, error) {
+	target, credential, _, err := s.forwarding()
+	if err != nil {
+		return nil, err
+	}
+	if target != nil {
+		return s.remoteAgentTools(ctx, *target, credential)
+	}
+	return s.localAgentTools(ctx)
+}
+
+// localAgentTools reads the tools from this computer's driver.
+func (s *Service) localAgentTools(ctx context.Context) ([]AgentTool, error) {
 	binary, err := s.locate(ctx)
 	if err != nil {
 		return nil, err

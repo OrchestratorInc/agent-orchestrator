@@ -602,8 +602,9 @@ type Manager struct {
 	versionPolicyMu sync.Mutex
 	versionPolicy   func() VersionRefreshPolicy
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
-	computerUseMu sync.Mutex
-	computerUse   func(context.Context) bool
+	computerUseMu     sync.Mutex
+	computerUse       func(context.Context) bool
+	computerUseRemote func(context.Context) string
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -6840,7 +6841,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
 	if chat && m.computerUseEnabled(ctx) {
-		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
+		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir), m.computerUseRemoteLabel(ctx)))
 	}
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)

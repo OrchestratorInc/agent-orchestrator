@@ -62,7 +62,9 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
 // host-mutating installer routes under /api/v1/system/install, desktop control
 // through Cua Driver under /api/v1/computer-use and the switch that hands it to
-// new chat sessions at /api/v1/settings/computer-use, and personal
+// new chat sessions at /api/v1/settings/computer-use (the user's other
+// computers drive it only through /api/v1/remote-computer-use, which refuses
+// every call until the user turns that on; see ADR 0007), and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
 // /api/v1/agents/codex/account-switches (the harmless read-only Codex model
 // routes stay reachable so mobile can pick a model). Some routes
