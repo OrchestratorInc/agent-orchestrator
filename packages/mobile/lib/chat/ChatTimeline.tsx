@@ -104,7 +104,6 @@ import {
 	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
-	streamingCursorMessageId,
 	summarizeActivities,
 	type ActivityNode,
 	type ConversationGroup,
@@ -655,14 +654,13 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
 		: group.items, group.turn);
-	const cursorMessageId = streamingCursorMessageId(items);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
 		: undefined;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -712,7 +710,6 @@ const TimelineItem = memo(function TimelineItem({
 	onEdit,
 	editor,
 	answeredBelow,
-	showCursor = false,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -727,7 +724,6 @@ const TimelineItem = memo(function TimelineItem({
 	/** Shown in place of the bubble while this prompt is being edited. */
 	editor?: ReactNode;
 	answeredBelow?: number;
-	showCursor?: boolean;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	// The long-press menu hosts the bubble in a SwiftUI view sized to its
@@ -774,7 +770,7 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				<ChatMarkdown text={item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
 			</View>
 		);
 	}
