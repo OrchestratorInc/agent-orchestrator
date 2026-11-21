@@ -540,6 +540,21 @@ func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
 	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
 }
 
+// providerTitle drops AO's standing instructions from a title the agent sent.
+// An agent that titles a chat from its first prompt (Hermes takes the first
+// line) sees the instructions block before the user's text, so its title is
+// the opening tag. What follows the block is the user's text; a title that is
+// only the block, or cut off inside it, is no title and the rename is skipped.
+func providerTitle(title string) (string, bool) {
+	trimmed := strings.TrimSpace(title)
+	if !strings.HasPrefix(trimmed, standingOpen) {
+		return title, true
+	}
+	_, rest, ok := strings.Cut(trimmed, standingClose)
+	rest = strings.TrimSpace(rest)
+	return rest, ok && rest != ""
+}
+
 func historicalUserContent(content acpsdk.ContentBlock) string {
 	switch {
 	case content.Text != nil:
