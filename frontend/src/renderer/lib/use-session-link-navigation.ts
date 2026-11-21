@@ -62,6 +62,7 @@ export function useSessionLinkSource(sourceHostId?: string, sourceKind?: "cloud"
 
 const restoringLinks = new Map<string, string>();
 let latestRestoreLink: string | undefined;
+if (typeof window !== "undefined") window.addEventListener("hashchange", () => { latestRestoreLink = undefined; });
 
 export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cloud"): (url: string) => boolean {
 	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;

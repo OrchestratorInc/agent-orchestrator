@@ -23,7 +23,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ ready: true, org: { id: "org-1" } }) }));
 
 describe("useSessionLinkNavigation", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		mocks.navigate.mockReset();
 		mocks.restore.mockReset();
 		mocks.restore.mockResolvedValue({ status: "success" });
@@ -98,6 +99,7 @@ describe("useSessionLinkNavigation", () => {
 		const { result } = renderHook(() => useSessionLinkNavigation());
 		act(() => { result.current("ao://sessions/project/terminated"); });
 		window.location.hash = "#/projects/other-project/sessions/other-session";
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 		act(() => { result.current("ao://sessions/project/terminated"); });
 		await act(async () => finish({ status: "success" }));
 		expect(mocks.restore).toHaveBeenCalledTimes(1);
@@ -108,6 +110,7 @@ describe("useSessionLinkNavigation", () => {
 		const finishes: Array<(result: { status: "success" }) => void> = [];
 		mocks.restore.mockImplementation(() => new Promise((resolve) => { finishes.push(resolve); }));
 		window.location.hash = "#/projects/project/sessions/session";
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 		const { result } = renderHook(() => useSessionLinkNavigation());
 		act(() => { result.current("ao://sessions/project/terminated"); });
 		act(() => { result.current("ao://sessions/project/terminated-2"); });
@@ -116,6 +119,21 @@ describe("useSessionLinkNavigation", () => {
 		await act(async () => finishes[1]!({ status: "success" }));
 		expect(mocks.navigate).toHaveBeenCalledTimes(1);
 		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated-2");
+	});
+
+	it("does not open after the user left and came back before the resume finished", async () => {
+		let finish!: (result: { status: "success" }) => void;
+		mocks.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		window.location.hash = "#/projects/project/sessions/session";
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		act(() => { result.current("ao://sessions/project/terminated"); });
+		window.location.hash = "#/projects/other-project/sessions/other-session";
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+		window.location.hash = "#/projects/project/sessions/session";
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+		await act(async () => finish({ status: "success" }));
+		expect(mocks.navigate).not.toHaveBeenCalled();
 	});
 
 	it("does not pull the user away when they moved on before the resume finished", async () => {
