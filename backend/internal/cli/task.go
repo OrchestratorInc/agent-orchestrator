@@ -331,7 +331,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 			ID string `json:"id"`
 		} `json:"orchestrator"`
 	}
-	if err := c.postSetupJSON(ctx, "orchestrators", map[string]string{"projectId": project.ID}, &ensured); err != nil {
+	if err := c.postSetupJSON(ctx, "orchestrators", spawnOrchestratorAPIRequest{ProjectID: project.ID}, &ensured); err != nil {
 		agent := ""
 		if project.Config != nil {
 			agent = strings.TrimSpace(project.Config.Orchestrator.Agent)
@@ -358,7 +358,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 	}
 	messagePath := "sessions/" + url.PathEscape(orchestratorID) + "/conversation/messages"
 	clientMessageID := newTaskClientMessageID()
-	body := map[string]string{"text": message, "clientMessageId": clientMessageID}
+	body := conversationMessageAPIRequest{Text: message, ClientMessageID: clientMessageID}
 	sendErr := c.postJSON(ctx, messagePath, body, &sent)
 	var apiErr apiResponseError
 	if sendErr != nil && !errors.As(sendErr, &apiErr) && ctx.Err() == nil {
@@ -370,7 +370,10 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 	if errors.As(sendErr, &apiErr) && apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH" {
 		// A terminal (TUI) orchestrator has no chat turns: deliver the task as
 		// `ao send` does and follow the session's activity instead.
-		if err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", map[string]string{"message": message}, nil); err != nil {
+		// Same attribution as `ao send`: an agent inside a session names itself;
+		// anything else is the user's own message.
+		sender := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
+		if err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", sendAPIRequest{Message: message, SenderSessionID: sender, UserAuthored: sender == ""}, nil); err != nil {
 			return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", err)
 		}
 		return c.taskStatus(ctx, taskID{session: orchestratorID})
@@ -386,6 +389,13 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		return failedTask("", sessions, "daemon accepted the task but returned no turn id", "")
 	}
 	return c.taskStatus(ctx, taskID{session: orchestratorID, turn: strings.TrimSpace(sent.TurnID)})
+}
+
+// spawnOrchestratorAPIRequest mirrors the daemon's SpawnOrchestratorRequest
+// for POST /orchestrators, which returns the project's orchestrator and
+// starts it only when there is none.
+type spawnOrchestratorAPIRequest struct {
+	ProjectID string `json:"projectId"`
 }
 
 // orchestratorTaskMessage is the brief plus the worker choices the caller

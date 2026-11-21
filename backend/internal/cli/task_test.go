@@ -438,6 +438,11 @@ func TestTaskStartOrchestratorTerminalFallsBackToSend(t *testing.T) {
 	if !strings.HasPrefix(out, "task repo-orchestrator: running") {
 		t.Fatalf("stdout = %q", out)
 	}
+	var sent map[string]any
+	_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/sessions/repo-orchestrator/send"]), &sent)
+	if !reflect.DeepEqual(sent, map[string]any{"message": "fix calc", "userAuthored": true}) {
+		t.Fatalf("send body = %v; want what `ao send` sends outside a session", sent)
+	}
 	if d.saw("GET /api/v1/sessions/repo-orchestrator/conversation") {
 		t.Fatal("a terminal session has no conversation to read")
 	}
