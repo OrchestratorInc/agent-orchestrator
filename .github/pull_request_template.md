@@ -37,4 +37,5 @@ How you validated this locally (commands, scenarios).
 - [ ] Follows [AGENTS.md](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/AGENTS.md) conventions and PR hygiene
 - [ ] Before / After filled in; UI changes include screenshots or a recording
 - [ ] Tests added/updated for user-visible behavior where it makes sense
+- [ ] Docs updated if this changes anything a user sees (run `node scripts/check-docs-version.mjs --mode review` in `frontend/src/docs`)
 - [ ] Relevant CI checks pass for the area touched (`go`, frontend, etc.)

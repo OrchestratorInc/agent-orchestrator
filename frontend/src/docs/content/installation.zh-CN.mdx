@@ -1,7 +1,7 @@
 ---
 title: 安装
 description: 下载 Orchestrator 桌面应用，并连接你的编程工具。
-translatedFrom: 7460247266d0
+translatedFrom: 648f1167ceaf
 ---
 
 如需最新的稳定版桌面构建，请从 [Orchestrator 官方下载页面](https://orchestrator.inc/download/)开始。该页面还列出了每夜构建和移动应用。如果你想直接获取桌面安装包，请从下面选择：
@@ -87,7 +87,7 @@ gh auth status
 <span id="add-a-project" />
 ### 添加项目
 
-在桌面应用中选择 **Add project**，然后选择一个现有的本地 Git 仓库。Orchestrator 会登记该仓库，但不会移动你原来的检出目录。每个 worker 会话都有自己独立的工作树。
+在桌面应用中选择 **New project**，然后选择一个现有的本地 Git 仓库。Orchestrator 会登记该仓库，但不会移动你原来的检出目录。每个 worker 会话都有自己独立的工作树。
 
 </Step>
 </Steps>
@@ -101,14 +101,14 @@ gh auth status
 <summary>
 	<span className="ao-legacy-cli-summary-copy">
 		<span className="ao-legacy-cli-summary-title">已经在用 npm CLI？</span>
-		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> 已冻结在 <code>0.10.0</code>，不再推荐使用。</span>
+		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> 已冻结在 <code>0.10.3</code>，不再推荐使用。</span>
 	</span>
 	<span className="ao-legacy-cli-summary-icon" aria-hidden="true" />
 </summary>
 
 <div className="ao-legacy-cli-details__content">
 
-`0.10.0` 是最后一个 npm 版本。该包作为现有用户的旧版过渡保留，不会再获得新的产品功能。从该安装运行 `ao start` 会获取并打开桌面构建。
+`0.10.3` 是最后一个 npm 版本。该包作为现有用户的旧版过渡保留，不会再获得新的产品功能。从该安装运行 `ao start` 会获取并打开桌面构建。
 
 ```bash
 npm install -g @aoagents/ao
