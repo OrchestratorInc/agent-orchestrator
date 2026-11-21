@@ -49,9 +49,9 @@ func TestInterfaceTransitionNativeHistoryStartGetsSettleWaitOnTopOfStep(t *testi
 	}
 	// The start itself runs well within a second, so anything above the bare
 	// step budget proves the settle wait was added on top of it.
-	if got, floor := recording.budgets[0], interfaceTransitionStepLimit+ports.ChatNativeHistorySettleLimit-5*time.Second; got < floor {
-		t.Fatalf("native-history target start budget = %v, want at least %v (step %v + settle %v)",
-			got, floor, interfaceTransitionStepLimit, ports.ChatNativeHistorySettleLimit)
+	if got, floor := recording.budgets[0], 2*ports.ChatStartHandshakeLimit+ports.ChatNativeHistorySettleLimit-5*time.Second; got < floor {
+		t.Fatalf("native-history target start budget = %v, want at least %v (initialize + session/load %v each + settle %v)",
+			got, floor, ports.ChatStartHandshakeLimit, ports.ChatNativeHistorySettleLimit)
 	}
 }
 

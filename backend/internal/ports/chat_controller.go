@@ -28,6 +28,12 @@ const (
 // minutes, so the wait is generous.
 const ChatNativeHistorySettleLimit = 120 * time.Second
 
+// ChatStartHandshakeLimit bounds each ACP startup handshake step (initialize,
+// then the first session/load) of a Chat start. A caller that bounds a whole
+// native-history start reserves one limit per step before the settle wait, so
+// a slow but supported startup cannot spend the time kept for settling.
+const ChatStartHandshakeLimit = 60 * time.Second
+
 // ChatControllerStart is the resolved launch contract shared by the coordinator and Chat service.
 type ChatControllerStart struct {
 	// ReconnectOnly restricts startup recovery to an existing provider process.

@@ -23,7 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-const handshakeTimeout = 60 * time.Second
+const handshakeTimeout = ports.ChatStartHandshakeLimit
 
 // Launch describes one ACP agent process. Command may be either AO's packaged
 // protocol bridge or the exact user-installed provider executable resolved by

@@ -23,10 +23,11 @@ const (
 	interfaceTransitionStopLimit          = 15 * time.Second
 	interfaceTransitionStepLimit          = 45 * time.Second
 	// interfaceTransitionHistoryStartLimit bounds starting a Chat target that
-	// must import native history: a step to launch the provider and make its
-	// first load, then the whole settle wait that follows. With only a step,
-	// a slow launch spent the settle wait and its reload was cancelled mid-load.
-	interfaceTransitionHistoryStartLimit = interfaceTransitionStepLimit + ports.ChatNativeHistorySettleLimit
+	// must import native history: the supported startup bounds (initialize,
+	// then the first session/load, each up to ports.ChatStartHandshakeLimit),
+	// then the whole settle wait that follows. With less, a slow but supported
+	// launch spent the settle wait and its reload was cancelled mid-load.
+	interfaceTransitionHistoryStartLimit = 2*ports.ChatStartHandshakeLimit + ports.ChatNativeHistorySettleLimit
 	interfaceDeliveryRetry               = 2 * time.Second
 	interfaceDeliveryIdlePoll            = 30 * time.Second
 )
@@ -662,7 +663,12 @@ func (m *Manager) runInterfaceTransition(
 		(modeChanged || transition.SourceMode != domain.SessionModeChat ||
 			!m.chatHoldsProviderConversation(ctx, rec.ID))
 	err = m.startTransitionTarget(ctx, rec.ID, fresh, replayHistory, transition.HistoryPolicy)
-	if errors.Is(err, ports.ErrChatHistoryUnsettled) &&
+	// A provider that timed out its own first session/load (-32602 with a
+	// context deadline) gave no verdict either, so it gets the same single
+	// retry. A settle wait that ran out of AO's own budget is not retried.
+	providerLoadDeadline := errors.Is(err, ports.ErrChatHistoryLoadDeadline) &&
+		!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled)
+	if (errors.Is(err, ports.ErrChatHistoryUnsettled) || providerLoadDeadline) &&
 		!errors.Is(err, ports.ErrChatRecoveryInconclusive) &&
 		!errors.Is(err, ports.ErrChatHistoryLoadFailed) &&
 		len(ports.ChatHistoryMismatchDimensions(err)) == 0 && transition.TargetMode == domain.SessionModeChat {
