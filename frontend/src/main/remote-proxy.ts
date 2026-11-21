@@ -49,8 +49,17 @@ export type ActiveProxy = {
 	isRenderUrl: (url: string) => boolean;
 	/** A preview's address for a browser outside AO; any other URL unchanged. */
 	externalUrl: (url: string) => string;
+	openLoopbackTunnel: (port: number) => Promise<Duplex>;
 	close: () => Promise<void>;
 };
+
+export type LoopbackTunnelRefusal = "refused" | "disabled" | "unavailable";
+
+export class LoopbackTunnelError extends Error {
+	constructor(readonly reason: LoopbackTunnelRefusal, message: string) {
+		super(message);
+	}
+}
 
 // "agent" is the host's agent browser (the Chromium the session's agent drives),
 // streamed through the daemon's agent-browser route. "render" is an agent page
@@ -978,6 +987,38 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			parsed.protocol = "http:";
 			parsed.port = String(port);
 			return parsed.href;
+		},
+		openLoopbackTunnel: async (loopbackPort) => {
+			if (closing) throw new LoopbackTunnelError("unavailable", "the host is disconnected");
+			await verifyUpstream();
+			const socket = new WebSocket(`${secure ? "wss" : "ws"}://${upstream.host}${prefix}/api/v1/loopback-tunnel?port=${loopbackPort}`, {
+				headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
+				perMessageDeflate: false,
+				handshakeTimeout: timing.openMs * 3,
+				...(isIP(hostname) ? {} : { servername: hostname }),
+			});
+			const stream = webSocketTunnelStream(socket);
+			stream.on("error", () => undefined);
+			const drop = () => stream.destroy();
+			tunnels.add(drop);
+			stream.once("close", () => tunnels.delete(drop));
+			try {
+				await new Promise<void>((resolve, reject) => {
+					socket.once("open", () => resolve());
+					socket.once("unexpected-response", (request, response) => {
+						const reason: LoopbackTunnelRefusal = response.headers["x-ao-loopback-disabled"] === "1" ? "disabled"
+							: response.headers["x-ao-loopback-refused"] === "1" ? "refused" : "unavailable";
+						response.resume();
+						request.destroy();
+						reject(new LoopbackTunnelError(reason, `localhost tunnel to port ${loopbackPort} answered ${response.statusCode}`));
+					});
+					socket.once("error", (error: Error) => reject(new LoopbackTunnelError("unavailable", error.message)));
+				});
+			} catch (error) {
+				stream.destroy();
+				throw error;
+			}
+			return stream;
 		},
 		close: () =>
 			new Promise((resolve) => {

@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readRemoteIdentity, type PairDeviceResult, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
+import type { LoopbackTunnels } from "./loopback-tunnel";
 import { ACCOUNT_TOKEN, DEVICE_TOKEN_PREFIX, addRemote, holdsAccountToken, holdsPairingPassword, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
 import { ExpectedIpcError } from "./main-error-capture";
 
@@ -45,6 +46,7 @@ type IpcMainLike = {
 export type RemotesIpcDeps = {
 	file: string;
 	registry: RemoteRegistry;
+	tunnels: LoopbackTunnels;
 	requireAccount: () => Promise<void>;
 	getAccountId: () => Promise<string>;
 	localIdentity: () => Promise<string | null>;
@@ -73,7 +75,7 @@ type AccountHost = { hostId: string; label: string; url: string; token: string }
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
 	{
-		file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
+		file, registry, tunnels, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
 		probe = probeRemote, identity = readRemoteIdentity, pair = pairDevice, authErrorCode = readAuthErrorCode, deviceName = computerName,
 	}: RemotesIpcDeps,
 ): void {
@@ -227,7 +229,9 @@ export function registerRemotesIpc(
 		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 	}));
 	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(async () => {
-		if (!(await owned()).some((entry) => entry.url === url)) throw new ExpectedIpcError("Host does not belong to this account.");
+		const removed = (await owned()).find((entry) => entry.url === url);
+		if (!removed) throw new ExpectedIpcError("Host does not belong to this account.");
+		if (removed.hostId) tunnels.stopHost(removed.hostId);
 		return removeSavedRemote(file, url, disconnect);
 	}));
 	ipcMain.handle("remotes:connect", async (_event, url: string, hostId?: string) => ordered(async () => {
@@ -383,4 +387,14 @@ export function registerRemotesIpc(
 		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during remote connection.");
 		return registry.externalUrl(hostId, url);
 	});
+	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => tunnels.reach(hostId));
+	ipcMain.handle("remotes:portForwards", async () => tunnels.list());
+	ipcMain.handle("remotes:forwardPort", async (_event, hostId: string, port: number) => {
+		try {
+			return await tunnels.forward(hostId, port);
+		} catch (error) {
+			throw new ExpectedIpcError(error instanceof Error ? error.message : String(error));
+		}
+	});
+	ipcMain.handle("remotes:stopPortForward", async (_event, hostId: string, port: number) => tunnels.stop(hostId, port));
 }

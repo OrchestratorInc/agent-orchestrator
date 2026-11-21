@@ -58,9 +58,6 @@ func parseLsofListeners(out string, include func(pid int) bool) []Listener {
 	return listeners
 }
 
-// processEnviron reads kern.procargs2: a native-endian int32 argc, the
-// executable path, NUL padding, argc NUL-terminated arguments, then the
-// NUL-terminated environment.
 func processEnviron(pid int) (string, []byte) {
 	raw, err := unix.SysctlRaw("kern.procargs2", pid)
 	if err != nil || len(raw) < 4 {

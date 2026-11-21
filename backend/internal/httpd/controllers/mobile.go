@@ -1224,8 +1224,7 @@ func (b *BridgeService) SetRequireDeviceCredentials(on bool) (MobileStatusRespon
 	return b.Status(), nil
 }
 
-// SetLoopbackTunnel lets paired desktops reach this machine's localhost
-// ports, or stops them. Off closes open tunnels before it returns.
+// SetLoopbackTunnel turns the localhost tunnel for paired desktops on or off.
 func (b *BridgeService) SetLoopbackTunnel(on bool) (MobileStatusResponse, error) {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()

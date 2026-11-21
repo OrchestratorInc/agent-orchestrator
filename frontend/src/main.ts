@@ -287,6 +287,7 @@ import { sealSavedPasswords, setPasswordCipher } from "./main/remotes-store";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
+import { createLoopbackTunnels } from "./main/loopback-tunnel";
 import { captureMainError, reportDaemonFailure, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink } from "./main/main-error-capture";
 
 // Every ipcMain.handle registered from here on reports unexpected throws.
@@ -1350,12 +1351,15 @@ async function createWindowInternal(): Promise<void> {
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		openInUserBrowser: (url) => userBrowser.open(url),
 		describeUserBrowser: () => userBrowser.describe(),
-		prepareBrowserPartition: (partition) =>
-			applyBrowserIdentity(session.fromPartition(partition), {
+		prepareBrowserPartition: (partition, hostId) => {
+			const browserSession = session.fromPartition(partition);
+			applyBrowserIdentity(browserSession, {
 				chromeVersion: process.versions.chrome,
 				platform: process.platform,
 				languages: acceptLanguages(app.getLocale(), app.getPreferredSystemLanguages()),
-			}),
+			});
+			return hostId ? loopbackTunnels.route(browserSession, hostId) : undefined;
+		},
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
@@ -3774,6 +3778,7 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
+const loopbackTunnels = createLoopbackTunnels((hostId, port) => remoteRegistry.openLoopbackTunnel(hostId, port));
 setPasswordCipher(() => protectedStorageAvailable() ? {
 	encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
 	decrypt: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),
@@ -3784,6 +3789,7 @@ void app.whenReady().then(() => sealSavedPasswords(remotesFilePath())).catch((er
 registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
+	tunnels: loopbackTunnels,
 	requireAccount: async () => {
 		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 	},
@@ -4420,6 +4426,7 @@ function notifyRenderersOfCloudSession(
 	bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
+		for (const { hostId } of loopbackTunnels.list()) loopbackTunnels.stopHost(hostId);
 		void cloudAgentProxy.close();
 	}
 	const contents = getShellWebContents();

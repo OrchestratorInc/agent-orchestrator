@@ -3262,8 +3262,7 @@ type MobileStatusResponse struct {
 	// devices may not list the machine, and linking again repairs both.
 	AccountLinkRefused  bool `json:"accountLinkRefused"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
-	// LoopbackTunnel means paired desktops may reach this machine's localhost ports.
-	LoopbackTunnel bool `json:"loopbackTunnel"`
+	LoopbackTunnel      bool `json:"loopbackTunnel"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
 	// NoPublicTunnel means the user disabled the managed public connector.

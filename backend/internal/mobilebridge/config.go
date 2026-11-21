@@ -67,9 +67,7 @@ type State struct {
 	// controlling the desktop-owned browser from a paired phone. Existing
 	// installations deserialize the omitted field as false.
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
-	// NoLoopbackTunnel stops paired desktops from reaching this machine's
-	// localhost ports. Old configs default to false: the tunnel is on.
-	NoLoopbackTunnel bool `json:"noLoopbackTunnel,omitempty"`
+	NoLoopbackTunnel    bool `json:"noLoopbackTunnel,omitempty"`
 }
 
 // Path returns the Connect Mobile config file location under the data dir

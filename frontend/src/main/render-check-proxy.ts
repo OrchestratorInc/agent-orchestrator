@@ -13,9 +13,9 @@ import ipaddr from "ipaddr.js";
  */
 export type RenderNetwork = "public" | "none";
 
-const REPLY_OK = 0x00;
-const REPLY_NOT_ALLOWED = 0x02;
-const REPLY_HOST_UNREACHABLE = 0x04;
+export const REPLY_OK = 0x00;
+export const REPLY_NOT_ALLOWED = 0x02;
+export const REPLY_HOST_UNREACHABLE = 0x04;
 const REPLY_COMMAND_UNSUPPORTED = 0x07;
 const REPLY_ADDRESS_UNSUPPORTED = 0x08;
 
@@ -142,7 +142,7 @@ class ClosedError extends Error {}
  * Collects what a client sends and hands it out in exact lengths, so the
  * handshake reads like the RFC's field list however the bytes arrive.
  */
-class SocketReader {
+export class SocketReader {
 	private buffered = Buffer.alloc(0);
 	private waiting: { length: number; resolve: (bytes: Buffer) => void; reject: (error: Error) => void } | undefined;
 	private closed = false;
@@ -193,16 +193,16 @@ class SocketReader {
 	}
 }
 
-function reply(socket: Socket, code: number): void {
+export function reply(socket: Socket, code: number): void {
 	socket.write(Buffer.from([0x05, code, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
 }
 
-function refuse(socket: Socket, code: number): void {
+export function refuse(socket: Socket, code: number): void {
 	socket.end(Buffer.from([0x05, code, 0x00, 0x01, 0, 0, 0, 0, 0, 0]), () => socket.destroy());
 }
 
 /** Reads the greeting and request; undefined means the client was answered and closed. */
-async function readRequest(client: Socket, reader: SocketReader): Promise<Target | undefined> {
+export async function readRequest(client: Socket, reader: SocketReader): Promise<Target | undefined> {
 	const version = await reader.byte();
 	const methods = await reader.read(await reader.byte());
 	if (version !== 0x05 || !methods.includes(0x00)) {

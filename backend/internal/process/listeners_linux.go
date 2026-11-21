@@ -64,9 +64,6 @@ func ListenersWithEnv(_ context.Context, name, value, skipExecutable string) ([]
 	return uniqueByPort(listeners), nil
 }
 
-// parseProcNetListeners adds each listening socket's inode and port from a
-// /proc/net/tcp or tcp6 table, keeping sockets bound to a loopback or
-// unspecified address.
 func parseProcNetListeners(table string, ports map[string]int) {
 	for line := range strings.SplitSeq(table, "\n") {
 		fields := strings.Fields(line)

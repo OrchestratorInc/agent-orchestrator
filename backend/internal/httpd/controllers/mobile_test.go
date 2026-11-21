@@ -106,10 +106,10 @@ func (f *fakeLAN) BoundPort() int {
 	}
 	return 3011
 }
-func (f *fakeLAN) SetPasswordHash(h string)     { f.hash = h }
-func (f *fakeLAN) PasswordHash() string         { return f.hash }
-func (f *fakeLAN) SetAccountTokenHash(h string) { f.accountHash = h }
-func (f *fakeLAN) AccountTokenHash() string     { return f.accountHash }
+func (f *fakeLAN) SetPasswordHash(h string)      { f.hash = h }
+func (f *fakeLAN) PasswordHash() string          { return f.hash }
+func (f *fakeLAN) SetAccountTokenHash(h string)  { f.accountHash = h }
+func (f *fakeLAN) AccountTokenHash() string      { return f.accountHash }
 func (f *fakeLAN) SetLoopbackTunnelOff(off bool) { f.loopbackOff = off }
 
 func TestLoopbackTunnelSwitchPersistsAndSurvivesEnable(t *testing.T) {

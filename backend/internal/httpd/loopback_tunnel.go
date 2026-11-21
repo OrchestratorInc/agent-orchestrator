@@ -13,10 +13,6 @@ import (
 	"github.com/coder/websocket"
 )
 
-// loopbackTunnelPath carries one TCP connection to one of this host's loopback
-// ports inside a WebSocket, so a desktop reaches the servers a remote session
-// started at their own localhost address. Served on the LAN listener only,
-// behind its auth.
 const loopbackTunnelPath = "/api/v1/loopback-tunnel"
 
 const (
@@ -62,7 +58,6 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 	<-done
 }
 
-// Not 502: Cloudflare, in front of a linked host, replaces an origin 502 with its own page.
 func refuseLoopback(w http.ResponseWriter, header, message string) {
 	w.Header().Set(header, "1")
 	http.Error(w, message, http.StatusForbidden)
@@ -77,8 +72,7 @@ func dialLoopback(ctx context.Context, port int) (net.Conn, error) {
 	return conn, err
 }
 
-// SetDaemonPort names the daemon's own loopback API port, which trusts every
-// loopback client, so no tunnel may reach it.
+// SetDaemonPort names the daemon's API port, which no tunnel may reach.
 func (m *LANManager) SetDaemonPort(port int) { m.daemonPort.Store(int64(port)) }
 
 func (m *LANManager) isOwnPort(port int) bool {

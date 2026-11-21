@@ -9,8 +9,7 @@ import (
 	"strings"
 )
 
-// Listener is a TCP port a process accepts connections on at a loopback or
-// unspecified address.
+// Listener is a TCP port a process listens on at a loopback or unspecified address.
 type Listener struct {
 	Port    int
 	PID     int

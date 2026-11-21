@@ -520,7 +520,7 @@ export type BrowserViewHostOptions = {
   /** Which browser openInUserBrowser would use, to name the action. */
   describeUserBrowser?: () => Promise<UserBrowser>;
   // Configures a browser partition's session before its first page exists.
-  prepareBrowserPartition?: (partition: string) => void;
+  prepareBrowserPartition?: (partition: string, hostId?: string) => void | Promise<void>;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
   // ClipboardItem API to this narrow image-only writer.
   clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
@@ -667,6 +667,7 @@ type BrowserEntry = {
 type BrowserSessionEntry = {
   sessionId: string;
   viewId: string;
+  hostId?: string;
   profileId: BrowserProfileId | null;
   profilePartition: string;
   tabs: Map<string, BrowserEntry>;
@@ -850,6 +851,23 @@ const REMOTE_PREVIEW_URL = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+
 
 function temporaryBrowserPartition(): string {
   return `${TEMPORARY_BROWSER_PARTITION_PREFIX}${randomUUID()}`;
+}
+
+export function remoteHostOfBrowserSession(sessionId: string): string | undefined {
+  const ref = sessionId.startsWith("remote:") ? sessionId.slice("remote:".length) : "";
+  const separator = ref.indexOf(":");
+  if (separator <= 0) return undefined;
+  try {
+    return decodeURIComponent(ref.slice(0, separator));
+  } catch {
+    return undefined;
+  }
+}
+
+export function sessionBrowserPartition(profileId: BrowserProfileId | null, hostId?: string): string {
+  if (!profileId) return temporaryBrowserPartition();
+  const partition = browserProfilePartition(profileId);
+  return hostId ? `${partition}-host-${hostId.replace(/[^A-Za-z0-9_-]/g, "_")}` : partition;
 }
 
 function isTemporaryBrowserPartition(partition: string): boolean {
@@ -1213,7 +1231,7 @@ export function createBrowserViewHost(
       preload: options.annotatePreloadPath,
       sandbox: true,
     };
-    options.prepareBrowserPartition?.(session.profilePartition);
+    const partitionReady = Promise.resolve(options.prepareBrowserPartition?.(session.profilePartition, session.hostId));
     const view = new options.WebContentsView({
       webPreferences,
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
@@ -1518,9 +1536,9 @@ export function createBrowserViewHost(
           // indefinitely. resolve is idempotent, so an earlier event still wins.
           setTimeout(done, entryReadyTimeoutMs);
         })
-      : loadEntryReady(view, entryReadyTimeoutMs, () => {
+      : partitionReady.then(() => loadEntryReady(view, entryReadyTimeoutMs, () => {
           entry.ready = Promise.resolve();
-        });
+        }));
     // Keep an unobserved tab initialization failure from becoming an unhandled
     // rejection; callers that need the target still await the original promise.
     void entry.ready.catch(() => undefined);
@@ -1545,16 +1563,16 @@ export function createBrowserViewHost(
     let session = entries.get(viewId);
     if (!session) {
       const profileId = initialProfileIdForSession(sessionId);
+      const hostId = remoteHostOfBrowserSession(sessionId);
       session = {
         sessionId,
         viewId,
+        hostId,
         profileId,
         // Temporary workers still use a persist: partition: Electron's built-in
         // PDF viewer does not reliably render in in-memory partitions, while AO
         // clears this session-scoped partition when the browser session ends.
-        profilePartition: profileId
-          ? browserProfilePartition(profileId)
-          : temporaryBrowserPartition(),
+        profilePartition: sessionBrowserPartition(profileId, hostId),
         tabs: new Map(),
         activeTabId: "",
         activationRevision: 0,
@@ -3387,9 +3405,7 @@ export function createBrowserViewHost(
       disposeSessionTabs(session);
       didTearDown = true;
       session.profileId = normalizedRequestedProfileId;
-      session.profilePartition = normalizedRequestedProfileId
-        ? browserProfilePartition(normalizedRequestedProfileId)
-        : temporaryBrowserPartition();
+      session.profilePartition = sessionBrowserPartition(normalizedRequestedProfileId, session.hostId);
       await rebuildSessionTabs(
         session,
         savedTabs,
