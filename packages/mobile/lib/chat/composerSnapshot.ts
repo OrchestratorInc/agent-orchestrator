@@ -8,6 +8,10 @@ import type { ConversationSnapshot } from "./types";
  * rate limits, capabilities, the controller, the turn settings and a model
  * reroute (which changes the model the composer names). Not the
  * transcript itself, which changes with every streamed word.
+ *
+ * Kept by hand: a snapshot field the composer starts reading must be added
+ * here too, or the composer keeps showing its old value until another listed
+ * field changes.
  */
 export function composerSnapshotKey(snapshot: ConversationSnapshot, openingTurnId?: string): string {
 	return JSON.stringify([
