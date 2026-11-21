@@ -2536,6 +2536,48 @@ func TestHistoricalUserContentDropsPlainStandingInstructionsJoinedToTheFirstMess
 	}
 }
 
+// Antigravity 1.5.14 replays the first prompt as two id-less user chunks: the
+// standing-instructions preamble, then what the user typed. The merged first
+// message must be only the user's text, or the ao_high_water checkpoint
+// never matches.
+func TestACPHistoryReplayDropsPlainStandingInstructionsChunkBeforeTheFirstPrompt(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
+		loadUpdates: []acpsdk.SessionUpdate{
+			acpsdk.UpdateUserMessage(PlainStandingInstructionsBlock("AO standing instructions")),
+			acpsdk.UpdateUserMessageText("Fix the failing test"),
+			acpsdk.UpdateAgentMessageText("Fixed."),
+		},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "sess1", WorkspacePath: t.TempDir(), ProviderConversationID: "provider-session-1",
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conv.Close()
+	events, err := conv.(ports.ChatHistoryReader).ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	var users []string
+	for _, event := range events {
+		if event.Kind == ports.ChatEventUserMessageCompleted {
+			users = append(users, event.Text)
+		}
+	}
+	if want := []string{"Fix the failing test"}; !reflect.DeepEqual(users, want) {
+		t.Fatalf("replayed user messages = %q, want %q", users, want)
+	}
+}
+
 func TestHistoricalUserContentSuppressesOnlyMarkedInternalReplayResources(t *testing.T) {
 	resource := acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
 		TextResourceContents: &acpsdk.TextResourceContents{
