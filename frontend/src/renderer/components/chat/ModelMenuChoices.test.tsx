@@ -182,6 +182,14 @@ describe("ModelMenuChoices", () => {
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(30);
 	});
 
+	it("keeps two rows of the list in a window too short for all of it", () => {
+		renderRows(generateModels(30), undefined, 4);
+		const pane = document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
+		// Past this the menu scrolls as a whole, rather than closing the list up to nothing.
+		expect(pane.style.getPropertyValue("--model-list-min")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 2)");
+		expect(pane).toHaveClass("min-h-(--model-list-min)");
+	});
+
 	it("keeps the footer, and with it the menu's height, while searching a fixed-height list", async () => {
 		const user = userEvent.setup();
 		render(

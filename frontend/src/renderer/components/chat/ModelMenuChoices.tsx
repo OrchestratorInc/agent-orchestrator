@@ -111,9 +111,13 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	// The pane's basis is that height whatever it lists, so a search with no matches never shrinks the
 	// menu under the pointer. It grows into room the held height below leaves it, and shrinks only
 	// when the menu has no room for it (many favourites in a short window), scrolling as it does.
+	// It keeps two rows even then: past that the menu scrolls as a whole, so the list never closes up.
 	const rowCap = listRows === undefined
 		? undefined
-		: ({ "--model-list-rows": `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${listRows} + 1px * ${listRows})` } as CSSProperties);
+		: ({
+			"--model-list-rows": `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${listRows} + 1px * ${listRows})`,
+			"--model-list-min": `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${Math.min(2, listRows)})`,
+		} as CSSProperties);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const holdsHeight = rows !== undefined;
 	// While open, the menu never gets shorter: when the rows under the list shrink (another agent
@@ -275,7 +279,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				</div>
 			) : null}
 			<div
-				className={cn("relative grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden", rowCap ? "shrink grow basis-(--model-list-rows)" : "flex-1")}
+				className={cn("relative grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden", rowCap ? "min-h-(--model-list-min) shrink grow basis-(--model-list-rows)" : "flex-1")}
 				style={rowCap}
 			>
 				<div
