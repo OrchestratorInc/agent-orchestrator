@@ -105,7 +105,9 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 	if (!source || (!html && !uri)) return null;
 	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
 		<WebView
-			{...ARTIFACT_MEDIA_PLAYBACK}
+			// Inline, a frame stays live off screen and a tap opens the viewer
+			// rather than reaching the page, so only the viewer plays media unprompted.
+			{...(fullscreen ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
 			ref={web}
 			source={source}
 			injectedJavaScriptBeforeContentLoaded={fullscreen ? VIEWER_STYLE_SCRIPT : undefined}

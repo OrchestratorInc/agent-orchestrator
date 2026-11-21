@@ -658,14 +658,11 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 	}, [inlined.html, theme]);
 	// An HTML page plays its media inline, and a neighbour in the pager holds it
 	// (see artifactMediaGateScript) without reloading, so its scroll and form
-	// state stay. The gate starts as the page is when this view is created;
-	// later changes are posted to it.
+	// state stay. The gate is written for the page as it is now, so a view
+	// created after a swipe starts right (a new script only reaches the next
+	// load; it never reloads the page); changes reach a loaded page as posts.
 	const pageView = Boolean(page);
-	const activeRef = useRef(active);
-	activeRef.current = active;
-	// Built again only for a new view (the key's parts), never on a change of page.
-	const fromMemory = Boolean(inlined.html);
-	const mediaGate = useMemo(() => pageView ? artifactMediaGateScript(activeRef.current) : undefined, [pageView, version, fromMemory, attempt]);
+	const mediaGate = pageView ? artifactMediaGateScript(active) : undefined;
 	useEffect(() => {
 		if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(active));
 	}, [active, pageView]);
@@ -680,6 +677,8 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 			<WebView
 				{...(pageView ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
 				injectedJavaScriptBeforeContentLoaded={mediaGate}
+				// The relaxed policy covers the page's frames too, so the gate goes into each.
+				injectedJavaScriptBeforeContentLoadedForMainFrameOnly={!pageView}
 				// A new version of the file reloads the page, and so does Retry.
 				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}`}
 				ref={web}
@@ -702,7 +701,7 @@ function ArtifactWeb({ backend, file, version, page, active = true }: {
 					loaded.current = true;
 					if (inlined.html) web.current?.injectJavaScript(renderThemeScript(theme));
 					// A change while the page was loading was posted before the gate could take it.
-					if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(activeRef.current));
+					if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(active));
 				}}
 				onHttpError={(event) => {
 					const status = event.nativeEvent.statusCode;
