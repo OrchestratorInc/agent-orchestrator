@@ -65,6 +65,13 @@ describe("expandComponents", () => {
     expect(out.match(/<InstallDownloads/g)).toHaveLength(1);
   });
 
+  it("closes a fence opened inside a block quote", () => {
+    const input = ["> ```mdx", "> <InstallDownloads />", "> ```", "", "<InstallDownloads />"].join("\n");
+    const out = expandComponents(input);
+    expect(out.startsWith(["> ```mdx", "> <InstallDownloads />", "> ```", ""].join("\n"))).toBe(true);
+    expect(out.match(/<InstallDownloads/g)).toHaveLength(1);
+  });
+
   it("ignores /> inside a quoted attribute when finding the end of a tag", () => {
     const input = ['<PlatformSupport note="<>Type />', 'on the next line</>" />'].join("\n");
     expect(expandComponents(input)).toBe(

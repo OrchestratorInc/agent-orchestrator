@@ -58,19 +58,26 @@ function cardMarkdown(tag: string): string {
 /** List-item and block-quote markers that can come before a code fence, e.g. "* ```mdx". */
 const CONTAINER_PREFIX = /^(?:(?:[*+-]|\d+[.)])\s+|>\s?)*/;
 
-/** The fence marker that opens a fenced code block on this line, if any. */
-function openingFence(line: string): string | undefined {
-  const rest = line.trim().replace(CONTAINER_PREFIX, "");
-  return /^(`{3,}|~{3,})/.exec(rest)?.[1];
+type Fence = { marker: string; quoteDepth: number };
+
+/** The fence that opens a fenced code block on this line, if any, with how many block quotes it sits in. */
+function openingFence(line: string): Fence | undefined {
+  const trimmed = line.trim();
+  const prefix = CONTAINER_PREFIX.exec(trimmed)?.[0] ?? "";
+  const marker = /^(`{3,}|~{3,})/.exec(trimmed.slice(prefix.length))?.[1];
+  return marker ? { marker, quoteDepth: (prefix.match(/>/g) ?? []).length } : undefined;
 }
 
 /**
  * Whether this line closes the open fence. Inside a fence every line is literal
- * content, so container markers are not stripped: "- ```" does not close it.
+ * content: only the block quotes the fence opened in are removed, so "- ```"
+ * does not close a top-level fence but "> ```" closes one opened in a quote.
  */
-function closesFence(line: string, fence: string): boolean {
-  const marker = /^(`{3,}|~{3,})\s*$/.exec(line.trim())?.[1];
-  return !!marker && marker[0] === fence[0] && marker.length >= fence.length;
+function closesFence(line: string, fence: Fence): boolean {
+  let rest = line.trim();
+  for (let depth = 0; depth < fence.quoteDepth; depth++) rest = rest.replace(/^>\s?/, "").trimStart();
+  const marker = /^(`{3,}|~{3,})\s*$/.exec(rest)?.[1];
+  return !!marker && marker[0] === fence.marker[0] && marker.length >= fence.marker.length;
 }
 
 /** Whether a JSX tag is complete: it ends with "/>" outside any quoted attribute value. */
@@ -94,7 +101,7 @@ const TAG_START = /^<(PlatformSupport|Card)\b/;
 export function expandComponents(markdown: string): string {
   const lines = markdown.split("\n");
   const out: string[] = [];
-  let fence: string | undefined;
+  let fence: Fence | undefined;
   let inCards = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!;
@@ -104,9 +111,9 @@ export function expandComponents(markdown: string): string {
       out.push(line);
       continue;
     }
-    const marker = openingFence(line);
-    if (marker) {
-      fence = marker;
+    const opening = openingFence(line);
+    if (opening) {
+      fence = opening;
       out.push(line);
       continue;
     }
