@@ -505,6 +505,8 @@ export function createNotificationsTransport(
 	queryClient: QueryClient,
 	/** The session whose agent terminal is currently on screen, if any. */
 	getVisibleAgentSessionId: () => string | undefined = () => undefined,
+	/** Whether the person's notification preferences let this one alert. */
+	shouldAlert: (notification: NotificationDTO) => boolean = () => true,
 ) {
 	return {
 		connect() {
@@ -546,7 +548,7 @@ export function createNotificationsTransport(
 				}
 				const inserted = mergeUnreadNotification(queryClient, event.notification);
 				mergeRecentNotification(queryClient, event.notification);
-				if (inserted) {
+				if (inserted && shouldAlert(event.notification)) {
 					void aoBridge.notifications.show({
 						id: event.notification.id,
 						title: event.notification.title,
