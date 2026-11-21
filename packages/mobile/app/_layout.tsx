@@ -27,6 +27,15 @@ import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
 import { sheetCornerRadius } from "../lib/tokens";
+import { demoMachine, demoTransport } from "../lib/demoMachine/entry";
+import { startJsStallProbe } from "../lib/devPerf";
+
+// Development builds only: lets the in-app demo machine answer its own address.
+// Loaded through ./entry so a release bundle does not contain it.
+demoTransport()?.installDemoTransport();
+const DemoMachineManager = demoMachine()?.DemoMachineManager ?? null;
+// Development builds started with EXPO_PUBLIC_AO_JANK=1 only: logs [jank] when the JS thread is blocked.
+startJsStallProbe();
 
 // Sheet routes, and how tall each is allowed to be.
 //
@@ -178,6 +187,8 @@ function Shell() {
 			<UpdatesManager />
 			<StoreUpdateManager />
 			<OnboardingGate />
+			{/* Only in a development build. */}
+			{DemoMachineManager ? <DemoMachineManager /> : null}
 			{/* The navigator paints surfaces of its own, and it reads them from *its*
 			    theme, not from the palette above. Two of those surfaces are visible
 			    only while a page moves: the stack's own container, which shows
