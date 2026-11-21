@@ -35,6 +35,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | `stop` | Stop the Orchestrator daemon | Shutting down Orchestrator | [commands/stop.md](commands/stop.md) |
 | `serve` | Run the Orchestrator daemon without the desktop app, or reuse the running one | Starting Orchestrator headless (servers, scripts, setting up for a user) | [commands/serve.md](commands/serve.md) |
 | `service` | Install, check, or remove a user service that keeps `ao serve` running across reboots | Keeping Orchestrator running without the app | [commands/service.md](commands/service.md) |
+| `setup` | Start the daemon, check the agent and GitHub, and register the project in one command; optionally start a first task | Setting up Orchestrator for a user | [commands/setup.md](commands/setup.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |
 | `triage` | Collect diagnostics and draft a problem report, even offline | Reporting a bug | [commands/triage.md](commands/triage.md) |
 | `doctor` | Run local health checks | Diagnosing Orchestrator setup problems | [commands/doctor.md](commands/doctor.md) |
@@ -44,7 +45,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 
 ## Conventions
 
-- When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
+- When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it: run `ao setup` when it is available.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.

@@ -2,7 +2,56 @@
 
 Use this when the user asks you to set up Orchestrator, add their first project, or get them started. Run the steps yourself. Ask the user only for what you cannot find out, and offer choices instead of asking for a path.
 
-## Steps
+## One command: `ao setup`
+
+`ao setup` does the whole setup in one go and tells you what is left for the user:
+
+```bash
+ao setup --path <repo> --json
+```
+
+It runs these steps in order. Each one reports `{step, status, detail, fix}`, with `status` one of `ok`, `fixed`, `skipped`, `needs_human` or `failed`:
+
+1. **daemon:** reuses the running daemon, or starts one in the background the way `ao serve` does.
+2. **agent:** uses `--agent` if given, otherwise the coding agent running the command (you), detected from its environment (`AI_AGENT` first, then tags such as `CLAUDECODE` or `CODEX_THREAD_ID`), otherwise the first ready agent. It checks the agent is installed and signed in. It never installs an agent or signs one in.
+3. **github:** checks that the GitHub CLI is signed in. It never runs `gh auth login`.
+4. **project:** registers `--path` (default: the git repository around the current directory) with that agent as worker and orchestrator, or reuses its existing registration. A repository with no remote gets its checked-out branch as the default branch.
+5. **first-run:** a registered project makes the desktop app skip its first-run screens.
+6. **start:** only with `--start "<task>"`. Pass the user's own request as the task. It goes to the project's orchestrator, or to one worker with `--worker`, and setup waits until it has started.
+7. **verify:** `ready` is true when nothing is left to do.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | Ready (and the task started, with `--start`). |
+| `10` | The user must do something first. `next_actions` lists the exact commands, such as the agent's login command or `gh auth login`. Show them to the user, wait until they are done, then run `ao setup` again. |
+| `1` | A step failed; its `detail` says why. |
+| `2` | Usage error: fix the command. |
+| `3` | The task started with `--start` is waiting on the user, for example for an approval. Do not start it again. |
+
+With `--json` the output is `{ready, agent, project, steps, next_actions, task}`. `task` is the `ao task start --json` result, or `null` without `--start`.
+
+| Flag | Meaning |
+|---|---|
+| `--path <repo>` | Repository to register. Default: the git repository containing the current directory. |
+| `--agent <id>` | Agent to use, from `ao agent ls`. Default: the calling agent, then the first ready agent. |
+| `--worker-agent <id>` / `--orchestrator-agent <id>` | Use a different agent for one role. |
+| `--start "<task>"` | Start this task once setup is ready. |
+| `--worker` | With `--start`, give the task to one worker instead of the orchestrator. |
+| `--yes` | Replace the agents already saved on a registered project with the ones you passed. Without it, setup keeps them and asks. |
+| `--check` | Report what is set up and what is missing. Changes nothing and starts nothing; exits 10 until setup is complete. |
+| `--dry-run` | Show what setup would do. Changes nothing. |
+| `--json` | Print the result as JSON. |
+
+```bash
+# Set up the repository you are in, with yourself as the agent, and start the user's task
+ao setup --start "Fix the failing login test" --json
+```
+
+On macOS the user can then open the app with `open "/Applications/Agent Orchestrator.app"`. If `ao setup` is not available (an older Orchestrator), follow the manual steps below.
+
+## Manual steps
 
 1. **Check the install.** `ao status` must report the daemon ready. In `ao doctor`, fix `FAIL` lines; a `WARN` for an agent the user does not use needs no action.
 2. **Check the agent.** `ao agent ls --refresh` must show the agent the user wants as `installed` and `authorized`. You cannot install an agent or sign in for the user. If it is not ready, send them to **Settings → Harness** in the app, which installs and signs in each agent, then run the check again.

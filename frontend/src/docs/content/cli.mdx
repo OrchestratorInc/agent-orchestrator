@@ -28,6 +28,7 @@ ao
 ├── status                        Show daemon health
 ├── serve                         Run the daemon without the desktop app
 ├── service                       install, status, uninstall (keep serve running)
+├── setup                         Set up the daemon, agent, GitHub and project in one command
 ├── doctor                        Check the local Orchestrator environment
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
@@ -136,6 +137,60 @@ Keeps `ao serve` running across logins and reboots, as a user service that never
 The service runs `ao serve --foreground` with the `PATH`, `AO_DATA_DIR`, `AO_RUN_FILE`, `AO_PORT`, `DO_NOT_TRACK`, and `AO_TELEMETRY_*` values of the shell you install from, so the daemon finds the same agents and tools. Run `ao service install` again after changing them. A custom `AO_DATA_DIR` or `AO_RUN_FILE` gets its own service name, so it never replaces your main one. The service restarts the daemon if it crashes; `ao stop` stops it until the next login. When a daemon is already running for the same data directory (for example, the desktop app's), the service watches it instead of starting a second one, and starts its own if that daemon crashes or quits with the app. Because the service cannot tell `ao stop` from the app quitting, stopping the desktop app's own daemon also makes the service start one; run `ao service uninstall` first to keep Orchestrator stopped. `install` and `uninstall` only touch a file that `ao service install` wrote. If the self-hosted host setup script already installed its own service (`dev.aoagents.self-hosted` / `ao-self-hosted.service`) for the same data directory, `install` refuses and prints how to remove it, since that service already keeps the daemon running.
 
 `install` accepts `--port`, `--no-wait`, `--timeout`, and `--json`; `status` and `uninstall` accept `--json`. On Linux, a user service starts when you log in and stops when you log out unless lingering is on; `install` and `status` report it (`"linger"` in `--json`) with the command to turn it on, `loginctl enable-linger <user>`. On a headless server, turn it on so the service runs from boot. `journalctl --user -u agent-orchestrator-serve` shows early `ao serve` failures for the default service; for a custom `AO_DATA_DIR` or `AO_RUN_FILE`, use the name `ao service status` prints.
+
+### `ao setup`
+
+Takes Orchestrator from installed to ready for a task in one command. It is built for coding agents asked to "set up Orchestrator", and works the same from a terminal.
+
+```bash
+ao setup --path ~/code/my-app --json
+```
+
+It runs these steps in order and reports each as `{step, status, detail, fix}`, where `status` is `ok`, `fixed`, `skipped`, `needs_human`, or `failed`:
+
+| Step | What it does |
+| --- | --- |
+| `daemon` | Reuses the daemon serving this data directory, or starts one in the background the same way `ao serve` does. |
+| `agent` | Picks the agent: `--agent` if given, otherwise the coding agent running the command (detected from its environment, `AI_AGENT` first), otherwise the first ready agent. Checks that it is installed and signed in. It never installs an agent or signs one in. |
+| `github` | Checks that the GitHub CLI is signed in. It never runs `gh auth login`. |
+| `project` | Registers `--path` (default: the Git repository containing the current directory) with the chosen agent for workers and the orchestrator, or reuses its registration. A repository with no remote gets its checked-out branch as the default branch, as `ao project set-config --default-branch` would. |
+| `first-run` | Reports that a registered project makes the desktop app skip its first-run screens. |
+| `start` | Only with `--start "<task>"`: starts the task as `ao task start --wait` does, on the project's orchestrator or, with `--worker`, on one worker. |
+| `verify` | Sums up: `ready` is true when nothing is left to do. |
+
+| Flag | Purpose |
+| --- | --- |
+| `--path <repo>` | Repository to register. |
+| `--agent <id>` | Agent to use. `--worker-agent` and `--orchestrator-agent` override one role. |
+| `--start "<task>"` | Start this task once setup is ready. Add `--worker` for a single worker. |
+| `--yes` | Replace agents already saved on a registered project with the ones you passed. Without it, setup keeps them and reports `needs_human`. |
+| `--check` | Report what is set up and what is missing. Changes nothing and never starts the daemon. |
+| `--dry-run` | Show what setup would do, without changing anything. |
+| `--json` | Print one object: `{ready, agent, project, steps, next_actions, task}`. |
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Ready, and the task started when `--start` was given. |
+| `10` | A person must act first. `next_actions` lists the exact commands, such as the agent's login command or `gh auth login`. With `--check`, also when `ao setup` still has work to do. |
+| `1` | A step failed, or the task started with `--start` failed. |
+| `2` | Usage error. |
+| `3` | The task started with `--start` is waiting on you. |
+
+```json
+{
+  "ready": false,
+  "agent": { "id": "claude-code", "source": "caller", "detectedFrom": "CLAUDECODE", "authStatus": "unauthorized", "worker": "claude-code", "orchestrator": "claude-code" },
+  "project": { "id": "my-app", "path": "/Users/me/code/my-app", "defaultBranch": "main", "reused": false },
+  "steps": [
+    { "step": "daemon", "status": "ok", "detail": "daemon running at http://127.0.0.1:3001 (pid 4242)", "fix": "" },
+    { "step": "agent", "status": "needs_human", "detail": "using claude-code (the calling agent, detected from CLAUDECODE): agent claude-code is not signed in", "fix": "run `claude auth login`" }
+  ],
+  "next_actions": ["run `claude auth login`"],
+  "task": null
+}
+```
+
+The `steps` list above is shortened. A daemon that `ao setup` starts follows the same usage-analytics setting as `ao serve`. Once setup is ready, open the app on macOS with `open "/Applications/Agent Orchestrator.app"`.
 
 ### `ao doctor`
 
