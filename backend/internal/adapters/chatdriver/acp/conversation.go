@@ -18,6 +18,7 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -90,6 +91,7 @@ type nestedMessageState struct {
 type conversation struct {
 	harness              domain.AgentHarness
 	suppressSessionModes bool
+	backgroundObserved   backgroundtasks.Tracker
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process
@@ -97,6 +99,9 @@ type conversation struct {
 	providerScopeID      string
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
+	// task ID to reference-only native session alias; guarded by mu.
+	backgroundAgentSessions map[string]string
+
 	// handshake is the agent's initialize answer, for steering details that
 	// vary by agent version.
 	handshake       acpsdk.InitializeResponse
@@ -213,6 +218,8 @@ type conversation struct {
 	// sessionPromptResponseFailure is promptResponseFailure given the session.
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	backgroundTasks              func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
+	stopBackgroundTask           func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
 	historyNotice                func(string) bool
 	hideCommand                  func(acpsdk.AvailableCommand) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.
@@ -1377,9 +1384,14 @@ func (c *conversation) Terminate() error {
 	return c.closeProvider(true, true)
 }
 
+// staleBackgroundTask bounds how long an event-derived running task can keep a
+// session from hibernating after its last event. ACP cannot enumerate native
+// jobs, so a completion the provider never sends must not block it forever.
+const staleBackgroundTask = 30 * time.Minute
+
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	if c.hibernationCheck == nil {
-		return true, nil
+		return !c.backgroundObserved.Active(time.Now(), staleBackgroundTask), nil
 	}
 	c.mu.Lock()
 	id := c.sessionID

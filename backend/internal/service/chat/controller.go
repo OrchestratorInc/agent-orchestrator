@@ -224,6 +224,13 @@ type Controller struct {
 	started       time.Time
 
 	conv                   ports.ChatConversation
+	backgroundMu           sync.Mutex
+	backgroundInFlight     chan struct{}
+	backgroundVersion      uint64
+	backgroundTasks        []ports.ChatBackgroundTask
+	backgroundSampledAt    time.Time
+	backgroundPartial      bool
+	backgroundErr          error
 	store                  Store
 	continuationReader     SnapshotReader
 	activity               ActivityRecorder

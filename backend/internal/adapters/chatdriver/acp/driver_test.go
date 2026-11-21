@@ -3749,12 +3749,8 @@ func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	air, _ := jetbrains["air"].(map[string]any)
 	version, versionOK := number(air["version"])
 	capabilities, _ := air["capabilities"].([]any)
-	capability := ""
-	if len(capabilities) == 1 {
-		capability, _ = capabilities[0].(string)
-	}
-	if !versionOK || version != 1 || capability != "sessionFailure" {
-		t.Fatalf("session failure capability = %#v", air)
+	if !versionOK || version != 1 || len(capabilities) != 1 || capabilities[0] != "sessionFailure" {
+		t.Fatalf("session failure and async-task capabilities = %#v", air)
 	}
 
 	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
@@ -6392,5 +6388,25 @@ func TestACPEarlyHiddenCompactKeepsCompactionInStart(t *testing.T) {
 	skills := awaitSkillCount(t, opened.(ports.ChatSkillLister), 1)
 	if skills[0].Name != "goal" {
 		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+}
+
+func TestACPAsyncTasksRequiresBindingOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		agent := &fakeAgent{}
+		driver := New(Config{Harness: domain.HarnessClaudeCode, AsyncTasks: enabled, Probe: func(context.Context) error { return nil }, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent.mu.Lock()
+		air := nestedMap(nestedMap(agent.initParams.ClientCapabilities.Meta, "jetbrains"), "air")
+		capabilities, _ := air["capabilities"].([]any)
+		agent.mu.Unlock()
+		if got := len(capabilities) == 2 && capabilities[1] == "asyncTasks"; got != enabled {
+			t.Fatalf("enabled=%v capabilities=%v", enabled, capabilities)
+		}
+		_ = conv.Close()
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -44,9 +45,10 @@ var approvalMethods = map[string]domain.ActivityKind{
 
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
-	conn *conn
-	proc *process
-	log  *slog.Logger
+	backgroundObserved backgroundtasks.Tracker
+	conn               *conn
+	proc               *process
+	log                *slog.Logger
 
 	threadID        string
 	historyParentID string
@@ -70,6 +72,13 @@ type conversation struct {
 	pending       map[string]*parkedRequest
 	pendingInputs map[string]*parkedInput
 	closed        bool
+	// backgroundStopping holds the terminals AO asked the app-server to
+	// terminate, so their completion reads as stopped, not failed.
+	backgroundStopping map[string]bool
+	// Command starts are observational; only the native inventory confirms background work.
+	backgroundCommands map[string]backgroundCommand
+	// A surviving host reconnect needs launch evidence without transcript replay.
+	backgroundHistoryPending bool
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.
@@ -181,6 +190,7 @@ func (c *conversation) pump() {
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		c.observeBackgroundNotification(n)
 		now := time.Now()
 		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
