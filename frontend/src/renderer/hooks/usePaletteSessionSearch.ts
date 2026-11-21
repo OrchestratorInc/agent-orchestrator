@@ -4,6 +4,7 @@ import { apiErrorCode } from "../lib/api-client";
 import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
+import { isQueryRefinement } from "../lib/session-search-machines";
 
 export type SessionSearchResponse = components["schemas"]["SessionSearchResponse"];
 export type SessionSearchCoverage = components["schemas"]["SessionSearchCoverage"];
@@ -44,6 +45,9 @@ const noRecents: SessionSearchResponse = {
  * person opening it to "go back to that session" gets the recent list, the way
  * Raycast and Atuin show recents before a query is typed.
  */
+/** Rows the palette asks each machine for: a launcher, not a results page. */
+export const PALETTE_SESSION_SEARCH_LIMIT = 8;
+
 export function usePaletteSessionSearch(
 	query: string,
 	hostId: HostId = LOCAL_HOST,
@@ -55,10 +59,18 @@ export function usePaletteSessionSearch(
 	return useQuery<SessionSearchResponse>({
 		queryKey: ["session-search", hostId, trimmed, "palette", mode],
 		enabled: enabled && ready,
-		// Typing refines the previous query's rows rather than blanking them. Recents
-		// are not kept for a query: they would show as matches until it answers.
-		placeholderData: (previous, previousQuery) =>
-			previousQuery?.queryKey.at(-1) === mode ? previous : undefined,
+		// Typing more of a word (or deleting some) keeps the previous rows until
+		// the new answer lands, rather than blanking them. Rows for an unrelated
+		// earlier query are not kept: Enter would open a session that has nothing
+		// to do with what is typed. Nor are recents kept for a query: they would
+		// show as matches until it answers.
+		placeholderData: (previous, previousQuery) => {
+			const previousText = previousQuery?.queryKey[2];
+			return previousQuery?.queryKey.at(-1) === mode
+				&& (mode === "recents" || (typeof previousText === "string" && isQueryRefinement(previousText, trimmed)))
+				? previous
+				: undefined;
+		},
 		staleTime: 5_000,
 		retry: false,
 		// The palette debounces the query; the signal stops a search the next
@@ -67,7 +79,11 @@ export function usePaletteSessionSearch(
 			// With no words, sort=recent asks the same endpoint for recent sessions.
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/search/sessions", {
 				signal,
-				params: { query: trimmed ? { q: trimmed, limit: 8 } : { sort: "recent", limit: 8 } },
+				params: {
+					query: trimmed
+						? { q: trimmed, limit: PALETTE_SESSION_SEARCH_LIMIT }
+						: { sort: "recent", limit: PALETTE_SESSION_SEARCH_LIMIT },
+				},
 			});
 			// Search is optional: a daemon whose index could not be opened answers
 			// SESSION_SEARCH_UNAVAILABLE. Opening the palette then shows no recents

@@ -12,45 +12,54 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// Keep this release aligned with the adapter's inspected hook and TUI contract.
+const openInterpreterInstallRelease = "rust-v0.0.56"
+
 var agentDocumentationURLs = map[Target]string{
-	TargetMemcode:     "https://github.com/memcode-ai/memcode/releases",
-	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
-	TargetCodex:       "https://github.com/openai/codex",
-	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
-	TargetOpencode:    "https://github.com/anomalyco/opencode",
-	TargetOpencodeV2:  "https://opencode.ai/v2/docs",
-	TargetAider:       "https://aider.chat/docs/install.html",
-	TargetCopilot:     "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
-	TargetGrok:        "https://docs.x.ai/build/overview",
-	TargetKimi:        "https://moonshotai.github.io/kimi-code/en/",
-	TargetPi:          "https://github.com/earendil-works/pi",
-	TargetAmp:         "https://ampcode.com/manual",
-	TargetAuggie:      "https://docs.augmentcode.com/cli/overview",
-	TargetDroid:       "https://docs.factory.ai/droid-cli/cli-reference",
-	TargetCrush:       "https://github.com/charmbracelet/crush",
-	TargetCline:       "https://github.com/cline/cline",
-	TargetGoose:       "https://goose-docs.ai/docs/getting-started/installation/",
-	TargetQwen:        "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
-	TargetGemini:      "https://geminicli.com/docs/get-started/installation/",
-	TargetContinue:    "https://docs.continue.dev/cli/quickstart",
-	TargetDevin:       "https://docs.devin.ai/get-started/devin-intro",
-	TargetKiro:        "https://kiro.dev/docs/getting-started/installation/",
-	TargetKilocode:    "https://kilo.ai/docs/code-with-ai/platforms/cli",
-	TargetVibe:        "https://github.com/mistralai/mistral-vibe",
-	TargetMuse:        "https://ai.meta.com/llama/",
-	TargetAgy:         "https://github.com/google-antigravity/antigravity-cli",
-	TargetAutohand:    "https://docs.autohand.ai/working-with-autohand-code/cli",
-	TargetKimchi:      "https://docs.kimchi.dev/docs/coding-getting-started",
-	TargetPrimeAgent:  "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md",
-	TargetOMP:         "https://github.com/can1357/oh-my-pi",
-	TargetCodewhale:   "https://github.com/Hmbown/Codewhale",
-	TargetFX:          "https://fx.sh/docs",
-	TargetUnreal:      "https://github.com/unreallabsai/unreal-agent",
-	TargetMiMoCode:    "https://github.com/XiaomiMiMo/MiMo-Code",
-	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
-	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
-	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
-	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetMemcode:         "https://github.com/memcode-ai/memcode/releases",
+	TargetClaudeCode:      "https://code.claude.com/docs/en/installation",
+	TargetCodex:           "https://github.com/openai/codex",
+	TargetCursor:          "https://docs.cursor.com/en/cli/installation",
+	TargetOpencode:        "https://github.com/anomalyco/opencode",
+	TargetOpencodeV2:      "https://opencode.ai/v2/docs",
+	TargetAider:           "https://aider.chat/docs/install.html",
+	TargetCopilot:         "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
+	TargetGrok:            "https://docs.x.ai/build/overview",
+	TargetKimi:            "https://moonshotai.github.io/kimi-code/en/",
+	TargetPi:              "https://github.com/earendil-works/pi",
+	TargetAmp:             "https://ampcode.com/manual",
+	TargetAuggie:          "https://docs.augmentcode.com/cli/overview",
+	TargetDroid:           "https://docs.factory.ai/droid-cli/cli-reference",
+	TargetCrush:           "https://github.com/charmbracelet/crush",
+	TargetCline:           "https://github.com/cline/cline",
+	TargetGoose:           "https://goose-docs.ai/docs/getting-started/installation/",
+	TargetQwen:            "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
+	TargetGemini:          "https://geminicli.com/docs/get-started/installation/",
+	TargetContinue:        "https://docs.continue.dev/cli/quickstart",
+	TargetDevin:           "https://docs.devin.ai/get-started/devin-intro",
+	TargetKiro:            "https://kiro.dev/docs/getting-started/installation/",
+	TargetKilocode:        "https://kilo.ai/docs/code-with-ai/platforms/cli",
+	TargetVibe:            "https://github.com/mistralai/mistral-vibe",
+	TargetMuse:            "https://ai.meta.com/llama/",
+	TargetAgy:             "https://github.com/google-antigravity/antigravity-cli",
+	TargetAutohand:        "https://docs.autohand.ai/working-with-autohand-code/cli",
+	TargetKimchi:          "https://docs.kimchi.dev/docs/coding-getting-started",
+	TargetPrimeAgent:      "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md",
+	TargetOMP:             "https://github.com/can1357/oh-my-pi",
+	TargetCodewhale:       "https://github.com/Hmbown/Codewhale",
+	TargetFX:              "https://fx.sh/docs",
+	TargetUnreal:          "https://github.com/unreallabsai/unreal-agent",
+	TargetMiMoCode:        "https://github.com/XiaomiMiMo/MiMo-Code",
+	TargetMiniMaxCode:     "https://agent.minimax.io/docs/cli/quick-start",
+	TargetDeepSeek:        "https://github.com/deepseek-ai/deepseek-harness",
+	TargetOpenHands:       "https://docs.openhands.dev/openhands/usage/cli/installation",
+	TargetCommandCode:     "https://commandcode.ai/docs/quickstart",
+	TargetMastraCode:      "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode",
+	TargetDockerAgent:     "https://docs.docker.com/ai/docker-agent/getting-started/installation/",
+	TargetHermes:          "https://github.com/NousResearch/hermes-agent",
+	TargetStakpak:         "https://github.com/stakpak/agent#installation",
+	TargetOpenInterpreter: "https://www.openinterpreter.com/docs/terminal/install",
+	TargetTau:             "https://github.com/huggingface/tau",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -255,6 +264,14 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			Target: target, Unsupported: true, Method: "manual",
 			Reason: "Unreal Agent is built into Orchestrator; update Orchestrator to update the harness.",
 		}}
+	case TargetMiniMaxCode:
+		// The official installers install npm latest into ~/.minimax-code
+		// (%USERPROFILE%\.minimax-code on Windows) with a private Node runtime
+		// when needed, so they work without a system Node.js.
+		plans = []Plan{
+			s.officialByOS(target, "https://filecdn.minimax.chat/public/install.sh", "bash", "https://filecdn.minimax.chat/public/install.ps1", agentDocumentationURLs[target]),
+			s.planNPM(target, "@minimax-ai/code"),
+		}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
 	case TargetDeepSeek:
@@ -268,6 +285,26 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		plans = []Plan{s.planUV(target, "openhands")}
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
+		}
+	case TargetMastraCode:
+		plans = []Plan{manualPlan(target, "Install mastracode 0.45.0 with @mastra/code-sdk pinned to 1.11.0 and Node >=22.19; AO qualifies the native TUI only. A plain `npm install -g mastracode@0.45.0` resolves @mastra/code-sdk 1.19.1, which needs a newer @mastra/core than mastracode pins and is unsupported. In an empty folder, create package.json with {\"dependencies\":{\"mastracode\":\"0.45.0\"},\"overrides\":{\"@mastra/code-sdk\":\"1.11.0\"}}, run `ONNXRUNTIME_NODE_INSTALL=skip npm install` there (the variable omits optional CUDA downloads for API-backed use), and add its node_modules/.bin to PATH.", agentDocumentationURLs[target])}
+	case TargetTau:
+		plans = []Plan{s.planUV(target, "tau-ai")}
+	case TargetOpenInterpreter:
+		plan := s.officialByOS(target, "https://www.openinterpreter.com/install", "sh", "https://www.openinterpreter.com/install.ps1", agentDocumentationURLs[target])
+		if plan.Script != nil {
+			plan.Script.Env = []string{"OPEN_INTERPRETER_RELEASE=" + openInterpreterInstallRelease}
+		}
+		plans = []Plan{plan}
+	case TargetDockerAgent:
+		// Docker publishes the standalone CLI as a Homebrew formula; AO installs
+		// and updates to its latest release (Chat admits v1.150.0 or newer).
+		// Its Chat binding is Unix only, so Windows gets no install route.
+		if s.goos == "darwin" || s.goos == "linux" {
+			manual := manualPlan(target, "Install the latest official standalone Docker Agent binary (v1.150.0 or newer). Docker Desktop is optional; Orchestrator supports native ACP Chat only.", agentDocumentationURLs[target])
+			plans = []Plan{s.planBrew(target, "docker-agent"), manual}
+		} else {
+			plans = []Plan{manualPlan(target, "Orchestrator runs Docker Agent Chat on macOS and Linux only.", agentDocumentationURLs[target])}
 		}
 	case TargetMemcode:
 		if s.goos == "darwin" || s.goos == "linux" {
@@ -284,6 +321,21 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetStakpak:
+		// Stakpak publishes a Homebrew tap and a release-binary installer for
+		// macOS and Linux. Windows has only a release zip, with no installer.
+		// install.sh asks "use Homebrew?" on /dev/tty and, run headless,
+		// takes the default yes whenever brew is on PATH, so it is offered
+		// only without Homebrew, where it installs the release binary.
+		if s.goos == "darwin" || s.goos == "linux" {
+			if _, err := s.executables.LookPath("brew"); err == nil {
+				plans = []Plan{s.planBrew(target, "stakpak/stakpak/stakpak")}
+			} else {
+				plans = []Plan{s.planShellInstaller(target, "https://stakpak.dev/install.sh", "bash")}
+			}
+		} else {
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Download stakpak-windows-x86_64.zip from the official GitHub release and put stakpak.exe on PATH", DocsURL: agentDocumentationURLs[target]}}
+		}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}
@@ -541,6 +593,7 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetOpencode:   {"opencode", "upgrade", "--method", "curl"},
 	TargetGoose:      {"goose", "update"},
 	TargetHermes:     {"hermes", "update", "--yes"},
+	TargetStakpak:    {"stakpak", "update"},
 	TargetKimchi:     {"kimchi", "update", "self", "--force"},
 	TargetOMP:        {"omp", "update"},
 	TargetAutohand:   {"autohand", "update"},

@@ -272,8 +272,11 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const solo = personal || (memberCount.data !== undefined && memberCount.data <= 1);
 	const queryClient = useQueryClient();
 	// Opened for a project rather than a session: there is no session to go back to.
+	// The same dialog can be handed a session again (the header follows the
+	// session on screen), so the scope follows it rather than its first one.
 	const projectOnly = !sessionId;
-	const [scope, setScope] = useState<ShareScope>(projectOnly ? "project" : "session");
+	const [chosenScope, setScope] = useState<ShareScope>("session");
+	const scope: ShareScope = projectOnly ? "project" : chosenScope;
 	const [view, setView] = useState<"main" | "settings">("main");
 	const [staged, setStaged] = useState<Recipient[]>([]);
 	const [stagedRole, setStagedRole] = useState<CloudCpShareRole>("viewer");
@@ -476,7 +479,7 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		setStaged([]);
 		setStagedRole("viewer");
 		setStagedCap("read-only");
-		setScope(projectOnly ? "project" : "session");
+		setScope("session");
 		setView("main");
 		setConfirm(null);
 		setAnnouncement("");

@@ -106,6 +106,10 @@ const CLOUD_CP_ORIGINS = (() => {
 	return origins;
 })();
 
+// Where published artifact links serve their files (one subdomain per link),
+// framed by the Artifacts page's preview of a link shared with this person.
+const SHARE_CONTENT_ORIGINS = ["https://*.orchestratorusercontent-staging.com", "https://*.orchestratorusercontent.com"];
+
 const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^http/, "ws"));
 
 // CSP for the renderer. The daemon is loopback-only, so network access is
@@ -172,7 +176,7 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// *.localhost is the inline-artifact origin an HTML artifact is framed from.
 		// A cloud session's HTML artifact is framed from its control plane, whose
 		// response CSP sandboxes it.
-		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
+		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS, ...SHARE_CONTENT_ORIGINS].join(" "),
 	].join("; ");
 }
 

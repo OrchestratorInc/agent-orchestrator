@@ -47,10 +47,13 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 	const { hostStates, configForHost, reloadConfig, reloadHostMetadata } = useApp();
 	const snapshot = hostStates.find((item) => item.hostId === host.id);
 	const editor = useMachineEditor(host, snapshot?.config ?? configForHost(host.id) ?? undefined, async (draft) => {
-		const { routeChanged } = await saveEnvironmentMachine(host, draft, Platform.OS);
+		const { routeChanged, appearanceError } = await saveEnvironmentMachine(host, draft, Platform.OS);
 		await reloadHostMetadata();
 		// The default machine reconnects over the route it was just given.
 		if (routeChanged && isDefault) void reloadConfig().catch(() => {});
+		// Only the icon failed: what did save is applied above, and the editor
+		// stays open to say so and to try again.
+		if (appearanceError) throw appearanceError;
 	});
 	const [saved, setSaved] = useState(false);
 
