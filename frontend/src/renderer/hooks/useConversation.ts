@@ -1330,15 +1330,17 @@ export function useConversationCommands(
 	 * so a success has to be followed by a refetch rather than an optimistic edit —
 	 * how much was discarded is the daemon's answer, not the client's guess.
 	 */
-	// A steer refusal is about the turn that was running when it came back. Once
-	// another turn is current it would go stale, so it is shown only while that
-	// turn is. A refusal that lands after the turn ended belongs to "no turn" and
-	// still shows. The error itself is kept, so steerUnsupported stays sticky.
+	// A steer refusal is about the turn the steer was sent on. It shows only while
+	// the turn current when it came back is still current, and only if that is
+	// the steer's own turn or no turn at all: a refusal that lands after its turn
+	// ended still shows ("send it as a message"), one that lands during a later
+	// turn does not, and any refusal goes once another turn starts. The error
+	// itself is kept, so steerUnsupported stays sticky.
 	const currentTurnIdRef = useRef(activeTurnId);
 	useLayoutEffect(() => {
 		currentTurnIdRef.current = activeTurnId;
 	});
-	const [steerRefusedOn, setSteerRefusedOn] = useState<{ turnId?: string }>();
+	const [steerRefusedOn, setSteerRefusedOn] = useState<{ sentOn?: string; arrivedOn?: string }>();
 	/**
 	 * Guidance delivered INTO the running turn.
 	 *
@@ -1352,8 +1354,11 @@ export function useConversationCommands(
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
 	const steer = useMutation({
-		onMutate: () => setSteerRefusedOn(undefined),
-		onError: () => setSteerRefusedOn({ turnId: currentTurnIdRef.current }),
+		onMutate: () => {
+			setSteerRefusedOn(undefined);
+			return { sentOn: currentTurnIdRef.current };
+		},
+		onError: (_error, _input, sent) => setSteerRefusedOn({ sentOn: sent?.sentOn, arrivedOn: currentTurnIdRef.current }),
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/steer",
@@ -1861,7 +1866,10 @@ export function useConversationCommands(
 		 * send-instead cases produce copy: `CHAT_STEER_UNSUPPORTED` is answered by
 		 * hiding the control entirely, since the harness will never accept one.
 		 */
-		steerRefusal: steerRefusedOn && steerRefusedOn.turnId === activeTurnId ? steerRefusal(steer.error) : undefined,
+		steerRefusal: steerRefusedOn && steerRefusedOn.arrivedOn === activeTurnId &&
+			(steerRefusedOn.arrivedOn === undefined || steerRefusedOn.arrivedOn === steerRefusedOn.sentOn)
+			? steerRefusal(steer.error)
+			: undefined,
 		/**
 		 * A harness that cannot steer at all. Learned from the daemon's typed refusal
 		 * rather than from the harness name, and sticky for the life of the surface: the
