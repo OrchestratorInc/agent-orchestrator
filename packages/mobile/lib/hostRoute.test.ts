@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
 import {
 	connectedSpawnHosts,
+	heldPreview,
 	hostRouteMatches,
 	initialSpawnHostId,
+	machineState,
+	rejectedMachineCopy,
+	rejectedMachineLine,
+	rejectionRepairsWithQr,
 	previewForConfig,
 	promotableHostConfig,
 	selectSpawnHost,
@@ -115,5 +120,69 @@ describe("host-qualified mobile routes", () => {
 		expect(previewForConfig(loaded, b, "host-a")).toBeNull();
 		expect(previewForConfig(loaded, b, "host-b")).toBeNull();
 		expect(previewForConfig(loaded, { ...a, host: "new-address" }, "host-a")).toBeNull();
+	});
+
+	it("keeps the page showing through an app switch, with the credential that loaded it", () => {
+		const a = { hostId: "host-a", host: "alice", httpPort: "3011", password: "a" } as ServerConfig;
+		const loaded = { config: a, value: { url: "http://alice:3011/preview", authenticated: true } };
+		// The connection is away: the page stays, still paired with A's own connection.
+		expect(heldPreview(loaded, null, "host-a")).toEqual({ value: loaded.value, config: a });
+		// Back on the same endpoint as a new object: the same page, not a reload.
+		expect(heldPreview(loaded, { ...a }, "host-a")).toEqual({ value: loaded.value, config: a });
+	});
+
+	it("never keeps a preview across a changed endpoint, credential or machine", () => {
+		const a = { hostId: "host-a", host: "alice", httpPort: "3011", password: "a" } as ServerConfig;
+		const loaded = { config: a, value: { url: "http://alice:3011/preview", authenticated: true } };
+		expect(heldPreview(loaded, { ...a, host: "tunnel.example" }, "host-a")).toBeNull();
+		expect(heldPreview(loaded, { ...a, password: "rotated" }, "host-a")).toBeNull();
+		expect(heldPreview(loaded, null, "host-b")).toBeNull();
+		expect(heldPreview(null, a, "host-a")).toBeNull();
+	});
+
+	// What an app switch leaves behind: closed on purpose, no failed poll.
+	const backgrounded = { unreachable: false, paired: true, connection: "closed", error: null, errorStatus: null };
+	const refused = (errorStatus: number) => ({ ...backgrounded, error: "Your machine rejected this phone's password.", errorStatus });
+
+	it("reads a connection an app switch closed as a reconnect, and only a real outage or no pairing as offline", () => {
+		expect(machineState(backgrounded)).toBe("ok");
+		// A cold start that has not resolved the pairing yet is not offline either.
+		expect(machineState({ ...backgrounded, paired: null })).toBe("ok");
+		// Reconnecting after the app came back, or connected.
+		expect(machineState({ ...backgrounded, connection: "connecting" })).toBe("ok");
+		expect(machineState({ ...backgrounded, connection: "open" })).toBe("ok");
+		expect(machineState({ ...backgrounded, unreachable: true, error: "Couldn't reach your machine." })).toBe("offline");
+		expect(machineState({ ...backgrounded, paired: false })).toBe("offline");
+	});
+
+	// The poll stops on these for good, so a screen that waited spun forever.
+	it.each([401, 403, 429, 426])("reads a poll the machine refused with %s as rejected", (status) => {
+		expect(machineState(refused(status))).toBe("rejected");
+		expect(machineState({ ...refused(status), paired: null })).toBe("rejected");
+	});
+
+	it("does not read a failure the poll recovers from, or a refusal it is asking past, as rejected", () => {
+		// A 5xx answered, and the poll keeps going.
+		expect(machineState(refused(500))).toBe("ok");
+		// Unanswered: offline only once the link tracker gives up (`unreachable`).
+		expect(machineState({ ...backgrounded, error: "Couldn't reach your machine." })).toBe("ok");
+		// The poll is asking again (the app came back), or already got through.
+		expect(machineState({ ...refused(401), connection: "connecting" })).toBe("ok");
+		expect(machineState({ ...refused(401), connection: "open" })).toBe("ok");
+		// No pairing at all wins over a stale refusal.
+		expect(machineState({ ...refused(401), paired: false })).toBe("offline");
+	});
+
+	it("words a refusal as the board does, and offers a new code only where one fixes it", () => {
+		expect(rejectedMachineCopy(401)).toMatchObject({ title: "Your machine rejected this phone", icon: "monitor-off" });
+		expect(rejectedMachineCopy(403).title).toBe("Your machine rejected this phone");
+		expect(rejectedMachineCopy(429).title).toBe("Too many attempts");
+		expect(rejectedMachineCopy(426).title).toBe("Orchestrator versions are incompatible");
+		expect(rejectedMachineLine(401)).toBe("Your machine rejected this phone. It was removed from that machine, or the password changed. Scan a new code there.");
+		expect(rejectionRepairsWithQr(401)).toBe(true);
+		expect(rejectionRepairsWithQr(403)).toBe(true);
+		// A lockout clears by itself, and a new code does not fix a version mismatch.
+		expect(rejectionRepairsWithQr(429)).toBe(false);
+		expect(rejectionRepairsWithQr(426)).toBe(false);
 	});
 });

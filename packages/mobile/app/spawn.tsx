@@ -21,7 +21,8 @@ import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pa
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
-import { spawnNotices } from "../lib/spawnNotices";
+import { spawnHostState, spawnNotices } from "../lib/spawnNotices";
+import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
@@ -52,7 +53,7 @@ export default function SpawnScreen() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, phoneNetwork } = useApp();
 	const cloudState = useCloud();
 	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
 	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -63,6 +64,22 @@ export default function SpawnScreen() {
 	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
 	const cloudSelected = isCloudHost(selectedHostId);
 	const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	// The pickers load once per machine, not once per connection. An app switch
+	// drops the connection and brings it back, and the loads below used to empty
+	// every picker and fetch it all again each time. Each remembers what it last
+	// loaded (`loadedFor`) and keeps it on screen while the connection is away;
+	// a load whose inputs changed meanwhile runs once it is back. Requests only
+	// ever go through the live `config`. A connection that really changed
+	// (another endpoint or credential, as an upgrade race brings) moves `epoch`
+	// on, which loads them all again through it.
+	const connected = Boolean(config);
+	const connectionEpoch = useRef<ConnectionEpoch>({ last: null, epoch: 0 });
+	connectionEpoch.current = nextConnectionEpoch(connectionEpoch.current, config);
+	const epoch = connectionEpoch.current.epoch;
+	const loadedFor = useRef<{ catalog?: string; project?: string; models?: string }>({});
+	// The agent menu's lists, kept per agent: one that failed is asked again on
+	// the next load without asking again for the ones that loaded.
+	const agentModelCache = useRef(createAgentModelCache());
 	const projects = cloudSelected ? cloud?.projects ?? [] : selectedHost?.projects ?? [];
 	// Cloud's list is known once it loaded, not as soon as Cloud is signed in:
 	// before that, an empty list would ask to create a project that exists.
@@ -77,7 +94,9 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) void reloadCloudPlan?.();
 	}, [cloudSelected, reloadCloudPlan]);
-	const unreachable = Boolean(selectedHost && selectedHost.connection === "closed");
+	// Offline or rejected by the same rule as the other screens: a connection the
+	// app closed on going to the background is neither (see spawnHostState).
+	const machine = spawnHostState(selectedHost, phoneNetwork, Date.now());
 	const hostOptions = useMemo(() => {
 		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
 		const selected = hostStates.find((host) => host.hostId === selectedHostId);
@@ -193,13 +212,17 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId) { setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
+		if (!requestedHostId) { loadedFor.current.catalog = undefined; setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
+		const wanted = `${catalogGeneration.current}|${epoch}|${requestedHostId}|${reloadKey}`;
+		if (!config) { setLoading(false); return; }
+		if (loadedFor.current.catalog === wanted) return;
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setLoading(true);
 		Promise.all([getAgents(config), getSettings(config)])
 			.then(([c, settings]) => {
 				if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+				loadedFor.current.catalog = wanted;
 				setCatalog(c);
 				setChatHarnesses(settings.chatHarnesses);
 				setCatalogError(null);
@@ -215,7 +238,10 @@ export default function SpawnScreen() {
 		return () => {
 			cancelled = true;
 		};
-	}, [cloudSelected, config, reloadKey, selectedHostId]);
+		// Keyed on whether the machine is connected and on which connection it is
+		// (`epoch`), not on the connection object, which an app switch replaces.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloudSelected, connected, epoch, reloadKey, selectedHostId]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -266,9 +292,10 @@ export default function SpawnScreen() {
 		...(!setupBlocked && cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
 	];
 	const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({
-		// Only when a reconnect can fix it: a rejected password stops the poll for
-		// good, and its catalog error already says to re-scan the pairing code.
-		offline: unreachable,
+		// One line for a machine that is gone or refused this phone, in place of
+		// the same failure from every request on this screen.
+		machine,
+		errorStatus: selectedHost?.errorStatus,
 		mode,
 		loading,
 		catalogLoaded: catalog !== null,
@@ -295,16 +322,24 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		// What is cleared is not loaded: coming back to the same project loads it again.
+		if (!requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { loadedFor.current.project = undefined; setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		const wanted = `${catalogGeneration.current}|${epoch}|${requestedHostId}|${projectId}|${reloadKey}`;
+		if (!config || loadedFor.current.project === wanted) return;
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
-			.then((nextProject) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetail(nextProject); })
+			.then((nextProject) => {
+				if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+				loadedFor.current.project = wanted;
+				setProjectDetail(nextProject);
+			})
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [cloudSelected, config, projectId, reloadKey, selectedHostId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloudSelected, connected, epoch, projectId, reloadKey, selectedHostId]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
@@ -339,21 +374,31 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !agentIds) { setAgentModelLists({}); return; }
+		if (!requestedHostId || !agentIds) { setAgentModelLists({}); return; }
+		const ids = agentIds.split("|");
+		const cache = agentModelCache.current;
+		const scope = `${catalogGeneration.current}|${epoch}|${requestedHostId}`;
+		const missing = cache.missing(scope, ids);
+		// Lists on screen stay while the ones still missing load. Those are asked
+		// again on a reconnect or a reload: only the agents whose list failed.
+		if (!config || missing.length === 0) { setAgentModelLists(cache.lists(ids)); return; }
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		const polling = new AbortController();
-		void Promise.all(agentIds.split("|").map(async (id) => {
+		void Promise.all(missing.map(async (id) => {
 			try {
 				return [id, (await getAgentModels(config, id, undefined, polling.signal)).models ?? []] as const;
 			} catch {
-				return [id, []] as const;
+				return [id, undefined] as const;
 			}
 		})).then((entries) => {
-			if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setAgentModelLists(Object.fromEntries(entries));
+			if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+			for (const [id, models] of entries) if (models) cache.record(scope, id, models);
+			setAgentModelLists(cache.lists(ids));
 		});
 		return () => { cancelled = true; polling.abort(); };
-	}, [agentIds, cloudSelected, config, reloadKey, selectedHostId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);
 
 	// A new cloud task's models come from Orchestrator Cloud's catalog for the agent.
 	useEffect(() => {
@@ -373,17 +418,26 @@ export default function SpawnScreen() {
 		const requestedHostId = selectedHostId;
 		// The machine's own catalog loads before a project is chosen, so the
 		// model menu is never just the default; choosing a project swaps in its.
-		if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!requestedHostId || !harness) { loadedFor.current.models = undefined; setModelCatalog(undefined); setModelLoading(false); return; }
+		const wanted = `${catalogGeneration.current}|${epoch}|${requestedHostId}|${harness}|${projectId ?? ""}|${reloadKey}`;
+		if (!config) { setModelLoading(false); return; }
+		if (loadedFor.current.models === wanted) return;
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
 		const polling = new AbortController();
 		getAgentModels(config, harness, !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
-			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
+			.then((nextCatalog) => {
+				if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
+				loadedFor.current.models = wanted;
+				setModelCatalog(nextCatalog);
+				setModelError(nextCatalog.warning);
+			})
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
 		return () => { cancelled = true; polling.abort(); };
-	}, [cloudSelected, config, harness, projectId, reloadKey, selectedHostId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloudSelected, connected, epoch, harness, projectId, reloadKey, selectedHostId]);
 
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
@@ -398,13 +452,17 @@ export default function SpawnScreen() {
 
 	// A level belongs to the model it was picked for, so a new model starts at its own default.
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); };
-	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
+	// A cleared catalog is not loaded any more: picking the same agent or
+	// project again (A, B, then A) loads it again rather than leaving it empty.
+	const resetModelSource = () => { clearModelOverride(); loadedFor.current.models = undefined; setModelCatalog(undefined); setModelError(undefined); };
 	const chooseHost = (nextHostId: string) => {
 		if (nextHostId === selectedHostId) return;
 		catalogGeneration.current += 1;
 		setProjectId(null);
 		setHarness("");
 		setAgentTouched(false);
+		loadedFor.current.catalog = undefined;
+		loadedFor.current.project = undefined;
 		setCatalog(null);
 		setCatalogError(null);
 		setChatHarnesses([]);
@@ -430,6 +488,7 @@ export default function SpawnScreen() {
 		}
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
+		loadedFor.current.project = undefined;
 		setProjectDetail(undefined);
 		setProjectDetailLoadedFor(null);
 		setAgentTouched(false);

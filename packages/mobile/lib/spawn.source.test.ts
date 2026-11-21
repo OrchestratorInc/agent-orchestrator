@@ -8,6 +8,15 @@ const composer = readFileSync(fileURLToPath(new URL("./spawn-composer.tsx", impo
 const platformControls = ["ios", "android"].map((platform) => readFileSync(fileURLToPath(new URL(`./spawn-composer-controls.${platform}.tsx`, import.meta.url)), "utf8"));
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
 
+/** The text from `start` up to `end`; both must be there, or the slice would be the wrong text. */
+function between(text: string, start: string, end: string): string {
+	const from = text.indexOf(start);
+	expect(from, start).toBeGreaterThanOrEqual(0);
+	const to = text.indexOf(end, from);
+	expect(to, end).toBeGreaterThan(from);
+	return text.slice(from, to);
+}
+
 describe("spawn page", () => {
 	// A started spawn can't be called back. The page holds until the request
 	// settles, then becomes the session's conversation in place.
@@ -71,7 +80,63 @@ describe("spawn composer", () => {
 	// The machine's catalog loads before a project is chosen, so a project is
 	// not part of the guard.
 	it("clears model loading when changing to a machine without a ready model request", () => {
-		expect(spawn).toContain('if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }');
+		expect(spawn).toContain('if (!requestedHostId || !harness) { loadedFor.current.models = undefined; setModelCatalog(undefined); setModelLoading(false); return; }');
+		// A machine whose connection is away (or not up yet) stops loading too, and keeps what it showed.
+		expect(spawn).toContain('if (!config) { setModelLoading(false); return; }');
+	});
+
+	it("keeps the pickers through an app switch, loading once per machine rather than per connection", () => {
+		expect(spawn).toContain("if (loadedFor.current.catalog === wanted) return;");
+		expect(spawn).toContain("if (!config || loadedFor.current.project === wanted) return;");
+		expect(spawn).toContain("}, [cloudSelected, connected, epoch, reloadKey, selectedHostId]);");
+	});
+
+	// Cleared is not loaded: A, B, then A again loads A rather than skipping it
+	// and leaving the menu empty with Start disabled.
+	it("forgets a load once what it loaded is cleared", () => {
+		expect(spawn).toContain("const resetModelSource = () => { clearModelOverride(); loadedFor.current.models = undefined; setModelCatalog(undefined); setModelError(undefined); };");
+		expect(spawn).toContain("if (!requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { loadedFor.current.project = undefined; setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }");
+		const changeProject = between(spawn, "const changeProject = ", "const selectAgent = ");
+		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeGreaterThan(0);
+		expect(changeProject.indexOf("setProjectDetail(undefined);")).toBeGreaterThan(0);
+		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeLessThan(changeProject.indexOf("setProjectDetail(undefined);"));
+		const chooseHost = between(spawn, "const chooseHost = ", "const changeProject = ");
+		expect(chooseHost).toContain("loadedFor.current.catalog = undefined;");
+		expect(chooseHost).toContain("loadedFor.current.project = undefined;");
+	});
+
+	// The same connection back after an app switch loads nothing; another
+	// endpoint or credential (an upgrade race) loads every picker through it.
+	it("loads the pickers again only when the connection really changed", () => {
+		expect(spawn).toContain("connectionEpoch.current = nextConnectionEpoch(connectionEpoch.current, config);");
+		for (const key of ["`${catalogGeneration.current}|${epoch}|${requestedHostId}|${reloadKey}`", "`${catalogGeneration.current}|${epoch}|${requestedHostId}|${projectId}|${reloadKey}`", "`${catalogGeneration.current}|${epoch}|${requestedHostId}|${harness}|${projectId ?? \"\"}|${reloadKey}`", "`${catalogGeneration.current}|${epoch}|${requestedHostId}`"]) {
+			expect(spawn).toContain(key);
+		}
+		expect(spawn).toContain("}, [cloudSelected, connected, epoch, projectId, reloadKey, selectedHostId]);");
+		expect(spawn).toContain("}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);");
+		expect(spawn).toContain("}, [cloudSelected, connected, epoch, harness, projectId, reloadKey, selectedHostId]);");
+	});
+
+	// A failed agent's list is asked again on the next load; the ones that loaded are not.
+	it("asks again only for the agent model lists that failed", () => {
+		const effect = between(spawn, "const cache = agentModelCache.current;", "}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);");
+		expect(effect).toContain("void Promise.all(missing.map(async (id) => {");
+		expect(effect).toContain("return [id, undefined] as const;");
+		expect(effect).toContain("for (const [id, models] of entries) if (models) cache.record(scope, id, models);");
+		expect(effect).not.toContain("loadedFor");
+	});
+});
+
+describe("spawn offline notice", () => {
+	// The store closes the connection on purpose whenever the app goes to the
+	// background; that is not the machine being offline (see spawnHostState).
+	it("calls the machine offline or rejected by the rule the other screens use, not by a closed connection", () => {
+		expect(spawn).toContain("const machine = spawnHostState(selectedHost, phoneNetwork, Date.now());");
+		expect(spawn).not.toContain('connection === "closed");');
+		const notices = between(spawn, "const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({", "}))];");
+		expect(notices).toContain("machine,");
+		// The refusal's status, for the board's copy of it.
+		expect(notices).toContain("errorStatus: selectedHost?.errorStatus,");
 	});
 });
 
