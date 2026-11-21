@@ -125,6 +125,13 @@ describe("loopback tunnels", () => {
 		expect((await receive(client, 1)).length).toBe(0);
 		await expect(connect(forward.localPort)).rejects.toThrow();
 
+		const opened = await tunnels.localUrl("h_box", `http://0.0.0.0:${echo}/app?x=1#y`);
+		expect(opened).toBe(`http://localhost:${tunnels.list()[0]!.localPort}/app?x=1#y`);
+		expect(await tunnels.localUrl("h_box", `http://ao-preview-${"0".repeat(32)}.localhost:${echo}/`)).toBeUndefined();
+		expect(await tunnels.localUrl("h_same", `http://localhost:${echo}/`)).toBeUndefined();
+		expect(await tunnels.localUrl("h_box", "https://example.com/")).toBeUndefined();
+		tunnels.stop("h_box", echo);
+
 		await expect(tunnels.forward("h_same", echo)).rejects.toThrow(/runs on this computer/);
 		await expect(tunnels.forward("h_off", echo)).rejects.toThrow(/does not share/);
 		await expect(tunnels.forward("h_box", 0)).rejects.toThrow(/1 to 65535/);

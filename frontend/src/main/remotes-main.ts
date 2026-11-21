@@ -385,7 +385,7 @@ export function registerRemotesIpc(
 		const account = await accountID();
 		refuseSelf(hostId, await localIdentity());
 		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during remote connection.");
-		return registry.externalUrl(hostId, url);
+		return await tunnels.localUrl(hostId, url) ?? registry.externalUrl(hostId, url);
 	});
 	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => tunnels.reach(hostId));
 	ipcMain.handle("remotes:portForwards", async () => tunnels.list());

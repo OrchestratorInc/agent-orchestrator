@@ -220,6 +220,21 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 			}
 			return started;
 		},
+		async localUrl(hostId: string, url: string): Promise<string | undefined> {
+			let parsed: URL;
+			try {
+				parsed = new URL(url);
+			} catch {
+				return undefined;
+			}
+			const host = parsed.hostname.toLowerCase();
+			if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !isLoopbackName(host) || host.endsWith(".localhost")) return undefined;
+			const forward = await this.forward(hostId, Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80))).catch(() => undefined);
+			if (!forward) return undefined;
+			parsed.hostname = "localhost";
+			parsed.port = String(forward.localPort);
+			return parsed.href;
+		},
 		stop(hostId: string, remotePort: number): void {
 			const id = key(hostId, remotePort);
 			const existing = forwards.get(id);

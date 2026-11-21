@@ -230,6 +230,7 @@ interface MobileStatus {
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
 	browserRemoteAccess?: boolean;
+	loopbackTunnel?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */

@@ -119,6 +119,7 @@ const OpenChatLink = createContext<{
 	open?: (url: string) => void;
 	openFile?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
@@ -153,6 +154,7 @@ export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
+	hostLocalLinks,
 	sessionLinkHostId,
 	sessionLinkSourceKind,
 	onSessionLinkOpen,
@@ -163,6 +165,7 @@ export function ChatLinkProvider({
 	onLinkOpen?: (url: string) => void;
 	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	onSessionLinkOpen?: (url: string) => void;
@@ -177,8 +180,8 @@ export function ChatLinkProvider({
 	const canOpenFile = Boolean(onFileOpen);
 	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
-		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
+		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
+		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
 	);
 	const pathMenuValue = useMemo(
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
@@ -531,7 +534,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 
 function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
+	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
 		: undefined;
@@ -545,7 +548,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 	const linkedFile = href && sessionId && onFileOpen ? explicitWorkspaceFilePath(href.split(/[?#]/, 1)[0]!) : undefined;
 	const ownArtifact = linkedFile && sessionId && sessionArtifactPath(linkedFile, sessionId) ? linkedFile : undefined;
 	const openInFiles = ownArtifact ?? (filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined);
-	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
+	if (remoteHost && href && ((isHostLocalWebLink(href) && !hostLocalLinks) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
 		</span>;
@@ -670,10 +673,10 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
  * must stay module-level so react-markdown's memoization survives polling.
  */
 function MermaidFence({ code }: { code: string }) {
-	const { open: onLinkOpen, remoteHost } = useContext(OpenChatLink);
+	const { open: onLinkOpen, remoteHost, hostLocalLinks } = useContext(OpenChatLink);
 	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
 		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
-		if (!href || !isHostLocalWebLink(href)) return;
+		if (!href || !isHostLocalWebLink(href) || hostLocalLinks) return;
 		event.preventDefault();
 		event.stopPropagation();
 	};

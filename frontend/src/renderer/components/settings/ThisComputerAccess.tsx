@@ -1,5 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
@@ -61,6 +61,15 @@ export function ThisComputerAccess() {
 		// Only what this row shows: the cache never holds other hosts' tokens.
 		queryFn: async () => (await listAccountRemoteHosts(cloudBaseUrl)).map(({ hostId, label }) => ({ hostId, label })),
 		enabled: usable,
+	});
+
+	const setLoopbackTunnel = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { error } = await apiClient.POST("/api/v1/mobile/loopback-tunnel", { body: { enabled } });
+			if (error) throw apiErrorException(error);
+		},
+		onError: (cause) => setError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed")),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: mobileStatusQueryKey }),
 	});
 
 	if (!usable) return null;
@@ -166,6 +175,19 @@ export function ThisComputerAccess() {
 					onCheckedChange={change}
 				/>
 			</SettingsRow>
+			{on ? (
+				<SettingsRow label={t("remote.shareLocalhost")} description={t("remote.shareLocalhostDescription")}>
+					<Switch
+						aria-label={t("remote.shareLocalhost")}
+						checked={setLoopbackTunnel.isPending ? setLoopbackTunnel.variables : current?.loopbackTunnel ?? true}
+						disabled={setLoopbackTunnel.isPending}
+						onCheckedChange={(next) => {
+							setError("");
+							setLoopbackTunnel.mutate(next);
+						}}
+					/>
+				</SettingsRow>
+			) : null}
 		</SettingsSection>
 	);
 }

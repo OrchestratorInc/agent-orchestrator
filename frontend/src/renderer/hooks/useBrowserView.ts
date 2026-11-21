@@ -17,6 +17,7 @@ import type {
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
+import { hostLoopbackUrl } from "../lib/loopback";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
@@ -1291,9 +1292,13 @@ export function useBrowserView({
 		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
 		if (target) {
 			let cancelled = false;
-			const resolved = origin
-				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
-				: Promise.resolve(target);
+			const loopback = origin ? hostLoopbackUrl(target) : undefined;
+			const resolved = !origin
+				? Promise.resolve(target)
+				: loopback
+					? aoBridge.remotes.loopbackReach(origin.hostId).then((reach) =>
+						reach === "off" ? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target) : loopback)
+					: aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target);
 			void resolved.then((url) => {
 				return cancelled ? undefined : showPreview(url);
 			}).catch((error) => console.warn("Unable to open browser preview", error));

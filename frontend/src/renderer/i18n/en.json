@@ -5225,5 +5225,15 @@
 	"shell.deleteCloudProjectTitle": "Delete project",
 	"shell.deleteCloudProjectLead": "This will permanently delete {{name}}",
 	"shell.deleteCloudProjectConfirm": "Delete permanently",
-	"shell.cloudProjectDeleted": "Deleted {{name}}"
+	"shell.cloudProjectDeleted": "Deleted {{name}}",
+	"sessionServers.title": "Servers",
+	"sessionServers.open": "Open port {{port}} in Browser",
+	"sessionServers.forward": "Forward",
+	"sessionServers.forwardLabel": "Forward port {{port}} to this computer",
+	"sessionServers.forwardedTitle": "Forwarded to this computer",
+	"sessionServers.stop": "Stop",
+	"sessionServers.stopLabel": "Stop forwarding port {{port}}",
+	"sessionServers.forwardFailed": "Couldn't forward the port",
+	"remote.shareLocalhost": "Share localhost",
+	"remote.shareLocalhostDescription": "Your other devices can open servers running on this computer and forward its ports."
 }

@@ -351,6 +351,13 @@ describe("ChatMarkdown", () => {
 		openExternal.mockRestore();
 	});
 
+	it("opens a remote host-local link in the Browser when the host shares its localhost", () => {
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks><ChatMarkdown text="[preview](http://localhost:5173/app)" /></ChatLinkProvider>);
+		fireEvent.click(screen.getByRole("link", { name: "preview" }));
+		expect(onLinkOpen).toHaveBeenCalledWith("http://localhost:5173/app");
+	});
+
 	it("scopes a session preview to the chat source", async () => {
 		sessionPreview.mockClear();
 		const onSessionLinkOpen = vi.fn();
