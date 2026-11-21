@@ -89,7 +89,7 @@ describe("collectPageFiles", () => {
 
 	it("includes the files beside the page once each and says what it leaves out", async () => {
 		const html = `<img src="images/a.png"><img src="./images/a.png"><img src="b.jpg"><img src="report.html">
-<video src="clip.mp4" poster="b.jpg"></video><video src="take.mkv"></video><img src="../top.png"><img src="missing.png"><img src="link.png">
+<video src="clip.mp4" poster="b.jpg"></video><video src="take.mkv"></video><video src="theora.ogv"></video><img src="../top.png"><img src="missing.png"><img src="link.png">
 <img src="https://cdn.test/x.png"><img src="_ao/x.png">`;
 		const { files, skipped } = await collectPageFiles(dataDir, "sess-1", "docs/report.html", html);
 		expect(files.map((file) => [file.path, file.file.relativePath, file.file.size])).toEqual([
@@ -99,6 +99,7 @@ describe("collectPageFiles", () => {
 		]);
 		expect(skipped).toEqual([
 			{ reference: "take.mkv", reason: "video_format" },
+			{ reference: "theora.ogv", reason: "video_format" },
 			{ reference: "../top.png", reason: "outside" },
 			{ reference: "missing.png", reason: "missing", relativePath: "docs/missing.png" },
 			{ reference: "link.png", reason: "outside" },

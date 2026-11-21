@@ -27,6 +27,7 @@ beforeEach(async () => {
 	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "<h1>quarterly</h1>!!");
 	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.mp4"), "video");
 	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.mkv"), "video");
+	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.ogv"), "video");
 });
 
 afterEach(async () => {
@@ -322,10 +323,12 @@ describe("cloudShare IPC", () => {
 	it("turns refusals into results the dialog can act on", async () => {
 		// A video browsers cannot play is refused before anything is sent.
 		const unplayable = setup();
-		await expect(unplayable.invoke("cloudShare:inspect", { ...unplayable.file, path: "clip.mkv" })).resolves.toMatchObject({ unsupported: true });
-		await expect(unplayable.invoke("cloudShare:publish", { ...unplayable.file, path: "clip.mkv" })).resolves.toEqual({
-			status: "unsupported", message: "This video format can't be played in a browser. Use MP4, MOV or WebM.",
-		});
+		for (const name of ["clip.mkv", "clip.ogv"]) {
+			await expect(unplayable.invoke("cloudShare:inspect", { ...unplayable.file, path: name })).resolves.toMatchObject({ unsupported: true });
+			await expect(unplayable.invoke("cloudShare:publish", { ...unplayable.file, path: name })).resolves.toEqual({
+				status: "unsupported", message: "This video format can't be played in a browser. Use MP4, MOV or WebM.",
+			});
+		}
 		expect(unplayable.requests).toEqual([]);
 
 		// A playable video goes to the control plane, which refuses it while it serves none.
@@ -452,10 +455,12 @@ describe("cloudShare IPC", () => {
 		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
 		await fs.writeFile(path.join(docs, "clip.webm"), "video");
 		await fs.writeFile(path.join(docs, "take.mkv"), "video");
-		await fs.writeFile(path.join(docs, "report.html"), `<video src="clip.webm"></video><video src="take.mkv"></video>`);
-		const { publish, bodies } = setup({ files: true });
+		await fs.writeFile(path.join(docs, "theora.ogv"), "video");
+		await fs.writeFile(path.join(docs, "report.html"), `<video src="clip.webm"></video><video src="take.mkv"></video><video src="theora.ogv"></video>`);
+		const { publish, bodies, requests } = setup({ files: true });
 		// A format browsers cannot play is left out, though not as a video the control plane refused.
-		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1, videos: 0, unsupported: false } });
+		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 2, videos: 0, unsupported: false } });
+		expect(requests.filter((request) => request.endsWith("/uploads/files"))).toHaveLength(1);
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:clip.webm" }] });
 	});
 

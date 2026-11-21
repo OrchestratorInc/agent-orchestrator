@@ -831,9 +831,9 @@ describe("ShareArtifactButton states", () => {
 		expect(screen.getByRole("button", { name: "Publish: report.html" })).toBeTruthy();
 	});
 
-	it("disables Publish for a video browsers cannot play", async () => {
-		renderButton({ ...localFile, path: "clip.mkv" }, "clip.mkv");
-		expect(await screen.findByRole("button", { name: "Publish: clip.mkv" })).toBeDisabled();
+	it.each(["clip.mkv", "clip.avi", "clip.ogv"])("disables Publish for %s, a video browsers cannot play", async (name) => {
+		renderButton({ ...localFile, path: name }, name);
+		expect(await screen.findByRole("button", { name: `Publish: ${name}` })).toBeDisabled();
 	});
 
 	it("offers Publish for a video browsers play", async () => {
