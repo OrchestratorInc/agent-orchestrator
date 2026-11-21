@@ -44,12 +44,23 @@ import { modelSheetRoute } from "../lib/sheetResult";
 import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
+import { PillHeaderFrame } from "../lib/headerPill";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
 import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
+// Android: the chat's pill bar (see `pillHeaderOptions` on the route) over its
+// frost; the page holds itself below the bar through `useGlassBarInset`.
 export default function SpawnScreen() {
+	return (
+		<PillHeaderFrame>
+			<SpawnPage />
+		</PillHeaderFrame>
+	);
+}
+
+function SpawnPage() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();

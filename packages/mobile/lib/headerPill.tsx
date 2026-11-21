@@ -61,6 +61,15 @@ export const pillScreenLayout: ((props: { children: ReactNode }) => ReactElement
 	? ({ children }) => <PillHeaderScreen>{children}</PillHeaderScreen>
 	: undefined;
 
+/**
+ * `pillScreenLayout` for a single page in a stack whose other pages keep the
+ * stack's own bar, such as New task in the root stack: the page wraps itself.
+ * Nothing on iOS.
+ */
+export function PillHeaderFrame({ children }: { children: ReactNode }) {
+	return Platform.OS === "android" ? <PillHeaderScreen>{children}</PillHeaderScreen> : <>{children}</>;
+}
+
 function PillHeaderScreen({ children }: { children: ReactNode }) {
 	const headerHeight = useHeaderHeight();
 	return (
