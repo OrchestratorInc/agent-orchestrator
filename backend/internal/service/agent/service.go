@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -1261,7 +1262,7 @@ func (s *Service) ResolveAgentBinary(ctx context.Context, agentID string) (strin
 
 // modelCatalogSettledReadFloor is the least time between two rediscoveries a
 // read starts for a catalog that failed for a settled reason.
-const modelCatalogSettledReadFloor = 30 * time.Second
+const modelCatalogSettledReadFloor = 10 * time.Second
 
 func settledCatalogKey(agentID, projectID string) string { return agentID + "\x00" + projectID }
 
@@ -1327,6 +1328,11 @@ func modelCatalogFailureIsSettled(err error) bool {
 			return true
 		}
 	}
+	// A gateway or server error that mentions sign-in is the service failing,
+	// not the agent signed out: it keeps the timed retries.
+	if modelCatalogServerFailure.MatchString(text) {
+		return false
+	}
 	for _, phrase := range []string{"not logged in", "not currently logged in", "authentication required", "set an auth method", "please log in", "please sign in", "not signed in"} {
 		if strings.Contains(text, phrase) {
 			return true
@@ -1334,6 +1340,10 @@ func modelCatalogFailureIsSettled(err error) bool {
 	}
 	return false
 }
+
+// modelCatalogServerFailure matches failure text from a gateway or an HTTP
+// server error (5xx).
+var modelCatalogServerFailure = regexp.MustCompile(`gateway|\b(?:http|status)[ :]*5\d\d\b|\b5\d\d (?:internal|bad|service|gateway)`)
 
 // storedFailureIsSettled reports whether a saved catalog's last discovery
 // failed for a settled reason, from the failure text it keeps.

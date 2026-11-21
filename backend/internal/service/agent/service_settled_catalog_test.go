@@ -27,6 +27,10 @@ func TestModelCatalogFailureIsSettled(t *testing.T) {
 		{errors.New("claude-code model discovery: the configured gateway returned HTTP 404"), false},
 		{errors.New("codex model discovery: context deadline exceeded"), false},
 		{errors.New("codex model discovery: HTTP 407 Proxy Authentication Required"), false},
+		{errors.New("claude-code model discovery: gateway answered: authentication required, upstream timed out"), false},
+		{errors.New("opencode model discovery: HTTP 503 Service Unavailable: authentication required"), false},
+		{errors.New("cursor model discovery: status 502: please sign in again later"), false},
+		{errors.New("cursor model discovery: HTTP 401: authentication required"), true},
 		{nil, false},
 	}
 	for _, tc := range cases {
