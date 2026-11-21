@@ -166,16 +166,16 @@ export function AgentEndpointDialog({
 
 					<div className={settingsDialogFooterClass}>
 						{endpoint.configured ? (
-							<Button disabled={busy} onClick={() => void remove()} type="button" variant="footer">
+							<Button disabled={busy} onClick={() => void remove()} type="button" variant="destructive-ghost">
 								{pending === "remove" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
 								{t("settings.harness.endpoint.remove")}
 							</Button>
 						) : null}
 						<div className="flex-1" />
 						<DialogClose asChild>
-							<Button disabled={busy} type="button" variant="footer">{t("confirm.cancel")}</Button>
+							<Button disabled={busy} type="button" variant="secondary">{t("confirm.cancel")}</Button>
 						</DialogClose>
-						<Button disabled={!canSave} type="submit" variant="footer-primary">
+						<Button disabled={!canSave} type="submit" variant="primary">
 							{pending === "save" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
 							{pending === "save" ? t("settings.harness.endpoint.saving") : t("settings.harness.endpoint.save")}
 						</Button>
