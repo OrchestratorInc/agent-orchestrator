@@ -4610,7 +4610,16 @@ type AgentAccountResponse struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	// Device marks the computer's own login, which AO launches with the CLI's
 	// config folder untouched.
-	Device  bool   `json:"device"`
+	Device bool `json:"device"`
+	// Kind is how the account signs its CLI in: a subscription, a subscription
+	// setup token, an API key, or a metered (per-token) sign-in such as
+	// Anthropic Console. API key and metered accounts bill per token, have no
+	// limits, and are never moved to or from at a usage limit.
+	Kind domain.AgentAccountKind `json:"kind" enum:"subscription,setup_token,api_key,metered"`
+	// Name is the label of an API key account; KeyHint is its key's last four
+	// characters. The key itself is never sent.
+	Name    string `json:"name,omitempty"`
+	KeyHint string `json:"keyHint,omitempty"`
 	Email   string `json:"email,omitempty"`
 	Plan    string `json:"plan,omitempty"`
 	Default bool   `json:"default"`
@@ -4634,16 +4643,53 @@ type AgentAccountsResponse struct {
 	Accounts []AgentAccountResponse `json:"accounts"`
 }
 
-// StartAgentAccountLoginRequest asks to add an account of a provider.
+// StartAgentAccountLoginRequest asks to add an account of a provider. Without
+// a method, the CLI's own sign-in runs in a terminal; with one, it runs in the
+// background and the app follows it as a UI login (its authOperationId). A
+// setup token is saved at once.
 type StartAgentAccountLoginRequest struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// Method is the sign-in method; Secret its credential when it takes one
+	// (a setup token, an OpenAI API key or access token).
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+	// Name labels a new account that has no email of its own.
+	Name string `json:"name,omitempty"`
+}
+
+// SignInAgentAccountAgainRequest picks how a saved account signs in again,
+// with a method that makes its own kind of account. An empty body opens the
+// CLI's own sign-in in a terminal.
+type SignInAgentAccountAgainRequest struct {
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+}
+
+// AddAgentAccountAPIKeyRequest adds an account that launches the provider's
+// CLI with an API key. The key is checked with the provider before it is saved.
+type AddAgentAccountAPIKeyRequest struct {
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude"`
+	// Name labels the account; empty shows a default label.
+	Name   string `json:"name,omitempty"`
+	APIKey string `json:"apiKey"`
+}
+
+// ReplaceAgentAccountAPIKeyRequest saves a new key for an API key account.
+type ReplaceAgentAccountAPIKeyRequest struct {
+	APIKey string `json:"apiKey"`
 }
 
 // StartAgentAccountLoginResponse is a sign-in running in a terminal.
 type StartAgentAccountLoginResponse struct {
-	OperationID   string                            `json:"operationId"`
-	Provider      domain.AgentAccountProvider       `json:"provider" enum:"claude,codex"`
-	ShellTerminal CodexAccountLoginTerminalResponse `json:"shellTerminal"`
+	// OperationID verifies or cancels the sign-in; empty when Account is set.
+	OperationID string                      `json:"operationId,omitempty"`
+	Provider    domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// ShellTerminal is a sign-in running in a terminal. AuthOperationID is one
+	// running in the background, read and answered through the harness's
+	// /auth/operations routes. Account is the account a setup token saved.
+	ShellTerminal   *CodexAccountLoginTerminalResponse `json:"shellTerminal,omitempty"`
+	AuthOperationID string                             `json:"authOperationId,omitempty"`
+	Account         *AgentAccountResponse              `json:"account,omitempty"`
 }
 
 // VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login

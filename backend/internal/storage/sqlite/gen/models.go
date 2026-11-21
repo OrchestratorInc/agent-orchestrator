@@ -19,6 +19,9 @@ type AgentAccount struct {
 	Email     string
 	Plan      string
 	CreatedAt time.Time
+	Kind      string
+	Name      string
+	KeyHint   string
 }
 
 type AgentAccountDefault struct {
