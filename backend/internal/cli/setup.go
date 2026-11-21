@@ -112,6 +112,8 @@ type setupResult struct {
 	// project keeps.
 	readiness []agentReadinessSnapshot
 	checked   map[string]bool
+	// agentUsable is set when the agent step passed.
+	agentUsable bool
 }
 
 func newSetupCommand(ctx *commandContext) *cobra.Command {
@@ -198,8 +200,6 @@ func setupExit(res setupResult, opts setupOptions) error {
 	switch {
 	case len(failed) > 0:
 		return taskExitError{code: setupExitFailed, msg: "setup failed: " + strings.Join(failed, "; ")}
-	case res.Task != nil && res.Task.Status == taskStatusFailed:
-		return taskExitError{code: taskExitFailed, msg: "setup is ready but the task failed: " + res.Task.Reason}
 	case res.Task != nil && res.Task.Status == taskStatusNeedsInput:
 		return taskExitError{code: taskExitNeedsInput, msg: "the task is waiting on you: " + res.Task.Reason}
 	case len(human) > 0:
@@ -225,7 +225,7 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	if !daemonUp {
 		reason := "needs the daemon"
 		if daemonStep.Status == setupSkipped {
-			reason = "the daemon is not running; `ao setup` would start it first"
+			reason = "waits for the daemon"
 		}
 		agent := c.setupAgentWithoutDaemon(opts)
 		res.Agent = agent
@@ -239,7 +239,10 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 		return res
 	}
 
-	add(c.setupAgentStep(ctx, opts, &res))
+	agentStep := add(c.setupAgentStep(ctx, opts, &res))
+	// Save agents on the project only once they passed their check, so a
+	// person who picks another agent next run is not asked for --yes.
+	res.agentUsable = agentStep.Status == setupOK || agentStep.Status == setupFixed
 	add(c.setupGitHubStep(ctx))
 	projectStep := add(c.setupProjectStep(ctx, opts, &res))
 	add(setupFirstRunStep(projectStep))
@@ -321,6 +324,11 @@ func (c *commandContext) setupDaemon(ctx context.Context, errOut io.Writer, opts
 			step.Detail = fmt.Sprintf("a daemon (pid %d) is running but is not healthy: %s", st.PID, st.Error)
 			step.Fix = "ao stop"
 			return step, false
+		case stateNotReady:
+			res.pending = true
+			step.Status = setupSkipped
+			step.Detail = fmt.Sprintf("the daemon (pid %d) is still starting; `ao setup` would wait for it", st.PID)
+			return step, false
 		}
 		res.pending = true
 		step.Status = setupSkipped
@@ -371,7 +379,9 @@ type setupProbe struct {
 // checks that it, and any role overrides, are installed and signed in.
 func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, res *setupResult) setupStep {
 	step := setupStep{Step: setupStepAgent}
-	readiness, err := c.ensureAgentReadiness(ctx, nil, "launch")
+	// The display policy is enough to choose; the chosen agents are probed
+	// fresh below.
+	readiness, err := c.ensureAgentReadiness(ctx, nil, "display")
 	if err != nil {
 		step.Status, step.Detail = setupFailed, "could not read agent readiness: "+err.Error()
 		return step
@@ -614,7 +624,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			res.pending = true
 			step.Status = setupSkipped
 			step.Detail = fmt.Sprintf("%s is not registered; `ao setup` would register it", path)
-			if res.Agent != nil {
+			if res.Agent != nil && res.agentUsable {
 				step.Detail += fmt.Sprintf(" with worker %s and orchestrator %s", res.Agent.Worker, res.Agent.Orchestrator)
 			}
 			if branch := c.setupNoRemoteBranch(ctx, path); branch != "" {
@@ -624,7 +634,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			return step
 		}
 		req := addProjectRequest{Path: path}
-		if res.Agent != nil {
+		if res.Agent != nil && res.agentUsable {
 			req.Config = &projectConfig{
 				Worker:       roleOverride{Agent: res.Agent.Worker},
 				Orchestrator: roleOverride{Agent: res.Agent.Orchestrator},
@@ -663,7 +673,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		}
 	}
 
-	if reused {
+	if reused && res.agentUsable {
 		agentStep, changed := c.setupReconcileAgents(ctx, opts, res, &project)
 		if agentStep != nil {
 			return *agentStep
@@ -794,7 +804,7 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 			Step:   setupStepProject,
 			Status: setupNeedsHuman,
 			Detail: fmt.Sprintf("project %s is already registered and %s", project.ID, strings.Join(conflicts, "; ")),
-			Fix:    "run the same `ao setup` command with --yes to replace the saved agents, or drop --agent to keep them",
+			Fix:    "run the same `ao setup` command with --yes to replace the saved agents, or leave out the agent flags to keep them",
 		}
 		res.Project = setupProjectFrom(*project, true)
 		return &step, ""
@@ -858,7 +868,18 @@ func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (
 			Fix:    "run `ao setup --path <repo>` with the repository to set up, or `git init` and make a first commit here",
 		}
 	}
-	return filepath.Clean(top), nil
+	top = filepath.Clean(top)
+	// A repository at the home directory or the filesystem root is almost
+	// always a dotfiles repo around the folder the person meant.
+	if home, err := os.UserHomeDir(); (err == nil && sameDir(top, home)) || top == filepath.Dir(top) {
+		return "", &setupStep{
+			Step:   setupStepProject,
+			Status: setupNeedsHuman,
+			Detail: fmt.Sprintf("%s is inside the git repository at %s, which looks like a home-folder or system repository, not a project", abs, top),
+			Fix:    "run `ao setup --path <repo>` with the repository to set up",
+		}
+	}
+	return top, nil
 }
 
 // setupNoRemoteBranch returns the checked-out branch of a repository that has

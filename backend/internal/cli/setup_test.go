@@ -685,3 +685,43 @@ func TestSetupChecksAgentsAReusedProjectKeeps(t *testing.T) {
 		t.Fatalf("agent = %+v", res.Agent)
 	}
 }
+
+func TestSetupDoesNotSaveAnAgentThatFailedItsCheck(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("CLAUDECODE", "1")
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+
+	_, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)", got, err)
+	}
+	var body addProjectRequest
+	if err := json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Config != nil {
+		t.Fatalf("project registered with agents %+v although the agent is signed out", body.Config)
+	}
+}
+
+func TestSetupRefusesARepositoryAtHome(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("HOME", repo)
+	sub := filepath.Join(repo, "scratch")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", sub, "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if d.saw("POST /api/v1/projects") {
+		t.Fatal("setup registered the home-folder repository")
+	}
+	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; !strings.Contains(fix, "--path") {
+		t.Fatalf("fix = %q", fix)
+	}
+}
