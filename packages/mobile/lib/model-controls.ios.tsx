@@ -8,6 +8,7 @@ import {
 	contentShape,
 	disabled as disabledModifier,
 	font,
+	fixedSize,
 	frame,
 	lineLimit,
 	menuOrder,
@@ -98,9 +99,9 @@ export function ApprovalMenu({ title = "Approval", choices, onChoose, disabled, 
 /** A symbol, a name and a small chevron as a trigger's face, a full touch target tall. */
 function LabelledFace({ name, title }: { name: IOSSymbol; title: string }) {
 	return (
-		<HStack spacing={space.xxs} modifiers={[padding({ horizontal: space.xs }), frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
+		<HStack spacing={space.hair} modifiers={[padding({ horizontal: space.hair }), frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
 			<Image systemName={name} modifiers={[font({ textStyle: "subheadline", weight: "medium" })]} />
-			<Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), lineLimit(1)]}>{title}</Text>
+			<Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), lineLimit(1), fixedSize()]}>{title}</Text>
 			<Image systemName="chevron.down" modifiers={[font({ textStyle: "caption2", weight: "semibold" })]} />
 		</HStack>
 	);

@@ -74,7 +74,9 @@ const COMPOSER_SETTLE_MS = 120;
  * The conversation runs on under a clear bar: iOS 26's glass, and on Android
  * the bar the frost lies behind. Older iOS keeps the stack's solid bar.
  */
-const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";
+// A solid top bar on iOS, as the desktop's session view and the local chat
+// have; Android keeps its clear bar, as the local chat does.
+const CLEAR_HEADER = Platform.OS === "android";
 
 /** The worker's Plan mode, as the composer's settings show a provider's switch. */
 const PLAN_OPTION_ID = "plan";

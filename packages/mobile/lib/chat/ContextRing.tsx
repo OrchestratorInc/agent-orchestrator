@@ -29,7 +29,7 @@ export function ContextRing({ usage, onPress }: { usage?: ConversationUsage; onP
 			disabled={!onPress}
 			onPress={onPress}
 			hitSlop={6}
-			style={{ width: touchTarget - 12, height: touchTarget, alignItems: "center", justifyContent: "center" }}
+			style={{ width: 26, height: touchTarget, alignItems: "center", justifyContent: "center" }}
 			testID="composer-context-ring"
 		>
 			<Svg width={SIZE} height={SIZE} style={{ transform: [{ rotate: "-90deg" }] }}>

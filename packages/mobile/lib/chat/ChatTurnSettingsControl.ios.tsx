@@ -1,6 +1,6 @@
 import { Host } from "@expo/ui";
 import { HStack, Label, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
-import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
+import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag, layoutPriority } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
@@ -70,7 +70,8 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 					label={pending
 						? <ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />
 						: <ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
-					modifiers={useTriggerModifiers({ label: pending ? `Next message switches to ${otherAgents?.agents.find((agent) => agent.id === pending.harness)?.label ?? pending.harness}, ${pending.modelLabel}` : parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
+					// The model's name is the last thing in the row to shorten.
+					modifiers={[...useTriggerModifiers({ label: pending ? `Next message switches to ${otherAgents?.agents.find((agent) => agent.id === pending.harness)?.label ?? pending.harness}, ${pending.modelLabel}` : parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off }), layoutPriority(1)]}
 				>
 					{modelChoices.latest.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
 					{/* Older versions one level down, as on Android: the newest of

@@ -1123,7 +1123,11 @@ function Failure({ children }: { children: ReactNode }) {
  * a terminal session does. iOS 26's glass blurred only the status bar over
  * this list, leaving the title over sharp text, and older versions have none.
  */
-const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";
+// The desktop's session view keeps the conversation below a solid top bar, and
+// iOS does too, rather than scrolling it up behind a clear one. Android's bar
+// floats its back button, title and actions on pills of their own over the
+// page, which need the clear bar.
+const CLEAR_HEADER = Platform.OS === "android";
 
 /**
  * Android's bar floats its controls on pills over the conversation (see

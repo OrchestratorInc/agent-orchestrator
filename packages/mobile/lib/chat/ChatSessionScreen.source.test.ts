@@ -175,7 +175,7 @@ describe("the composer and the keyboard", () => {
 // the title over sharp text; iOS 27's covers the whole bar.
 describe("the bar over the conversation", () => {
 	it("is the clear glass bar on iOS 27 and later only, and the stack's own bar on every other iOS", () => {
-		expect(screenSource).toContain('const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";');
+		expect(screenSource).toContain('const CLEAR_HEADER = Platform.OS === "android";');
 		expect(screenSource).toContain("if (!CLEAR_HEADER) return;");
 		expect(screenSource).not.toContain("headerBlurEffect");
 	});
