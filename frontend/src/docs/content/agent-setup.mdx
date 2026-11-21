@@ -27,7 +27,7 @@ On Windows, use winget:
 winget install --id OrchestratorInc.AgentOrchestrator -e
 ```
 
-On Linux, or without a package manager, download a package from [Installation](/installation) and install it. Linux `.deb` and `.rpm` packages need `sudo`; the AppImage needs `chmod +x`.
+On Linux, or without a package manager, download a package from [Installation](/installation) and install it. On Linux, prefer the `.deb` or `.rpm` package (it needs `sudo`), because an AppImage doesn't give you a usable `ao`.
 
 ## 2. Find `ao`
 
@@ -39,7 +39,9 @@ If `ao` isn't on your `PATH`, call the bundled copy by its full path:
 | Windows | `resources\daemon\ao.exe` inside the app's install folder |
 | Linux `.deb` / `.rpm` | `resources/daemon/ao` inside the app's install folder |
 
-Use the bundled `ao`, not the legacy npm package `@aoagents/ao`, which is frozen at `0.10.3`. To put the bundled `ao` on the `PATH` on macOS or Linux, a person can turn on **Developer mode** in **Settings → General** and choose **Link** beside **Global ao command**. See [Run the CLI](/cli#run-the-cli).
+Use the bundled `ao`, not the legacy npm package `@aoagents/ao`, which is frozen at `0.10.3`. To put the bundled `ao` on the `PATH` on macOS, or on Linux with a `.deb` or `.rpm` install, a person can turn on **Developer mode** in **Settings → General** and choose **Link** beside **Global ao command**. See [Run the CLI](/cli#run-the-cli).
+
+An AppImage install can't be linked, and its bundled `ao` isn't at a fixed path. On Linux, install the `.deb` or `.rpm` package instead when an agent needs `ao`.
 
 ## 3. Start the app and check the daemon
 
