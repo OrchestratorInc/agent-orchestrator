@@ -3434,6 +3434,8 @@ export interface components {
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
             orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
+            sandboxDocker?: components["schemas"]["ProjectSandboxDocker"];
+            agentsCanUseSudo?: components["schemas"]["ProjectAgentsCanUseSudo"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
@@ -3622,6 +3624,8 @@ export interface components {
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
             orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
+            sandboxDocker?: components["schemas"]["ProjectSandboxDocker"];
+            agentsCanUseSudo?: components["schemas"]["ProjectAgentsCanUseSudo"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
         };
         /**
@@ -3633,6 +3637,10 @@ export interface components {
         ProjectWorkersRequestReview: boolean;
         /** @description Commits a session's agent makes carry a Co-authored-by trailer naming the AO GitHub App's bot account, so GitHub shows the App as a co-author beside the person the commit is authored as. Defaults to on. */
         ProjectCoAuthorCommits: boolean;
+        /** @description Docker (Coder sandboxes): the session's agents may use Docker in a Coder sandbox. Docker access amounts to root there, so while it is on, saved logins are not filled into that sandbox's browser. Sandboxes whose provider runs no Docker (Freestyle) ignore it. Defaults to on. */
+        ProjectSandboxDocker: boolean;
+        /** @description The session's agents may use sudo in the cloud sandbox. While it is on, saved logins are not filled into that sandbox's browser. Defaults to off. */
+        ProjectAgentsCanUseSudo: boolean;
         /** @description Issue intake: while enabled, every open GitHub issue of the project's repository (or repo) that assignee matches gets one worker session, started as the organization owner or admin who last saved the rule. Only issues opened by the repository's owners, members and collaborators are taken; an issue anyone else opens is skipped. The sessions intake starts get none of the project's environment variables. An enabled rule needs an assignee. A patch merges into the stored rule. Setting it requires an organization owner or admin. */
         ProjectTrackerIntake: {
             enabled?: boolean;
