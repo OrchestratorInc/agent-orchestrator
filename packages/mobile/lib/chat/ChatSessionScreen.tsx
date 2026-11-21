@@ -791,7 +791,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const headerItems = useMemo(() => (menuReady || topbarActions.length) && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
 			{sessionTopbarToolbarButtons(topbarActions)}
-			{menuReady ? <Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} /> : null}
+			{menuReady ? <Stack.Toolbar.Button icon={toolbarIcon("more")} hidesSharedBackground accessibilityLabel="Conversation actions" onPress={openActions} /> : null}
 		</Stack.Toolbar>
 	) : null, [menuReady, openActions, topbarActions]);
 

@@ -418,7 +418,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const headerItems = useMemo(() => hasSession ? (
 		<Stack.Toolbar placement="right">
 			{sessionTopbarToolbarButtons(topbarActions)}
-			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Session actions" onPress={openActions} />
+			<Stack.Toolbar.Button icon={toolbarIcon("more")} hidesSharedBackground accessibilityLabel="Session actions" onPress={openActions} />
 		</Stack.Toolbar>
 	) : null, [hasSession, openActions, topbarActions]);
 

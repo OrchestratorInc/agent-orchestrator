@@ -73,6 +73,8 @@ export function sessionTopbarToolbarButtons(actions: readonly SessionTopbarActio
 			icon={action.id === "orchestrator" ? ORCHESTRATOR_GLYPH : toolbarIcon(action.symbol)}
 			iconRenderingMode={action.id === "orchestrator" ? "template" : undefined}
 			accessibilityLabel={action.label}
+			// Flat on the bar, as the desktop topbar's icons are, without iOS 26's shared glass.
+			hidesSharedBackground
 			disabled={action.disabled}
 			onPress={action.onPress}
 		/>

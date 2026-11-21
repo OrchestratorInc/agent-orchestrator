@@ -1,11 +1,10 @@
 import { Host } from "@expo/ui";
-import { HStack, Label, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { HStack, Label, Menu, Picker, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
 import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag, layoutPriority } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
 import { approvalSymbol } from "../approvalSymbol";
-import { EffortGaugeButton } from "../effort-gauge";
 import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
@@ -34,9 +33,11 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
 	const modelRow = select("model");
-	const effortRow = select("effort");
 	const approvalRow = select("permissions");
-	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
+	// Effort is one of the model menu's settings, as on the desktop, where the
+	// row holds the model and approvals alone; a gauge beside the model left
+	// its name too little room on a phone.
+	const otherRows = rows.filter((row) => row !== modelRow && row !== approvalRow);
 	const modelChoices = splitModelChoices(modelRow?.choices ?? []);
 	const parts = turnSettingsParts(snapshot, models, options);
 	const off = Boolean(disabled);
@@ -120,13 +121,6 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 						</Section>
 					) : null}
 				</Menu>
-				{/* The effort as a speedometer lit to the chosen level; a tap
-				    opens the slider over the composer. */}
-				{effort?.choices.length ? (
-					<RNHostView matchContents>
-						<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />
-					</RNHostView>
-				) : null}
 				<Spacer minLength={0} />
 				{approvalRow ? (
 					<ApprovalMenu

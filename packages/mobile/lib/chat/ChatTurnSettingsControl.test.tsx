@@ -132,25 +132,19 @@ describe("Android chat controls row", () => {
 		expect(trigger("chat-model").findByType("ComposeText" as never).props.children).toBe("Opus");
 		expect(trigger("chat-model").props.modifiers).toContainEqual({ modifier: "semantics", args: [{ contentDescription: "Model, Opus" }] });
 		expect(menu("chat-model").props.expanded).toBe(false);
-		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
+		expect(titles("chat-model").slice(0, 3)).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
+		// Effort is one of the model menu's settings, as on the desktop.
+		expect(titles("chat-model").map(([title]) => title)).toContain("Effort: Low");
 		open("chat-model");
 		expect(menu("chat-model").props.expanded).toBe(true);
 	});
 
-	// The speedometer lit to the level, which opens the composer's slider.
-	it("draws the effort's speedometer, which opens the composer's slider", () => {
-		const { onToggleEffort } = render();
-		expect(gauge().props.disabled).toBe(false);
-		act(() => gauge().props.onPress());
-		expect(onToggleEffort).toHaveBeenCalledOnce();
+	// The row holds the model and approvals alone, as on the desktop: no speedometer.
+	it("draws no effort speedometer in the row", () => {
+		render();
+		expect(gauge()).toBeUndefined();
 	});
 
-	it("draws no speedometer for a model that takes no effort", () => {
-		render({ effort: null });
-		expect(gauge()).toBeUndefined();
-		render({ effort: { choices: [], open: false, onToggle: () => {} } });
-		expect(gauge()).toBeUndefined();
-	});
 
 	// The desktop composer's "Auto ▾": the shield, the mode's name and an arrow.
 	it("offers the approval modes from the shield, named as on the desktop", () => {
@@ -273,7 +267,6 @@ describe("Android chat controls row", () => {
 
 	it("disables every control while the conversation cannot take a change", () => {
 		render({ disabled: true });
-		expect(gauge().props.disabled).toBe(true);
 		for (const id of ["chat-model", "chat-approval"]) expect(trigger(id).props.enabled).toBe(false);
 	});
 });

@@ -1,10 +1,9 @@
-import { Button, DropdownMenu, DropdownMenuItem, Host, HorizontalDivider, Icon, RNHostView, Row, Spacer, Text } from "@expo/ui/jetpack-compose";
+import { Button, DropdownMenu, DropdownMenuItem, Host, HorizontalDivider, Icon, Row, Spacer, Text } from "@expo/ui/jetpack-compose";
 import { fillMaxWidth, height, padding, semantics, testID, weight, width } from "@expo/ui/jetpack-compose/modifiers";
 import { useState } from "react";
 import { HarnessMark, KEEP_KEYBOARD, MenuRow, SUBMENU, useCloseMenuOnBack } from "../composeMenu.android";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
-import { EffortGaugeButton } from "../effort-gauge";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { materialDrawable } from "../toolbarIcon.android";
@@ -39,11 +38,13 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
 	const modelRow = select("model");
-	const effortRow = select("effort");
 	const approvalRow = select("permissions");
 	// The effort has its slider; everything else the provider offers is listed
 	// under the models, or Android would have no way to reach it.
-	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
+	// Effort is one of the model menu's settings, as on the desktop, where the
+	// row holds the model and approvals alone; a gauge beside the model left
+	// its name too little room on a phone.
+	const otherRows = rows.filter((row) => row !== modelRow && row !== approvalRow);
 	const modelChoices = splitModelChoices(modelRow?.choices ?? []);
 	const parts = turnSettingsParts(snapshot, models, options);
 	const off = Boolean(disabled);
@@ -200,13 +201,6 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 					</DropdownMenu.Items>
 				</DropdownMenu>
 
-				{/* The effort as a speedometer lit to the chosen level; a tap opens
-				    the slider over the composer. */}
-				{effort?.choices.length ? (
-					<RNHostView matchContents>
-						<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={() => { close(); effort.onToggle(); }} disabled={off} testID="chat-effort" />
-					</RNHostView>
-				) : null}
 
 				<Spacer modifiers={[weight(1)]} />
 
