@@ -44,7 +44,8 @@ func executeWithDeps(deps Deps, args []string) error {
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
-	if err != nil && ExitCode(err) == 2 {
+	var ue usageError
+	if err != nil && errors.As(err, &ue) {
 		(&commandContext{deps: deps}).emitCLIUsageError(context.Background(), args, err)
 	}
 	return err
@@ -64,7 +65,8 @@ func (e usageError) Unwrap() error { return e.err }
 const exitDataDirLocked = 75
 
 // ExitCode maps a CLI error to a process exit code: 2 for usage errors, 75 when
-// another AO process owns the data dir, 1 for any other failure, 0 for success.
+// another AO process owns the data dir, the error's own code when it carries
+// one (`ao task`), 1 for any other failure, 0 for success.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -72,6 +74,10 @@ func ExitCode(err error) int {
 	var ue usageError
 	if errors.As(err, &ue) {
 		return 2
+	}
+	var coded interface{ ExitCode() int }
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
 	}
 	if errors.Is(err, datadirlock.ErrLocked) {
 		return exitDataDirLocked
@@ -257,6 +263,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newAccountCommand(ctx))
 	root.AddCommand(newSpawnCommand(ctx))
 	root.AddCommand(newSendCommand(ctx))
+	root.AddCommand(newTaskCommand(ctx))
 	root.AddCommand(newReportCommand(ctx))
 	root.AddCommand(newArtifactCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))

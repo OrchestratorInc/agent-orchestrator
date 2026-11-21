@@ -30,6 +30,7 @@ ao
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
+├── task                          start, status, wait: hand off a task and check it started
 ├── session                       ls, get, kill, restore, rename, cleanup, delete,
 │                                 claim-pr, exit-agent, resume-agent
 ├── automation                    create, list, get, update, delete, runs
@@ -148,6 +149,44 @@ Important flags include:
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
 Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, Orchestrator refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
+
+### `ao task`
+
+Hands a task to Orchestrator and reports, through its exit code, whether the agent really picked it up. It is meant for scripts and for other coding agents.
+
+```bash
+ao task start "Fix the failing login test" --wait --json
+```
+
+By default the project's orchestrator receives the task, plans it, and starts workers. With `--worker`, a single worker session takes the task directly. Without `--project`, Orchestrator uses `AO_PROJECT_ID`, then the closest registered project that contains the current directory.
+
+| Command | Purpose |
+| --- | --- |
+| `ao task start "<brief>"` | Start the task. Flags: `--project <id>`, `--worker`, `--agent <id>`, `--base <branch>`, `--wait`, `--timeout <duration>` (default `120s`), `--json`. |
+| `ao task status <task-id>` | Report the task's status once. Supports `--json`. |
+| `ao task wait <task-id>` | Wait until the task has started, failed, or needs you. Supports `--timeout` and `--json`. |
+
+`start --wait` behaves like `start` followed by `wait`. A task has started once its first turn is running (and stays running for a few seconds) or has finished. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. With the orchestrator, `--agent` and `--base` are passed on as instructions for the workers it starts.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The task started: it is running or done. Without `--wait`, it may also still be starting. |
+| `1` | The task failed: the session could not start, the agent's turn failed, or `--timeout` ran out first. |
+| `2` | The task is waiting on you, for example for an approval. A usage error also exits `2`, but prints no JSON. |
+
+With `--json`, the command prints one object:
+
+```json
+{
+  "status": "failed",
+  "taskId": "my-app-3",
+  "sessionIds": ["my-app-3"],
+  "reason": "Not logged in · Please run /login (auth_required)",
+  "fix": "run `claude auth login`, then retry"
+}
+```
+
+`status` is `starting`, `running`, `done`, `failed`, or `needs_input`. `taskId` is the worker's session ID, or `<orchestrator-session>:<turn>` for a task sent to the orchestrator; pass it to `ao task status` or `ao task wait`. `sessionIds` lists the session that runs the task and any workers the orchestrator started for it. When the agent is not signed in, `fix` gives the agent's own login command. `ao spawn`, `ao send`, and the session states are unchanged.
 
 ### `ao session`
 
