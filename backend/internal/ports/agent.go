@@ -668,7 +668,12 @@ type TranscriptTurnFailureDetector interface {
 // should read its terminal and which native decision states it can report.
 type TerminalActivityOptions struct {
 	PreferStyledOutput bool
-	SupportsBlocked    bool
+	// RawOutputFallback lets a PreferStyledOutput adapter keep reconciling
+	// from raw output when the runtime reports
+	// ErrStyledTerminalOutputUnavailable (older ConPTY pty-hosts). Adapters
+	// whose detection is only sound on the rendered screen leave it false.
+	RawOutputFallback bool
+	SupportsBlocked   bool
 }
 
 // TerminalActivityOptionsProvider exposes an adapter's terminal observation needs.

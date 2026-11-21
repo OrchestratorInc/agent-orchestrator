@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -205,6 +206,10 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	if available && (requiresViewport || requiresRendered || options.PreferStyledOutput) {
 		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
+		if err != nil && options.RawOutputFallback && !requiresViewport && !requiresRendered &&
+			errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+			output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+		}
 	} else {
 		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	}

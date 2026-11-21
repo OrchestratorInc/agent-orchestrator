@@ -73,6 +73,14 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 // rest of an actively running turn.
 func (p *Plugin) ContinuouslyDetectTerminalActivityWhileWaiting() bool { return true }
 
+// TerminalActivityOptions reads the rendered viewport for reconciliation. On
+// ConPTY the raw output is the PTY ring, and Codex redraws can leave it
+// without the current working line, so a resumed turn would stay
+// waiting_input. Older pty-hosts without a styled snapshot keep the raw path.
+func (p *Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
+	return ports.TerminalActivityOptions{PreferStyledOutput: true, RawOutputFallback: true}
+}
+
 // InspectTerminalSurface reports Codex work and composer facts separately.
 // A visible prompt can contain a draft, and Codex can render that prompt while
 // an active turn remains interruptible.

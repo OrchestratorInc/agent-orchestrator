@@ -426,6 +426,33 @@ func TestPollReconcilesWaitingCodexOnceTurnResumes(t *testing.T) {
 	}
 }
 
+// On ConPTY the raw output is the PTY ring and the styled output is the
+// rendered viewport. A redraw can leave the ring still showing the approval
+// picker while the screen shows the resumed working line; reconciliation must
+// read the rendered screen so the turn becomes active.
+func TestPollReconcilesWaitingCodexFromRenderedScreen(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodex)
+	session.Activity = domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now.Add(-time.Second)}
+	session.UpdatedAt = now.Add(-time.Second)
+	sink := &fakeSink{}
+	runtime := &styledRuntime{fakeRuntime: fakeRuntime{output: codexExecApprovalFrame}, surface: codexRunningFrame}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink, runtime, fakeAgents{domain.HarnessCodex: codex.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.calls != 0 || runtime.surfaceCalls != 1 {
+		t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityActive {
+		t.Fatalf("signals = %+v, want one active", sink.signals)
+	}
+}
+
 // panickingCodex parses panes like codex but panics while doing it.
 type panickingCodex struct{ *codex.Plugin }
 
@@ -760,9 +787,12 @@ func TestPollRetainsClaudeAndCodexReconciliationOnOlderHosts(t *testing.T) {
 		agent   ports.Agent
 		output  string
 		want    domain.ActivityState
+		// Codex asks for the rendered screen first and falls back to raw
+		// output when the host reports it unavailable.
+		surfaceCalls int
 	}{
-		{domain.HarnessClaudeCode, claudecode.New(), claudeStuckActiveScreen, domain.ActivityWaitingInput},
-		{domain.HarnessCodex, codex.New(), "› Write tests for @filename\n\ngpt-5.6-sol low · ~/project\n", domain.ActivityIdle},
+		{domain.HarnessClaudeCode, claudecode.New(), claudeStuckActiveScreen, domain.ActivityWaitingInput, 0},
+		{domain.HarnessCodex, codex.New(), "› Write tests for @filename\n\ngpt-5.6-sol low · ~/project\n", domain.ActivityIdle, 1},
 	} {
 		t.Run(string(tc.harness), func(t *testing.T) {
 			now := time.Unix(500, 0).UTC()
@@ -782,7 +812,7 @@ func TestPollRetainsClaudeAndCodexReconciliationOnOlderHosts(t *testing.T) {
 			if len(sink.signals) != 1 || sink.signals[0].State != tc.want {
 				t.Fatalf("reconciliation = %+v, want %s", sink.signals, tc.want)
 			}
-			if runtime.calls != 1 || runtime.surfaceCalls != 0 {
+			if runtime.calls != 1 || runtime.surfaceCalls != tc.surfaceCalls {
 				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
 			}
 		})
