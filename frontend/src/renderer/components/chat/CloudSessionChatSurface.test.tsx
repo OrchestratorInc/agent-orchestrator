@@ -3573,6 +3573,46 @@ describe("toSnapshot turns waiting for their agent", () => {
 		expect(pending(toSnapshot(session, page, undefined, { partial: true }))).toEqual([]);
 	});
 
+	// The worker's agent is already running: a later turn on it finds the
+	// project set up, so it reads as the agent's from its start, without a
+	// "Setting up project" flash before each message's capabilities arrive.
+	it("does not wait again on a worker whose agent already opened a turn", () => {
+		const warm = [
+			event(1, "worker.connected", { workerId: "w", epoch: 3 }),
+			...taken.slice(0, 1).map((e) => ({ ...e, sequence: 2 })),
+			event(3, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 }),
+			event(4, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: true }),
+			event(5, "chat.turn_completed", { turnId: "turn-1", attempt: 1 }),
+			event(6, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		const connected = { ...session, runtimeConnected: true };
+		// Sent to the warm session, before the worker took it.
+		expect(pending(toSnapshot(connected, warm))).toEqual([]);
+		// Taken by the same worker, its capabilities not in yet.
+		const takenWarm = [...warm, event(7, "chat.turn_started", { turnId: "turn-2", attempt: 1, workerEpoch: 3 })];
+		expect(pending(toSnapshot(connected, takenWarm))).toEqual([]);
+	});
+
+	it("waits on a new worker (a restore or a wake) and while no worker is connected", () => {
+		const before = [
+			event(1, "worker.connected", { workerId: "w", epoch: 3 }),
+			event(2, "chat.user_message", { text: "Go", turnId: "turn-1" }),
+			event(3, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 }),
+			event(4, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: true }),
+			event(5, "chat.turn_completed", { turnId: "turn-1", attempt: 1 }),
+			event(6, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		// The worker paused or ended: the next message waits for a new one.
+		expect(pending(toSnapshot({ ...session, runtimeConnected: false }, before))).toEqual(["turn-2"]);
+		// A new worker took it: its agent starts first.
+		const rewoken = [...before,
+			event(7, "worker.connected", { workerId: "w2", epoch: 4 }),
+			event(8, "chat.turn_started", { turnId: "turn-2", attempt: 1, workerEpoch: 4 })];
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true }, rewoken))).toEqual(["turn-2"]);
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true },
+			[...rewoken, event(9, "chat.turn_capabilities", { turnId: "turn-2", attempt: 1, steering: true })]))).toEqual([]);
+	});
+
 	it("leaves a worker that never reports capabilities as running from its start", () => {
 		const older = [
 			event(1, "chat.user_message", { text: "First", turnId: "turn-0" }),

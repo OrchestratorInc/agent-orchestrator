@@ -56,6 +56,10 @@ import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliver
 
 type EventPayload = {
 	attempt?: unknown;
+	/** chat.turn_started: the epoch of the worker that took the turn. */
+	workerEpoch?: unknown;
+	/** worker.connected and worker.ready: the epoch of the worker that connected. */
+	epoch?: unknown;
 	/**
 	 * chat.turn_interrupted: why a turn ended before it started (deleted,
 	 * interface_switch, steered); chat.turn_aborted: author_cannot_write for a message
@@ -1019,6 +1023,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// from an older one that never does.
 	const agentTurns = new Set<string>();
 	const capabilityTurns = new Set<string>();
+	// Which worker (its epoch) took each turn, and the workers whose agent has
+	// opened a turn: a later turn on such a worker finds the project set up
+	// and the agent running, so it is the agent's from its start, as before.
+	// Only a worker's first turn (a new session, a restore, a wake) waits.
+	const turnEpochs = new Map<string, number>();
+	const agentEpochs = new Set<number>();
+	let currentEpoch: number | undefined;
 	// Queued messages the person deleted (turn_interrupted of reason deleted).
 	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
@@ -1080,6 +1091,10 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			if (startedEarlier) agentTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
+		if (event.type === "worker.connected" || event.type === "worker.ready") {
+			const epoch = eventPayload(event).epoch;
+			if (typeof epoch === "number") currentEpoch = epoch;
+		}
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
@@ -1087,14 +1102,21 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			startedTurns.add(turnID);
 			// A new attempt (a retry, a new worker) waits for its own agent.
 			agentTurns.delete(turnID);
+			const epoch = eventPayload(event).workerEpoch;
+			if (typeof epoch === "number") turnEpochs.set(turnID, epoch);
+			else turnEpochs.delete(turnID);
 		}
 		if (turnID && event.type === "chat.turn_capabilities") {
 			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
 			capabilityTurns.add(turnID);
 			if (eventPayload(event).steering === true) steerableTurns.add(turnID);
 		}
 		if (turnID && (event.type === "chat.assistant_delta" || event.type === "chat.activity" || event.type === "chat.approval_requested")) {
 			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
 		}
 		if (turnID && (event.type === "chat.turn_completed" || event.type === "chat.turn_interrupted" || event.type === "chat.turn_aborted")) {
 			const turn = turns.get(turnID)!;
@@ -1408,7 +1430,15 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// read as running from their start, as before.
 	const reportsAgentStart = !orderedTurns.some((turn) => turn.state === "completed" && startedTurns.has(turn.id) && !capabilityTurns.has(turn.id));
 	if (reportsAgentStart) {
-		for (const turn of orderedTurns) if (turn.state === "running" && !agentTurns.has(turn.id)) turn.agentPending = true;
+		for (const turn of orderedTurns) {
+			if (turn.state !== "running" || agentTurns.has(turn.id)) continue;
+			// A turn a worker took goes by that worker; one no worker has taken
+			// yet, by the connected worker, if any (a paused session's worker is
+			// gone, so its turn waits for the next one).
+			const epoch = turnEpochs.get(turn.id) ?? (session.runtimeConnected ? currentEpoch : undefined);
+			if (epoch !== undefined && agentEpochs.has(epoch)) continue;
+			turn.agentPending = true;
+		}
 	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
