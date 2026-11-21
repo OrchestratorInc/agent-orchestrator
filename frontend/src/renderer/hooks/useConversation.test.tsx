@@ -1379,9 +1379,9 @@ describe("steering refusals", () => {
 		);
 	});
 
-	async function steerFailingWith(code: string) {
+	async function steerFailingWith(code: string, message = "a compaction turn is running.") {
 		apiErrorCodeMock.mockReturnValue(code);
-		apiErrorMessageMock.mockReturnValue("a compaction turn is running.");
+		apiErrorMessageMock.mockReturnValue(message);
 		postMock.mockResolvedValue({ data: undefined, error: { code } });
 
 		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
@@ -1466,8 +1466,7 @@ describe("steering refusals", () => {
 
 	// Daemon messages usually end without a full stop, so the advice would run on.
 	it("ends the daemon's sentence before the advice", async () => {
-		apiErrorMessageMock.mockReturnValueOnce("the agent did not collect the guidance within 5s");
-		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE");
+		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE", "the agent did not collect the guidance within 5s");
 		await waitFor(() => {
 			expect(result.current.steerRefusal).toBe(
 				"the agent did not collect the guidance within 5s. Try again once it finishes.",
