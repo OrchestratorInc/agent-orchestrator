@@ -8,7 +8,7 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
-import { canStackOn, type PRStackInfo, type PRStackLayer } from "../lib/pr-stack";
+import { canStackOn, stackLayerToRebase, stackRebaseMessage, type PRStack, type PRStackInfo, type PRStackLayer } from "../lib/pr-stack";
 import { openPRTab } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
@@ -80,7 +80,55 @@ function LayerRow({ current, hostId, layer, session }: { current: boolean; hostI
 			) : (
 				<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground"><LayerName layer={layer} /></span>
 			)}
+			{(layer.behindParent ?? 0) > 0 ? <span className="shrink-0 text-xs text-muted-foreground">{t("pr.stack.needsRebase")}</span> : null}
 		</li>
+	);
+}
+
+/**
+ * The next layer to rebase onto the one below it. Its agent does the rebase, as
+ * the session's own "Update from base" does; a layer AO doesn't track, or a
+ * whole stack at once, rebases from GitHub's merge box instead.
+ */
+function StackRebaseRow({ hostId, stack }: { hostId?: string; stack: PRStack }) {
+	const { t } = useTranslation();
+	const next = stackLayerToRebase(stack);
+	// Asked once per head: the push that rebases it moves the head, and the layer
+	// above becomes the next to rebase.
+	const [asked, setAsked] = useState<string>();
+	const ask = useMutation({
+		mutationFn: async ({ layer, below }: { layer: PRStackLayer; below: PRStackLayer }) => {
+			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
+				params: { path: { sessionId: layer.sessionId ?? "" } },
+				body: { message: stackRebaseMessage(layer, below) },
+			});
+			if (error) throw apiErrorException(error, t("pr.stack.askRebaseFailed", { number: layer.number }));
+			return layer.headSha;
+		},
+		onSuccess: (head) => setAsked(head),
+	});
+	if (!next) return null;
+	const { layer, below } = next;
+	const sent = asked === layer.headSha;
+	return (
+		<div className="flex min-w-0 flex-col gap-1 px-1.5" data-testid="pr-stack-rebase">
+			<p className="m-0 text-xs leading-normal text-muted-foreground" role="status">
+				{sent ? t("pr.stack.askedRebase", { number: layer.number }) : t("pr.stack.behind", { number: layer.number, below: below.number })}
+			</p>
+			<div className="flex flex-wrap items-center gap-2">
+				{layer.sessionId && !sent ? (
+					<Button className="-ml-2 h-6 px-2 text-xs" disabled={ask.isPending} onClick={() => ask.mutate(next)} size="sm" type="button" variant="ghost">
+						{t("pr.stack.askRebase", { number: layer.number })}
+					</Button>
+				) : null}
+				{layer.url ? (
+					<ProductExternalLink className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" href={layer.url}>
+						{t("pr.stack.rebaseOnGitHub")}
+					</ProductExternalLink>
+				) : null}
+			</div>
+			{ask.error instanceof Error ? <p className="m-0 text-xs leading-normal text-error" role="alert">{ask.error.message}</p> : null}
+		</div>
 	);
 }
 
@@ -189,6 +237,7 @@ export function PRStackSection({ hostId, pr, section, session }: {
 					</li>
 				</ol>
 			) : null}
+			{stack ? <StackRebaseRow hostId={hostId} key={stack.number} stack={stack} /> : null}
 			{info.parent ? (
 				<div className={cn(rowClass, "justify-between")}>
 					<ProductExternalLink className="min-w-0 truncate text-muted-foreground underline-offset-2 hover:underline" href={info.parent.url}>

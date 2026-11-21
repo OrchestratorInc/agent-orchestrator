@@ -13,7 +13,7 @@ import type { PRTabSection } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { GitHubIcon } from "./GitHubIcon";
-import { blockReasonLabel, PRActionButton, PRStateMenu } from "./PRActions";
+import { blockReasonLabel, PRActionButton, PRStateMenu, stackBlockReasonLabel } from "./PRActions";
 import { AppLink } from "./AppLink";
 import { checkTone, sortedChecks } from "./PRCardDetails";
 import { PRAvatar, PRComments, prCommentCount } from "./PRComments";
@@ -152,7 +152,7 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 	const merge: { state?: PRCheckState; className?: string; label: string } | undefined = pr.state !== "open" && pr.state !== "draft" ? undefined
 		: pr.mergeability.state === "conflicting" ? { state: "failed", label: t("pr.card.mergeConflict") }
 			: pr.state === "draft" || pr.mergeability.state === "unknown" ? undefined
-				: lowerBlock ? { label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) }) }
+				: lowerBlock ? { label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(stackBlockReasonLabel[lowerBlock.reason]) }) }
 					: prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) ? { state: "passed", label: t("pr.card.readyToMerge") }
 						: { ...(blockReason ? blockMark[blockReason] : undefined), label: blockReason === "checks" && failedChecks(checks) > 0 ? t("pr.blocker.checksFailing", { count: failedChecks(checks) }) : t(blockReason ? blockReasonLabel[blockReason] : "pr.card.mergeBlocked") };
 	const stackGroup = stackSection ? (
