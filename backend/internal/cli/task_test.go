@@ -470,7 +470,7 @@ func TestTaskWaitTimesOutWithSignInHint(t *testing.T) {
 	if res["status"] != "failed" || !strings.Contains(res["reason"].(string), "timed out after 30s") {
 		t.Fatalf("result = %v", res)
 	}
-	if res["fix"] != "if claude-code is not signed in, run `claude auth login`, then retry" {
+	if res["fix"] != "if claude-code is not signed in, run `claude auth login`, then retry; otherwise check `ao session get repo-1`" {
 		t.Fatalf("fix = %v", res["fix"])
 	}
 }
@@ -704,5 +704,113 @@ func TestTaskStatusPagesBackWhileThePageSplitsTheTurn(t *testing.T) {
 	}
 	if d.saw("GET /api/v1/sessions/repo-orchestrator/conversation") && d.lastQuery != "beforeSequence=100" {
 		t.Fatalf("stopped paging at %q; want it to stop once the earlier turn t1 is loaded", d.lastQuery)
+	}
+}
+
+func TestTaskStartWithNoRegisteredProjectIsAUsageError(t *testing.T) {
+	d := newTaskDaemon(t)
+	t.Chdir(t.TempDir())
+	d.set("GET /api/v1/projects", 200, `{"projects":[]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--json")
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("exit = %d (%v), want 2", got, err)
+	}
+	if out != "" || !strings.Contains(err.Error(), "ao project add --path <repo>") {
+		t.Fatalf("stdout = %q, err = %v", out, err)
+	}
+}
+
+func TestTaskWaitTimeoutWhileProvisioningDoesNotBlameSignIn(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"provisioning"}}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "wait", "repo-1", "--timeout", "10s", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if fix := res["fix"].(string); strings.Contains(fix, "signed in") || !strings.Contains(fix, "workspace setup had not finished") {
+		t.Fatalf("fix = %q", fix)
+	}
+}
+
+func TestTaskWaitTerminalWorkThenPromptIsDone(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	start := deps.Now()
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator", func() (int, string) {
+		state := "waiting_input"
+		if elapsed := deps.Now().Sub(start); elapsed >= time.Second && elapsed < 3*time.Second {
+			state = "active"
+		}
+		return 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"` + state + `"}}}`
+	})
+
+	out, _, err := executeCLI(t, deps, "task", "wait", "repo-orchestrator", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d: %v", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "done" {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+func TestTaskWaitTerminalPromptOnlySaysSoOnTimeout(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "wait", "repo-orchestrator", "--timeout", "10s", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if !strings.Contains(res["reason"].(string), "a terminal session does not report whether it took this task") || strings.Contains(res["fix"].(string), "signed in") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+func TestTaskStartWorkerRetriesALostReplyWithTheSameRequestID(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"provisioning"}}`)
+	var ids []string
+	d.setFunc("POST /api/v1/orchestrators/delegate", func() (int, string) {
+		var req map[string]string
+		d.mu.Lock()
+		_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/orchestrators/delegate"]), &req)
+		d.mu.Unlock()
+		ids = append(ids, req["clientRequestId"])
+		if len(ids) == 1 {
+			return -1, ""
+		}
+		return 202, `{"ok":true,"workerId":"repo-1"}`
+	})
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d: %v", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["taskId"] != "repo-1" {
+		t.Fatalf("result = %v", res)
+	}
+	if len(ids) != 2 || ids[0] != ids[1] || !strings.HasPrefix(ids[0], "ao-task-") {
+		t.Fatalf("client request ids = %v; want the retry to reuse the first id", ids)
+	}
+}
+
+func TestTaskStartTerminalDeliveryUnconfirmedPointsAtTheTerminal(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-1","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"idle"}}}`)
+	d.set("POST /api/v1/sessions/repo-1/conversation/messages", 409, `{"error":"conflict","code":"SESSION_MODE_MISMATCH","message":"no chat conversation"}`)
+	d.set("POST /api/v1/sessions/repo-1/send", 409, `{"error":"conflict","code":"SESSION_DELIVERY_UNCONFIRMED","message":"Message was written to the terminal but the agent did not start a turn"}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["fix"] != "check the agent's terminal with `ao session get repo-1`; if claude-code is not signed in, run `claude auth login`, then retry" {
+		t.Fatalf("result = %v", res)
 	}
 }

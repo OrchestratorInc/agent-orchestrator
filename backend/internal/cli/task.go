@@ -285,14 +285,27 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 			WorkerID string `json:"workerId"`
 		}
 		req := struct {
-			ProjectID  string `json:"projectId"`
-			Brief      string `json:"brief"`
-			Agent      string `json:"agent,omitempty"`
-			BaseBranch string `json:"baseBranch,omitempty"`
-		}{ProjectID: project.ID, Brief: brief, Agent: strings.TrimSpace(opts.agent), BaseBranch: strings.TrimSpace(opts.base)}
+			ClientRequestID string `json:"clientRequestId"`
+			ProjectID       string `json:"projectId"`
+			Brief           string `json:"brief"`
+			Agent           string `json:"agent,omitempty"`
+			BaseBranch      string `json:"baseBranch,omitempty"`
+		}{ClientRequestID: newTaskClientMessageID(), ProjectID: project.ID, Brief: brief, Agent: strings.TrimSpace(opts.agent), BaseBranch: strings.TrimSpace(opts.base)}
 		// The desktop's new-task route: one worker, named from the brief.
-		if err := c.postSetupJSON(ctx, "orchestrators/delegate", req, &out); err != nil {
+		err := c.postSetupJSON(ctx, "orchestrators/delegate", req, &out)
+		var apiErr apiResponseError
+		if err != nil && !errors.As(err, &apiErr) && ctx.Err() == nil {
+			// The daemon may have started the worker before the reply was
+			// lost. The same client request id returns that worker instead of
+			// starting a second one.
+			err = c.postSetupJSON(ctx, "orchestrators/delegate", req, &out)
+		}
+		switch {
+		case errors.As(err, &apiErr):
 			return c.taskAPIFailure(ctx, nil, workerAgent, "start worker", err)
+		case err != nil:
+			return failedTask("", nil, fmt.Sprintf("could not confirm that the worker started (client request id %s): %s", req.ClientRequestID, err.Error()),
+				"check `ao session ls` before starting the task again, so it does not run twice")
 		}
 		if strings.TrimSpace(out.WorkerID) == "" {
 			return failedTask("", nil, "daemon returned no worker id", "")
@@ -407,7 +420,7 @@ func (c *commandContext) resolveTaskProject(ctx context.Context, explicit string
 	}
 	if !ok {
 		cwd, _ := os.Getwd()
-		return projectDetails{}, fmt.Errorf("no registered project contains %s; pass --project or register it with `ao project add --path <repo>`", cwd)
+		return projectDetails{}, usageError{fmt.Errorf("no registered project contains %s; pass --project or register it with `ao project add --path <repo>`", cwd)}
 	}
 	return project, nil
 }
@@ -423,6 +436,12 @@ func (c *commandContext) taskAPIFailure(ctx context.Context, sessions []string, 
 	var apiErr apiResponseError
 	if errors.As(err, &apiErr) && signInErrorCodes[apiErr.ErrorBody.Code] {
 		return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), c.signInFix(ctx, agent))
+	}
+	if errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_DELIVERY_UNCONFIRMED" && len(sessions) > 0 && agent != "" {
+		// A terminal agent that never takes the message is often sitting at a
+		// sign-in screen.
+		return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()),
+			fmt.Sprintf("check the agent's terminal with `ao session get %s`; if %s is not signed in, %s", sessions[0], agent, c.signInFix(ctx, agent)))
 	}
 	return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), "")
 }
@@ -633,6 +652,7 @@ func (conv *taskConversation) prepend(older taskConversation) {
 type taskObservation struct {
 	result  taskResult
 	harness string
+	phase   string
 	// turnID is the turn the status describes (after retries), empty for a
 	// terminal session or before the turn exists.
 	turnID string
@@ -677,7 +697,7 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	case "provider_key_missing":
 		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
 	}
-	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID}
+	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID, phase: eval.phase}
 }
 
 type taskEvaluation struct {
@@ -686,7 +706,20 @@ type taskEvaluation struct {
 	failureCode string
 	spawned     []string
 	turnID      string
+	// phase says why a task is still starting, so a timeout can name the
+	// likely cause instead of always suggesting sign-in.
+	phase string
 }
+
+// Why a task has not started yet.
+const (
+	taskPhaseProvisioning   = "provisioning"
+	taskPhaseQueued         = "queued"
+	taskPhaseAwaitingTurn   = "awaiting_turn"
+	taskPhaseTerminalPrompt = "terminal_prompt"
+	taskPhaseTerminalIdle   = "terminal_idle"
+	taskPhaseTerminalActive = "terminal_active"
+)
 
 // evaluateTask turns a session and its conversation into a task status. With
 // no turn id the task is the session's first turn (a worker's prompt).
@@ -701,7 +734,7 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 		}
 		return taskEvaluation{status: taskStatusFailed, reason: "session failed to start: " + reason}
 	case sess.ProvisionState == "provisioning":
-		return taskEvaluation{status: taskStatusStarting, reason: "preparing the workspace"}
+		return taskEvaluation{status: taskStatusStarting, reason: "preparing the workspace", phase: taskPhaseProvisioning}
 	}
 	if conv == nil {
 		return evaluateTerminalTask(sess)
@@ -721,9 +754,9 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 			}
 		}
 		if conv.HasMoreBefore {
-			return taskEvaluation{status: taskStatusStarting, reason: "the task's turn is not in the loaded session history yet"}
+			return taskEvaluation{status: taskStatusStarting, reason: "the task's turn is not in the loaded session history yet", phase: taskPhaseAwaitingTurn}
 		}
-		return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task"}
+		return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task", phase: taskPhaseAwaitingTurn}
 	}
 
 	// A failed turn the user retried continues as its retry. The whole chain
@@ -770,7 +803,9 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 
 	switch turn.State {
 	case "queued":
-		return eval(taskStatusStarting, "queued behind the agent's current turn")
+		res := eval(taskStatusStarting, "queued behind the agent's current turn")
+		res.phase = taskPhaseQueued
+		return res
 	case "running":
 		return eval(taskStatusRunning, "the agent is working on it")
 	case "completed", "recovered":
@@ -800,15 +835,15 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 func evaluateTerminalTask(sess taskSession) taskEvaluation {
 	switch sess.Activity.State {
 	case "active":
-		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working (terminal session)"}
+		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working (terminal session)", phase: taskPhaseTerminalActive}
 	case "blocked":
 		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
 	case "exited":
 		return taskEvaluation{status: taskStatusFailed, reason: "the agent process exited (terminal session)"}
 	case "waiting_input":
-		return taskEvaluation{status: taskStatusStarting, reason: "the agent is at its prompt; a terminal session does not say whether it has taken this task yet"}
+		return taskEvaluation{status: taskStatusStarting, reason: "the agent is at its prompt; a terminal session does not say whether it has taken this task yet", phase: taskPhaseTerminalPrompt}
 	}
-	return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task (terminal session)"}
+	return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task (terminal session)", phase: taskPhaseTerminalIdle}
 }
 
 func detailString(detail map[string]any, key string) string {
@@ -826,7 +861,8 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 	}
 	deadline := c.deps.Now().Add(timeout)
 	last := res
-	harness := ""
+	harness, phase := "", ""
+	sawTerminalWork := false
 	var runningTurn string
 	var runningSince time.Time
 	for {
@@ -847,8 +883,17 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		if obs.harness != "" {
 			harness = obs.harness
 		}
-		last = obs.result
+		last, phase = obs.result, obs.phase
 		now := c.deps.Now()
+		if obs.phase == taskPhaseTerminalActive {
+			sawTerminalWork = true
+		}
+		if obs.phase == taskPhaseTerminalPrompt && sawTerminalWork {
+			// This wait saw the terminal agent working and then return to its
+			// prompt, so it took the task and finished it.
+			last.Status, last.Reason = taskStatusDone, "the agent worked on the task and is back at its prompt (terminal session)"
+			return last
+		}
 		switch last.Status {
 		case taskStatusFailed, taskStatusNeedsInput, taskStatusDone:
 			return last
@@ -869,8 +914,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		c.deps.Sleep(min(taskPollInterval, remaining))
 	}
 
-	// Nothing settled in time. The usual cause of a task that never starts is
-	// an agent that is not signed in.
+	// Nothing settled in time. Name the likely cause from the last reading.
 	reason := fmt.Sprintf("timed out after %s: the task has not started", timeout)
 	if last.Status == taskStatusRunning {
 		reason = fmt.Sprintf("timed out after %s: the agent had only just started the task", timeout)
@@ -878,9 +922,22 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 	if last.Reason != "" {
 		reason += " (" + last.Reason + ")"
 	}
-	fix := "check the session in the Orchestrator app"
-	if harness != "" {
-		fix = "if " + harness + " is not signed in, " + c.signInFix(ctx, harness)
+	check := fmt.Sprintf("`ao session get %s`", id.session)
+	var fix string
+	switch {
+	case last.Status == taskStatusRunning:
+		fix = fmt.Sprintf("the agent is working; wait longer with `ao task wait %s`, or check %s", id, check)
+	case phase == taskPhaseProvisioning:
+		fix = "workspace setup had not finished; check the project's setup steps and " + check
+	case phase == taskPhaseQueued:
+		fix = "the agent was still busy with an earlier turn; wait longer, or check " + check
+	case phase == taskPhaseTerminalPrompt:
+		reason = fmt.Sprintf("timed out after %s: a terminal session does not report whether it took this task (%s)", timeout, last.Reason)
+		fix = "this wait never saw the agent working, so it may have finished quickly or not started; check " + check + " or open the session in the Orchestrator app"
+	case harness != "":
+		fix = "if " + harness + " is not signed in, " + c.signInFix(ctx, harness) + "; otherwise check " + check
+	default:
+		fix = "check " + check
 	}
 	return failedTask(id.String(), last.SessionIDs, reason, fix)
 }

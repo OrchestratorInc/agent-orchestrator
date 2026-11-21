@@ -11,6 +11,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | Command | What it does | When to use | Details |
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
+| `task` | Hand a task to the project's orchestrator (or one worker) and report from the exit code whether it started | Sending a task from a script or an outside agent and confirming it really started | [commands/task.md](commands/task.md) |
 | `session` | Manage agent sessions (list, interrupt, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
 | `account` | List Claude Code and Codex subscription accounts, set the default, show or move a session's account | Starting work on a specific account, or moving a session off an account that hit its limit | [commands/account.md](commands/account.md) |
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
