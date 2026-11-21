@@ -666,9 +666,10 @@ func (m *Manager) runInterfaceTransition(
 	// A provider that timed out its own first session/load (-32602 with a
 	// context deadline) gave no verdict either, so it gets the same single
 	// retry. A settle wait that ran out of AO's own budget is not retried.
-	providerLoadDeadline := errors.Is(err, ports.ErrChatHistoryLoadDeadline) &&
+	// Either reason, once AO's own context ran out, is budget exhaustion.
+	retryable := (errors.Is(err, ports.ErrChatHistoryUnsettled) || errors.Is(err, ports.ErrChatHistoryLoadDeadline)) &&
 		!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled)
-	if (errors.Is(err, ports.ErrChatHistoryUnsettled) || providerLoadDeadline) &&
+	if retryable &&
 		!errors.Is(err, ports.ErrChatRecoveryInconclusive) &&
 		!errors.Is(err, ports.ErrChatHistoryLoadFailed) &&
 		len(ports.ChatHistoryMismatchDimensions(err)) == 0 && transition.TargetMode == domain.SessionModeChat {

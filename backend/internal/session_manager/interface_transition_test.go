@@ -1263,6 +1263,9 @@ func TestInterfaceTransitionReportsNativeHistoryReplayFailure(t *testing.T) {
 		// AO's own settle wait expired: the retry would only spend another full budget.
 		{name: "load deadline after settle wait", err: fmt.Errorf("wait for settled native conversation history: %w: %w",
 			ports.ErrChatHistoryLoadDeadline, context.DeadlineExceeded), code: "TARGET_RESUME_FAILED", wantStarts: 1},
+		// Unsettled, then AO's settle budget ran out: also exhaustion, so no retry.
+		{name: "unsettled after settle wait", err: fmt.Errorf("wait for settled native conversation history: %w: %w",
+			ports.ErrChatHistoryUnsettled, context.DeadlineExceeded), code: "TARGET_HISTORY_UNSETTLED", wantStarts: 1},
 		{name: "legacy text mismatch", err: &ports.ChatHistoryUnsettledError{Dimensions: []ports.ChatHistoryMismatchDimension{
 			ports.ChatHistoryMismatchUntrustedUserText,
 			ports.ChatHistoryMismatchUntrustedAssistantText,
