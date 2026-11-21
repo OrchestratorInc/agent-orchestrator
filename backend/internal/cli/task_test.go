@@ -3,9 +3,11 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"reflect"
 	"strings"
 	"sync"
@@ -79,7 +81,8 @@ func TestEvaluateTask(t *testing.T) {
 		{name: "provisioning", sess: taskSession{ID: "repo-1", ProvisionState: "provisioning"}, wantStatus: taskStatusStarting},
 		{name: "tui active", sess: tui("active"), wantStatus: taskStatusRunning},
 		{name: "tui blocked", sess: tui("blocked"), wantStatus: taskStatusNeedsInput},
-		{name: "tui waiting for next instruction", sess: tui("waiting_input"), wantStatus: taskStatusDone},
+		// At its prompt before and after the task looks the same, so never "done".
+		{name: "tui at its prompt", sess: tui("waiting_input"), wantStatus: taskStatusStarting},
 		{name: "tui exited", sess: tui("exited"), wantStatus: taskStatusFailed},
 		{name: "tui idle", sess: tui("idle"), wantStatus: taskStatusStarting},
 		{name: "no turns yet", sess: chat, conv: `{"turns":[]}`, wantStatus: taskStatusStarting},
@@ -111,6 +114,26 @@ func TestEvaluateTask(t *testing.T) {
 		},
 		{name: "session blocked", sess: blocked, conv: `{"turns":[{"id":"t1","state":"running"}]}`, wantStatus: taskStatusNeedsInput},
 		{
+			name: "a later turn's approval does not reopen a finished task", sess: blocked, turn: "t1",
+			conv:       `{"turns":[{"id":"t1","state":"completed"},{"id":"t2","state":"running"}],"activities":[{"turnId":"t2","activityKind":"approval","status":"pending"}]}`,
+			wantStatus: taskStatusDone,
+		},
+		{
+			name: "needs input keeps the workers the turn started", sess: chat, turn: "t1",
+			conv: `{"turns":[{"id":"t1","state":"running"}],"activities":[
+				{"turnId":"t1","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-4"}},
+				{"turnId":"t1","activityKind":"user_input","status":"pending"}]}`,
+			wantStatus: taskStatusNeedsInput, wantSpawned: []string{"repo-4"},
+		},
+		{
+			name: "workers from every attempt of a retried task", sess: chat, turn: "t1",
+			conv: `{"turns":[{"id":"t1","state":"failed"},{"id":"t0","state":"completed"},{"id":"t2","state":"running","retryOfTurnId":"t1"}],"activities":[
+				{"turnId":"t1","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-4"}},
+				{"turnId":"t0","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}},
+				{"turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-5"}}]}`,
+			wantStatus: taskStatusRunning, wantSpawned: []string{"repo-4", "repo-5"},
+		},
+		{
 			name: "orchestrator turn picks the named turn", sess: chat, turn: "t2",
 			conv:       `{"turns":[{"id":"t1","state":"completed"},{"id":"t2","state":"running"}]}`,
 			wantStatus: taskStatusRunning,
@@ -134,9 +157,10 @@ func TestEvaluateTask(t *testing.T) {
 			wantStatus: taskStatusDone, wantSpawned: []string{"repo-4"},
 		},
 		{
-			name: "first turn paged out", sess: chat,
+			// Older history existing says nothing about the task's own turn.
+			name: "first turn not loaded", sess: chat,
 			conv:       `{"hasMoreBefore":true,"turns":[{"id":"t50","state":"running"}]}`,
-			wantStatus: taskStatusRunning,
+			wantStatus: taskStatusStarting,
 		},
 	}
 	for _, tc := range cases {
@@ -164,9 +188,10 @@ func TestEvaluateTask(t *testing.T) {
 
 // taskDaemon is a scripted daemon for `ao task` command tests.
 type taskDaemon struct {
-	mu       sync.Mutex
-	requests []string
-	bodies   map[string]string
+	mu        sync.Mutex
+	lastQuery string
+	requests  []string
+	bodies    map[string]string
 	// routes maps "METHOD /path" to a status and body.
 	routes map[string]func() (int, string)
 }
@@ -193,6 +218,7 @@ func newTaskDaemon(t *testing.T) *taskDaemon {
 			d.requests = append(d.requests, key)
 			d.bodies[key] = string(body)
 		}
+		d.lastQuery = r.URL.RawQuery
 		route := d.routes[key]
 		d.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -202,6 +228,14 @@ func newTaskDaemon(t *testing.T) *taskDaemon {
 			return
 		}
 		status, out := route()
+		if status < 0 {
+			// Simulate a reply lost after the request reached the daemon.
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, _ := hj.Hijack()
+				_ = conn.Close()
+			}
+			return
+		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, out)
 	}))
@@ -340,17 +374,22 @@ func TestTaskStartOrchestratorWaitsForTheTurnToRun(t *testing.T) {
 	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
 	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", 202, `{"turnId":"t2","state":"queued","duplicate":false}`)
 	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"authorized"},"supported":true,"installed":true}`)
+	deps := fakeClockDeps()
 	polls := 0
+	var firstRunning time.Time
 	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
 		polls++
 		if polls < 3 {
 			return 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"queued"}]}`
 		}
+		if firstRunning.IsZero() {
+			firstRunning = deps.Now()
+		}
 		return 200, `{"turns":[{"id":"t1","state":"completed"},{"id":"t2","state":"running"}],"activities":[
 			{"turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-5"}}]}`
 	})
 
-	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--agent", "codex", "--base", "feat/x", "--wait", "--json")
+	out, _, err := executeCLI(t, deps, "task", "start", "fix calc", "--project", "repo", "--agent", "codex", "--base", "feat/x", "--wait", "--json")
 	if err != nil {
 		t.Fatalf("exit = %d: %v\n%s", ExitCode(err), err, out)
 	}
@@ -361,9 +400,9 @@ func TestTaskStartOrchestratorWaitsForTheTurnToRun(t *testing.T) {
 	if !reflect.DeepEqual(res["sessionIds"], []any{"repo-orchestrator", "repo-5"}) {
 		t.Fatalf("sessionIds = %v", res["sessionIds"])
 	}
-	// Settling means several reads of a running turn, not just the first one.
-	if polls < 5 {
-		t.Fatalf("conversation polled %d times; want the running turn re-checked before reporting", polls)
+	// A running turn counts as started only after it has run for five seconds.
+	if settled := deps.Now().Sub(firstRunning); settled < 5*time.Second {
+		t.Fatalf("reported running %s after the turn was first seen running; want at least 5s", settled)
 	}
 	var msg map[string]string
 	_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/sessions/repo-orchestrator/conversation/messages"]), &msg)
@@ -486,5 +525,144 @@ func TestTaskExitErrorCarriesItsCode(t *testing.T) {
 	}
 	if got := ExitCode(taskExitError{code: 1, msg: "failed"}); got != 1 {
 		t.Fatalf("ExitCode(failed) = %d", got)
+	}
+}
+
+func TestTaskWaitRestartsSettleWhenARetryTakesOver(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	start := deps.Now()
+	var retrySeen time.Time
+	d.setFunc("GET /api/v1/sessions/repo-1/conversation", func() (int, string) {
+		if deps.Now().Sub(start) < 4*time.Second {
+			return 200, `{"turns":[{"id":"t1","state":"running"}]}`
+		}
+		if retrySeen.IsZero() {
+			retrySeen = deps.Now()
+		}
+		return 200, `{"turns":[{"id":"t1","state":"failed"},{"id":"t2","state":"running","retryOfTurnId":"t1"}]}`
+	})
+
+	out, _, err := executeCLI(t, deps, "task", "wait", "repo-1", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d: %v", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "running" {
+		t.Fatalf("result = %v", res)
+	}
+	if settled := deps.Now().Sub(retrySeen); settled < 5*time.Second {
+		t.Fatalf("retry reported started after %s; the settle time must restart for the new turn", settled)
+	}
+}
+
+func TestTaskWaitDeadlineBeforeSettleIsATimeout(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/repo-1/conversation", 200, `{"turns":[{"id":"t1","state":"running"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "wait", "repo-1", "--timeout", "2s", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "failed" || !strings.Contains(res["reason"].(string), "only just started") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+func TestTaskStatusPagesBackToTheFirstTurn(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-1/conversation", func() (int, string) {
+		d.mu.Lock()
+		query := d.lastQuery
+		d.mu.Unlock()
+		if query == "beforeSequence=300" {
+			return 200, `{"hasMoreBefore":false,"oldestSequence":1,"turns":[{"id":"t1","state":"failed","failureCode":"auth_required","errorMessage":"Not logged in"}]}`
+		}
+		return 200, `{"hasMoreBefore":true,"oldestSequence":300,"turns":[{"id":"t9","state":"running"}]}`
+	})
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-1", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "failed" || res["fix"] != "run `claude auth login`, then retry" {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+func TestTaskStartAmbiguousProjectIsAUsageError(t *testing.T) {
+	d := newTaskDaemon(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	d.set("GET /api/v1/projects", 200, `{"projects":[{"id":"a"},{"id":"b"}]}`)
+	d.set("GET /api/v1/projects/a", 200, `{"project":{"id":"a","path":`+jsonQuote(dir)+`}}`)
+	d.set("GET /api/v1/projects/b", 200, `{"project":{"id":"b","path":`+jsonQuote(dir)+`}}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--json")
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("exit = %d (%v), want 2", got, err)
+	}
+	if out != "" {
+		t.Fatalf("a usage error prints no JSON, got %q", out)
+	}
+}
+
+func TestTaskStartRetriesALostReplyWithTheSameMessageID(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t2","state":"running"}]}`)
+	var ids []string
+	d.setFunc("POST /api/v1/sessions/repo-orchestrator/conversation/messages", func() (int, string) {
+		var msg map[string]string
+		d.mu.Lock()
+		_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/sessions/repo-orchestrator/conversation/messages"]), &msg)
+		d.mu.Unlock()
+		ids = append(ids, msg["clientMessageId"])
+		if len(ids) == 1 {
+			return -1, "" // drop the connection
+		}
+		return 202, `{"turnId":"t2","state":"running","duplicate":true}`
+	})
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d: %v", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["taskId"] != "repo-orchestrator:t2" {
+		t.Fatalf("result = %v", res)
+	}
+	if len(ids) != 2 || ids[0] != ids[1] || ids[0] == "" {
+		t.Fatalf("client message ids = %v; want the retry to reuse the first id", ids)
+	}
+}
+
+func TestTaskStartUnconfirmedDeliveryHasNoTaskID(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", -1, "")
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["taskId"] != "" || !strings.Contains(res["reason"].(string), "client message id ao-task-") ||
+		res["fix"] != "check `ao session history repo-orchestrator` before starting the task again, so it is not sent twice" {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+func TestExitCodeKeepsOtherExitErrorsAtOne(t *testing.T) {
+	err := exec.Command("sh", "-c", "exit 2").Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("setup: %v", err)
+	}
+	if got := ExitCode(fmt.Errorf("codex login failed: %w", err)); got != 1 {
+		t.Fatalf("ExitCode(wrapped exec.ExitError) = %d, want 1", got)
 	}
 }

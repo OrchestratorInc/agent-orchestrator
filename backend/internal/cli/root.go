@@ -65,8 +65,8 @@ func (e usageError) Unwrap() error { return e.err }
 const exitDataDirLocked = 75
 
 // ExitCode maps a CLI error to a process exit code: 2 for usage errors, 75 when
-// another AO process owns the data dir, the error's own code when it carries
-// one (`ao task`), 1 for any other failure, 0 for success.
+// another AO process owns the data dir, the task outcome's code for `ao task`,
+// 1 for any other failure, 0 for success.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -75,9 +75,9 @@ func ExitCode(err error) int {
 	if errors.As(err, &ue) {
 		return 2
 	}
-	var coded interface{ ExitCode() int }
-	if errors.As(err, &coded) {
-		return coded.ExitCode()
+	var te taskExitError
+	if errors.As(err, &te) {
+		return te.code
 	}
 	if errors.Is(err, datadirlock.ErrLocked) {
 		return exitDataDirLocked

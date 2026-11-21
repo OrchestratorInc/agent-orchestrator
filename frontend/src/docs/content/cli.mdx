@@ -166,7 +166,7 @@ By default the project's orchestrator receives the task, plans it, and starts wo
 | `ao task status <task-id>` | Report the task's status once. Supports `--json`. |
 | `ao task wait <task-id>` | Wait until the task has started, failed, or needs you. Supports `--timeout` and `--json`. |
 
-`start --wait` behaves like `start` followed by `wait`. A task has started once its first turn is running (and stays running for a few seconds) or has finished. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. With the orchestrator, `--agent` and `--base` are passed on as instructions for the workers it starts.
+`start --wait` behaves like `start` followed by `wait`. A task has started once its turn has finished, or has stayed running for a few seconds before `--timeout` ends. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. With the orchestrator, `--agent` and `--base` are passed on as instructions for the workers it starts.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -186,7 +186,14 @@ With `--json`, the command prints one object:
 }
 ```
 
-`status` is `starting`, `running`, `done`, `failed`, or `needs_input`. `taskId` is the worker's session ID, or `<orchestrator-session>:<turn>` for a task sent to the orchestrator; pass it to `ao task status` or `ao task wait`. `sessionIds` lists the session that runs the task and any workers the orchestrator started for it. When the agent is not signed in, `fix` gives the agent's own login command. `ao spawn`, `ao send`, and the session states are unchanged.
+`status` is `starting`, `running`, `done`, `failed`, or `needs_input`. `taskId` is what you pass to `ao task status` or `ao task wait`:
+
+- a worker task: the worker's session ID;
+- a task sent to a Chat orchestrator: `<orchestrator-session>:<turn>`;
+- a task sent to a terminal (TUI) orchestrator: the orchestrator's session ID, with no `:<turn>`;
+- empty when the command failed before a task existed. There is nothing to look up then.
+
+A terminal session reports no turns, so its task is never `done`: once the agent is back at its prompt, `status` stays `starting`. `sessionIds` lists the session that runs the task and any workers the orchestrator started for it. When the agent is not signed in, `fix` gives the agent's own login command. `ao spawn`, `ao send`, and the session states are unchanged.
 
 ### `ao session`
 

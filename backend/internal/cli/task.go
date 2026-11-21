@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,7 +66,6 @@ type taskExitError struct {
 }
 
 func (e taskExitError) Error() string { return e.msg }
-func (e taskExitError) ExitCode() int { return e.code }
 
 type taskStartOptions struct {
 	project string
@@ -112,7 +113,10 @@ func newTaskStartCommand(ctx *commandContext) *cobra.Command {
 			if opts.timeout <= 0 {
 				return usageError{fmt.Errorf("--timeout must be positive")}
 			}
-			res := ctx.startTask(cmd.Context(), brief, opts)
+			res, err := ctx.startTask(cmd.Context(), brief, opts)
+			if err != nil {
+				return err
+			}
 			if opts.wait && (res.Status == taskStatusStarting || res.Status == taskStatusRunning) {
 				res = ctx.waitTask(cmd.Context(), res, opts.timeout)
 			}
@@ -243,13 +247,23 @@ func failedTask(id string, sessions []string, reason, fix string) taskResult {
 	return taskResult{Status: taskStatusFailed, TaskID: id, SessionIDs: sessions, Reason: reason, Fix: fix}
 }
 
-// startTask creates the task and returns its first status. Every failure is
-// reported as a failed result so --json callers always get the same shape.
-func (c *commandContext) startTask(ctx context.Context, brief string, opts taskStartOptions) taskResult {
+// startTask creates the task and returns its first status. Usage errors
+// (such as an ambiguous project) come back as the error; every other failure
+// is a failed result so --json callers always get the same shape.
+func (c *commandContext) startTask(ctx context.Context, brief string, opts taskStartOptions) (taskResult, error) {
 	project, err := c.resolveTaskProject(ctx, opts.project)
-	if err != nil {
-		return failedTask("", nil, err.Error(), "")
+	var ue usageError
+	if errors.As(err, &ue) {
+		return taskResult{}, err
 	}
+	if err != nil {
+		return failedTask("", nil, err.Error(), ""), nil
+	}
+	res := c.createTask(ctx, project, brief, opts)
+	return res, nil
+}
+
+func (c *commandContext) createTask(ctx context.Context, project projectDetails, brief string, opts taskStartOptions) taskResult {
 	workerAgent := strings.TrimSpace(opts.agent)
 	if workerAgent == "" && project.Config != nil {
 		workerAgent = strings.TrimSpace(project.Config.Worker.Agent)
@@ -278,7 +292,7 @@ func (c *commandContext) startTask(ctx context.Context, brief string, opts taskS
 		}{ProjectID: project.ID, Brief: brief, Agent: strings.TrimSpace(opts.agent), BaseBranch: strings.TrimSpace(opts.base)}
 		// The desktop's new-task route: one worker, named from the brief.
 		if err := c.postSetupJSON(ctx, "orchestrators/delegate", req, &out); err != nil {
-			return c.taskAPIFailure(ctx, "", nil, workerAgent, "start worker", err)
+			return c.taskAPIFailure(ctx, nil, workerAgent, "start worker", err)
 		}
 		if strings.TrimSpace(out.WorkerID) == "" {
 			return failedTask("", nil, "daemon returned no worker id", "")
@@ -304,7 +318,7 @@ func (c *commandContext) startTask(ctx context.Context, brief string, opts taskS
 		if project.Config != nil {
 			agent = strings.TrimSpace(project.Config.Orchestrator.Agent)
 		}
-		return c.taskAPIFailure(ctx, "", nil, agent, "start orchestrator", err)
+		return c.taskAPIFailure(ctx, nil, agent, "start orchestrator", err)
 	}
 	orchestratorID := strings.TrimSpace(ensured.Orchestrator.ID)
 	if orchestratorID == "" {
@@ -313,10 +327,10 @@ func (c *commandContext) startTask(ctx context.Context, brief string, opts taskS
 	sessions := []string{orchestratorID}
 	sess, err := c.fetchTaskSession(ctx, orchestratorID)
 	if err != nil {
-		return failedTask(orchestratorID, sessions, err.Error(), "")
+		return failedTask("", sessions, err.Error(), "")
 	}
 	if res := preflight(sess.Harness); res != nil {
-		res.TaskID, res.SessionIDs = orchestratorID, sessions
+		res.SessionIDs = sessions
 		return *res
 	}
 
@@ -324,19 +338,34 @@ func (c *commandContext) startTask(ctx context.Context, brief string, opts taskS
 	var sent struct {
 		TurnID string `json:"turnId"`
 	}
-	sendErr := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/conversation/messages",
-		map[string]string{"text": message, "clientMessageId": newTaskClientMessageID()}, &sent)
+	messagePath := "sessions/" + url.PathEscape(orchestratorID) + "/conversation/messages"
+	clientMessageID := newTaskClientMessageID()
+	body := map[string]string{"text": message, "clientMessageId": clientMessageID}
+	sendErr := c.postJSON(ctx, messagePath, body, &sent)
 	var apiErr apiResponseError
+	if sendErr != nil && !errors.As(sendErr, &apiErr) && ctx.Err() == nil {
+		// The daemon may have accepted the message before the reply was lost.
+		// The same client message id makes this retry idempotent: it returns
+		// the turn the first attempt created instead of starting a second one.
+		sendErr = c.postJSON(ctx, messagePath, body, &sent)
+	}
 	if errors.As(sendErr, &apiErr) && apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH" {
 		// A terminal (TUI) orchestrator has no chat turns: deliver the task as
 		// `ao send` does and follow the session's activity instead.
-		sendErr = c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", map[string]string{"message": message}, nil)
-		sent.TurnID = ""
-	} else if sendErr == nil && strings.TrimSpace(sent.TurnID) == "" {
-		return failedTask(orchestratorID, sessions, "daemon accepted the task but returned no turn id", "")
+		if err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", map[string]string{"message": message}, nil); err != nil {
+			return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", err)
+		}
+		return c.taskStatus(ctx, taskID{session: orchestratorID})
 	}
-	if sendErr != nil {
-		return c.taskAPIFailure(ctx, orchestratorID, sessions, sess.Harness, "send task to orchestrator", sendErr)
+	switch {
+	case errors.As(sendErr, &apiErr):
+		return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", sendErr)
+	case sendErr != nil:
+		// No task id: a bare session id would name the orchestrator's other turns.
+		return failedTask("", sessions, fmt.Sprintf("could not confirm that orchestrator %s received the task (client message id %s): %s", orchestratorID, clientMessageID, sendErr.Error()),
+			fmt.Sprintf("check `ao session history %s` before starting the task again, so it is not sent twice", orchestratorID))
+	case strings.TrimSpace(sent.TurnID) == "":
+		return failedTask("", sessions, "daemon accepted the task but returned no turn id", "")
 	}
 	return c.taskStatus(ctx, taskID{session: orchestratorID, turn: strings.TrimSpace(sent.TurnID)})
 }
@@ -390,12 +419,12 @@ var signInErrorCodes = map[string]bool{
 	"AGENT_ACCOUNT_KEY_REJECTED":     true,
 }
 
-func (c *commandContext) taskAPIFailure(ctx context.Context, id string, sessions []string, agent, action string, err error) taskResult {
+func (c *commandContext) taskAPIFailure(ctx context.Context, sessions []string, agent, action string, err error) taskResult {
 	var apiErr apiResponseError
 	if errors.As(err, &apiErr) && signInErrorCodes[apiErr.ErrorBody.Code] {
-		return failedTask(id, sessions, fmt.Sprintf("%s: %s", action, err.Error()), c.signInFix(ctx, agent))
+		return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), c.signInFix(ctx, agent))
 	}
-	return failedTask(id, sessions, fmt.Sprintf("%s: %s", action, err.Error()), "")
+	return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), "")
 }
 
 // preflightTaskAgent re-checks an agent's sign-in now. Only a definite answer
@@ -473,28 +502,40 @@ type taskSession struct {
 	} `json:"activity"`
 }
 
+type taskTurn struct {
+	ID            string `json:"id"`
+	State         string `json:"state"`
+	RetryOfTurnID string `json:"retryOfTurnId"`
+	ErrorMessage  string `json:"errorMessage"`
+	FailureCode   string `json:"failureCode"`
+}
+
+type taskActivity struct {
+	ID           string         `json:"id"`
+	TurnID       string         `json:"turnId"`
+	ActivityKind string         `json:"activityKind"`
+	Status       string         `json:"status"`
+	Detail       map[string]any `json:"detail"`
+}
+
+type taskBatchedDelivery struct {
+	TurnID              string `json:"turnId"`
+	DeliveredWithTurnID string `json:"deliveredWithTurnId"`
+}
+
 // taskConversation is the part of GET /sessions/{id}/conversation a task
 // status needs.
 type taskConversation struct {
-	HasMoreBefore     bool `json:"hasMoreBefore"`
-	BatchedDeliveries []struct {
-		TurnID              string `json:"turnId"`
-		DeliveredWithTurnID string `json:"deliveredWithTurnId"`
-	} `json:"batchedDeliveries"`
-	Turns []struct {
-		ID            string `json:"id"`
-		State         string `json:"state"`
-		RetryOfTurnID string `json:"retryOfTurnId"`
-		ErrorMessage  string `json:"errorMessage"`
-		FailureCode   string `json:"failureCode"`
-	} `json:"turns"`
-	Activities []struct {
-		TurnID       string         `json:"turnId"`
-		ActivityKind string         `json:"activityKind"`
-		Status       string         `json:"status"`
-		Detail       map[string]any `json:"detail"`
-	} `json:"activities"`
+	HasMoreBefore     bool                  `json:"hasMoreBefore"`
+	OldestSequence    int64                 `json:"oldestSequence"`
+	BatchedDeliveries []taskBatchedDelivery `json:"batchedDeliveries"`
+	Turns             []taskTurn            `json:"turns"`
+	Activities        []taskActivity        `json:"activities"`
 }
+
+// taskHistoryPageLimit bounds how many older conversation pages a status read
+// loads while looking for the task's turn.
+const taskHistoryPageLimit = 50
 
 func (c *commandContext) fetchTaskSession(ctx context.Context, id string) (taskSession, error) {
 	var res struct {
@@ -510,24 +551,113 @@ func (c *commandContext) fetchTaskSession(ctx context.Context, id string) (taskS
 	return res.Session, nil
 }
 
+// fetchTaskConversation reads the conversation and, when the task's turn is
+// older than the latest page, pages back until it is loaded. A worker task is
+// its session's first turn, so it reads back to the start.
+func (c *commandContext) fetchTaskConversation(ctx context.Context, id taskID) (*taskConversation, error) {
+	path := "sessions/" + url.PathEscape(id.session) + "/conversation"
+	var conv taskConversation
+	if err := c.getJSON(ctx, path, &conv); err != nil {
+		return nil, err
+	}
+	for page := 0; page < taskHistoryPageLimit && conv.HasMoreBefore && conv.OldestSequence > 0; page++ {
+		if id.turn != "" && conv.findTurn(id.turn) >= 0 {
+			break
+		}
+		var older taskConversation
+		if err := c.getJSON(ctx, path+"?beforeSequence="+strconv.FormatInt(conv.OldestSequence, 10), &older); err != nil {
+			return nil, err
+		}
+		if older.OldestSequence <= 0 || older.OldestSequence >= conv.OldestSequence {
+			break
+		}
+		conv.prepend(older)
+	}
+	return &conv, nil
+}
+
+// findTurn returns the index of the turn that carries turnID, following a
+// queued message that was batched into another turn.
+func (conv *taskConversation) findTurn(turnID string) int {
+	target := turnID
+	for _, batched := range conv.BatchedDeliveries {
+		if batched.TurnID == target && batched.DeliveredWithTurnID != "" {
+			target = batched.DeliveredWithTurnID
+		}
+	}
+	for i, turn := range conv.Turns {
+		if turn.ID == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// prepend merges an older page in front of the loaded one.
+func (conv *taskConversation) prepend(older taskConversation) {
+	seenTurns := map[string]bool{}
+	for _, turn := range conv.Turns {
+		seenTurns[turn.ID] = true
+	}
+	turns := make([]taskTurn, 0, len(older.Turns)+len(conv.Turns))
+	for _, turn := range older.Turns {
+		if !seenTurns[turn.ID] {
+			turns = append(turns, turn)
+		}
+	}
+	conv.Turns = append(turns, conv.Turns...)
+
+	seenActs := map[string]bool{}
+	for _, act := range conv.Activities {
+		if act.ID != "" {
+			seenActs[act.ID] = true
+		}
+	}
+	acts := make([]taskActivity, 0, len(older.Activities)+len(conv.Activities))
+	for _, act := range older.Activities {
+		if act.ID == "" || !seenActs[act.ID] {
+			acts = append(acts, act)
+		}
+	}
+	conv.Activities = append(acts, conv.Activities...)
+	conv.BatchedDeliveries = append(older.BatchedDeliveries, conv.BatchedDeliveries...)
+	conv.HasMoreBefore = older.HasMoreBefore
+	conv.OldestSequence = older.OldestSequence
+}
+
+// taskObservation is one status read plus what the wait loop needs from it.
+type taskObservation struct {
+	result  taskResult
+	harness string
+	// turnID is the turn the status describes (after retries), empty for a
+	// terminal session or before the turn exists.
+	turnID string
+}
+
 // taskStatus reads the task's session and conversation once.
 func (c *commandContext) taskStatus(ctx context.Context, id taskID) taskResult {
+	return c.observeTask(ctx, id).result
+}
+
+func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObservation {
 	sessions := []string{id.session}
 	sess, err := c.fetchTaskSession(ctx, id.session)
 	if err != nil {
-		return failedTask(id.String(), sessions, err.Error(), "")
+		return taskObservation{result: failedTask(id.String(), sessions, err.Error(), "")}
 	}
 	var conv *taskConversation
 	if sess.Mode != "tui" && sess.ProvisionState != "provisioning" && !sess.IsTerminated {
-		var snapshot taskConversation
-		err := c.getJSON(ctx, "sessions/"+url.PathEscape(id.session)+"/conversation", &snapshot)
+		conv, err = c.fetchTaskConversation(ctx, id)
 		var apiErr apiResponseError
 		switch {
 		case err == nil:
-			conv = &snapshot
 		case errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH":
+			conv = nil
 		default:
-			return failedTask(id.String(), sessions, fmt.Sprintf("read conversation of %s: %s", id.session, err.Error()), "")
+			return taskObservation{
+				result:  failedTask(id.String(), sessions, fmt.Sprintf("read conversation of %s: %s", id.session, err.Error()), ""),
+				harness: sess.Harness,
+			}
 		}
 	}
 	eval := evaluateTask(sess, conv, id.turn)
@@ -543,7 +673,7 @@ func (c *commandContext) taskStatus(ctx context.Context, id taskID) taskResult {
 	case "provider_key_missing":
 		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
 	}
-	return res
+	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID}
 }
 
 type taskEvaluation struct {
@@ -551,6 +681,7 @@ type taskEvaluation struct {
 	reason      string
 	failureCode string
 	spawned     []string
+	turnID      string
 }
 
 // evaluateTask turns a session and its conversation into a task status. With
@@ -573,76 +704,73 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 	}
 
 	idx := -1
-	if turnID == "" {
-		if len(conv.Turns) > 0 && !conv.HasMoreBefore {
-			idx = 0
-		}
-	} else {
-		target := turnID
-		for _, batched := range conv.BatchedDeliveries {
-			if batched.TurnID == target && batched.DeliveredWithTurnID != "" {
-				target = batched.DeliveredWithTurnID
-			}
-		}
-		for i, turn := range conv.Turns {
-			if turn.ID == target {
-				idx = i
-				break
-			}
-		}
+	switch {
+	case turnID != "":
+		idx = conv.findTurn(turnID)
+	case len(conv.Turns) > 0 && !conv.HasMoreBefore:
+		idx = 0
 	}
-	// A failed turn the user retried continues as its retry.
-	for idx >= 0 {
-		next := -1
-		for i, turn := range conv.Turns {
-			if turn.RetryOfTurnID != "" && turn.RetryOfTurnID == conv.Turns[idx].ID {
-				next = i
-			}
-		}
-		if next < 0 {
-			break
-		}
-		idx = next
-	}
-
-	for _, act := range conv.Activities {
-		if (act.ActivityKind == "approval" || act.ActivityKind == "user_input") && act.Status == "pending" {
-			return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your answer or approval"}
-		}
-	}
-	if sess.Activity.State == "blocked" {
-		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval"}
-	}
-
 	if idx < 0 {
 		for _, act := range conv.Activities {
 			if act.ActivityKind == "system" && detailString(act.Detail, "event") == "auth.reauth_required" {
 				return taskEvaluation{status: taskStatusFailed, reason: "the agent needs to sign in again (auth_required)", failureCode: "auth_required"}
 			}
 		}
-		if len(conv.Turns) > 0 && conv.HasMoreBefore {
-			// The task's turn is older than the loaded page, so it ran long ago.
-			return taskEvaluation{status: taskStatusRunning, reason: "the task's turn is older than the session's recent history"}
+		if conv.HasMoreBefore {
+			return taskEvaluation{status: taskStatusStarting, reason: "the task's turn is not in the loaded session history yet"}
 		}
 		return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task"}
 	}
 
+	// A failed turn the user retried continues as its retry. The whole chain
+	// is the task: its approvals and the workers it started all count.
+	chain := map[string]bool{conv.Turns[idx].ID: true}
+	for {
+		next := -1
+		for i, turn := range conv.Turns {
+			if turn.RetryOfTurnID != "" && turn.RetryOfTurnID == conv.Turns[idx].ID {
+				next = i
+			}
+		}
+		if next < 0 || chain[conv.Turns[next].ID] {
+			break
+		}
+		idx = next
+		chain[conv.Turns[idx].ID] = true
+	}
 	turn := conv.Turns[idx]
+
 	var spawned []string
 	for _, act := range conv.Activities {
-		if act.TurnID == turn.ID && act.ActivityKind == "ao_action" && detailString(act.Detail, "action") == "session.spawned" {
-			if target := detailString(act.Detail, "targetSessionId"); target != "" && target != sess.ID {
+		if chain[act.TurnID] && act.ActivityKind == "ao_action" && detailString(act.Detail, "action") == "session.spawned" {
+			if target := detailString(act.Detail, "targetSessionId"); target != "" && target != sess.ID && !slices.Contains(spawned, target) {
 				spawned = append(spawned, target)
 			}
 		}
 	}
+	eval := func(status, reason string) taskEvaluation {
+		return taskEvaluation{status: status, reason: reason, spawned: spawned, turnID: turn.ID}
+	}
+
+	if turn.State == "running" || turn.State == "queued" {
+		for _, act := range conv.Activities {
+			if (act.ActivityKind == "approval" || act.ActivityKind == "user_input") && act.Status == "pending" && chain[act.TurnID] {
+				return eval(taskStatusNeedsInput, "the agent is waiting for your answer or approval")
+			}
+		}
+		// The session-wide state describes the turn that is running now.
+		if turn.State == "running" && sess.Activity.State == "blocked" {
+			return eval(taskStatusNeedsInput, "the agent is waiting for your approval")
+		}
+	}
+
 	switch turn.State {
 	case "queued":
-		return taskEvaluation{status: taskStatusStarting, reason: "queued behind the agent's current turn", spawned: spawned}
+		return eval(taskStatusStarting, "queued behind the agent's current turn")
 	case "running":
-		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working on it", spawned: spawned}
+		return eval(taskStatusRunning, "the agent is working on it")
 	case "completed", "recovered":
-		return taskEvaluation{status: taskStatusDone, reason: "the agent finished its turn", spawned: spawned}
+		return eval(taskStatusDone, "the agent finished its turn")
 	case "failed":
 		reason := strings.TrimSpace(turn.ErrorMessage)
 		if reason == "" {
@@ -651,27 +779,30 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 		if turn.FailureCode != "" {
 			reason += " (" + turn.FailureCode + ")"
 		}
-		return taskEvaluation{status: taskStatusFailed, reason: reason, failureCode: turn.FailureCode, spawned: spawned}
+		res := eval(taskStatusFailed, reason)
+		res.failureCode = turn.FailureCode
+		return res
 	case "interrupted":
-		return taskEvaluation{status: taskStatusFailed, reason: "the agent's turn was interrupted before it finished", spawned: spawned}
+		return eval(taskStatusFailed, "the agent's turn was interrupted before it finished")
 	case "cancelled":
-		return taskEvaluation{status: taskStatusFailed, reason: "the task was cancelled before the agent started it", spawned: spawned}
+		return eval(taskStatusFailed, "the task was cancelled before the agent started it")
 	}
-	return taskEvaluation{status: taskStatusStarting, reason: fmt.Sprintf("turn state %q", turn.State), spawned: spawned}
+	return eval(taskStatusStarting, fmt.Sprintf("turn state %q", turn.State))
 }
 
 // evaluateTerminalTask reads a terminal (TUI) session, which has no chat
-// turns, from its reported activity.
+// turns, from its reported activity. Its prompt state looks the same before
+// the agent reads the task and after it finishes, so it is never "done".
 func evaluateTerminalTask(sess taskSession) taskEvaluation {
 	switch sess.Activity.State {
 	case "active":
-		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working on it (terminal session)"}
+		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working (terminal session)"}
 	case "blocked":
 		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
-	case "waiting_input":
-		return taskEvaluation{status: taskStatusDone, reason: "the agent is waiting for its next instruction (terminal session)"}
 	case "exited":
 		return taskEvaluation{status: taskStatusFailed, reason: "the agent process exited (terminal session)"}
+	case "waiting_input":
+		return taskEvaluation{status: taskStatusStarting, reason: "the agent is at its prompt; a terminal session does not say whether it has taken this task yet"}
 	}
 	return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task (terminal session)"}
 }
@@ -682,48 +813,70 @@ func detailString(detail map[string]any, key string) string {
 }
 
 // waitTask polls until the task has started, failed, or needs the user. A
-// running turn must stay running for taskRunningSettle first.
+// running turn must stay running for taskRunningSettle, counted from when that
+// same turn was first seen running, and must settle before the deadline.
 func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout time.Duration) taskResult {
 	id, err := parseTaskID(res.TaskID)
 	if err != nil {
 		return res
 	}
 	deadline := c.deps.Now().Add(timeout)
+	last := res
+	harness := ""
+	var runningTurn string
 	var runningSince time.Time
 	for {
-		if res.Status == "" || res.Status == taskStatusStarting || res.Status == taskStatusRunning {
-			res = c.taskStatus(ctx, id)
+		remaining := deadline.Sub(c.deps.Now())
+		if remaining <= 0 {
+			break
 		}
+		readCtx, cancel := context.WithTimeout(ctx, remaining)
+		obs := c.observeTask(readCtx, id)
+		readErr := readCtx.Err()
+		cancel()
+		if err := ctx.Err(); err != nil {
+			return failedTask(id.String(), last.SessionIDs, "interrupted while waiting: "+err.Error(), "")
+		}
+		if readErr != nil {
+			break // the read ran into the deadline
+		}
+		if obs.harness != "" {
+			harness = obs.harness
+		}
+		last = obs.result
 		now := c.deps.Now()
-		switch res.Status {
+		switch last.Status {
 		case taskStatusFailed, taskStatusNeedsInput, taskStatusDone:
-			return res
+			return last
 		case taskStatusRunning:
-			if runningSince.IsZero() {
-				runningSince = now
+			if runningSince.IsZero() || obs.turnID != runningTurn {
+				runningTurn, runningSince = obs.turnID, now
 			}
-			if now.Sub(runningSince) >= taskRunningSettle || !now.Before(deadline) {
-				return res
+			if now.Sub(runningSince) >= taskRunningSettle {
+				return last
 			}
 		default:
 			runningSince = time.Time{}
 		}
-		if !now.Before(deadline) {
-			// Nothing has run yet: the usual cause is an agent that is not signed in.
-			agent := ""
-			if sess, err := c.fetchTaskSession(ctx, id.session); err == nil {
-				agent = sess.Harness
-			}
-			fix := "check the session in Orchestrator"
-			if agent != "" {
-				fix = "if " + agent + " is not signed in, " + c.signInFix(ctx, agent)
-			}
-			return failedTask(res.TaskID, res.SessionIDs, fmt.Sprintf("timed out after %s: the task has not started (%s)", timeout, res.Reason), fix)
+		remaining = deadline.Sub(now)
+		if remaining <= 0 {
+			break
 		}
-		if err := ctx.Err(); err != nil {
-			return failedTask(res.TaskID, res.SessionIDs, "interrupted while waiting: "+err.Error(), "")
-		}
-		c.deps.Sleep(taskPollInterval)
-		res.Status = taskStatusStarting
+		c.deps.Sleep(min(taskPollInterval, remaining))
 	}
+
+	// Nothing settled in time. The usual cause of a task that never starts is
+	// an agent that is not signed in.
+	reason := fmt.Sprintf("timed out after %s: the task has not started", timeout)
+	if last.Status == taskStatusRunning {
+		reason = fmt.Sprintf("timed out after %s: the agent had only just started the task", timeout)
+	}
+	if last.Reason != "" {
+		reason += " (" + last.Reason + ")"
+	}
+	fix := "check the session in the Orchestrator app"
+	if harness != "" {
+		fix = "if " + harness + " is not signed in, " + c.signInFix(ctx, harness)
+	}
+	return failedTask(id.String(), last.SessionIDs, reason, fix)
 }
