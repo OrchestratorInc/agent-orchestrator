@@ -3,7 +3,7 @@
 import type { I18n } from "@lingui/core";
 import { useLingui } from "@lingui/react";
 import type * as PageTree from "fumadocs-core/page-tree";
-import { DocsLayout } from "fumadocs-ui/layouts/docs";
+import { DocsLayout } from "fumadocs-ui/layouts/notebook";
 import { type ReactNode, useMemo } from "react";
 import { navLabel } from "@/i18n/ui-messages";
 import { baseOptions } from "@/lib/layout.shared";

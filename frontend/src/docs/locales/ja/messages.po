@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "{name} ドキュメント"
 
+msgid "{name} home"
+msgstr "{name} ホーム"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Orchestrator.inc ドキュメント"
 
@@ -23,6 +26,9 @@ msgstr "ドキュメントのトップへ戻る"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "組み込み機能"
+
+msgid "Changelog"
+msgstr "変更履歴"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Markdown をコピー"
 msgid "Docs"
 msgstr "ドキュメント"
 
+msgid "Download"
+msgstr "ダウンロード"
+
+msgid "Edit this page"
+msgstr "このページを編集"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "リンクからここに来ましたか？<0>リンク切れを報告</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "はじめに"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "サイドバーを隠す"
 
-msgid "Main site"
-msgstr "メインサイト"
+msgid "Installation"
+msgstr "インストール"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "サイドバーを開く"
 msgid "Page not found"
 msgstr "ページが見つかりません"
 
+msgid "Popular pages"
+msgstr "よく見られているページ"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "前へ"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "サイドバーを表示"
 
+msgid "Something wrong or missing on this page?"
+msgstr "このページに誤りや不足がありますか？"
+
+msgid "Suggest a change"
+msgstr "変更を提案"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "目次"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "トラッカー"
 
+msgid "Troubleshooting"
+msgstr "トラブルシューティング"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator の使い方"
-
-msgid "View on GitHub"
-msgstr "GitHub で見る"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

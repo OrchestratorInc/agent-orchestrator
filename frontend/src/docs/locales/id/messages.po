@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "Dokumentasi {name}"
 
+msgid "{name} home"
+msgstr "Beranda {name}"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Dokumentasi Orchestrator.inc"
 
@@ -23,6 +26,9 @@ msgstr "Kembali ke beranda dokumentasi"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "Kemampuan bawaan"
+
+msgid "Changelog"
+msgstr "Catatan perubahan"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Salin Markdown"
 msgid "Docs"
 msgstr "Dokumentasi"
 
+msgid "Download"
+msgstr "Unduh"
+
+msgid "Edit this page"
+msgstr "Edit halaman ini"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "Sampai di sini dari sebuah tautan? <0>Laporkan tautan rusak</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Memulai"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Sembunyikan bilah samping"
 
-msgid "Main site"
-msgstr "Situs utama"
+msgid "Installation"
+msgstr "Instalasi"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "Buka bilah samping"
 msgid "Page not found"
 msgstr "Halaman tidak ditemukan"
 
+msgid "Popular pages"
+msgstr "Halaman populer"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Sebelumnya"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "Tampilkan bilah samping"
 
+msgid "Something wrong or missing on this page?"
+msgstr "Ada yang salah atau kurang di halaman ini?"
+
+msgid "Suggest a change"
+msgstr "Sarankan perubahan"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "Daftar isi"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Pelacak"
 
+msgid "Troubleshooting"
+msgstr "Pemecahan masalah"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Menggunakan Orchestrator"
-
-msgid "View on GitHub"
-msgstr "Lihat di GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

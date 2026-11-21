@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "Dokumentace {name}"
 
+msgid "{name} home"
+msgstr "Domovská stránka {name}"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Dokumentace Orchestrator.inc"
 
@@ -23,6 +26,9 @@ msgstr "Zpět na úvod dokumentace"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "Vestavěné funkce"
+
+msgid "Changelog"
+msgstr "Přehled změn"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Kopírovat Markdown"
 msgid "Docs"
 msgstr "Dokumentace"
 
+msgid "Download"
+msgstr "Stáhnout"
+
+msgid "Edit this page"
+msgstr "Upravit tuto stránku"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "Dostali jste se sem přes odkaz? <0>Nahlaste nefunkční odkaz</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Začínáme"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Skrýt postranní panel"
 
-msgid "Main site"
-msgstr "Hlavní web"
+msgid "Installation"
+msgstr "Instalace"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "Otevřít postranní panel"
 msgid "Page not found"
 msgstr "Stránka nenalezena"
 
+msgid "Popular pages"
+msgstr "Oblíbené stránky"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Předchozí"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "Zobrazit postranní panel"
 
+msgid "Something wrong or missing on this page?"
+msgstr "Je na této stránce něco špatně nebo něco chybí?"
+
+msgid "Suggest a change"
+msgstr "Navrhnout změnu"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "Obsah"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Sledování úkolů"
 
+msgid "Troubleshooting"
+msgstr "Řešení problémů"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Používání Orchestratoru"
-
-msgid "View on GitHub"
-msgstr "Zobrazit na GitHubu"
 
 msgctxt "sidebar section"
 msgid "Workspaces"
