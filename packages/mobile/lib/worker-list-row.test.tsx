@@ -16,6 +16,7 @@ const boardStore = vi.hoisted(() => ({
 const archivePages = vi.hoisted(() => ({
 	requests: [] as { hostId?: string; cursor?: string | null; resolve(page: { sessions: unknown[]; nextCursor: string | null }): void; reject(cause: unknown): void }[],
 }));
+vi.mock("./chat/LatticeLoader", () => ({ LatticeLoader: () => null }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
@@ -70,7 +71,7 @@ vi.mock("./ThemeProvider", () => {
 		blue: "blue", green: "green", purple: "purple", orange: "orange", amber: "amber",
 		tintBlue: "blue-tint", tintGreen: "green-tint", tintPurple: "purple-tint", tintOrange: "orange-tint", tintAmber: "amber-tint",
 	};
-	return { useTheme: () => theme, useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
+	return { useTheme: () => theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
 });
 vi.mock("./worker-action-model", async (importOriginal) => ({
 	...await importOriginal<typeof import("./worker-action-model")>(),
@@ -96,7 +97,7 @@ function TestList({ ref, ...props }: { ref?: React.Ref<unknown>; data: {key: str
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./reviewView", () => ({ reviewRouteForSession: () => undefined }));
 
-import { WorkerListRow } from "./worker-list-row";
+import { pullRequestLabel, WorkerListRow } from "./worker-list-row";
 import { WorkerBoardList } from "./worker-board-list";
 
 const session: DashboardSession = {
@@ -237,7 +238,8 @@ describe("WorkerListRow", () => {
 			renderer = create(<WorkerListRow session={session} projectName="Agent Orchestrator" unreachable isRenaming={false} nowBucket={1} {...handlers} />);
 		});
 		const dimmed = renderer.root.findAll((node) => Array.isArray(node.props.style) && node.props.style.some((value: { opacity?: number } | false) => value && value.opacity === 0.5));
-		expect(dimmed.length).toBeGreaterThanOrEqual(2);
+		// The whole row dims as one, lead and lines together.
+		expect(dimmed.length).toBeGreaterThanOrEqual(1);
 		expect(renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.endsWith("Last known; its machine can't be reached.")).length).toBeGreaterThan(0);
 	});
 
@@ -701,5 +703,14 @@ describe("a machine that pages its archive", () => {
 		await answer({ sessions: [arch("a1", 1)], nextCursor: null });
 		expect(archivedIds(renderer)).toEqual(["a1"]);
 		act(() => renderer.unmount());
+	});
+});
+
+describe("pullRequestLabel", () => {
+	it("names the worker's pull request by number, counts the rest, and is null with none", () => {
+		expect(pullRequestLabel({ pr: { number: 1253 } } as never)).toBe("#1253");
+		expect(pullRequestLabel({ prs: [{ number: 12 }, { number: 13 }] } as never)).toBe("#12 +1");
+		expect(pullRequestLabel({ pr: { number: 0 } } as never)).toBeNull();
+		expect(pullRequestLabel({} as never)).toBeNull();
 	});
 });
