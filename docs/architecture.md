@@ -91,7 +91,7 @@ wake a hibernated session. OS processes remain separate, optional Diagnostics.
 | Chat transport | Source | Coverage |
 | --- | --- | --- |
 | Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
-| Codex | Paginated `thread/backgroundTerminals/list`, launch/turn completion, settled history and collaboration events | Always partial: shells need launch-lifecycle evidence, and event-derived subagents may predate attachment |
+| Codex | Paginated `thread/backgroundTerminals/list`, launch/turn completion, idle reconnect snapshots and collaboration events | Always partial: shells need launch-lifecycle evidence, and event-derived subagents may predate attachment |
 | Unreal Agent | No background mode in the pinned harness | Unavailable; Bash operations are foreground tool calls |
 | All other ACP bindings | Explicitly backgrounded tool metadata and provider-reported lifecycle events | Reported jobs; complete native inventory is not available in ACP v1 |
 
@@ -113,13 +113,16 @@ The native terminal list also contains foreground commands. A shell is reported
 and stoppable only when a read begun after its launching call or turn completed
 still lists it. Unconfirmed calls and their failures stay out of the reading.
 An overlapping read cannot use a completion that arrived after it began. Settled
-history can recover missing launch evidence after attachment. On live host
-reconnect, the first background read fetches `thread/read` once solely to seed
-settled launch evidence before listing terminals. It does not replay the transcript
-or resume a turn. Active-turn launch IDs remain unconfirmed until a later
-completion and subsequent inventory read. Failed or malformed history reads
-remain retryable; unknown shells stay hidden until their lifecycle is confirmed. Short-lived jobs may end before a
-qualifying read. Confirmed shells retain outcomes even if a later list omits them
+history can recover matching launch evidence after attachment. On live host
+reconnect, background reads also recover terminals whose runtime item IDs or exit
+codes do not match replayed history, or whose commands are absent from history.
+For these unmatched terminals, `thread/read` must show an idle thread both before
+and after the complete terminal inventory, with unchanged turn IDs. A foreground
+turn starting during the read, even if it finishes before the second snapshot,
+invalidates that bracket. Unsettled or malformed reads remain retryable; recovery
+stops fetching history after a stable idle bracket. These reads do not replay the
+transcript or resume a turn. Unknown start timestamps remain hidden. Short-lived
+jobs may end before a qualifying read. Confirmed shells retain outcomes even if a later list omits them
 before completion arrives. Unconfirmed command metadata is bounded to 256
 sanitized labels per conversation.
 Provider labels are one line, capped at 240 characters, and redact obvious

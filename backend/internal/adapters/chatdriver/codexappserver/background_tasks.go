@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
@@ -43,24 +44,15 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 	if closed {
 		return nil, errConversationClosed
 	}
+	var recoveryTurns []string
+	recoveryIdle := false
 	if needHistory {
-		// Live reconnect skips transcript replay. Recover only settled launch
-		// evidence, including while another turn is running, before inventory.
-		var response codexproto.ThreadReadResponse
-		includeTurns := true
-		if err := c.conn.request(ctx, codexproto.MethodThreadRead, codexproto.ThreadReadParams{ThreadID: c.threadID, IncludeTurns: &includeTurns}, &response); err != nil {
-			return nil, fmt.Errorf("background launch history: %w", err)
+		history, err := c.readBackgroundLaunchHistory(ctx)
+		if err != nil {
+			return nil, err
 		}
-		if response.Thread.ID != c.threadID {
-			return nil, fmt.Errorf("background history returned %q, requested %q", response.Thread.ID, c.threadID)
-		}
-		if response.Thread.Turns == nil {
-			return nil, errors.New("background history is missing turns")
-		}
-		c.rememberBackgroundLaunchHistory(response.Thread.Turns)
-		c.mu.Lock()
-		c.backgroundHistoryPending = false
-		c.mu.Unlock()
+		c.rememberBackgroundLaunchHistory(history.Turns)
+		recoveryTurns, recoveryIdle = idleBackgroundTurns(history)
 	}
 	c.mu.Lock()
 	closed = c.closed
@@ -73,6 +65,18 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 	if closed {
 		return nil, errConversationClosed
 	}
+	type terminal struct {
+		ProcessID string `json:"processId"`
+		ItemID    string `json:"itemId"`
+		Command   string `json:"command"`
+	}
+	var inventory []terminal
+	prior := make(map[string]ports.ChatBackgroundTask)
+	for _, task := range c.backgroundObserved.Snapshot(time.Now()) {
+		if task.Kind == "shell" && task.State == "running" {
+			prior[task.ID] = task
+		}
+	}
 	out := make([]ports.ChatBackgroundTask, 0)
 	seenIDs := make(map[string]bool)
 	confirmedIDs := make(map[string]bool)
@@ -80,12 +84,8 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 	cursor := ""
 	for page := 0; page < 100; page++ {
 		var response struct {
-			Data []struct {
-				ProcessID string `json:"processId"`
-				ItemID    string `json:"itemId"`
-				Command   string `json:"command"`
-			} `json:"data"`
-			NextCursor *string `json:"nextCursor"`
+			Data       []terminal `json:"data"`
+			NextCursor *string    `json:"nextCursor"`
 		}
 		params := map[string]any{"threadId": c.threadID, "limit": 100}
 		if cursor != "" {
@@ -109,20 +109,43 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 				return nil, errors.New("background-terminal response has missing or duplicate identity")
 			}
 			seenIDs[task.ProcessID] = true
-			c.mu.Lock()
-			observed, known := c.backgroundCommands[task.ItemID]
-			if !known || !eligible[task.ItemID] || observed.CallCompletedAt.IsZero() {
-				c.mu.Unlock()
-				continue
-			}
-			observed.Listed = true
-			observed.Description = domain.SanitizeTaskDescription(task.Command)
-			c.backgroundCommands[task.ItemID] = observed
-			c.mu.Unlock()
-			confirmedIDs[task.ProcessID] = true
-			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: observed.Description, State: "running", StartedAt: observed.StartedAt})
+			inventory = append(inventory, task)
 		}
 		if response.NextCursor == nil || *response.NextCursor == "" {
+			recoverUnmatched := false
+			if recoveryIdle {
+				after, err := c.readBackgroundLaunchHistory(ctx)
+				if err != nil {
+					return nil, err
+				}
+				afterTurns, idle := idleBackgroundTurns(after)
+				recoverUnmatched = idle && slices.Equal(recoveryTurns, afterTurns)
+			}
+			c.mu.Lock()
+			if recoverUnmatched {
+				c.backgroundHistoryPending = false
+			}
+			for _, task := range inventory {
+				observed, known := c.backgroundCommands[task.ItemID]
+				previous, confirmed := prior[task.ProcessID]
+				confirmed = confirmed && previous.RunID == task.ItemID
+				launchCompleted := known && eligible[task.ItemID] && !observed.CallCompletedAt.IsZero()
+				if !launchCompleted && !confirmed && !recoverUnmatched {
+					continue
+				}
+				if observed.StartedAt == nil && confirmed {
+					observed.StartedAt = previous.StartedAt
+				}
+				if observed.CallCompletedAt.IsZero() {
+					observed.CallCompletedAt = time.Now()
+				}
+				observed.Listed = true
+				observed.Description = domain.SanitizeTaskDescription(task.Command)
+				c.rememberBackgroundCommand(task.ItemID, observed)
+				confirmedIDs[task.ProcessID] = true
+				out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: observed.Description, State: "running", StartedAt: observed.StartedAt})
+			}
+			c.mu.Unlock()
 			c.backgroundObserved.ReconcileShells(out, time.Now())
 			tasks := c.backgroundObserved.Snapshot(time.Now())
 			// Every supported app-server can terminate a listed terminal; an
@@ -131,7 +154,7 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 				tasks[i].Stoppable = confirmedIDs[tasks[i].ID] && tasks[i].State == "running"
 			}
 			// Launch evidence and event-derived agents may predate attachment;
-			// unknown shells stay hidden until their lifecycle can be confirmed.
+			// unknown shells need a launch boundary or a stable idle bracket.
 			return tasks, ports.ErrBackgroundTasksPartial
 		}
 		cursor = *response.NextCursor
@@ -395,4 +418,45 @@ func (c *conversation) rememberBackgroundLaunchHistory(turns []codexproto.Turn) 
 		}
 	}
 	c.mu.Unlock()
+}
+
+// readBackgroundLaunchHistory never replays messages or changes provider state.
+func (c *conversation) readBackgroundLaunchHistory(ctx context.Context) (codexproto.Thread, error) {
+	var response codexproto.ThreadReadResponse
+	includeTurns := true
+	if err := c.conn.request(ctx, codexproto.MethodThreadRead, codexproto.ThreadReadParams{ThreadID: c.threadID, IncludeTurns: &includeTurns}, &response); err != nil {
+		return response.Thread, fmt.Errorf("background launch history: %w", err)
+	}
+	if response.Thread.ID != c.threadID {
+		return response.Thread, fmt.Errorf("background history returned %q, requested %q", response.Thread.ID, c.threadID)
+	}
+	if response.Thread.Turns == nil {
+		return response.Thread, errors.New("background history is missing turns")
+	}
+	return response.Thread, nil
+}
+
+// A reconnect can enumerate surviving terminals without matching replayed item
+// IDs or exit codes. Require two idle snapshots with the same turn identities,
+// bracketing the inventory, so a new foreground turn cannot qualify its shells.
+func idleBackgroundTurns(thread codexproto.Thread) ([]string, bool) {
+	if thread.Status.Type != "" && thread.Status.Type != codexproto.ThreadStatusTypeIdle {
+		return nil, false
+	}
+	if thread.Status.Type == "" && len(thread.Turns) == 0 {
+		return nil, false
+	}
+	ids := make([]string, 0, len(thread.Turns))
+	for _, turn := range thread.Turns {
+		if turn.ID == "" {
+			return nil, false
+		}
+		switch turn.Status {
+		case codexproto.TurnStatusCompleted, codexproto.TurnStatusFailed, codexproto.TurnStatusInterrupted:
+		default:
+			return nil, false
+		}
+		ids = append(ids, turn.ID)
+	}
+	return ids, true
 }

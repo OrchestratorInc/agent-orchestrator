@@ -545,6 +545,7 @@ func TestBackgroundTasksCodexLiveReconnectRecoversSettledLaunches(t *testing.T) 
 	}
 	// An active launch was retained but could not qualify until a later boundary.
 	c.observeBackgroundNotification(notification{Method: "turn/completed", Params: []byte(`{"threadId":"thread-1","turn":{"id":"current","status":"completed"}}`)})
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"previous","status":"completed","items":[]},{"id":"current","status":"completed","items":[]}]}}`)
 	tasks, err := c.BackgroundTasks(t.Context())
 	if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 2 {
 		t.Fatalf("post-boundary tasks=%+v err=%v", tasks, err)
@@ -558,6 +559,9 @@ func TestBackgroundTasksCodexLiveReconnectRecoversSettledLaunches(t *testing.T) 
 	if !foundLive {
 		t.Fatalf("surviving active launch missing after completion: %+v", tasks)
 	}
+	if _, err := c.BackgroundTasks(t.Context()); !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
 	if srv.sentMethod("thread/resume") {
 		t.Fatal("background history read resumed the thread")
 	}
@@ -569,8 +573,8 @@ func TestBackgroundTasksCodexLiveReconnectRecoversSettledLaunches(t *testing.T) 
 		}
 	}
 	srv.mu.Unlock()
-	if historyReads != 1 {
-		t.Fatalf("background history read %d times; want once", historyReads)
+	if historyReads != 4 {
+		t.Fatalf("background history read %d times; want two active reads and an idle bracket", historyReads)
 	}
 	select {
 	case event := <-c.events:
@@ -606,5 +610,133 @@ func TestBackgroundTasksCodexReconnectHistoryFailureCanRetry(t *testing.T) {
 				t.Fatalf("retry tasks=%+v err=%v", tasks, err)
 			}
 		})
+	}
+}
+
+func TestBackgroundTasksCodexReconnectInventoryDoesNotRequireReplayIdentity(t *testing.T) {
+	for _, history := range []string{
+		`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"past","status":"completed","items":[]}]}}`,
+		`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`,
+		`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"past","status":"completed","items":[{"id":"replayed-command","type":"commandExecution","exitCode":0}]}]}}`,
+	} {
+		t.Run(history, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			srv.reply("thread/read", history)
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"old-process","itemId":"runtime-command","command":"server"}]}`)
+			srv.reply("thread/backgroundTerminals/terminate", `{"terminated":true}`)
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			c.mu.Lock()
+			c.backgroundHistoryPending = true
+			c.mu.Unlock()
+			tasks, err := c.BackgroundTasks(t.Context())
+			if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || tasks[0].ID != "old-process" || !tasks[0].Stoppable || tasks[0].StartedAt != nil {
+				t.Fatalf("tasks=%+v err=%v", tasks, err)
+			}
+			if err := c.StopBackgroundTask(t.Context(), "old-process"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestBackgroundTasksCodexReconnectNeedsStableIdleInventory(t *testing.T) {
+	idle := `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"past","status":"completed","items":[]}]}}`
+	for _, tc := range []struct{ name, before, after string }{
+		{"active before", `{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[]}}`, idle},
+		{"unknown before", `{"thread":{"id":"thread-1","turns":[]}}`, idle},
+		{"in progress before", `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"past","status":"inProgress"}]}}`, idle},
+		{"unknown turn", `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"past","status":"future"}]}}`, idle},
+		{"missing turn identity", `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"status":"completed"}]}}`, idle},
+		{"active after", idle, `{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"next","status":"inProgress"}]}}`},
+		{"new turn completed between reads", idle, `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"past","status":"completed"},{"id":"next","status":"completed"}]}}`},
+		{"malformed after", idle, `{"thread":{"id":"other","status":{"type":"idle"},"turns":[]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			srv.reply("thread/read", tc.before)
+			if tc.before == idle {
+				srv.respondSequence("thread/read", tc.before, tc.after)
+			}
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"unmatched","command":"build"}]}`)
+			opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			c := opened.(*conversation)
+			c.backgroundHistoryPending = true
+			tasks, _ := c.BackgroundTasks(t.Context())
+			if len(tasks) != 0 {
+				t.Fatalf("unproven foreground promoted: %+v", tasks)
+			}
+			if err := c.StopBackgroundTask(t.Context(), "p"); !errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
+				t.Fatal(err)
+			}
+			c.mu.Lock()
+			pending := c.backgroundHistoryPending
+			c.mu.Unlock()
+			if !pending {
+				t.Fatal("unstable recovery stopped retrying")
+			}
+			srv.reply("thread/read", idle)
+			tasks, err = c.BackgroundTasks(t.Context())
+			if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || !tasks[0].Stoppable {
+				t.Fatalf("idle retry tasks=%+v err=%v", tasks, err)
+			}
+		})
+	}
+}
+
+func TestBackgroundTasksCodexRecoveredInventoryWithoutItemIDRemainsStoppable(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","command":"server"}]}`)
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c := opened.(*conversation)
+	c.backgroundHistoryPending = true
+	for range 3 {
+		tasks, err := c.BackgroundTasks(t.Context())
+		if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || !tasks[0].Stoppable || tasks[0].StartedAt != nil {
+			t.Fatalf("tasks=%+v err=%v", tasks, err)
+		}
+	}
+}
+
+func TestBackgroundTasksCodexReconnectBracketsAllInventoryPages(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`)
+	srv.respondSequence("thread/backgroundTerminals/list",
+		`{"data":[{"processId":"p1","itemId":"i1","command":"one"}],"nextCursor":"next"}`,
+		`{"data":[{"processId":"p2","itemId":"i2","command":"two"}]}`)
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c := opened.(*conversation)
+	c.backgroundHistoryPending = true
+	tasks, err := c.BackgroundTasks(t.Context())
+	if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 2 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	srv.mu.Lock()
+	var methods []string
+	for _, req := range srv.seen {
+		if req.Method == "thread/read" || req.Method == "thread/backgroundTerminals/list" {
+			methods = append(methods, req.Method)
+		}
+	}
+	srv.mu.Unlock()
+	if got := strings.Join(methods, ","); got != "thread/read,thread/backgroundTerminals/list,thread/backgroundTerminals/list,thread/read" {
+		t.Fatal(got)
 	}
 }
