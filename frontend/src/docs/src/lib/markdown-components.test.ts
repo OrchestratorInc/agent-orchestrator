@@ -58,6 +58,20 @@ describe("expandComponents", () => {
     expect(out.match(/<InstallDownloads/g)).toHaveLength(1);
   });
 
+  it("does not close a fence on a list-marker line inside it", () => {
+    const input = ["```mdx", "- ```", "<InstallDownloads />", "```", "<InstallDownloads />"].join("\n");
+    const out = expandComponents(input);
+    expect(out.startsWith(["```mdx", "- ```", "<InstallDownloads />", "```", ""].join("\n"))).toBe(true);
+    expect(out.match(/<InstallDownloads/g)).toHaveLength(1);
+  });
+
+  it("ignores /> inside a quoted attribute when finding the end of a tag", () => {
+    const input = ['<PlatformSupport note="<>Type />', 'on the next line</>" />'].join("\n");
+    expect(expandComponents(input)).toBe(
+      ["Platform support:", "", "- macOS: Supported", "- Linux: Supported", "- Windows: Supported", "", "Type />\non the next line"].join("\n"),
+    );
+  });
+
   it("converts tags that span several lines", () => {
     const input = ['<PlatformSupport macos="full" linux="full" windows="partial" note="<>First line', 'Second line</>" />', "", "Next."].join("\n");
     expect(expandComponents(input)).toBe(

@@ -58,10 +58,33 @@ function cardMarkdown(tag: string): string {
 /** List-item and block-quote markers that can come before a code fence, e.g. "* ```mdx". */
 const CONTAINER_PREFIX = /^(?:(?:[*+-]|\d+[.)])\s+|>\s?)*/;
 
-/** The fence marker that opens or closes a fenced code block on this line, if any. */
-function fenceMarker(line: string): string | undefined {
+/** The fence marker that opens a fenced code block on this line, if any. */
+function openingFence(line: string): string | undefined {
   const rest = line.trim().replace(CONTAINER_PREFIX, "");
   return /^(`{3,}|~{3,})/.exec(rest)?.[1];
+}
+
+/**
+ * Whether this line closes the open fence. Inside a fence every line is literal
+ * content, so container markers are not stripped: "- ```" does not close it.
+ */
+function closesFence(line: string, fence: string): boolean {
+  const marker = /^(`{3,}|~{3,})\s*$/.exec(line.trim())?.[1];
+  return !!marker && marker[0] === fence[0] && marker.length >= fence.length;
+}
+
+/** Whether a JSX tag is complete: it ends with "/>" outside any quoted attribute value. */
+function tagComplete(tag: string): boolean {
+  let quote: string | undefined;
+  for (let i = 0; i < tag.length; i++) {
+    const char = tag[i]!;
+    if (quote) {
+      if (char === "\\") i++;
+      else if (char === quote) quote = undefined;
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === "/" && tag[i + 1] === ">") return i + 2 === tag.length;
+  }
+  return false;
 }
 
 /** Components whose whole tag is converted. A tag may span several lines. */
@@ -76,12 +99,12 @@ export function expandComponents(markdown: string): string {
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!;
     const trimmed = line.trim();
-    const marker = fenceMarker(line);
     if (fence) {
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
+      if (closesFence(line, fence)) fence = undefined;
       out.push(line);
       continue;
     }
+    const marker = openingFence(line);
     if (marker) {
       fence = marker;
       out.push(line);
@@ -93,8 +116,8 @@ export function expandComponents(markdown: string): string {
       // Collect the rest of a tag the serializer split across lines, e.g. a note with a line break.
       let tag = trimmed;
       let end = index;
-      while (!tag.endsWith("/>") && end + 1 < lines.length) tag += `\n${lines[++end]!.trim()}`;
-      if (tag.endsWith("/>")) {
+      while (!tagComplete(tag) && end + 1 < lines.length) tag += `\n${lines[++end]!.trim()}`;
+      if (tagComplete(tag)) {
         out.push(tagName === "Card" ? cardMarkdown(tag) : platformSupportMarkdown(tag));
         index = end;
         continue;
