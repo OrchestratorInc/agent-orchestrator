@@ -135,3 +135,10 @@ it("draws a bot's HTML review comment as its words, each <details> section folde
 	act(() => section.props.onPress());
 	expect(textOf(renderer!.root)).toContain("Fix the claim in browser.md.");
 });
+
+it("names a section by its summary's words, not the link markup inside it", () => {
+	const body = '<details>\n<summary>See <a href="https://github.com/o/r">the docs</a> and <code>x</code></summary>\n\nbody\n</details>';
+	draw(message(reviewComment.replace(UNSAFE, body)));
+	const section = renderer!.root.find((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.startsWith("See"));
+	expect(section.props.accessibilityLabel).toBe("See the docs and x");
+});

@@ -453,7 +453,7 @@ function GitHubSection({ section }: { section: Extract<GitHubSegment, { kind: "d
 			<Pressable
 				accessibilityRole="button"
 				accessibilityState={{ expanded: open }}
-				accessibilityLabel={section.summary.replace(/\*\*|`/g, "")}
+				accessibilityLabel={inlineRuns(section.summary).map((run) => run.text).join("")}
 				hitSlop={8}
 				onPress={() => {
 					haptics.tap();

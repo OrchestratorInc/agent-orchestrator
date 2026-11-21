@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { githubSegments, isDecorativeIcon } from "./githubHtml";
+import { safeMarkdown } from "./automationMessages";
+import { parseBlocks } from "./markdownBlocks";
 
 const ICON = "https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1";
 
@@ -95,20 +97,23 @@ describe("githubSegments", () => {
 		]);
 	});
 
+	// Every block comes back as a ``` block; a line inside that would read as a fence starts with ZWSP.
 	it("ends a fence only at a closing fence of the same character, at least as long", () => {
-		const longer = "````md\n```\n<details><summary>s</summary>x</details>\n```\n````";
-		expect(githubSegments(longer)).toEqual([{ kind: "markdown", text: longer }]);
-		const tilde = "~~~\n```\n<details><summary>s</summary>x</details>\n~~~";
-		expect(githubSegments(tilde)).toEqual([{ kind: "markdown", text: tilde }]);
+		expect(githubSegments("````md\n```\n<details><summary>s</summary>x</details>\n```\n````")).toEqual([
+			{ kind: "markdown", text: "```md\n\u200B```\n<details><summary>s</summary>x</details>\n\u200B```\n```" },
+		]);
+		expect(githubSegments("~~~\n```\n<details><summary>s</summary>x</details>\n~~~")).toEqual([
+			{ kind: "markdown", text: "```\n\u200B```\n<details><summary>s</summary>x</details>\n```" },
+		]);
 		// A shorter run, or the other character, inside a fence is code; the fence then runs on to the end.
-		expect(githubSegments("````\n```\n<!-- kept -->")).toEqual([{ kind: "markdown", text: "````\n```\n<!-- kept -->" }]);
-		expect(githubSegments("```\ncode\n`````\n<b>bold</b>")).toEqual([{ kind: "markdown", text: "```\ncode\n`````\n**bold**" }]);
+		expect(githubSegments("````\n```\n<!-- kept -->")).toEqual([{ kind: "markdown", text: "```\n\u200B```\n<!-- kept -->\n```" }]);
+		expect(githubSegments("```\ncode\n`````\n<b>bold</b>")).toEqual([{ kind: "markdown", text: "```\ncode\n```\n**bold**" }]);
 	});
 
 	it("closes an empty fence at the very next line", () => {
 		for (const fence of ["```", "~~~"]) {
 			expect(githubSegments(`${fence}\n${fence}\n<details><summary>Note</summary>body</details>`)).toEqual([
-				{ kind: "markdown", text: `${fence}\n${fence}` },
+				{ kind: "markdown", text: "```\n```" },
 				{ kind: "details", summary: "Note", body: [{ kind: "markdown", text: "body" }] },
 			]);
 		}
@@ -157,7 +162,7 @@ describe("githubSegments", () => {
 
 	it("keeps code spans inside HTML code as written", () => {
 		expect(githubSegments("<pre><code>const name = `world`;</code></pre>")).toEqual([{ kind: "markdown", text: "```\nconst name = `world`;\n```" }]);
-		expect(githubSegments("<pre>```\nfence\n```</pre>")).toEqual([{ kind: "markdown", text: "````\n```\nfence\n```\n````" }]);
+		expect(githubSegments("<pre>```\nfence\n```</pre>")).toEqual([{ kind: "markdown", text: "```\n\u200B```\nfence\n\u200B```\n```" }]);
 		expect(githubSegments("Run <code>a `b` c</code>.")).toEqual([{ kind: "markdown", text: "Run `` a `b` c ``." }]);
 	});
 
@@ -197,5 +202,81 @@ describe("isDecorativeIcon", () => {
 		expect(isDecorativeIcon("Status", "16", "16")).toBe(false);
 		expect(isDecorativeIcon("", "600", "32")).toBe(false);
 		expect(isDecorativeIcon("", undefined, undefined)).toBe(false);
+	});
+});
+
+const markdownOf = (body: string) => githubSegments(body).map((segment) => segment.kind === "markdown" ? segment.text : "").join("");
+
+describe("hostile and unusual comment HTML", () => {
+	it("keeps a <pre> holding a fence line as one code block, in both mobile parsers", () => {
+		const text = markdownOf("<pre>a\n```\nb</pre>\n[x](https://github.com/o/r)");
+		expect(text).toBe("```\na\n\u200B```\nb\n```\n\n[x](https://github.com/o/r)");
+		// ChatMarkdown's parser draws exactly one code block, then the link as prose.
+		expect(parseBlocks(text)).toEqual([{ kind: "code", language: undefined, text: "a\n\u200B```\nb" }, { kind: "paragraph", text: "[x](https://github.com/o/r)" }]);
+		// safeMarkdown leaves the whole block as code and still checks the link after it.
+		expect(safeMarkdown(text)).toBe(`${text.slice(0, text.lastIndexOf("\n\n"))}\n\n[x](https://github.com/o/r) (github.com)`);
+	});
+
+	it("draws ~~~ fences as ``` blocks, which ChatMarkdown reads as code", () => {
+		const text = markdownOf("~~~js\n[x](https://evil.example)\n~~~");
+		expect(text).toBe("```js\n[x](https://evil.example)\n```");
+		expect(parseBlocks(text)).toEqual([{ kind: "code", language: "js", text: "[x](https://evil.example)" }]);
+	});
+
+	it("writes a link target the renderers read whole, and drops links they would not allow", () => {
+		expect(markdownOf('<a href="https://github.com/o/r/blob/main/a_(b).md">doc</a>')).toBe("[doc](https://github.com/o/r/blob/main/a_%28b%29.md)");
+		expect(safeMarkdown(markdownOf('<a href="https://github.com/o/r/blob/main/a_(b).md">doc</a>'))).toBe("[doc](https://github.com/o/r/blob/main/a_%28b%29.md) (github.com)");
+		expect(safeMarkdown(markdownOf('<a href="javascript:alert(1)">click</a>'))).toBe("click");
+		expect(safeMarkdown(markdownOf('<a href="&#106;avascript:alert(1)">click</a>'))).toBe("click");
+		expect(safeMarkdown(markdownOf('<a href="https://evil.example/x">docs</a>'))).toBe("docs");
+		expect(safeMarkdown(markdownOf('<a href="https://github.com/o/r/pull/1">PR</a>'))).toBe("[PR](https://github.com/o/r/pull/1) (github.com)");
+		// A label holding brackets cannot be a link in either renderer, so it keeps its words.
+		expect(markdownOf('<a href="https://github.com/o/r">[see] this</a>')).toBe("[see] this");
+	});
+
+	it("reads a > inside a quoted attribute as part of the tag", () => {
+		expect(markdownOf('<a title="x>y" href="https://github.com/o/r">t</a>')).toBe("[t](https://github.com/o/r)");
+		expect(markdownOf("<img alt='a > b' width=\"300\" src=\"x.png\"> after")).toBe("a > b after");
+	});
+
+	it("numbers ordered lists and marks each paragraph of bold or emphasis", () => {
+		expect(markdownOf("<ol><li>one</li><li>two</li></ol><ul><li>dot</li></ul>")).toBe("1. one\n2. two\n\n- dot");
+		expect(markdownOf('<ol start="3"><li>c</li></ol>')).toBe("3. c");
+		expect(markdownOf("<b>a\n\nb</b> and <em>c\n\nd</em>")).toBe("**a**\n\n**b** and *c*\n\n*d*");
+	});
+
+	it("keeps the words of unclosed and stray tags", () => {
+		expect(markdownOf("<b>open <i>also</i> text")).toBe("open *also* text");
+		expect(markdownOf("</b>stray <a href=\"https://github.com/o/r\">never closed")).toBe("stray never closed");
+	});
+
+	it("writes a summary in what a summary draws: bold, code and links, emphasis as words", () => {
+		const [section] = githubSegments('<details><summary><em>Why</em> <strong>now</strong> <code>x</code> <a href="https://github.com/o/r">docs</a></summary>body</details>');
+		expect(section).toEqual({ kind: "details", summary: "Why **now** `x` [docs](https://github.com/o/r)", body: [{ kind: "markdown", text: "body" }] });
+	});
+
+	// GitHub's comment limit is 65,536 characters. Each pass reads a body once, so even
+	// the worst of these stays far under the bound (about 15 ms on a laptop); a pattern
+	// that rescans to the end of the body for each unclosed tag took ~280 ms for <b> alone.
+	it.each<[string, string]>([
+		["unclosed <b>", "<b>"], ["unclosed <a>", "<a href=x>"], ["unclosed <h1>", "<h1>"], ["unclosed <i>", "<i>"],
+		["unclosed <code>", "<code>"], ["unclosed <pre>", "<pre>"], ["unclosed <details>", "<details>"], ["<details without >", "<details "],
+		["unclosed <summary>", "<details><summary>"], ["unclosed quote", '<a title="'], ["<b without >", "<b "], ["unclosed comments", "<!--"],
+		["fence lines", "```\nx\n"], ["lists", "<ol><li>"], ["stray ampersands", "&a"],
+	])("converts a %s body at GitHub's size limit quickly", (_name, unit) => {
+		const body = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536);
+		const started = performance.now();
+		githubSegments(body);
+		expect(performance.now() - started).toBeLessThan(150);
+	});
+
+	it("converts deeply nested and long-run bodies at GitHub's size limit quickly", () => {
+		let unpaired = "";
+		for (let run = 1; unpaired.length < 65_536; run++) unpaired += `${"`".repeat(run)}x `;
+		for (const body of ["<b>".repeat(10_922) + "</b>".repeat(10_922), unpaired.slice(0, 65_536), `<b>a${" ".repeat(65_500)}b</b>`, `<code>a${" ".repeat(65_500)}b</code>`]) {
+			const started = performance.now();
+			githubSegments(body);
+			expect(performance.now() - started).toBeLessThan(150);
+		}
 	});
 });
