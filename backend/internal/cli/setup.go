@@ -81,7 +81,7 @@ type setupStep struct {
 
 type setupAgent struct {
 	ID string `json:"id"`
-	// Source says how the agent was chosen: flag, caller or ready.
+	// Source says how the agent was chosen: flag, project, caller or ready.
 	Source string `json:"source"`
 	// DetectedFrom names the environment variable for source "caller".
 	DetectedFrom string `json:"detectedFrom,omitempty"`
@@ -124,8 +124,9 @@ func newSetupCommand(ctx *commandContext) *cobra.Command {
 		Short: "Set up Orchestrator on this machine and project in one command",
 		Long: "Set up Orchestrator so it is ready to take a task: start (or reuse) the daemon, pick and check\n" +
 			"a coding agent, check GitHub access, and register the project.\n\n" +
-			"The agent is --agent if given, otherwise the coding agent running this command (from its\n" +
-			"environment, AI_AGENT first), otherwise the first ready agent. Setup never signs anything in\n" +
+			"The agent is --agent if given, otherwise the agents an already registered project runs,\n" +
+			"otherwise the coding agent running this command (from its environment, AI_AGENT first),\n" +
+			"otherwise the first ready agent. Setup never signs anything in\n" +
 			"and never installs an agent: it prints the exact command for a person to run.\n\n" +
 			"With --start \"<task>\" it also starts a task, on the project's orchestrator by default or on\n" +
 			"one worker with --worker, and waits until the task has started.\n\n" +
@@ -147,7 +148,7 @@ func newSetupCommand(ctx *commandContext) *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&opts.path, "path", "", "Repository to register (default: the git repository containing the current directory)")
-	f.StringVar(&opts.agent, "agent", "", "Agent to use (default: the calling agent, else the first ready agent)")
+	f.StringVar(&opts.agent, "agent", "", "Agent to use (default: the project's saved agents, else the calling agent, else the first ready agent)")
 	f.StringVar(&opts.workerAgent, "worker-agent", "", "Agent for worker sessions (default: --agent's choice)")
 	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Agent for the orchestrator (default: --agent's choice)")
 	f.StringVar(&opts.start, "start", "", "Start this task once setup is ready")
@@ -394,9 +395,17 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 
 	agent := &setupAgent{}
 	var callerNote string
+	saved := c.setupSavedAgents(ctx, opts)
 	switch {
 	case opts.agent != "":
 		agent.ID, agent.Source = opts.agent, "flag"
+	case opts.workerAgent != "" && opts.orchestratorAgent != "":
+		// Both roles are named, so no default is needed.
+		agent.ID, agent.Source = opts.workerAgent, "flag"
+	case saved != nil:
+		// A registered project keeps the agents it was set up with unless
+		// the caller asks for others.
+		agent.ID, agent.Source = saved.Worker.Agent, "project"
 	default:
 		if match, ok := registry.DetectCaller(os.Getenv); ok {
 			id := string(match.Harness)
@@ -418,6 +427,9 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	}
 	agent.Worker = firstNonEmpty(opts.workerAgent, agent.ID)
 	agent.Orchestrator = firstNonEmpty(opts.orchestratorAgent, agent.ID)
+	if agent.Source == "project" {
+		agent.Orchestrator = saved.Orchestrator.Agent
+	}
 	res.Agent = agent
 
 	// Check every distinct agent the project will run.
@@ -435,7 +447,7 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 		}
 		status = worseSetupStatus(status, check.status)
 		if check.problem != "" {
-			problems = append(problems, check.problem)
+			problems = append(problems, check.problem+check.alt)
 			fixes = append(fixes, check.fix)
 			continue
 		}
@@ -463,12 +475,34 @@ func setupAgentSource(a *setupAgent) string {
 		return "the calling agent, detected from " + a.DetectedFrom
 	case "ready":
 		return "the first ready agent"
+	case "project":
+		return "the project's saved agent"
 	}
 	return a.Source
 }
 
 type setupAgentCheck struct {
 	status, auth, problem, fix, note string
+	// alt names a ready agent to use instead, when there is one.
+	alt string
+}
+
+// setupSavedAgents returns the agents a registered project already runs,
+// when the repository is registered with both roles set and the caller named
+// no agent. Lookup problems are left to the project step to report.
+func (c *commandContext) setupSavedAgents(ctx context.Context, opts setupOptions) *projectConfig {
+	if opts.agent != "" || opts.workerAgent != "" || opts.orchestratorAgent != "" {
+		return nil
+	}
+	path, stop := c.setupRepoPath(ctx, opts)
+	if stop != nil {
+		return nil
+	}
+	project, found, err := c.findProjectByPath(ctx, path)
+	if err != nil || !found || project.Config == nil || project.Config.Worker.Agent == "" || project.Config.Orchestrator.Agent == "" {
+		return nil
+	}
+	return project.Config
 }
 
 // setupCheckAgent probes one agent now and says whether it can run: not
@@ -490,11 +524,13 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 		check.fix = "pick a supported agent from `ao agent ls` and pass --agent <id>"
 	case !probe.Installed:
 		check.status = setupNeedsHuman
-		check.problem = fmt.Sprintf("agent %s is not installed", id) + setupAlternative(res.readiness, id)
+		check.problem = fmt.Sprintf("agent %s is not installed", id)
+		check.alt = setupAlternative(res.readiness, id)
 		check.fix = c.setupInstallFix(ctx, id, res)
 	case check.auth == "unauthorized":
 		check.status = setupNeedsHuman
-		check.problem = fmt.Sprintf("agent %s is not signed in", id) + setupAlternative(res.readiness, id)
+		check.problem = fmt.Sprintf("agent %s is not signed in", id)
+		check.alt = setupAlternative(res.readiness, id)
 		check.fix = c.setupSignInFix(ctx, id, res)
 	case check.auth == "authorized" || check.auth == "not_applicable":
 		check.note = fmt.Sprintf("%s is signed in", id)
@@ -518,6 +554,15 @@ func firstReadyAgent(agents []agentReadinessSnapshot) string {
 		}
 	}
 	return ""
+}
+
+// setupReplaceHint turns an alternative into the command that replaces a
+// registered project's saved agent, which needs --yes.
+func setupReplaceHint(alt string) string {
+	if alt == "" {
+		return ""
+	}
+	return strings.Replace(alt, "`ao setup --agent ", "replace it with `ao setup --yes --agent ", 1)
 }
 
 // setupAlternative names a ready agent the person could use instead.
@@ -643,6 +688,9 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 	reused := found
 	if !found {
 		if opts.readOnly() {
+			if repoStep := c.setupCheckRepo(ctx, path); repoStep != nil {
+				return *repoStep
+			}
 			res.pending = true
 			step.Status = setupSkipped
 			step.Detail = fmt.Sprintf("%s is not registered; `ao setup` would register it", path)
@@ -713,7 +761,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		case branch == "":
 			step.Status = setupNeedsHuman
 			step.Detail = fmt.Sprintf("project %s has no remote and no branch is checked out, so Orchestrator cannot pick a base branch", project.ID)
-			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch <branch>", project.ID)
+			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch <branch>", shellQuote(project.ID))
 			res.Project = setupProjectFrom(project, reused)
 			return step
 		case opts.readOnly():
@@ -726,14 +774,14 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		cfg, err := c.currentProjectConfig(ctx, project.ID)
 		if err != nil {
 			step.Status, step.Detail = setupFailed, "could not read the project config: "+err.Error()
-			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", project.ID, branch)
+			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
 			return step
 		}
 		cfg.DefaultBranch = branch
 		var updated projectResult
 		if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: cfg}, &updated); err != nil {
 			step.Status, step.Detail = setupFailed, "could not set the default branch: "+err.Error()
-			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", project.ID, branch)
+			step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
 			return step
 		}
 		project.DefaultBranch = branch
@@ -817,7 +865,7 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 				step := setupStep{
 					Step:   setupStepProject,
 					Status: check.status,
-					Detail: fmt.Sprintf("project %s is already registered and runs %s: %s", project.ID, id, check.problem),
+					Detail: fmt.Sprintf("project %s is already registered and runs %s: %s", project.ID, id, check.problem) + setupReplaceHint(check.alt),
 					Fix:    check.fix,
 				}
 				res.Project = setupProjectFrom(*project, true)
@@ -906,6 +954,22 @@ func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (
 		}
 	}
 	return top, nil
+}
+
+// setupCheckRepo reports, without registering anything, what the daemon
+// would refuse: a folder that is not a git repository, or one with no commit.
+func (c *commandContext) setupCheckRepo(ctx context.Context, path string) *setupStep {
+	if out, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "--show-toplevel"); err != nil || strings.TrimSpace(string(out)) == "" {
+		return &setupStep{Step: setupStepProject, Status: setupNeedsHuman,
+			Detail: fmt.Sprintf("%s is not a git repository", path),
+			Fix:    fmt.Sprintf("run `git init` in %s and make a first commit, or pass --path <repo>", path)}
+	}
+	if _, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "--verify", "-q", "HEAD"); err != nil {
+		return &setupStep{Step: setupStepProject, Status: setupNeedsHuman,
+			Detail: fmt.Sprintf("%s has no commits yet; Orchestrator needs one to create agent workspaces", path),
+			Fix:    fmt.Sprintf("git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(path))}
+	}
+	return nil
 }
 
 // setupNoRemoteBranch returns the checked-out branch of a repository that has

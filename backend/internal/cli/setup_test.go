@@ -35,7 +35,7 @@ func gitRepo(t *testing.T, withRemote bool) string {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = append(gitFreeEnv(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -50,6 +50,18 @@ func gitRepo(t *testing.T, withRemote bool) string {
 		t.Fatal(err)
 	}
 	return resolved
+}
+
+// gitFreeEnv is the test environment without GIT_* variables, so a fixture
+// repository never resolves to a repository the suite runs inside (a hook).
+func gitFreeEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	return env
 }
 
 const (
@@ -110,23 +122,21 @@ func decodeSetup(t *testing.T, out string) setupResult {
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range res.Steps {
-		var step map[string]any
-		_ = json.Unmarshal(mustJSON(t, s), &step)
-		if len(step) != 4 {
-			t.Fatalf("step %v does not have exactly step/status/detail/fix", step)
+	var steps []map[string]json.RawMessage
+	if err := json.Unmarshal(raw["steps"], &steps); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		got := make([]string, 0, len(step))
+		for k := range step {
+			got = append(got, k)
+		}
+		sort.Strings(got)
+		if want := []string{"detail", "fix", "status", "step"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("step keys = %v, want %v", got, want)
 		}
 	}
 	return res
-}
-
-func mustJSON(t *testing.T, v any) []byte {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
 }
 
 func stepStatuses(res setupResult) map[string]string {
@@ -680,11 +690,11 @@ func TestSetupChecksAgentsAReusedProjectKeeps(t *testing.T) {
 		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
 	}
 	res := decodeSetup(t, out)
-	project := stepNamed(t, res, "project")
-	if project.Status != setupNeedsHuman || !strings.Contains(project.Detail, "runs codex") || project.Fix != "codex login" {
-		t.Fatalf("project step = %+v", project)
+	agent := stepNamed(t, res, "agent")
+	if agent.Status != setupNeedsHuman || !strings.Contains(agent.Detail, "codex is not signed in") || agent.Fix != "codex login" {
+		t.Fatalf("agent step = %+v", agent)
 	}
-	if res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
+	if res.Agent.ID != "codex" || res.Agent.Source != "project" || res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
 		t.Fatalf("agent = %+v", res.Agent)
 	}
 }
@@ -773,5 +783,61 @@ func TestSetupDryRunOnRegisteredProjectReportsWouldChange(t *testing.T) {
 	project := stepNamed(t, decodeSetup(t, out), "project")
 	if project.Status != setupSkipped || !strings.Contains(project.Detail, "would set worker agent codex") {
 		t.Fatalf("project step = %+v", project)
+	}
+}
+
+func TestSetupPrefersAReusedProjectsAgentsOverTheCaller(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("CLAUDECODE", "1")
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	d.set("GET /api/v1/projects", 200, `{"projects":[{"id":"calc"}]}`)
+	d.set("GET /api/v1/projects/calc", 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}}`, repo))
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	res := decodeSetup(t, out)
+	if !res.Ready || res.Agent.ID != "codex" || res.Agent.Source != "project" {
+		t.Fatalf("ready=%v agent=%+v", res.Ready, res.Agent)
+	}
+	if d.saw("POST /api/v1/agents/claude-code/probe") {
+		t.Fatal("setup checked the signed-out caller although the project does not run it")
+	}
+}
+
+func TestSetupBothRoleFlagsNeedNoDefault(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/readiness/ensure", 200, `{"agents":[]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--worker-agent", "codex", "--orchestrator-agent", "claude-code", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	res := decodeSetup(t, out)
+	if res.Agent.Worker != "codex" || res.Agent.Orchestrator != "claude-code" {
+		t.Fatalf("agent = %+v", res.Agent)
+	}
+}
+
+func TestSetupCheckReportsNonGitAndUnbornPaths(t *testing.T) {
+	newSetupDaemon(t)
+	plain := t.TempDir()
+	unborn := t.TempDir()
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir, cmd.Env = unborn, gitFreeEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	for dir, want := range map[string]string{plain: "git init", unborn: "commit --allow-empty"} {
+		out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", dir, "--check", "--json")
+		if got := ExitCode(err); got != setupExitNeedsHuman {
+			t.Fatalf("%s: exit = %d (%v)", dir, got, err)
+		}
+		if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupNeedsHuman || !strings.Contains(project.Fix, want) {
+			t.Fatalf("%s: project step = %+v", dir, project)
+		}
 	}
 }

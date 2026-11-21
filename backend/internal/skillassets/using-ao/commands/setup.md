@@ -13,7 +13,7 @@ ao setup --path <repo> --json
 It runs these steps in order. Each one reports `{step, status, detail, fix}`, with `status` one of `ok`, `fixed`, `skipped`, `needs_human` or `failed`:
 
 1. **daemon:** reuses the running daemon, or starts one in the background the way `ao serve` does.
-2. **agent:** uses `--agent` if given, otherwise the coding agent running the command (you), detected from its environment (`AI_AGENT` first, then tags such as `CLAUDECODE` or `CODEX_THREAD_ID`), otherwise the first ready agent. It checks the agent is installed and signed in. It never installs an agent or signs one in.
+2. **agent:** uses `--agent` if given, otherwise the agents an already registered project runs, otherwise the coding agent running the command (you), detected from its environment (`AI_AGENT` first, then tags such as `CLAUDECODE` or `CODEX_THREAD_ID`), otherwise the first ready agent. It checks the agent is installed and signed in. It never installs an agent or signs one in.
 3. **github:** checks that the GitHub CLI is signed in. It never runs `gh auth login`.
 4. **project:** registers `--path` (default: the git repository around the current directory) with that agent as worker and orchestrator, or reuses its existing registration. A repository with no remote gets its checked-out branch as the default branch.
 5. **first-run:** a registered project makes the desktop app skip its first-run screens.
@@ -24,9 +24,9 @@ Exit codes:
 
 | Code | Meaning |
 |---|---|
-| `0` | Ready (and the task started, with `--start`). |
+| `0` | Ready (and the task started, with `--start`). A `--dry-run` also exits 0 with `ready: false` when setup still has work to do; read `ready` for the verdict. |
 | `10` | The user must do something first. `next_actions` lists the exact commands, such as the agent's login command or `gh auth login`. Show them to the user, wait until they are done, then run `ao setup` again. |
-| `1` | A step failed; its `detail` says why. |
+| `1` | A step failed; its `detail` says why. With `--start`, if `task.taskId` is set the task may already exist: check it with `ao task status <taskId>` instead of starting it again (see [task.md](task.md)). |
 | `2` | Usage error: fix the command. |
 | `3` | The task started with `--start` is waiting on the user, for example for an approval. Do not start it again. |
 
@@ -35,7 +35,7 @@ With `--json` the output is `{ready, agent, project, steps, next_actions, task}`
 | Flag | Meaning |
 |---|---|
 | `--path <repo>` | Repository to register. Default: the git repository containing the current directory. |
-| `--agent <id>` | Agent to use, from `ao agent ls`. Default: the calling agent, then the first ready agent. |
+| `--agent <id>` | Agent to use, from `ao agent ls`. Default: a registered project's saved agents, then the calling agent, then the first ready agent. |
 | `--worker-agent <id>` / `--orchestrator-agent <id>` | Use a different agent for one role. |
 | `--start "<task>"` | Start this task once setup is ready. |
 | `--worker` | With `--start`, give the task to one worker instead of the orchestrator. |

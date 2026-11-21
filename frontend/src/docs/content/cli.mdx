@@ -151,7 +151,7 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
 | Step | What it does |
 | --- | --- |
 | `daemon` | Reuses the daemon serving this data directory, or starts one in the background the same way `ao serve` does. |
-| `agent` | Picks the agent: `--agent` if given, otherwise the coding agent running the command (detected from its environment, `AI_AGENT` first), otherwise the first ready agent. Checks that it is installed and signed in. It never installs an agent or signs one in. |
+| `agent` | Picks the agent: `--agent` if given, otherwise the agents an already registered project runs, otherwise the coding agent running the command (detected from its environment, `AI_AGENT` first), otherwise the first ready agent. Checks that it is installed and signed in. It never installs an agent or signs one in. |
 | `github` | Checks that the GitHub CLI is signed in. It never runs `gh auth login`. |
 | `project` | Registers `--path` (default: the Git repository containing the current directory) with the chosen agent for workers and the orchestrator, or reuses its registration. A repository with no remote gets its checked-out branch as the default branch, as `ao project set-config --default-branch` would. |
 | `first-run` | Reports that a registered project makes the desktop app skip its first-run screens. |
@@ -170,9 +170,9 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | Ready, and the task started when `--start` was given. |
+| `0` | Ready, and the task started when `--start` was given. `--dry-run` also exits 0 when it only found work to do; its `ready` stays `false`. |
 | `10` | A person must act first. `next_actions` lists the exact commands, such as the agent's login command or `gh auth login`. With `--check`, also when `ao setup` still has work to do. |
-| `1` | A step failed, or the task started with `--start` failed. |
+| `1` | A step failed, or the task started with `--start` failed. If `task.taskId` is set, check it with `ao task status` before starting the task again. |
 | `2` | Usage error. |
 | `3` | The task started with `--start` is waiting on you. |
 
