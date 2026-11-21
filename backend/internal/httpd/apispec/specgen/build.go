@@ -18,6 +18,7 @@ import (
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
@@ -580,6 +581,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"AgentauthPlan":                               "AgentAuthPlan",
 	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
 	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
+	"ControllersAgentEndpointResponse":            "AgentEndpointResponse",
+	"HarnessendpointStatus":                       "AgentEndpointStatus",
+	"HarnessendpointInput":                        "SetAgentEndpointRequest",
+	"HarnessendpointAuthStyle":                    "AgentEndpointAuthStyle",
 	"ControllersStartAgentUILoginRequest":         "StartAgentUILoginRequest",
 	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
 	"AgentauthLoginMethod":                        "AgentLoginMethod",
@@ -2595,6 +2600,29 @@ func agentOperations() []operation {
 			pathParams: []any{controllers.AgentIDParam{}},
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.PrewarmChatAgentResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/{agent}/endpoint", id: "setAgentEndpoint", tag: "agents",
+			summary:    "Store a custom API base URL and key for one agent",
+			pathParams: []any{controllers.AgentIDParam{}},
+			reqBody:    harnessendpoint.Input{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentEndpointResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/{agent}/endpoint", id: "clearAgentEndpoint", tag: "agents",
+			summary:    "Remove the custom API endpoint for one agent",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentEndpointResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

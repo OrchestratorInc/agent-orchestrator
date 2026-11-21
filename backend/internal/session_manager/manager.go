@@ -27,6 +27,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -7426,6 +7427,20 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		for key, value := range providerkeys.Withheld(m.dataDir, string(harness)) {
 			if !overridden(key) {
 				setProtectedEnv(env, key, value, caseInsensitive)
+			}
+		}
+		// A custom endpoint the user set for this harness goes last, so its
+		// base URL and key replace any AO-stored or withheld provider key;
+		// project configuration still wins.
+		if harness != "" {
+			endpointEnv, err := harnessendpoint.ForDataDir(m.dataDir).Env(string(harness))
+			if err != nil {
+				m.logger.Warn("custom harness endpoint unavailable; launching with native credentials", "harness", harness, "error", err)
+			}
+			for key, value := range endpointEnv {
+				if !overridden(key) {
+					setProtectedEnv(env, key, value, caseInsensitive)
+				}
 			}
 		}
 	}

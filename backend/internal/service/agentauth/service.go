@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -77,6 +78,9 @@ type Plan struct {
 	Guidance         string `json:"guidance,omitempty"`
 	DocumentationURL string `json:"documentationUrl"`
 	Reason           string `json:"reason,omitempty"`
+	// CustomEndpoint is present for harnesses that accept a user-supplied base
+	// URL and API key in place of native login. The key is never included.
+	CustomEndpoint *harnessendpoint.Status `json:"customEndpoint,omitempty"`
 	// Methods lists the login methods supported by the background UI flow.
 	Methods       []LoginMethod `json:"methods,omitempty"`
 	command       []string
@@ -428,6 +432,7 @@ func (s *Service) prepareAuthWorkspace(ctx context.Context, plan Plan) (string, 
 
 func (s *Service) resolve(ctx context.Context, plan Plan) Plan {
 	plan.Methods = loginMethods(plan.AgentID)
+	plan.CustomEndpoint = s.endpointStatus(plan.AgentID)
 	plan.command = append([]string(nil), plan.command...)
 	if len(plan.command) == 0 {
 		plan.Available = true
