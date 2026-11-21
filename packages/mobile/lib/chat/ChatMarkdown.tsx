@@ -1,7 +1,9 @@
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { cloneElement, createContext, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
+import { STREAM_SMOOTH_MAX_CHARS } from "../../../shared/chat/streamPacing";
+import { withAlpha } from "../../../shared/theme/color";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
@@ -11,6 +13,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import { imageSourceForPlatform } from "../imageSource";
+import { useStreamingTextFade, type TextFade } from "./useStreamingTextFade";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { FirstLineMarker } from "./FirstLineMarker";
 import { HighlightedCodeText } from "./HighlightedCodeText";
@@ -79,9 +82,11 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessi
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false, nestedScroll = false, diagrams = true }: {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, fadeStreamingText = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false, nestedScroll = false, diagrams = true }: {
 	text: string;
 	streaming?: boolean;
+	/** Fades new text within a continuously selectable response. */
+	fadeStreamingText?: boolean;
 	continuousSelection?: boolean;
 	selectionSource?: Omit<ChatExcerpt, "text">;
 	/**
@@ -122,7 +127,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		const images = imagesInPlace ? [] : blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
 			{splitRuns(blocks, imagesInPlace, diagrams && !streaming).map((run, index) => Array.isArray(run)
-				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
+				? <SelectableResponseText key={index} blocks={run} streaming={streaming} fadeStreamingText={fadeStreamingText && text.length <= STREAM_SMOOTH_MAX_CHARS} source={selectionSource} onSelect={onAddSelection} />
 				: run.kind === "code"
 					? <DiagramFence key={index} code={run.text} codeBlock={<CodeBlock {...run} nestedScroll={nestedScroll} />} />
 				: run.kind === "image"
@@ -222,7 +227,13 @@ function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Arra
 }
 
 /** One native text surface for selecting across a run of response blocks. */
-export function SelectableResponseText({ blocks, source, onSelect }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text">; onSelect?: (text: string) => void }) {
+export function SelectableResponseText({ blocks, source, onSelect, streaming = false, fadeStreamingText = false }: {
+	blocks: Array<Exclude<MarkdownBlock, TableBlock>>;
+	source?: Omit<ChatExcerpt, "text">;
+	onSelect?: (text: string) => void;
+	streaming?: boolean;
+	fadeStreamingText?: boolean;
+}) {
 	const t = useTheme();
 	const addToChat = useContext(AddResponseToChat);
 	// In a conversation, only a finished message (one with a source) can be quoted.
@@ -232,18 +243,73 @@ export function SelectableResponseText({ blocks, source, onSelect }: { blocks: A
 	const styles = useThemedStyles(makeStyles);
 	const openFiles = Boolean(useFilesNavigation());
 	const selectionColor = textSelectionColors(t).selectionColor;
+	const content = useMemo(() => blocks.map((block, index) => {
+		const separator = index > 0 ? "\n\n" : "";
+		if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+		if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+		if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+		if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, true, undefined, openFiles)}</Text>)}</Text>;
+		if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
+		if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
+		return <Text key={index}>{separator}────────</Text>;
+	}), [blocks, openFiles, styles]);
+	const renderedText = useMemo(() => fadeStreamingText ? responseText(content) : undefined, [content, fadeStreamingText]);
+	const fades = useStreamingTextFade(renderedText, streaming);
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
-		{blocks.map((block, index) => {
-			const separator = index > 0 ? "\n\n" : "";
-			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, true, undefined, openFiles)}</Text>)}</Text>;
-			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
-			return <Text key={index}>{separator}────────</Text>;
-		})}
+		{fadeStreamingText && fades.length ? fadeResponseText(content, fades, t.textPrimary) : content}
 	</Text>;
+}
+
+type ResponseTextProps = { children?: ReactNode; style?: StyleProp<TextStyle>; label?: string };
+
+function responseText(node: ReactNode): string {
+	if (typeof node === "string") return node;
+	if (Array.isArray(node)) return node.map(responseText).join("");
+	if (isValidElement<ResponseTextProps>(node)) return node.props.label ?? responseText(node.props.children);
+	return "";
+}
+
+/** Keep the fade within the selectable text surface and split only newly revealed glyphs. */
+function fadeResponseText(content: ReactNode, fades: TextFade[], baseColor: string): ReactNode {
+	let offset = 0;
+	const fadeEnd = fades[fades.length - 1].end;
+	const visit = (node: ReactNode, style: StyleProp<TextStyle>, color: string): ReactNode => {
+		if (offset >= fadeEnd) return node;
+		if (Array.isArray(node)) return node.map((child) => visit(child, style, color));
+		if (isValidElement<ResponseTextProps>(node)) {
+			const { children, label, style: ownStyle } = node.props;
+			if (label !== undefined) {
+				// iOS uses the link's text fragments for hit testing and VoiceOver.
+				offset += label.length;
+				return node;
+			}
+			const ownColor = StyleSheet.flatten(ownStyle)?.color;
+			const inheritedColor = Platform.OS === "ios" ? baseColor : color;
+			const next = visit(children, ownStyle, typeof ownColor === "string" ? ownColor : inheritedColor);
+			return next === children ? node : cloneElement(node, { children: next });
+		}
+		if (typeof node !== "string") return node;
+
+		const start = offset;
+		const end = offset + node.length;
+		offset = end;
+		const parts: ReactNode[] = [];
+		let at = start;
+		for (const fade of fades) {
+			if (fade.end <= start) continue;
+			if (fade.start >= end) break;
+			const from = Math.max(start, fade.start);
+			const to = Math.min(end, fade.end);
+			if (from > at) parts.push(node.slice(at - start, from - start));
+			// The iOS text view flattens spans against the root, so copy the run's style.
+			parts.push(<Text key={from} style={[style, { color: withAlpha(color, fade.opacity) }]}>{node.slice(from - start, to - start)}</Text>);
+			at = to;
+		}
+		if (!parts.length) return node;
+		if (at < end) parts.push(node.slice(at - start));
+		return parts;
+	};
+	return visit(content, undefined, baseColor);
 }
 
 function SelectableInlineText({ value, selectionColor, style, styles, codeStyle }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles>; codeStyle?: StyleProp<TextStyle> }) {

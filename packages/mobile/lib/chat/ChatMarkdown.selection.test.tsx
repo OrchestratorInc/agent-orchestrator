@@ -5,7 +5,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 
 const { platform, theme } = vi.hoisted(() => ({
 	platform: { OS: "ios" },
-	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", accentTint: "rgba(244,245,247,0.14)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
+	theme: { textPrimary: "#f4f5f7", accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", accentTint: "rgba(244,245,247,0.14)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
 }));
 
 vi.mock("react-native", () => ({
@@ -15,7 +15,11 @@ vi.mock("react-native", () => ({
 	Platform: platform,
 	Pressable: "Pressable",
 	ScrollView: "ScrollView",
-	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
+	StyleSheet: {
+		create: (styles: unknown) => styles,
+		flatten: (style: unknown) => Array.isArray(style) ? Object.assign({}, ...style.flat(Infinity).filter(Boolean)) : style,
+		hairlineWidth: 1,
+	},
 	Text: "Text",
 	View: "View",
 }));
@@ -137,6 +141,56 @@ it("keeps inline links operable in the continuously selectable response", () => 
 	act(() => link.props.onPress());
 	expect(onLinkOpen).toHaveBeenCalledWith("https://example.com/docs");
 	act(() => renderer.unmount());
+});
+
+it("fades new Markdown text in place through the final append", () => {
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+	vi.stubGlobal("requestAnimationFrame", (callback: () => void) => setTimeout(callback, 16));
+	vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+	const intro = "# Guide\n\nRead [the docs](https://example.com/docs)";
+	const onLinkOpen = vi.fn();
+	let renderer: ReactTestRenderer | undefined;
+	function show(text: string, streaming: boolean, fadeStreamingText = true) {
+		act(() => {
+			const reply = <ChatLinkProvider onLinkOpen={onLinkOpen}><ChatMarkdown text={text} streaming={streaming} fadeStreamingText={fadeStreamingText} continuousSelection /></ChatLinkProvider>;
+			if (renderer) renderer.update(reply);
+			else renderer = create(reply);
+		});
+	}
+	const fadingSpans = () => renderer!.root.findAll((node) => {
+		const style = node.props.style;
+		return Array.isArray(style) && /^#[0-9a-f]{8}$/i.test(style.at(-1)?.color ?? "");
+	}).map((node) => ({ text: textOf(node), color: node.props.style.at(-1).color }));
+
+	try {
+		show(intro, true);
+		expect(fadingSpans()).toEqual([]);
+		show(intro + " for details", true);
+		expect(fadingSpans()).toEqual([{ text: " for details", color: "#f4f5f700" }]);
+		act(() => { vi.advanceTimersByTime(160); });
+		const [partlyVisible] = fadingSpans();
+		expect(partlyVisible.text).toBe(" for details");
+		expect(parseInt(partlyVisible.color.slice(-2), 16)).toBeGreaterThan(0);
+		expect(parseInt(partlyVisible.color.slice(-2), 16)).toBeLessThan(255);
+
+		show(intro + " for details and context.", false);
+		expect(fadingSpans()).toEqual([partlyVisible, { text: " and context.", color: "#f4f5f700" }]);
+		const selectable = renderer!.root.findAll((node) => node.props.selectable === true);
+		expect(selectable.map(textOf)).toEqual(["Guide\n\nRead the docs for details and context."]);
+		const link = renderer!.root.find((node) => node.props.accessibilityRole === "link");
+		act(() => link.props.onPress());
+		expect(onLinkOpen).toHaveBeenCalledWith("https://example.com/docs");
+		act(() => { vi.advanceTimersByTime(320); });
+		expect(fadingSpans()).toEqual([]);
+
+		show(intro, true, false);
+		show(intro + " with Reduce Motion.", true, false);
+		expect(fadingSpans()).toEqual([]);
+	} finally {
+		act(() => renderer?.unmount());
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	}
 });
 
 it("lets readers select response prose in every rendered Markdown block", () => {
