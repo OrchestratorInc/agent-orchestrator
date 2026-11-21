@@ -213,7 +213,10 @@ func lockPath(path string) func() {
 		key = abs
 	}
 	mu, _ := pathLocks.LoadOrStore(key, &sync.Mutex{})
-	m := mu.(*sync.Mutex)
+	m, ok := mu.(*sync.Mutex)
+	if !ok {
+		panic("harnessendpoint: path lock is not a *sync.Mutex")
+	}
 	m.Lock()
 	return m.Unlock
 }
