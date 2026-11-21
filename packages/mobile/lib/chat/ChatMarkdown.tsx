@@ -117,12 +117,16 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	const openFiles = Boolean(useFilesNavigation());
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep each run of response text
-		// in one text surface; only a table breaks the run, because a grid cannot
-		// live inside text. Image previews follow without repeating captions.
+		// in one text surface; a table breaks the run, because a grid cannot live
+		// inside text, and so does a list, drawn as the desktop draws it with its
+		// wrapped lines under the item's text, which one text surface cannot
+		// indent. Image previews follow without repeating captions.
 		const images = imagesInPlace ? [] : blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			{splitRuns(blocks, imagesInPlace, diagrams && !streaming).map((run, index) => Array.isArray(run)
+			{splitRuns(blocks, imagesInPlace, diagrams && !streaming, true).map((run, index) => Array.isArray(run)
 				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
+				: run.kind === "list"
+					? <MarkdownList key={index} block={run} selectionColor={selectionColor} styles={styles} />
 				: run.kind === "code"
 					? <DiagramFence key={index} code={run.text} codeBlock={<CodeBlock {...run} nestedScroll={nestedScroll} />} />
 				: run.kind === "image"
@@ -155,7 +159,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
 		else if (block.kind === "quote") content.push(<View key={index} style={styles.quote}><SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} /></View>);
-		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><ListMarker checked={item.checked} number={block.ordered ? itemIndex + 1 : undefined} styles={styles} /><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
+		else content.push(<MarkdownList key={index} block={block} selectionColor={selectionColor} styles={styles} />);
 	}
 	flushProse();
 	return (
@@ -180,6 +184,15 @@ function ListMarker({ checked, number, styles }: { checked?: boolean; number?: n
 }
 
 type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
+type ListBlock = Extract<MarkdownBlock, { kind: "list" }>;
+
+/**
+ * A list as the desktop draws it: each item a row with its marker beside it,
+ * so an item's wrapped lines line up under its text, not under the bullet.
+ */
+function MarkdownList({ block, selectionColor, styles }: { block: ListBlock; selectionColor: string; styles: ReturnType<typeof makeStyles> }) {
+	return <View style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><ListMarker checked={item.checked} number={block.ordered ? itemIndex + 1 : undefined} styles={styles} /><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>;
+}
 type ImageBlock = Extract<MarkdownBlock, { kind: "image" }>;
 type CodeFence = Extract<MarkdownBlock, { kind: "code" }>;
 
@@ -191,11 +204,11 @@ export type MarkdownImageSource = { uri: string; headers?: Record<string, string
  * inside text), by a Mermaid fence drawn as its diagram, and, for a document,
  * by each image so it sits in place.
  */
-export function splitRuns(blocks: MarkdownBlock[], splitImages: boolean, splitDiagrams = false): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> {
-	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> = [];
+export function splitRuns(blocks: MarkdownBlock[], splitImages: boolean, splitDiagrams = false, splitLists = false): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence | ListBlock> {
+	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence | ListBlock> = [];
 	for (const block of blocks) {
 		const last = runs[runs.length - 1];
-		if (block.kind === "table" || (splitImages && block.kind === "image") || (splitDiagrams && block.kind === "code" && isMermaidFence(block.language))) runs.push(block);
+		if (block.kind === "table" || (splitImages && block.kind === "image") || (splitDiagrams && block.kind === "code" && isMermaidFence(block.language)) || (splitLists && block.kind === "list")) runs.push(block);
 		else if (Array.isArray(last)) last.push(block);
 		else runs.push([block]);
 	}

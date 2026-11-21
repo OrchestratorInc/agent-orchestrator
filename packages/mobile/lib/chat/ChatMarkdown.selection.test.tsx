@@ -87,7 +87,10 @@ it.each(["ios", "android"])("offers one continuous selection across all response
 	}
 });
 
-it.each(["ios", "android"])("renders the agent reply as one in-place selection across headings, bullets, and code on %s", (os) => {
+// Prose and code share one in-place selection; a list is drawn as the desktop
+// draws it, a row per item with its wrapped lines under its text, so each item
+// is a selection of its own.
+it.each(["ios", "android"])("renders the agent reply's prose in one in-place selection, and its list as item rows, on %s", (os) => {
 	platform.OS = os;
 	let renderer!: ReactTestRenderer;
 	try {
@@ -96,9 +99,10 @@ it.each(["ios", "android"])("renders the agent reply as one in-place selection a
 			"```sh", "npm test", "```",
 		].join("\n")} />); });
 		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
-		expect(selectable).toHaveLength(1);
+		expect(selectable.map(textOf)).toEqual(["Release steps\n\nBuild the app.", "Check iOS", "Check Android", "sh\nnpm test"]);
 		expect(selectable[0].props.uiTextView).toBe(true);
-		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test");
+		// The bullets are drawn beside the items, not typed into the text.
+		expect(selectable.map(textOf).join("\n")).not.toContain("•");
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";
@@ -250,13 +254,13 @@ it("adds the exact native selection without changing the response or link handle
 	const onAddToChat = vi.fn();
 	const source = { conversationId: "conversation", messageId: "response", revision: 2 };
 	let renderer!: ReactTestRenderer;
-	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={vi.fn()} onAddToChat={onAddToChat}><ChatMarkdown continuousSelection selectionSource={source} text={"# Heading\n\n- One\n- Two"} /></ChatLinkProvider>); });
+	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={vi.fn()} onAddToChat={onAddToChat}><ChatMarkdown continuousSelection selectionSource={source} text={"# Heading\n\nThe first line.\nThe second line."} /></ChatLinkProvider>); });
 	const root = renderer.root.find((node) => node.props.selectable === true);
 	expect(root.props.addToChatEnabled).toBe(true);
-	const selection = "ding\n\n• One\n• Tw";
+	const selection = "ding\n\nThe first";
 	act(() => root.props.onAddToChat({ nativeEvent: { target: 1, text: selection } }));
 	expect(onAddToChat).toHaveBeenCalledExactlyOnceWith(selection, source);
-	expect(textOf(root)).toBe("Heading\n\n• One\n• Two");
+	expect(textOf(root)).toContain("Heading\n\nThe first line.");
 	act(() => renderer.unmount());
 });
 

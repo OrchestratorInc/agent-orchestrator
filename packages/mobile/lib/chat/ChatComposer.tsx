@@ -307,14 +307,12 @@ function Composer({
 	const listening = voice.state === "starting" || voice.state === "recording";
 	const transcribing = voice.state === "transcribing";
 	const dictating = listening || transcribing;
-	// Collapsed, the composer is a slim pill under the session's chips. Writing
-	// grows it into a card that adds the turn settings between attach and the
-	// round button, and it stays open while anything waits to be sent. While the
-	// mic is open it is the slim pill again with only the waveform and the stop
+	// The composer is the desktop's card at rest as well as while writing: the
+	// field on top and the turn settings in a row under it, between attach and
+	// the round button, so the model, effort and approvals are always in view.
+	// While the mic is open it is a slim pill with only the waveform and the stop
 	// button, so the trace gets the whole width.
-	// `keyboardSend.holding` keeps it open through a hardware-Return send, while the
-	// draft has cleared and the field has yet to get its focus back.
-	const expanded = !dictating && (focused || keyboardSend.holding || hasDraft || attachments.length > 0);
+	const expanded = !dictating;
 	// 0 collapsed, 1 open. Everything that changes as the pill opens reads it, so
 	// the row, the field's insets and the settings move as one.
 	const reduceMotion = useReducedMotion();
@@ -344,7 +342,9 @@ function Composer({
 	// spring that waits for the blur to reach JS. Nothing else may hold it open.
 	const { closedByBlur } = useKeyboardMotion();
 	const { input: focusedInput } = useReanimatedFocusedInput();
-	const held = !dictating && (keyboardSend.holding || hasDraft || attachments.length > 0);
+	// Held open whenever it is not dictating, so a tap on the conversation closes
+	// the keyboard but not the card.
+	const held = !dictating;
 	const heldOpen = useSharedValue(held);
 	useEffect(() => { heldOpen.value = held; }, [held, heldOpen]);
 	const primaryAction = composerPrimaryAction({ active, hasDraft, hasAttachments: attachments.length > 0 });
@@ -746,7 +746,26 @@ function Composer({
 	// The session's state as chips over the composer, open or not: the account's
 	// quota once that matters, its PR, what it changed, and how full the context
 	// is once that matters.
-	const chips = activeReviewPR || changes || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
+	// What the session changed, as the desktop's "N Files Changed · Review" card
+	// above the composer, the whole card opening the changed files.
+	const changesCard = changes ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
+		<Pressable
+			accessibilityRole="button"
+			accessibilityLabel={changesAccessibilityLabel(changes)}
+			accessibilityHint="Opens the changed files to review"
+			onPress={changes.onOpen}
+			style={({ pressed }) => [styles.changesCard, pressed && styles.changesCardPressed]}
+			testID="composer-changes-card"
+		>
+			<ComposerGlass radius={CHANGES_CARD_RADIUS} />
+			<AppSymbol name="diff" size={iconSize.xs} color={t.textSecondary} />
+			<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.changesTitle}>{changes.files} {changes.files === 1 ? "File" : "Files"} Changed</Text>
+			{changes.additions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.green }]}>+{compactCount(changes.additions)}</Text> : null}
+			{changes.deletions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.red }]}>−{compactCount(changes.deletions)}</Text> : null}
+			<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.changesReview}>Review</Text>
+		</Pressable>
+	</Animated.View> : null;
+	const chips = activeReviewPR || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
 		<ScrollView key={fieldSize.fontScale} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
 			{/* First: the row scrolls with no indicator, and this is the only quota
 			    warning, so it must not start off screen behind the PR and changes chips. */}
@@ -756,12 +775,6 @@ function Composer({
 			</ComposerChip> : null}
 			{activeReviewPR ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(activeReviewPR, reviewPRSummary)} accessibilityHint="Opens the pull request review" onPress={onOpenReview}>
 				<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />
-			</ComposerChip> : null}
-			{changes ? <ComposerChip accessibilityLabel={changesAccessibilityLabel(changes)} accessibilityHint="Opens the changed files" onPress={changes.onOpen}>
-				<AppSymbol name="diff" size={iconSize.xs} color={t.textSecondary} />
-				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.chipText}>{changes.files}</Text>
-				{changes.additions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.green }]}>+{compactCount(changes.additions)}</Text> : null}
-				{changes.deletions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.red }]}>−{compactCount(changes.deletions)}</Text> : null}
 			</ComposerChip> : null}
 			{contextMeter ? <View accessible accessibilityRole="progressbar" accessibilityLabel="Context window" accessibilityValue={contextMeter.accessibilityValue} style={styles.chip}>
 				<ComposerGlass radius={CHIP_HEIGHT / 2} />
@@ -780,6 +793,7 @@ function Composer({
 		// fill of its own: the chips and the composer carry their own glass.
 		<Animated.View style={[styles.dock, styles.floatingDock, { paddingBottom: restingInset }, dockRise]}>
 			<DockFade />
+			{changesCard}
 			{chips}
 			{/* Composer-local only. Conversation and action failures are banners above
 			    the timeline; echoing them here showed one failure twice. */}
@@ -998,6 +1012,7 @@ function ComposerChip({ accessibilityLabel, accessibilityHint, onPress, children
 }
 
 const NO_OPTIONS: ChatConfigOption[] = [];
+const CHANGES_CARD_RADIUS = 14;
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	...composerStyleRules(t),
@@ -1017,6 +1032,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	controlsRow: { width: "100%", flexDirection: "row", alignItems: "center", gap: space.xxs, overflow: "hidden" },
 	settingsSlot: { flex: 1, minWidth: 0, minHeight: touchTarget, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
 	chips: { gap: space.xs, paddingVertical: CHIP_SLOP },
+	changesCard: { height: 44, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, marginBottom: space.xs, borderRadius: CHANGES_CARD_RADIUS, borderCurve: "continuous", overflow: "hidden" },
+	changesCardPressed: { opacity: 0.8 },
+	changesTitle: { flex: 1, minWidth: 0, fontFamily: "DMSans_500Medium", fontSize: type.subheadline.fontSize, color: t.textSecondary },
+	changesReview: { marginLeft: space.sm, fontFamily: "DMSans_500Medium", fontSize: type.subheadline.fontSize, color: t.textSecondary },
 	// A capsule; the glass fills it on iOS 26, so the fill drops out there.
 	chip: { height: CHIP_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.md, borderRadius: radius.pill, borderCurve: "continuous", overflow: "hidden", backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderWidth: composerGlassSupported ? 0 : rowDividerWidth, borderColor: t.borderDefault },
 	// Never shrunk: the chips scroll sideways, so a count is shown whole rather than cut to "+..".
