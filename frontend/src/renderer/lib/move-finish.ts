@@ -81,6 +81,12 @@ export type FinishOutcome = "done" | "retry" | { failed: string };
 
 /** Refusals that retrying will not change. */
 const PERMANENT_STATUSES = new Set([400, 401, 403, 409, 422]);
+/** Refusals with a permanent status that say a retry is safe and may work. */
+const RETRYABLE_CODES = new Set(["MOVE_TRANSCRIPT_NOT_CAPTURED"]);
+
+function permanent(status: number | undefined, code: string | undefined): boolean {
+	return status !== undefined && PERMANENT_STATUSES.has(status) && !RETRYABLE_CODES.has(code ?? "");
+}
 
 /** Tries the move's last step once. */
 export async function finishMove(
@@ -96,7 +102,7 @@ export async function finishMove(
 		// A session that is gone, or moved under another move, has nothing left to record.
 		if (["SESSION_NOT_FOUND", "SESSION_MOVED"].includes(apiErrorCode(error) ?? "")) return "done";
 		const status = (response as { status?: number } | undefined)?.status;
-		return status !== undefined && PERMANENT_STATUSES.has(status) ? { failed: apiErrorMessage(error, "Could not mark the session as moved") } : "retry";
+		return permanent(status, apiErrorCode(error)) ? { failed: apiErrorMessage(error, "Could not mark the session as moved") } : "retry";
 	}
 	if (!deps.cloud) return "retry";
 	try {
@@ -104,7 +110,7 @@ export async function finishMove(
 		return "done";
 	} catch (error) {
 		if (error instanceof CloudCpError && error.status === 404) return "done";
-		if (error instanceof CloudCpError && PERMANENT_STATUSES.has(error.status)) return { failed: error.message };
+		if (error instanceof CloudCpError && permanent(error.status, error.code)) return { failed: error.message };
 		return "retry";
 	}
 }

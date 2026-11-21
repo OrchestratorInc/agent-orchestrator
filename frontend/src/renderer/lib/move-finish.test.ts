@@ -35,6 +35,11 @@ describe("finishMove", () => {
 			const refuse = vi.fn(async () => { throw new CloudCpError("refused", { status }); });
 			expect(await finishMove(deleteCloud, { daemon: daemon({}).factory, cloud: { deleteSession: refuse } })).toEqual({ failed: "refused" });
 		}
+		// A refusal that says a retry is safe, and a timeout, are retried.
+		const notCaptured = vi.fn(async () => { throw new CloudCpError("not captured", { status: 422, code: "MOVE_TRANSCRIPT_NOT_CAPTURED" }); });
+		expect(await finishMove(deleteCloud, { daemon: daemon({}).factory, cloud: { deleteSession: notCaptured } })).toBe("retry");
+		const timeout = vi.fn(async () => { throw new CloudCpError("timeout", { status: 504, code: "WORKER_TIMEOUT" }); });
+		expect(await finishMove(deleteCloud, { daemon: daemon({}).factory, cloud: { deleteSession: timeout } })).toBe("retry");
 	});
 
 	it("deletes the Cloud session a move left, and is done once Cloud no longer has it", async () => {
