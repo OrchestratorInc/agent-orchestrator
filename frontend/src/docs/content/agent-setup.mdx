@@ -45,11 +45,13 @@ An AppImage install can't be linked, and its bundled `ao` isn't at a fixed path.
 
 ## 3. Start the app and check the daemon
 
-Open the desktop app. On macOS you can do it from a terminal:
+Open the desktop app. On macOS you can do it from a terminal by its bundle id:
 
 ```bash
-open -a "Orchestrator"
+open -b dev.agent-orchestrator.desktop
 ```
+
+Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
 
 Then check that its daemon is ready:
 
@@ -67,7 +69,7 @@ List the agents Orchestrator supports, with fresh install and sign-in checks:
 ao agent ls --refresh
 ```
 
-Each row shows the agent `ID`, whether it is installed, and whether it is signed in. Add `--json` for machine-readable output. Pick an agent that shows `installed` and `authorized`; the agent you're running in is a good choice if it's listed. If none is ready, see [steps only a human can do](#steps-only-a-human-can-do).
+Each row shows the agent `ID`, whether it is installed, and whether it is signed in. Add `--json` for machine-readable output. Pick an agent that shows `installed` and either `authorized` or `configured (unverified)`. `configured (unverified)` means a credential exists but hasn't been checked yet, and agents in that state usually work. In `--json` output, that is an `authStatus` of `authorized` or `configured`. The agent you're running in is a good choice if it's listed. If none is ready, see [steps only a human can do](#steps-only-a-human-can-do).
 
 ## 5. Add the repository
 
@@ -84,8 +86,6 @@ A repository with no `origin` remote has no default branch Orchestrator can find
 ```bash
 ao project set-config <project-id> --default-branch main
 ```
-
-You can also pass `--default-branch` to `ao project add` directly.
 
 ## 6. Start the orchestrator or a worker
 
