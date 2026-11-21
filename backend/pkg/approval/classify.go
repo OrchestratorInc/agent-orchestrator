@@ -1,11 +1,9 @@
-// Package approval pauses consequential agent actions until the user allows
-// or denies them, and records every gated action in an audit log.
+// Package approval holds the rules that decide which agent browser actions
+// need the user's approval: Classify, its modes, categories and request kinds.
 //
-// Classify decides whether a browser action needs approval from the element
-// and page it targets. Gate holds a request open until the user answers it in
-// the app or it times out (a timeout is a deny). Other features, such as the
-// credential vault's "first use of a saved login on this site", call
-// Gate.Request directly with their own Kind and Category.
+// It is public so every gate applies the exact same rules: the local
+// daemon's gate (backend/internal/approval) and AO Cloud's gate for cloud
+// agent browsers both import it. It has no state and no I/O.
 package approval
 
 import (
@@ -13,6 +11,13 @@ import (
 	"net/url"
 	"strings"
 	"unicode"
+)
+
+// Request kinds. KindSavedLogin is the credential vault's first use of a
+// saved login on a site; it is gated with CategoryCredential.
+const (
+	KindBrowserAction = "browser-action"
+	KindSavedLogin    = "credential-use"
 )
 
 // Mode is how much a session asks before acting.

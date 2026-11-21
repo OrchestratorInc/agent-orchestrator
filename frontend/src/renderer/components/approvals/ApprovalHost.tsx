@@ -9,6 +9,7 @@ import {
 	type ApprovalDecision,
 	type PendingApproval,
 } from "../../lib/approvals";
+import { useCloudPendingApprovals, useLiveCloudPendingApprovals, useWatchCloudApprovals } from "../../lib/cloud-approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import { ApprovalPrompt } from "./ApprovalPrompt";
@@ -22,7 +23,13 @@ function useDecide(request: PendingApproval | undefined) {
 		setBusyId(request.id);
 		setError(undefined);
 		try {
-			await decideApproval(request.id, decision, queryClient, request.hostId);
+			await decideApproval(
+				request.id,
+				decision,
+				queryClient,
+				request.hostId,
+				request.cloud && { ...request.cloud, sessionId: request.sessionId },
+			);
 		} catch (reason) {
 			setError({ id: request.id, message: reason instanceof Error ? reason.message : String(reason) });
 		} finally {
@@ -40,10 +47,15 @@ function useDecide(request: PendingApproval | undefined) {
  * The session's own approval prompt, under its topbar so it shows over chat
  * and terminal sessions alike. Requests are answered oldest first.
  */
-export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+export function SessionApprovalDock({ sessionId, hostId, cloudOrgId }: { sessionId: string; hostId?: string; cloudOrgId?: string }) {
+	// A cloud session on screen is read often, whatever the session lists say.
+	useWatchCloudApprovals(hostId ? undefined : cloudOrgId, sessionId);
 	const local = usePendingApprovals();
 	const remote = useRemotePendingApprovals();
-	const mine = (hostId ? remote : local.data ?? []).filter(
+	// A cloud session's agent browser is gated by AO Cloud; its requests
+	// share the route key of a local session (no host).
+	const cloud = useCloudPendingApprovals();
+	const mine = (hostId ? remote : [...(local.data ?? []), ...cloud]).filter(
 		(request) => request.sessionId === sessionId && (request.hostId ?? undefined) === hostId,
 	);
 	const request = mine[0];
@@ -93,10 +105,12 @@ function GlobalApprovalCardContent() {
 	const pending = usePendingApprovals({ live: true });
 	// Self-hosted remote hosts gate their agent browsers the same way.
 	const remote = useRemotePendingApprovals({ live: true });
+	// AO Cloud gates cloud sessions' agent browsers; one org stream holds them.
+	const cloud = useLiveCloudPendingApprovals();
 	const routed = useRoutedSessionKey();
 	const workspaces = useWorkspaceQuery();
 	const navigateToSession = useNavigateToSession();
-	const elsewhere = [...(pending.data ?? []), ...remote].filter((request) => requestKey(request) !== routed);
+	const elsewhere = [...(pending.data ?? []), ...remote, ...cloud].filter((request) => requestKey(request) !== routed);
 	const request = elsewhere[0];
 	const { decide, busy, error } = useDecide(request);
 	if (!request) return null;

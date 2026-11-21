@@ -1,4 +1,4 @@
-import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, focusManager } from "@tanstack/react-query";
 import { captureRendererException } from "./telemetry";
 
 export const queryClient = new QueryClient({
@@ -19,4 +19,20 @@ export const queryClient = new QueryClient({
 			networkMode: "always",
 		},
 	},
+});
+
+// React Query treats a hidden document as unfocused, and while unfocused it
+// pauses every retry and refetchInterval. A browser tab can afford that; AO
+// cannot: its window is often hidden while agents work, and a read that
+// failed once (or a poll, such as a cloud approval's) then waited for the
+// window to be shown again. So the app always counts as focused, and showing
+// the window still tells queries that refetch on focus to do so.
+focusManager.setEventListener((setFocused) => {
+	setFocused(true);
+	if (typeof window === "undefined") return undefined;
+	const onVisibilityChange = () => {
+		if (document.visibilityState === "visible") focusManager.onFocus();
+	};
+	window.addEventListener("visibilitychange", onVisibilityChange, false);
+	return () => window.removeEventListener("visibilitychange", onVisibilityChange);
 });
