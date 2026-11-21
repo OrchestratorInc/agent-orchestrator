@@ -85,6 +85,9 @@ type setupAgent struct {
 	AuthStatus   string `json:"authStatus"`
 	Worker       string `json:"worker"`
 	Orchestrator string `json:"orchestrator"`
+	// override is set when a role flag replaced one of the project's saved
+	// agents.
+	override bool
 }
 
 type setupProject struct {
@@ -397,7 +400,14 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 
 	agent := &setupAgent{}
 	var callerNote string
-	saved := c.setupSavedAgents(ctx, opts)
+	// Each role is its flag, else (without --agent) the agent a registered
+	// project already saves for it. A default is needed only for a role
+	// that has neither.
+	worker, orchestrator := opts.workerAgent, opts.orchestratorAgent
+	if saved := c.setupSavedAgents(ctx, opts); saved != nil {
+		worker = firstNonEmpty(worker, saved.Worker.Agent)
+		orchestrator = firstNonEmpty(orchestrator, saved.Orchestrator.Agent)
+	}
 	switch {
 	case opts.workerAgent != "" && opts.orchestratorAgent != "":
 		// Both roles are named, so no default (not even --agent) is used or
@@ -405,10 +415,11 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 		agent.ID, agent.Source = opts.workerAgent, "roles"
 	case opts.agent != "":
 		agent.ID, agent.Source = opts.agent, "flag"
-	case saved != nil:
+	case worker != "" && orchestrator != "":
 		// A registered project keeps the agents it was set up with unless
 		// the caller asks for others.
-		agent.ID, agent.Source = saved.Worker.Agent, "project"
+		agent.ID, agent.Source = worker, "project"
+		agent.override = opts.workerAgent != "" || opts.orchestratorAgent != ""
 	default:
 		if match, ok := registry.DetectCaller(os.Getenv); ok {
 			id := string(match.Harness)
@@ -428,11 +439,8 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 		step.Fix = "install a supported coding agent CLI (see `ao agent ls`) and sign it in, then run `ao setup` again"
 		return step
 	}
-	agent.Worker = firstNonEmpty(opts.workerAgent, agent.ID)
-	agent.Orchestrator = firstNonEmpty(opts.orchestratorAgent, agent.ID)
-	if agent.Source == "project" {
-		agent.Orchestrator = saved.Orchestrator.Agent
-	}
+	agent.Worker = firstNonEmpty(worker, agent.ID)
+	agent.Orchestrator = firstNonEmpty(orchestrator, agent.ID)
 	res.Agent = agent
 
 	// Check every distinct agent the project will run.
@@ -481,6 +489,9 @@ func setupAgentSource(a *setupAgent) string {
 	case "ready":
 		return "the first ready agent"
 	case "project":
+		if a.override {
+			return "the project's saved agents, with your role override"
+		}
 		return "the project's saved agent"
 	}
 	return a.Source
@@ -492,11 +503,12 @@ type setupAgentCheck struct {
 	alt string
 }
 
-// setupSavedAgents returns the agents a registered project already runs,
-// when the repository is registered with both roles set and the caller named
-// no agent. Lookup problems are left to the project step to report.
+// setupSavedAgents returns the config of the registered project at the
+// repository, whose saved agents fill roles the caller did not name. With
+// --agent it returns nil: --agent names every role. Lookup problems are left
+// to the project step to report.
 func (c *commandContext) setupSavedAgents(ctx context.Context, opts setupOptions) *projectConfig {
-	if opts.agent != "" || opts.workerAgent != "" || opts.orchestratorAgent != "" {
+	if opts.agent != "" || (opts.workerAgent != "" && opts.orchestratorAgent != "") {
 		return nil
 	}
 	path, stop := c.setupRepoPath(ctx, opts)
@@ -504,7 +516,7 @@ func (c *commandContext) setupSavedAgents(ctx context.Context, opts setupOptions
 		return nil
 	}
 	project, found, err := c.findProjectByPath(ctx, path)
-	if err != nil || !found || project.Config == nil || project.Config.Worker.Agent == "" || project.Config.Orchestrator.Agent == "" {
+	if err != nil || !found || project.Config == nil {
 		return nil
 	}
 	return project.Config
@@ -786,7 +798,40 @@ func (c *commandContext) setupRepoOnGitHub(ctx context.Context, opts setupOption
 		return false
 	}
 	out, err := c.deps.CommandOutputInDir(ctx, path, "git", "remote", "-v")
-	return err == nil && strings.Contains(strings.ToLower(string(out)), "github.com")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && isGitHubHost(remoteHost(fields[1])) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteHost returns the host of a git remote URL: scheme URLs
+// (https://host/..., ssh://git@host:22/...) and scp-style ones (git@host:path).
+func remoteHost(remote string) string {
+	if strings.Contains(remote, "://") {
+		u, err := url.Parse(remote)
+		if err != nil {
+			return ""
+		}
+		return strings.ToLower(u.Hostname())
+	}
+	host, _, ok := strings.Cut(remote, ":")
+	if !ok || strings.Contains(host, "/") {
+		return "" // a local path
+	}
+	if _, after, found := strings.Cut(host, "@"); found {
+		host = after
+	}
+	return strings.ToLower(host)
+}
+
+func isGitHubHost(host string) bool {
+	return host == "github.com" || host == "ssh.github.com" || host == "www.github.com"
 }
 
 // setupProjectStep registers the repository, or reuses its registration, and
@@ -817,10 +862,21 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			if res.Agent != nil && res.agentUsable {
 				step.Detail += fmt.Sprintf(" with worker %s and orchestrator %s", res.Agent.Worker, res.Agent.Orchestrator)
 			}
-			if branch := c.setupNoRemoteBranch(ctx, path); branch != "" {
-				step.Detail += fmt.Sprintf(", and set its default branch to %s (no remote)", branch)
-			}
 			res.Project = &setupProject{Path: path}
+			// Preview the base-branch rule the real run applies after
+			// registering, so the preview needs the same person the run does.
+			origin, _ := c.deps.CommandOutputInDir(ctx, path, "git", "remote", "get-url", "origin")
+			preview := projectDetails{Path: path, Repo: strings.TrimSpace(string(origin))}
+			if why := c.setupUnresolvedBranch(ctx, preview); why != "" {
+				branch := c.setupCurrentBranch(ctx, path)
+				if branch == "" {
+					step.Status = setupNeedsHuman
+					step.Detail = fmt.Sprintf("%s is not registered; %s, and no branch is checked out, so Orchestrator could not pick a base branch", path, why)
+					step.Fix = fmt.Sprintf("check out the branch new work should start from (git -C %s switch <branch>), then run `ao setup` again", shellQuote(path))
+					return step
+				}
+				step.Detail += fmt.Sprintf(", and set its default branch to %s (%s)", branch, why)
+			}
 			return step
 		}
 		req := addProjectRequest{Path: path}
@@ -1096,16 +1152,6 @@ func (c *commandContext) setupCheckRepo(ctx context.Context, path string) *setup
 	return nil
 }
 
-// setupNoRemoteBranch returns the checked-out branch of a repository that has
-// no remote, or "" when it has one or HEAD is detached.
-func (c *commandContext) setupNoRemoteBranch(ctx context.Context, path string) string {
-	remotes, err := c.deps.CommandOutputInDir(ctx, path, "git", "remote")
-	if err != nil || strings.TrimSpace(string(remotes)) != "" {
-		return ""
-	}
-	return c.setupCurrentBranch(ctx, path)
-}
-
 // setupCurrentBranch returns the checked-out branch, or "" when HEAD is
 // detached.
 func (c *commandContext) setupCurrentBranch(ctx context.Context, path string) string {
@@ -1227,13 +1273,14 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 		// The exit code comes from the task (1); the step stays out of
 		// next_actions unless the task names a fix.
 		step.Status, step.Detail, step.Fix = setupFailed, "the task failed: "+task.Reason, task.Fix
-		if strings.Contains(task.Reason, "auth_required") && res.Agent != nil {
-			// Name the login command verbatim, as the agent step does.
-			agent := res.Agent.Orchestrator
-			if opts.worker {
-				agent = res.Agent.Worker
+		// `ao task` builds the fix from the harness that really failed (a
+		// reused orchestrator may run another agent than the project saves).
+		// Keep that, and show its login command verbatim, as the agent step
+		// does.
+		if cmd, ok := strings.CutPrefix(task.Fix, "run `"); ok {
+			if cmd, ok = strings.CutSuffix(cmd, "`, then retry"); ok && !strings.Contains(cmd, "`") {
+				step.Fix = cmd
 			}
-			step.Fix = c.setupSignInFix(ctx, agent, res)
 		}
 	case taskStatusNeedsInput:
 		step.Status, step.Detail, step.Fix = setupNeedsHuman, "the task is waiting on you: "+task.Reason, task.Fix
