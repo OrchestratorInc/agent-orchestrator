@@ -84,14 +84,25 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 		return zero, err
 	}
 	defer func() { _ = root.Close() }()
-	key := fmt.Sprintf("%x.json", sha256.Sum256([]byte(source+"\x00"+r.NativeSessionID+"\x00"+cwd)))
-	reuse := func() (ports.NativeSessionRef, error) {
+	selection := r.SourceFingerprint
+	if selection == "" {
+		original, err := ReadImportedSession(ctx, source, r.NativeSessionID)
+		if err != nil {
+			return zero, err
+		}
+		selection = original.Fingerprint
+	}
+	// Each selected snapshot owns its own reservation and private home. Never
+	// retire a previous proof: a prepared or active session may still use it.
+	binding := source + "\x00" + r.NativeSessionID + "\x00" + cwd
+	key := fmt.Sprintf("%x.json", sha256.Sum256([]byte(binding+"\x00"+selection)))
+	reuse := func(key string) (ports.NativeSessionRef, error) {
 		b, err := readKimiFile(ctx, root, key, 1<<20)
 		if err != nil {
 			return zero, err
 		}
 		var proof kimiImportProof
-		if json.Unmarshal(b, &proof) != nil || proof.Source != source || proof.ID != r.NativeSessionID || proof.CWD != cwd || proof.Home == "" || filepath.Base(proof.Home) != proof.Home || !strings.HasPrefix(proof.Home, ".native-") || proof.Selection == "" || (r.SourceFingerprint != "" && proof.Selection != r.SourceFingerprint) {
+		if json.Unmarshal(b, &proof) != nil || proof.Source != source || proof.ID != r.NativeSessionID || proof.CWD != cwd || proof.Home == "" || filepath.Base(proof.Home) != proof.Home || !strings.HasPrefix(proof.Home, ".native-") || proof.Selection == "" || proof.Selection != selection {
 			return zero, errors.New("kimi: private import proof does not match selection")
 		}
 		status, err := root.Lstat(proof.Home)
@@ -109,7 +120,21 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 		return ports.NativeSessionRef{NativeSessionID: proof.ID, ConfigDir: home, TranscriptPath: copied.Path}, nil
 	}
 	if _, err := root.Lstat(key); err == nil {
-		return reuse()
+		return reuse(key)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return zero, err
+	}
+	// Recover a pre-fingerprint reservation only for its exact selection. A
+	// different selection must not be blocked by that earlier home or history.
+	legacyKey := fmt.Sprintf("%x.json", sha256.Sum256([]byte(binding)))
+	if b, err := readKimiFile(ctx, root, legacyKey, 1<<20); err == nil {
+		var proof kimiImportProof
+		if json.Unmarshal(b, &proof) != nil {
+			return zero, errors.New("kimi: invalid private import proof")
+		}
+		if proof.Selection == selection {
+			return reuse(legacyKey)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return zero, err
 	}
@@ -120,7 +145,7 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	if err := CheckImportedOAuth(ctx, source, original.Model); err != nil {
 		return zero, err
 	}
-	if r.SourceFingerprint != "" && r.SourceFingerprint != original.Fingerprint {
+	if selection != original.Fingerprint {
 		return zero, errors.New("kimi: source changed since selection; scan again")
 	}
 	home, err := os.MkdirTemp(staging, ".native-")
@@ -190,7 +215,7 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 	}
 	if err := importcopy.WriteOnce(ctx, root, key, proofBytes); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return reuse()
+			return reuse(key)
 		}
 		return zero, err
 	}
