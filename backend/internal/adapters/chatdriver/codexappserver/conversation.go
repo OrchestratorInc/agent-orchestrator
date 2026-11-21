@@ -174,6 +174,7 @@ func (c *conversation) pump() {
 	}()
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
+	subagents := newSubagentRouter(c.scopedID)
 	var usageLimits usageLimitTracker
 
 	for n := range c.conn.notifs() {
@@ -190,6 +191,7 @@ func (c *conversation) pump() {
 		}
 		_ = json.Unmarshal(n.Params, &scope)
 		citations.observeNotification(n, c.threadID)
+		subagents.observe(n, c.threadID)
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
@@ -232,7 +234,11 @@ func (c *conversation) pump() {
 					retry.Kind = ports.ChatEventActivityCompleted
 					retry.ActivityStatus = domain.ActivityStatusCompleted
 					if !completed || (ev.TurnState != domain.TurnStateFailed && ev.Err == nil) {
-						c.emit(retry)
+						// Routed like its start, which a child thread's router may
+						// still hold: the completion must follow it, under the launch.
+						for _, routed := range subagents.route(c.threadID, threadID, retry) {
+							c.emit(routed)
+						}
 					}
 					delete(retries, key)
 				}
@@ -276,8 +282,16 @@ func (c *conversation) pump() {
 				}
 				c.mu.Unlock()
 			}
-			c.emit(ev)
+			for _, routed := range subagents.route(c.threadID, threadID, ev) {
+				c.emit(routed)
+			}
 		}
+		for _, routed := range subagents.release() {
+			c.emit(routed)
+		}
+	}
+	for _, routed := range subagents.flush() {
+		c.emit(routed)
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go
 	// quiet: a silent channel close is indistinguishable from an idle agent.
