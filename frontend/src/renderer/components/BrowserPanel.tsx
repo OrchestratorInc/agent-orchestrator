@@ -99,6 +99,7 @@ import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
 import { isHostLocalWebLink } from "../lib/loopback";
+import { editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -888,13 +889,18 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
 		if (!session.hostId) return url;
-		// A disconnected host has no other address for it: keep the one shown.
-		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
+		return aoBridge.remotes.externalUrl(session.hostId, url).catch((error: unknown) => {
+			if (isHostLocalWebLink(url)) throw error;
+			return url;
+		});
 	};
 
 	const openCurrentPageExternally = async () => {
 		if (!isWebLink(navState.url) || agentPageOnHost) return;
-		await openLinkInSystemBrowser(await externalURL(navState.url));
+		const url = await externalURL(navState.url).catch((error: unknown) => {
+			showGlobalToast(t("sessionServers.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
+		});
+		if (url) await openLinkInSystemBrowser(url);
 	};
 
 	const copyCurrentURL = async () => {
@@ -904,8 +910,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			setUrlCopied(true);
 			clearTimeout(copyFeedbackTimeoutRef.current);
 			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
-		} catch {
-			showGlobalToast(t("browser.urlCopyFailed"), undefined, "top-center");
+		} catch (error) {
+			showGlobalToast(t("browser.urlCopyFailed"), editorHandoffErrorMessage(error) ?? undefined, "top-center");
 		}
 	};
 

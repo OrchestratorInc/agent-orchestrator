@@ -535,6 +535,7 @@ export interface ChatWorkspaceProps {
 	shellError?: string;
 	/** Open an HTTP(S) link in this session's AO Browser panel. */
 	onLinkOpen?: (url: string) => void;
+	hostLocalLinks?: boolean;
 	onSessionLinkOpen?: (url: string) => void;
 	/** A send or decision is in flight. */
 	busy?: boolean;
@@ -898,6 +899,7 @@ function ChatWorkspaceContent({
 	openingShell,
 	shellError,
 	onLinkOpen,
+	hostLocalLinks,
 	onSessionLinkOpen,
 	busy,
 	models,
@@ -2311,6 +2313,7 @@ function ChatWorkspaceContent({
 							onFileOpen={onOpenFile}
 							onSessionLinkOpen={onSessionLinkOpen}
 							remoteHost={Boolean(activeRemoteHostId)}
+							hostLocalLinks={hostLocalLinks}
 							sessionLinkHostId={activeRemoteHostId}
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}

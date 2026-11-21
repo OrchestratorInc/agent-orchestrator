@@ -5533,5 +5533,15 @@
 	"shell.deleteCloudProjectTitle": "Удалить проект навсегда",
 	"shell.deleteCloudProjectLead": "Проект {{name}} будет удалён навсегда",
 	"shell.deleteCloudProjectConfirm": "Удалить навсегда",
-	"shell.cloudProjectDeleted": "Проект {{name}} удалён навсегда"
+	"shell.cloudProjectDeleted": "Проект {{name}} удалён навсегда",
+	"sessionServers.title": "Серверы",
+	"sessionServers.open": "Открыть порт {{port}} в браузере",
+	"sessionServers.forward": "Пробросить",
+	"sessionServers.forwardLabel": "Пробросить порт {{port}} на этот компьютер",
+	"sessionServers.forwardedTitle": "Проброшен на этот компьютер",
+	"sessionServers.stop": "Остановить",
+	"sessionServers.stopLabel": "Остановить проброс порта {{port}}",
+	"sessionServers.forwardFailed": "Не удалось пробросить порт",
+	"remote.shareLocalhost": "Открыть доступ к localhost",
+	"remote.shareLocalhostDescription": "Ваши другие устройства смогут открывать серверы этого компьютера и пробрасывать его порты."
 }

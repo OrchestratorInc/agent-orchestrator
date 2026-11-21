@@ -5227,5 +5227,15 @@
 	"shell.deleteCloudProjectTitle": "删除项目",
 	"shell.deleteCloudProjectLead": "这将永久删除 {{name}}",
 	"shell.deleteCloudProjectConfirm": "永久删除",
-	"shell.cloudProjectDeleted": "已永久删除 {{name}}"
+	"shell.cloudProjectDeleted": "已永久删除 {{name}}",
+	"sessionServers.title": "服务器",
+	"sessionServers.open": "在浏览器中打开端口 {{port}}",
+	"sessionServers.forward": "转发",
+	"sessionServers.forwardLabel": "将端口 {{port}} 转发到这台电脑",
+	"sessionServers.forwardedTitle": "已转发到这台电脑",
+	"sessionServers.stop": "停止",
+	"sessionServers.stopLabel": "停止转发端口 {{port}}",
+	"sessionServers.forwardFailed": "无法转发端口",
+	"remote.shareLocalhost": "共享 localhost",
+	"remote.shareLocalhostDescription": "你的其他设备可以打开这台电脑上的服务器并转发其端口。"
 }

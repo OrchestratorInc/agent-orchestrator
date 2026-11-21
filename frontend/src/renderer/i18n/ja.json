@@ -5245,5 +5245,15 @@
 	"shell.deleteCloudProjectTitle": "プロジェクトを完全に削除",
 	"shell.deleteCloudProjectLead": "{{name}} を完全に削除します",
 	"shell.deleteCloudProjectConfirm": "完全に削除",
-	"shell.cloudProjectDeleted": "{{name}} を完全に削除しました"
+	"shell.cloudProjectDeleted": "{{name}} を完全に削除しました",
+	"sessionServers.title": "サーバー",
+	"sessionServers.open": "ポート {{port}} をブラウザで開く",
+	"sessionServers.forward": "転送",
+	"sessionServers.forwardLabel": "ポート {{port}} をこのコンピュータに転送",
+	"sessionServers.forwardedTitle": "このコンピュータに転送済み",
+	"sessionServers.stop": "停止",
+	"sessionServers.stopLabel": "ポート {{port}} の転送を停止",
+	"sessionServers.forwardFailed": "ポートを転送できませんでした",
+	"remote.shareLocalhost": "localhost を共有",
+	"remote.shareLocalhostDescription": "他のデバイスからこのコンピュータのサーバーを開き、ポートを転送できます。"
 }

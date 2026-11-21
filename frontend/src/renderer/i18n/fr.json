@@ -5393,5 +5393,15 @@
 	"shell.deleteCloudProjectTitle": "Supprimer le projet",
 	"shell.deleteCloudProjectLead": "Cela supprimera définitivement {{name}}",
 	"shell.deleteCloudProjectConfirm": "Supprimer définitivement",
-	"shell.cloudProjectDeleted": "{{name}} supprimé définitivement"
+	"shell.cloudProjectDeleted": "{{name}} supprimé définitivement",
+	"sessionServers.title": "Serveurs",
+	"sessionServers.open": "Ouvrir le port {{port}} dans le navigateur",
+	"sessionServers.forward": "Rediriger",
+	"sessionServers.forwardLabel": "Rediriger le port {{port}} vers cet ordinateur",
+	"sessionServers.forwardedTitle": "Redirigé vers cet ordinateur",
+	"sessionServers.stop": "Arrêter",
+	"sessionServers.stopLabel": "Arrêter la redirection du port {{port}}",
+	"sessionServers.forwardFailed": "Impossible de rediriger le port",
+	"remote.shareLocalhost": "Partager localhost",
+	"remote.shareLocalhostDescription": "Vos autres appareils peuvent ouvrir les serveurs de cet ordinateur et rediriger ses ports."
 }

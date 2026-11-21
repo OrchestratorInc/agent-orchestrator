@@ -20,7 +20,7 @@ import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
 /** Shared web-link behavior; native fragments and special schemes retain their handlers. */
-export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, filePath, menuPath, onFileOpen, hoverPreview, noHoverPreview, ref, ...props }: ComponentProps<"a"> & {
+export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, externalUrl, filePath, menuPath, onFileOpen, hoverPreview, noHoverPreview, ref, ...props }: ComponentProps<"a"> & {
 	onBrowserOpen?: (url: string) => void;
 	inAppLink?: (url: string) => boolean;
 	/**
@@ -29,6 +29,7 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	 * Browser. Schemes other than http(s) and mailto open nothing.
 	 */
 	systemBrowser?: boolean;
+	externalUrl?: (url: string) => Promise<string | undefined>;
 	filePath?: string;
 	/** A displayed filesystem path whose click navigates elsewhere, such as an artifact link. */
 	menuPath?: string;
@@ -48,6 +49,8 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	const hasHoverPreview = !noHoverPreview && (webLink || Boolean(hoverPreview));
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
+	const openExternally = (url: string) => void (externalUrl ? externalUrl(url).then((resolved) => resolved ? openLinkInSystemBrowser(resolved) : undefined) : openLinkInSystemBrowser(url));
+	const copy = (url: string) => void (externalUrl ? externalUrl(url).then((resolved) => resolved ? aoBridge.clipboard.writeText(resolved) : undefined) : aoBridge.clipboard.writeText(url));
 	const anchorRef = useRef<HTMLAnchorElement>(null);
 	useImperativeHandle(ref, () => anchorRef.current as HTMLAnchorElement);
 	// Gaining or losing a card remounts the anchor, so that re-runs this too.
@@ -68,14 +71,15 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 				if (!browserLink) return;
 				event.preventDefault();
 				if (openBrowser && (!webLink || (!event.ctrlKey && !event.metaKey && !event.altKey))) openBrowser(href);
-				else void openLinkInSystemBrowser(href);
+				else openExternally(href);
 			}}
 			onAuxClick={(event) => {
 				onAuxClick?.(event);
 				// Middle click would otherwise open a window the shell routes on its own.
-				if (!systemBrowser || event.button !== 1 || event.defaultPrevented || !href) return;
+				if ((!systemBrowser && !externalUrl) || event.button !== 1 || event.defaultPrevented || !href) return;
 				event.preventDefault();
-				if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
+				if (externalUrl) openExternally(href);
+				else if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
 			}}
 		/>
 	);
@@ -113,14 +117,14 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 					</ContextMenuItem>
 				)}
 				{webLink && (
-					<ContextMenuItem onSelect={() => void openLinkInSystemBrowser(href)}>
+					<ContextMenuItem onSelect={() => openExternally(href)}>
 						<ExternalLink aria-hidden="true" />
 						{t("link.openInExternalBrowser")}
 					</ContextMenuItem>
 				)}
 				{(showBrowserAction || (filePath && onFileOpen)) && <ContextMenuSeparator />}
 				{contextPath && pathMenuContext ? <ChatPathMenuItems path={contextPath} /> : (
-					<ContextMenuItem onSelect={() => void aoBridge.clipboard.writeText(href)}>
+					<ContextMenuItem onSelect={() => copy(href)}>
 						<Copy aria-hidden="true" />
 						{t("link.copy")}
 					</ContextMenuItem>

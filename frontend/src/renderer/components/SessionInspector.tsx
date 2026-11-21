@@ -61,6 +61,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { SessionForksSection } from "./SessionForksSection";
+import { SessionServersSection } from "./SessionServersSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
@@ -606,7 +607,7 @@ const SummaryView = memo(function SummaryView({
 				/>
 			)}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} policies={hasPRs} scratchpad={scratchpadSession} session={session} stopTurn={stopTurn} /> : undefined}
-			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
+			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : <SessionServersSection hostId={hostId} session={session} visible={inspectorVisible} />}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
 	);

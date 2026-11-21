@@ -156,14 +156,32 @@ func (c *MobileController) RequireDeviceCredentials(w http.ResponseWriter, r *ht
 		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "DEVICE_PAIRING", "device pairing is unavailable", nil)
 		return
 	}
-	var req SetRequireDeviceCredentialsRequest
+	writeSwitch(w, r, setter.SetRequireDeviceCredentials, "MOBILE_REQUIRE_DEVICE_CREDENTIALS")
+}
+
+// LoopbackTunnel handles POST /api/v1/mobile/loopback-tunnel.
+func (c *MobileController) LoopbackTunnel(w http.ResponseWriter, r *http.Request) {
+	setter, ok := c.Bridge.(interface {
+		SetLoopbackTunnel(bool) (MobileStatusResponse, error)
+	})
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "LOOPBACK_TUNNEL", "the localhost tunnel is unavailable", nil)
+		return
+	}
+	writeSwitch(w, r, setter.SetLoopbackTunnel, "MOBILE_LOOPBACK_TUNNEL")
+}
+
+func writeSwitch(w http.ResponseWriter, r *http.Request, set func(bool) (MobileStatusResponse, error), code string) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	res, err := setter.SetRequireDeviceCredentials(req.Enabled)
+	res, err := set(req.Enabled)
 	if err != nil {
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_REQUIRE_DEVICE_CREDENTIALS", err.Error(), nil)
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", code, err.Error(), nil)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, withWarning(res))
@@ -503,6 +521,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 		Port:                b.LAN.BoundPort(),
 		Warning:             mobileUnencryptedWarning,
 		BrowserRemoteAccess: st.BrowserRemoteAccess,
+		LoopbackTunnel:      !st.NoLoopbackTunnel,
 		Endpoints: mobilebridge.Endpoints(mobilebridge.EndpointInputs{
 			LANHosts:       lan,
 			TailscaleHosts: ts,
@@ -881,7 +900,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 	wasRunning := b.LAN.Running()
 	prevSt, _ := mobilebridge.Load(b.ConfigPath)
 
-	b.applyPasswordLogin(prevSt)
+	b.applyLANAccess(prevSt)
 
 	// A fresh listener must be armed before binding. For an already-running
 	// listener, wait until persistence succeeds before rotating the hash: a
@@ -917,7 +936,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		accountToken = ""
 		accountTokenOwner = ""
 	}
-	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, RequireDeviceCredentials: prevSt.RequireDeviceCredentials, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, KeepAwakeLid: prevSt.KeepAwakeLid, BrowserRemoteAccess: prevSt.BrowserRemoteAccess, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
+	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, RequireDeviceCredentials: prevSt.RequireDeviceCredentials, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, KeepAwakeLid: prevSt.KeepAwakeLid, BrowserRemoteAccess: prevSt.BrowserRemoteAccess, NoLoopbackTunnel: prevSt.NoLoopbackTunnel, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
 	if err := mobilebridge.Save(b.ConfigPath, nextSt); err != nil {
 		// Persist failed after the listener came up. A running listener still
 		// serves the old hash; a fresh enable must tear the listener back down.
@@ -1015,7 +1034,7 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
 		setter.SetAccountTokenHash(state.AccountTokenHash)
 	}
-	b.applyPasswordLogin(state)
+	b.applyLANAccess(state)
 	start := b.LAN.Start
 	if state.LoopbackOnly {
 		start = b.LAN.StartLoopback
@@ -1112,9 +1131,12 @@ var (
 	errPairingCodeUsed = errors.New("the pairing code is used or expired; make a new one")
 )
 
-func (b *BridgeService) applyPasswordLogin(st mobilebridge.State) {
+func (b *BridgeService) applyLANAccess(st mobilebridge.State) {
 	if setter, ok := b.LAN.(interface{ SetPasswordLoginDisabled(bool) }); ok {
 		setter.SetPasswordLoginDisabled(st.RequireDeviceCredentials)
+	}
+	if setter, ok := b.LAN.(interface{ SetLoopbackTunnelOff(bool) }); ok {
+		setter.SetLoopbackTunnelOff(st.NoLoopbackTunnel)
 	}
 }
 
@@ -1194,7 +1216,25 @@ func (b *BridgeService) SetRequireDeviceCredentials(on bool) (MobileStatusRespon
 			return MobileStatusResponse{}, err
 		}
 	}
-	b.applyPasswordLogin(st)
+	b.applyLANAccess(st)
+	return b.Status(), nil
+}
+
+// SetLoopbackTunnel turns the localhost tunnel for paired desktops on or off.
+func (b *BridgeService) SetLoopbackTunnel(on bool) (MobileStatusResponse, error) {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil {
+		return MobileStatusResponse{}, err
+	}
+	if st.NoLoopbackTunnel == on {
+		st.NoLoopbackTunnel = !on
+		if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
+			return MobileStatusResponse{}, err
+		}
+	}
+	b.applyLANAccess(st)
 	return b.Status(), nil
 }
 

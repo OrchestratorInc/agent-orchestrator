@@ -2741,6 +2741,17 @@ func mobileOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/mobile/loopback-tunnel", id: "setMobileLoopbackTunnel", tag: "mobile",
+			summary: "Let paired desktops reach this machine's localhost ports, or stop them",
+			reqBody: controllers.SetLoopbackTunnelRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MobileStatusResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/mobile/status", id: "getMobileStatus", tag: "mobile",
 			summary: "Check whether Connect Mobile's LAN bridge is enabled",
 			resps: []respUnit{
@@ -3476,6 +3487,17 @@ func sessionOperations() []operation {
 				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/servers", id: "listSessionServers", tag: "sessions",
+			summary:    "List the TCP ports a session's processes listen on",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SessionServersResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

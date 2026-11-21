@@ -527,6 +527,10 @@ if (typeof window !== "undefined") {
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		agentBrowserUrl: async () => "",
 			externalUrl: async (_hostId: string, url: string) => url,
+			loopbackReach: async () => "off" as const,
+			portForwards: async () => [],
+			forwardPort: async () => { throw new Error("remote hosts need the desktop app"); },
+			stopPortForward: async () => undefined,
 		},
 		cloud: {
 			getSession: async () => null,

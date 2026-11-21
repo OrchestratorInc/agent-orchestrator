@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
+import { queryClient } from "../lib/query-client";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -237,6 +238,7 @@ describe("useBrowserView", () => {
 		resetConsumedPreviewTriggersForTest();
 		resetClosedTabsForTest();
 		resetNativeViewCacheForTest();
+		queryClient.removeQueries({ queryKey: ["loopback-reach"] });
 	});
 
 	it("ensures a scoped browser view and reports the measured slot bounds", async () => {
@@ -1756,6 +1758,19 @@ describe("useBrowserView", () => {
 			viewId: "42:remote:box-a:ao-1", url: "http://ao-preview-abc.localhost:4000/",
 		}));
 		expect(browser.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ url: "http://localhost:5173/" }));
+	});
+
+	it("loads a remote loopback preview at its own address when the host shares its localhost", async () => {
+		const browser = setupBridge();
+		vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("tunnel");
+		const resolve = vi.spyOn(aoBridge.remotes, "previewUrl");
+		renderHook(() => useBrowserView({
+			sessionId: "remote:box-a:ao-1",
+			origin: { hostId: "box-a", sessionId: "ao-1", proxyBase: "http://127.0.0.1:4000/token" },
+			active: true, poppedOut: false, previewUrl: "localhost:5173/app", previewRevision: 1,
+		}));
+		await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({ viewId: "42:remote:box-a:ao-1", url: "http://localhost:5173/app" }));
+		expect(resolve).not.toHaveBeenCalled();
 	});
 
 	it("revokes a remote preview origin when its target clears or session terminates", async () => {

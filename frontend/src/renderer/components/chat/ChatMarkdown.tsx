@@ -49,6 +49,8 @@ import { cn } from "../../lib/utils";
 import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
+import { appI18n } from "../../i18n";
+import { editorHandoffErrorMessage } from "../../hooks/useEditorHandoff";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
@@ -66,6 +68,7 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { aoBridge } from "../../lib/bridge";
 import { LinkFavicon } from "../LinkPreviewCard";
 import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
 import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
@@ -119,6 +122,7 @@ const OpenChatLink = createContext<{
 	open?: (url: string) => void;
 	openFile?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
@@ -153,6 +157,7 @@ export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
+	hostLocalLinks,
 	sessionLinkHostId,
 	sessionLinkSourceKind,
 	onSessionLinkOpen,
@@ -163,6 +168,7 @@ export function ChatLinkProvider({
 	onLinkOpen?: (url: string) => void;
 	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	onSessionLinkOpen?: (url: string) => void;
@@ -177,8 +183,8 @@ export function ChatLinkProvider({
 	const canOpenFile = Boolean(onFileOpen);
 	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
-		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
+		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
+		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
 	);
 	const pathMenuValue = useMemo(
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
@@ -208,7 +214,7 @@ function chatUrlTransform(url: string, key: string): string | undefined {
 	// the click still goes through the workspace-confined preview endpoint.
 	if (isAoLink(url)) return url;
 	if (key === "href" && isPotentialWorkspaceFileLink(url)) return url;
-	return defaultUrlTransform(url);
+	return defaultUrlTransform(url.replace(/^(https?:\/\/)%5B([^/?#]*)%5D/i, "$1[$2]"));
 }
 
 const streamUrlTransform = (url: string, key: "href" | "src") => {
@@ -529,9 +535,15 @@ function InlineLinkFavicon({ href }: { href: string }) {
 	);
 }
 
+const hostExternalUrl = (hostId: string, url: string): Promise<string | undefined> =>
+	aoBridge.remotes.externalUrl(hostId, url).catch((error: unknown) => {
+		useUiStore.getState().showGlobalToast(appI18n.t("sessionServers.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
+		return undefined;
+	});
+
 function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
+	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
 		: undefined;
@@ -545,7 +557,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 	const linkedFile = href && sessionId && onFileOpen ? explicitWorkspaceFilePath(href.split(/[?#]/, 1)[0]!) : undefined;
 	const ownArtifact = linkedFile && sessionId && sessionArtifactPath(linkedFile, sessionId) ? linkedFile : undefined;
 	const openInFiles = ownArtifact ?? (filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined);
-	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
+	if (remoteHost && href && ((isHostLocalWebLink(href) && !hostLocalLinks) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
 		</span>;
@@ -554,9 +566,12 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
+	const hostLocalOn = remoteHost && sessionLinkHostId && href && isHostLocalWebLink(href) ? sessionLinkHostId : undefined;
 	return (
 		<AppLink
 			href={href}
+			noHoverPreview={Boolean(hostLocalOn)}
+			externalUrl={hostLocalOn ? (url) => hostExternalUrl(hostLocalOn, url) : undefined}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={ownArtifact ?? (filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath)}
@@ -670,12 +685,15 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
  * must stay module-level so react-markdown's memoization survives polling.
  */
 function MermaidFence({ code }: { code: string }) {
-	const { open: onLinkOpen, remoteHost } = useContext(OpenChatLink);
+	const { open: onLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId } = useContext(OpenChatLink);
 	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
 		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
 		if (!href || !isHostLocalWebLink(href)) return;
+		const external = event.type === "click" ? event.metaKey || event.ctrlKey || event.altKey : event.type === "auxclick" && event.button === 1;
+		if (hostLocalLinks && !external) return;
 		event.preventDefault();
 		event.stopPropagation();
+		if (hostLocalLinks && sessionLinkHostId) void hostExternalUrl(sessionLinkHostId, href).then((resolved) => resolved ? openLinkInSystemBrowser(resolved) : undefined);
 	};
 	const diagram = <MermaidBlock code={code} onLinkOpen={onLinkOpen} />;
 	return remoteHost

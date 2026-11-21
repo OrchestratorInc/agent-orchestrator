@@ -230,6 +230,7 @@ interface MobileStatus {
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
 	browserRemoteAccess?: boolean;
+	loopbackTunnel?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
@@ -573,6 +574,23 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSettled: invalidate,
 	});
 
+	const setLoopbackTunnel = useMutation({
+		mutationFn: async (loopbackTunnel: boolean) => {
+			const { error } = await apiClient.POST("/api/v1/mobile/loopback-tunnel", { body: { enabled: loopbackTunnel } });
+			if (error) throw apiErrorException(error);
+		},
+		onMutate: async (loopbackTunnel) => {
+			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
+			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, loopbackTunnel });
+			return { previous };
+		},
+		onError: (_error, _enabled, context) => {
+			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
+		},
+		onSettled: invalidate,
+	});
+
 	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
 	// is deliberately not tied to the connection picker. iOS refuses cleartext
 	// to a 100.x address, so a Tailscale pairing without it works on Android and
@@ -661,6 +679,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.isPending ||
 		setSecure.isPending ||
 		setBrowserRemoteAccess.isPending ||
+		setLoopbackTunnel.isPending ||
 		stayAwake.busy;
 
 	const clearActionErrors = () => {
@@ -670,6 +689,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setBrowserRemoteAccess.reset();
+		setLoopbackTunnel.reset();
 		setLinkError("");
 	};
 
@@ -723,6 +743,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		(setLoopbackTunnel.error instanceof Error && setLoopbackTunnel.error.message) ||
 		(pairingCodeFailed && pairing.error instanceof Error && pairing.error.message) ||
 		stayAwake.error ||
 		linkError ||
@@ -1041,6 +1062,22 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					onCheckedChange={(next) => {
 						clearActionErrors();
 						setBrowserRemoteAccess.mutate(next);
+					}}
+				/>
+			</SettingsRow>
+			<SettingsRow
+				icon={Globe}
+				label={t("remote.shareLocalhost")}
+				description={t("remote.shareLocalhostDescription")}
+				data-testid="mobile-loopback-tunnel"
+			>
+				<Switch
+					aria-label={t("remote.shareLocalhost")}
+					disabled={busy}
+					checked={status.loopbackTunnel ?? true}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setLoopbackTunnel.mutate(next);
 					}}
 				/>
 			</SettingsRow>

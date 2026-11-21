@@ -9,9 +9,11 @@ import {
 	createBrowserViewHost,
 	isAllowedBrowserURL,
 	normalizeBrowserURL,
+	remoteHostOfBrowserSession,
 	sanitizeBrowserTitle,
 	sanitizeBrowserURL,
 	scaleBoundsForZoom,
+	sessionBrowserPartition,
 	shouldHandleAppShortcutInBrowserContext,
 } from "./browser-view-host";
 import { browserProfilePartition, type BrowserProfile } from "../shared/browser-profiles";
@@ -2682,6 +2684,18 @@ describe("browser profile partitions and replacement", () => {
 
 		const partition = constructorOptions[0]!.webPreferences.partition!;
 		expect(order.slice(0, 2)).toEqual([`prepare ${partition}`, `construct ${partition}`]);
+	});
+
+	it("still opens pages in a tab whose partition could not be routed", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const prepare = vi.fn(() => Promise.reject(new Error("no proxy")));
+		const { invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, undefined, prepare);
+		const state = (await invoke("browser:ensure", "worker-1")) as { viewId: string };
+		const loaded = (await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" })) as BrowserNavState;
+		expect(loaded.url).toBe("https://example.test/");
+		expect(loaded.error).toBeUndefined();
+		expect(warn).toHaveBeenCalledWith("Unable to route the browser partition through its host", expect.any(Error));
+		warn.mockRestore();
 	});
 
 	it("clears temporary persisted partitions when their browser session is destroyed", async () => {
@@ -6913,5 +6927,18 @@ describe("sites that refuse the Browser panel", () => {
 		await invoke("browser:clear", viewId);
 		await expect(invoke("browser:openInUserBrowser", viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
 		expect(openInUserBrowser).toHaveBeenCalledOnce();
+	});
+});
+
+describe("remote session partitions", () => {
+	it("keeps each remote host's pages in a partition of its own", () => {
+		const profile = "6f2c1a8e-4b3d-4c1e-9a7f-2d5e8b1c0a93";
+		const remote = `remote:${encodeURIComponent("h_box/1")}:${encodeURIComponent("s:1")}`;
+		expect(remoteHostOfBrowserSession(remote)).toBe("h_box/1");
+		expect(remoteHostOfBrowserSession("s-1")).toBeUndefined();
+		expect(remoteHostOfBrowserSession("remote:%E0%A4:s")).toBeUndefined();
+		expect(sessionBrowserPartition(profile, "h_box/1")).toBe(`${browserProfilePartition(profile)}-host-h_box_1`);
+		expect(sessionBrowserPartition(profile)).toBe(browserProfilePartition(profile));
+		expect(sessionBrowserPartition(null, "h_box")).not.toContain("-host-");
 	});
 });

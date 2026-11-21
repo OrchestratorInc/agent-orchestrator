@@ -5245,5 +5245,15 @@
 	"shell.deleteCloudProjectTitle": "Projekt löschen",
 	"shell.deleteCloudProjectLead": "Dadurch wird {{name}} endgültig gelöscht",
 	"shell.deleteCloudProjectConfirm": "Endgültig löschen",
-	"shell.cloudProjectDeleted": "{{name}} gelöscht"
+	"shell.cloudProjectDeleted": "{{name}} gelöscht",
+	"sessionServers.title": "Server",
+	"sessionServers.open": "Port {{port}} im Browser öffnen",
+	"sessionServers.forward": "Weiterleiten",
+	"sessionServers.forwardLabel": "Port {{port}} an diesen Computer weiterleiten",
+	"sessionServers.forwardedTitle": "An diesen Computer weitergeleitet",
+	"sessionServers.stop": "Stoppen",
+	"sessionServers.stopLabel": "Weiterleitung von Port {{port}} stoppen",
+	"sessionServers.forwardFailed": "Port konnte nicht weitergeleitet werden",
+	"remote.shareLocalhost": "localhost freigeben",
+	"remote.shareLocalhostDescription": "Deine anderen Geräte können Server auf diesem Computer öffnen und seine Ports weiterleiten."
 }
