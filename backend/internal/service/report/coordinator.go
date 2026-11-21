@@ -635,6 +635,13 @@ const (
 	chatReportClose = "</ao-worker-reports>"
 )
 
+// Only the daemon's outer envelope may contain the reserved markers, even when
+// a report payload or attribution includes them as ordinary text.
+var chatReportContentEscaper = strings.NewReplacer(
+	chatReportOpen, "&lt;ao-worker-reports&gt;",
+	chatReportClose, "&lt;/ao-worker-reports&gt;",
+)
+
 // AppendToUserMessage places reports after the user's text in one semantic turn.
 // The envelope lets AO's Chat UI hide daemon-authored context while preserving
 // the exact prompt accepted by the provider for retry and recovery.
@@ -642,7 +649,7 @@ func (b PreparedBatch) AppendToUserMessage(message string) string {
 	if len(b.Reports) == 0 {
 		return message
 	}
-	return message + "\n\n" + chatReportOpen + "\n" + b.Render() + "\n" + chatReportClose
+	return message + "\n\n" + chatReportOpen + "\n" + chatReportContentEscaper.Replace(b.Render()) + "\n" + chatReportClose
 }
 
 // IdempotencyKey returns the stable durable delivery identity.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -196,7 +197,30 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 	if images > 8 || imageBytes > 25*1024*1024 {
 		return ErrQueuedContentInvalid
 	}
-	if strings.TrimSpace(edit.Text) == "" && len(content) == 0 {
+	text, reports := edit.Text, ""
+	if strings.HasSuffix(message.Text, "</ao-worker-reports>") {
+		if index := strings.LastIndex(message.Text, "\n\n<ao-worker-reports>\n"); index >= 0 {
+			// The report batch belongs to the recorded turn, not the editor.
+			// Preserve its exact context and attribution, including when an older
+			// client sends the full envelope back with its human-text edit.
+			reports = message.Text[index:]
+			// Match only the recorded batch: report-shaped human examples stay
+			// editable. Older clients may add whitespace after the envelope.
+			legacyText := strings.TrimRightFunc(text, unicode.IsSpace)
+			if strings.HasSuffix(legacyText, reports) {
+				text = strings.TrimSuffix(legacyText, reports)
+			} else if index := strings.LastIndex(legacyText, reports); index >= 0 {
+				// Older editors may leave the batch in the prose and append
+				// staged file references after it. Keep the files, but move the
+				// exact recorded batch back to the authoritative suffix.
+				footer := legacyText[index+len(reports):]
+				if strings.HasPrefix(footer, "\n\n") && stagedAttachmentFooterIndex(footer) == 0 {
+					text = legacyText[:index] + footer
+				}
+			}
+		}
+	}
+	if strings.TrimSpace(text) == "" && len(content) == 0 {
 		return ErrQueuedTurnTextRequired
 	}
 	encoded := ""
@@ -208,7 +232,7 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 		encoded = string(data)
 	}
 	return c.store.UpdateQueuedTurnMessage(ctx, c.conversation.ID, turnID,
-		edit.Text, encoded, message.Revision, c.now(), delivery)
+		text+reports, encoded, message.Revision, c.now(), delivery)
 }
 
 func queuedEditDelivery(turnID string, edit QueuedMessageEdit) (domain.ConversationQueuedEditDelivery, error) {

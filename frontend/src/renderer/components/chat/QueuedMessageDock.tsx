@@ -21,6 +21,7 @@ import { Pressable } from "../ui/pressable";
 import type { ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
+import { humanVisibleText } from "./ChatTimelineItems";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 
 export type QueuedMessage = {
@@ -107,7 +108,7 @@ function QueuedMessageRowContent({
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
-	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	onBeginQueuedEdit?: (turnId: string) => void;
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	canCancelMessage?: (message: ConversationMessage) => boolean;
@@ -123,6 +124,7 @@ function QueuedMessageRowContent({
 	dragHandleProps?: Record<string, unknown>;
 }) {
 	const { t } = useTranslation();
+	const visibleText = message.origin === "human" ? humanVisibleText(message.text) : message.text;
 	const annotations = message.origin === "human" ? null : parseBrowserAnnotationMessage(message.text);
 	// Lead with what the user wrote: page titles and counts alone leave two
 	// batches from the same page indistinguishable.
@@ -131,7 +133,7 @@ function QueuedMessageRowContent({
 	const text = annotations
 		? [annotations.items[0] ? annotationLabel(annotations.items[0]) : annotations.pageTitle,
 			t("browser.annotationCount", { count: annotations.items.length })].join(" · ")
-		: labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+		: labelInlineImages(visibleText, (index) => t("chat.image.numbered", { index }));
 	const tooltip = annotations
 		? [annotations.pageTitle, ...annotations.items.map((item) => `${item.number}. ${annotationLabel(item)}`)].join("\n")
 		: text;
@@ -217,7 +219,7 @@ function QueuedMessageRowContent({
 						size="icon-sm"
 						disabled={busy}
 						className={steadyClass}
-						onClick={() => onBeginQueuedEdit(turnId, message.text)}
+						onClick={() => onBeginQueuedEdit(turnId)}
 						aria-label="Edit queued message"
 						title="Edit"
 					>
@@ -289,7 +291,7 @@ function SortableQueuedMessageRow({
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
-	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	onBeginQueuedEdit?: (turnId: string) => void;
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	canCancelMessage?: (message: ConversationMessage) => boolean;
@@ -400,7 +402,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	canSteerNext?: boolean;
 	steerNextRequest?: number;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
-	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	onBeginQueuedEdit?: (turnId: string) => void;
 	/** Which human messages Edit is offered on; every one when absent. */
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;

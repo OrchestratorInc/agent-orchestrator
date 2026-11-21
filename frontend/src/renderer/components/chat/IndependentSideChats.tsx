@@ -2205,9 +2205,11 @@ export function useIndependentSideChats(
 										<QueuedMessageDock
 											messages={queuedMessages}
 											onCancelQueuedTurn={(turnId) => cancelQueuedTurn(activeId, turnId)}
-											onBeginQueuedEdit={(turnId, text) => {
+											onBeginQueuedEdit={(turnId) => {
 												if (!operationCurrent(activeId)()) return;
-												setQueuedEditors(current => ({ ...current, [activeId]: { turnId, text } }));
+												const turn = (snapshot.turns ?? []).find(turn => turn.id === turnId && turn.state === "queued");
+												if (!turn) return;
+												setQueuedEditors(current => ({ ...current, [activeId]: { turnId, text: turn.text } }));
 											}}
 										/>
 										{editingTurnId ? (

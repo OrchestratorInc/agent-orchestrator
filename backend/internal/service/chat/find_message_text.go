@@ -75,21 +75,27 @@ func findMessageText(message domain.ConversationMessage) string {
 			source = source[:index]
 		}
 	}
-	if match := findAttachmentSuffix.FindStringSubmatchIndex(source); match != nil {
-		valid := true
-		for _, line := range strings.Split(strings.TrimRight(source[match[2]:match[3]], "\n"), "\n") {
-			if !findStagedPath.MatchString(strings.TrimPrefix(line, "- ")) {
-				valid = false
-				break
-			}
-		}
-		if valid {
-			source = source[:match[0]]
-		}
+	if index := stagedAttachmentFooterIndex(source); index >= 0 {
+		source = source[:index]
 	}
 	// Inline image paths are removed per block by FindUserBlocks, which knows
 	// which ones the bubble draws as image chips and which it shows as code.
 	return source
+}
+
+// stagedAttachmentFooterIndex recognizes only the footer formats and paths
+// produced by AO. A prose example about other paths is not an attachment.
+func stagedAttachmentFooterIndex(text string) int {
+	match := findAttachmentSuffix.FindStringSubmatchIndex(text)
+	if match == nil {
+		return -1
+	}
+	for _, line := range strings.Split(strings.TrimRight(text[match[2]:match[3]], "\n"), "\n") {
+		if !findStagedPath.MatchString(strings.TrimPrefix(line, "- ")) {
+			return -1
+		}
+	}
+	return match[0]
 }
 
 // stripInlineImages removes staged image paths the bubble draws as image chips.
