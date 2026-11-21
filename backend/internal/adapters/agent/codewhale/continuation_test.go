@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codewhalestore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
@@ -420,5 +421,116 @@ func TestLegacyNonImportedRestorePreparesNewRuntime(t *testing.T) {
 	argv, ok, err := p.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
 	if err != nil || !ok || argv[len(argv)-1] != restoreTestID {
 		t.Fatalf("legacy restore = %v, %v, %v", argv, ok, err)
+	}
+}
+
+func TestImportedCodeWhaleReopenAllowsNativeHistoryGrowth(t *testing.T) {
+	root, sourceCWD, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+	source := writeRestoreSnapshot(t, root, sourceCWD, restoreTestID, "")
+	p := &Plugin{resolvedBinary: "/synthetic/codewhale"}
+	prepared, err := p.PrepareImportedSession(t.Context(), ports.ImportedSessionRelocation{NativeSessionID: restoreTestID, ConfigDir: root, TranscriptPath: source, LaunchCWD: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.WorkspaceHookConfig{WorkspacePath: workspace, Env: map[string]string{codewhaleHomeEnv: root}}
+	if got, err := p.nativeRestoreRuntimeDir(t.Context(), cfg, prepared.NativeSessionID, root, runtimeDir); err != nil || got != runtimeDir {
+		t.Fatalf("first open = %q, %v", got, err)
+	}
+	// Native first save removes ao_import and binds the copied conversation.
+	seedRuntimeOwner(t, runtimeDir)
+	path := writeRestoreSnapshot(t, root, workspace, prepared.NativeSessionID, runtimeDir)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	messages := doc["messages"].([]any)
+	for range 257 {
+		messages = append(messages, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": strings.Repeat("x", 64<<10)}}})
+	}
+	doc["messages"] = messages
+	body, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codewhalestore.Read(t.Context(), root, path); err == nil {
+		t.Fatal("source-admission budget was not exceeded")
+	}
+	if got, err := p.nativeRestoreRuntimeDir(t.Context(), cfg, prepared.NativeSessionID, root, t.TempDir()); err != nil || got != runtimeDir {
+		t.Fatalf("grown imported restore = %q, %v", got, err)
+	}
+	ref := ports.NativeSessionRef{ConfigDir: root, NativeSessionID: prepared.NativeSessionID}
+	if got, ok, err := p.LocateTranscript(t.Context(), ref); err != nil || !ok || got != path {
+		t.Fatalf("grown locator = %q, %v, %v", got, ok, err)
+	}
+	if got, err := p.ProbeNativeSession(t.Context(), ref); err != nil || got != ports.NativeSessionAvailabilityAvailable {
+		t.Fatalf("grown probe = %q, %v", got, err)
+	}
+	restore := ports.RestoreConfig{Env: cfg.Env, Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: prepared.NativeSessionID, ports.MetadataKeyImportConfigDir: root}}}
+	if argv, ok, err := p.GetRestoreCommand(t.Context(), restore); err != nil || !ok || argv[len(argv)-1] != prepared.NativeSessionID {
+		t.Fatalf("grown command = %v, %v, %v", argv, ok, err)
+	}
+	for _, kind := range []string{"identity", "workspace", "owner", "override", "profile", "import marker", "unbound", "malformed"} {
+		t.Run(kind, func(t *testing.T) {
+			env := map[string]string{codewhaleHomeEnv: root}
+			invalid := ports.WorkspaceHookConfig{WorkspacePath: workspace, Env: env}
+			saved := append([]byte(nil), body...)
+			defer func() {
+				if err := os.WriteFile(path, saved, 0o600); err != nil {
+					t.Error(err)
+				}
+				seedRuntimeOwner(t, runtimeDir)
+			}()
+			switch kind {
+			case "identity":
+				doc["metadata"].(map[string]any)["id"] = restoreTestID
+			case "workspace":
+				invalid.WorkspacePath = t.TempDir()
+			case "owner":
+				if err := os.WriteFile(filepath.Join(runtimeDir, "owner.json"), []byte(`{"owner_id":"foreign"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "override":
+				env[codewhaleRuntimeDirEnv] = t.TempDir()
+			case "profile":
+				env[codewhaleHomeEnv] = t.TempDir()
+			case "import marker":
+				doc["ao_import"] = map[string]any{"source_id": restoreTestID, "digest": "invalid"}
+			case "unbound":
+				delete(doc["metadata"].(map[string]any), "runtime_store")
+			case "malformed":
+				if err := os.WriteFile(path, append(saved, []byte(` {}`)...), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "identity" || kind == "import marker" || kind == "unbound" {
+				changed, err := json.Marshal(doc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, changed, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := p.nativeRestoreRuntimeDir(t.Context(), invalid, prepared.NativeSessionID, root, t.TempDir()); err == nil {
+				t.Fatal("invalid adopted binding accepted")
+			}
+			if err := json.Unmarshal(saved, &doc); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if after, err := os.ReadFile(path); err != nil || string(after) != string(body) {
+		t.Fatalf("restore modified native history: %v", err)
 	}
 }

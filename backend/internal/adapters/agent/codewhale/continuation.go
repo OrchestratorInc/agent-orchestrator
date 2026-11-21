@@ -55,7 +55,7 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 		return "", false, errors.New("invalid codewhale native session id")
 	}
 	path := filepath.Join(ref.ConfigDir, "sessions", ref.NativeSessionID+".json")
-	archive, err := codewhalestore.Read(ctx, ref.ConfigDir, path)
+	archive, err := readNativeResumeSnapshot(ctx, ref.ConfigDir, ref.NativeSessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
 	}
@@ -153,22 +153,19 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 		}
 		root = recordedRoot
 	}
-	var archive codewhalestore.Archive
-	if recordedRoot == "" {
-		// Ordinary native restores are not subject to import eligibility limits.
-		// Read only binding metadata, leaving the native CLI to load its history.
-		archive, err = readOrdinaryRestoreBinding(ctx, root, nativeID)
-		if err != nil {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			if archive.ImportCopy {
-				return "", err
-			}
-			return freshDir, nil
+	// Native first save drops the copy marker and establishes runtime authority.
+	// Later restores validate that binding without source-admission budgets.
+	archive, err := readNativeRestoreBinding(ctx, root, nativeID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
 		}
+		if recordedRoot != "" || archive.ImportCopy {
+			return "", err
+		}
+		return freshDir, nil
 	}
-	if recordedRoot != "" || archive.ImportCopy {
+	if archive.ImportCopy || (recordedRoot != "" && !archive.RuntimeBound) {
 		archive, err = codewhalestore.Read(ctx, root, filepath.Join(root, "sessions", nativeID+".json"))
 		if err != nil {
 			return "", err
@@ -235,10 +232,26 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 	return archive.RuntimeDir, nil
 }
 
-// readOrdinaryRestoreBinding streams past history instead of buffering it or
-// applying the import parser's schema, spawn-depth and snapshot-size budgets.
-// An AO import marker still selects the strict import-validation path.
-func readOrdinaryRestoreBinding(ctx context.Context, root, id string) (codewhalestore.Archive, error) {
+// readNativeResumeSnapshot keeps unbound and still-marked copies subject to
+// full copy verification, while native-bound conversations may grow freely.
+func readNativeResumeSnapshot(ctx context.Context, root, id string) (codewhalestore.Archive, error) {
+	archive, err := readNativeRestoreBinding(ctx, root, id)
+	if err != nil {
+		return archive, err
+	}
+	if !archive.RuntimeBound || archive.ImportCopy {
+		return codewhalestore.Read(ctx, root, filepath.Join(root, "sessions", id+".json"))
+	}
+	if archive.ID != id {
+		return archive, errors.New("codewhale native identity mismatch")
+	}
+	return archive, nil
+}
+
+// readNativeRestoreBinding streams past history instead of buffering it or
+// applying source-admission budgets. Callers retain strict first-copy proof
+// verification and validate native identity, workspace and runtime authority.
+func readNativeRestoreBinding(ctx context.Context, root, id string) (codewhalestore.Archive, error) {
 	var archive codewhalestore.Archive
 	profile, err := os.OpenRoot(root)
 	if err != nil {
@@ -304,8 +317,13 @@ func readOrdinaryRestoreBinding(ctx context.Context, root, id string) (codewhale
 			return archive, err
 		}
 	}
-	_, err = dec.Token()
-	return archive, errors.Join(err, metadataErr)
+	if _, err = dec.Token(); err != nil {
+		return archive, err
+	}
+	if _, err = dec.Token(); !errors.Is(err, io.EOF) {
+		return archive, errors.New("invalid trailing native CodeWhale snapshot data")
+	}
+	return archive, metadataErr
 }
 
 func skipNativeRestoreValue(ctx context.Context, dec *json.Decoder) error {

@@ -15,7 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codewhalestore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -113,7 +112,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	if root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]; root != "" {
-		_, err := codewhalestore.Read(ctx, root, filepath.Join(root, "sessions", nativeID+".json"))
+		_, err := readNativeResumeSnapshot(ctx, root, nativeID)
 		if err != nil {
 			return nil, false, err
 		}
