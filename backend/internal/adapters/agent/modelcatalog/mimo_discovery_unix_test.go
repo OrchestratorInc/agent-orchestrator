@@ -5,6 +5,7 @@ package modelcatalog
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -69,11 +70,26 @@ wait`)
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for syscall.Kill(pid, 0) == nil {
+	for processRunning(pid) {
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatalf("wrapped binary %d outlived discovery", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// processRunning reports whether pid is alive and not a zombie. An orphan's
+// zombie can linger where PID 1 does not reap, and kill(pid, 0) still succeeds
+// for it.
+func processRunning(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return false
+	}
+	state := strings.TrimSpace(string(out))
+	return state != "" && !strings.HasPrefix(state, "Z")
 }
