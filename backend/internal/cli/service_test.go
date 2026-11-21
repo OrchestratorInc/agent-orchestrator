@@ -167,6 +167,9 @@ func TestServiceSystemdInstallAndRollback(t *testing.T) {
 	}
 	var got []string
 	for _, c := range calls {
+		if c.args[1] == "show" {
+			continue // servicePID lookups
+		}
 		got = append(got, c.name+" "+strings.Join(c.args, " "))
 	}
 	want := []string{"systemctl --user daemon-reload", "systemctl --user enable " + st.Name + ".service", "systemctl --user restart " + st.Name + ".service"}
@@ -397,14 +400,77 @@ func TestServiceInstallReportsExistingDaemon(t *testing.T) {
 	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
 		t.Fatal(err)
 	}
+	// The service's serve (pid 777) has attached and watches daemon 4242.
+	if err := os.WriteFile(serveAttachMarker(cfg.runFile, 777), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var calls []serviceCall
 	deps := serviceTestDeps(&calls, nil)
 	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	loaded := false
+	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "print":
+			if !loaded {
+				return nil, errors.New("exit status 113")
+			}
+			return []byte("\tstate = running\n\tpid = 777\n"), nil
+		case "bootstrap":
+			loaded = true
+		}
+		return nil, nil
+	}
 	out, _, err := executeCLI(t, deps, "service", "install")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "a daemon was already running") {
 		t.Fatalf("install did not say it watches the existing daemon:\n%s", out)
+	}
+}
+
+// A reinstall replaces the service's own daemon; that is not an existing one.
+func TestServiceReinstallDoesNotReportItsOwnDaemon(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	srv := fakeServeDaemon(t, 4242)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if args[0] == "print" {
+			return []byte("\tpid = 4242\n"), nil // the old job runs daemon 4242 in process
+		}
+		return nil, nil
+	}
+	out, _, err := executeCLI(t, deps, "service", "install", "--no-wait", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st serviceStatus
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.ExistingDaemon {
+		t.Fatal("reinstall reported the service's own daemon as an existing one")
+	}
+}
+
+func TestServicePIDParsesManagers(t *testing.T) {
+	out := map[string]string{"launchctl": "gui/501/x = {\n\tstate = running\n\tpid = 4321\n}", "systemctl": "987\n"}
+	c := &commandContext{deps: Deps{CommandOutput: func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		return []byte(out[name]), nil
+	}}.withDefaults()}
+	if got := c.servicePID(context.Background(), serviceSpec{Manager: serviceManagerLaunchd, Name: "x"}); got != 4321 {
+		t.Fatalf("launchd pid = %d", got)
+	}
+	if got := c.servicePID(context.Background(), serviceSpec{Manager: serviceManagerSystemd, Name: "x"}); got != 987 {
+		t.Fatalf("systemd pid = %d", got)
 	}
 }

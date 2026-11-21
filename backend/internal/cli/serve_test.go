@@ -529,3 +529,47 @@ func TestApplyProcessEnvRemovesInheritedOwner(t *testing.T) {
 		t.Fatalf("env not applied: AO_PORT=%q keep=%q", os.Getenv("AO_PORT"), os.Getenv("AO_SERVE_TEST_KEEP"))
 	}
 }
+
+// An `ao stop` that is still shutting the daemon down while the service's
+// serve starts must stick: serve exits 0 instead of starting its own daemon.
+func TestServeForegroundHonoursStopDuringStartup(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "")
+	h.atTick = 2
+	// Shutting down: the PID is alive but its listener is already closed.
+	if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: 4242, Port: 1, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	h.onTick = func() {
+		h.alive[4242] = false
+		_ = runfile.Remove(h.cfg.runFile)
+	}
+	if _, err := h.run(); err != nil {
+		t.Fatalf("a stop during startup should exit 0: %v", err)
+	}
+	if h.started != 0 {
+		t.Fatal("serve started its own daemon in place of one that was being stopped")
+	}
+}
+
+func TestServeForegroundWritesAttachMarkerWhileWatching(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "")
+	marker := serveAttachMarker(h.cfg.runFile, os.Getpid())
+	seen := false
+	h.onTick = func() {
+		_, err := os.Stat(marker)
+		seen = err == nil
+		h.alive[4242] = false
+		_ = runfile.Remove(h.cfg.runFile)
+	}
+	if _, err := h.run(); err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("no attach marker while watching")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("attach marker left behind after exit: %v", err)
+	}
+}

@@ -8,7 +8,7 @@ The offline `ao triage` exception resolves agent executables and launches a loca
 agent without the daemon, as described below.
 
 When using the CLI directly from a shell, make sure the daemon is running first
-by opening the desktop app, running `ao serve`, or installing `ao service install`. Product commands such as
+by opening the desktop app, running `ao serve`, or running `ao service install`. Product commands such as
 `ao agent ls` and `ao spawn` call the loopback daemon and will fail with a
 "daemon is not running" error if no `running.json` points at a live process. From
 a source checkout, build and run the local binary explicitly, for example:

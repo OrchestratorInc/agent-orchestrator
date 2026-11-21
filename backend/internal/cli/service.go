@@ -378,6 +378,9 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if err != nil {
 		return serviceStatus{}, err
 	}
+	// The daemon a previous install of this service runs is not "existing":
+	// the reinstall replaces it.
+	oldJobPID := c.servicePID(ctx, spec)
 	content := renderLaunchdPlist(spec)
 	if spec.Manager == serviceManagerSystemd {
 		content = renderSystemdUnit(spec)
@@ -425,13 +428,16 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 			return rollback(err)
 		}
 	}
-	st := serviceStatus{Manager: spec.Manager, Name: spec.Name, File: spec.File, Installed: true, Loaded: true, ExistingDaemon: before.State == stateReady}
+	st := serviceStatus{Manager: spec.Manager, Name: spec.Name, File: spec.File, Installed: true, Loaded: true, ExistingDaemon: before.State == stateReady && before.PID != oldJobPID}
 	if opts.noWait {
 		return st, nil
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		return serviceStatus{}, err
+	}
+	if err := c.waitServiceAttached(ctx, spec, cfg, opts.timeout); err != nil {
+		return serviceStatus{}, fmt.Errorf("service installed, but %w", err)
 	}
 	if _, err := c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, false); err != nil {
 		return serviceStatus{}, fmt.Errorf("service installed, but %w", err)
@@ -442,6 +448,54 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	}
 	st.Daemon = &ds
 	return st, nil
+}
+
+// waitServiceAttached waits until the service's serve has started running or
+// watching a daemon, so a command run right after install (such as `ao stop`)
+// reaches it and is not mistaken for a missing daemon.
+func (c *commandContext) waitServiceAttached(ctx context.Context, spec serviceSpec, cfg config.Config, timeout time.Duration) error {
+	deadline := c.deps.Now().Add(timeout)
+	for {
+		if pid := c.servicePID(ctx, spec); pid > 0 {
+			if _, err := os.Stat(serveAttachMarker(cfg.RunFilePath, pid)); err == nil {
+				return nil
+			}
+		}
+		if !c.deps.Now().Before(deadline) {
+			return fmt.Errorf("the service did not start within %s; check it with `ao service status`", timeout)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.deps.Sleep(250 * time.Millisecond)
+	}
+}
+
+// servicePID is the PID of the service's running process, or 0.
+func (c *commandContext) servicePID(ctx context.Context, spec serviceSpec) int {
+	var out []byte
+	var err error
+	switch spec.Manager {
+	case serviceManagerLaunchd:
+		out, err = c.deps.CommandOutput(ctx, "launchctl", "print", launchdDomain()+"/"+spec.Name)
+		if err != nil {
+			return 0
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok && strings.TrimSpace(k) == "pid" {
+				pid, _ := strconv.Atoi(strings.TrimSpace(v))
+				return pid
+			}
+		}
+	case serviceManagerSystemd:
+		out, err = c.deps.CommandOutput(ctx, "systemctl", "--user", "show", "-p", "MainPID", "--value", spec.Name+".service")
+		if err != nil {
+			return 0
+		}
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+		return pid
+	}
+	return 0
 }
 
 // launchdServiceGoneWait bounds how long install waits for launchd to tear a

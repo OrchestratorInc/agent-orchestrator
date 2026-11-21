@@ -22,10 +22,10 @@ ao serve [flags]
 
 ## JSON output
 
-`--json` prints one object. Fields are only ever added, never renamed or removed:
+`--json` prints one object. Paths are absolute. Fields are only ever added, never renamed or removed:
 
 ```json
-{"status":"ready","port":3001,"pid":12345,"url":"http://127.0.0.1:3001","reused":false,"runFile":"~/.ao/running.json","dataDir":"~/.ao/data"}
+{"status":"ready","port":3001,"pid":12345,"url":"http://127.0.0.1:3001","reused":false,"runFile":"/Users/you/.ao/running.json","dataDir":"/Users/you/.ao/data"}
 ```
 
 `reused` is `true` when an existing daemon was found. Failures exit 1 with the reason on stderr; bad flags exit 2.

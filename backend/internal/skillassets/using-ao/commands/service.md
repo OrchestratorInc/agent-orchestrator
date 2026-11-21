@@ -8,6 +8,8 @@ Keep `ao serve` running across logins and reboots as a user service. It never ne
 | Linux | systemd user unit `~/.config/systemd/user/agent-orchestrator-serve.service` |
 | Windows | Not supported yet |
 
+With a custom `AO_DATA_DIR` or `AO_RUN_FILE`, the name gets a short hash suffix (for example `dev.agent-orchestrator.serve-1a2b3c4d`), so it never replaces the main service.
+
 ## Syntax
 
 ```
@@ -33,6 +35,7 @@ ao service uninstall [--json]
 - Exception: when the watched daemon is the desktop app's own, the service cannot tell `ao stop` from the app quitting, so it starts its own daemon. To keep Orchestrator stopped in that case, run `ao service uninstall` first.
 - `install` and `uninstall` only touch a file that `ao service install` wrote. `uninstall` stops the service and removes that file.
 - On Linux the service starts at login; `loginctl enable-linger` starts it at boot.
+- Stopping or uninstalling the service stops the daemon but leaves running session processes alone, as `ao stop` does, so the next daemon can adopt them.
 
 ## Examples
 

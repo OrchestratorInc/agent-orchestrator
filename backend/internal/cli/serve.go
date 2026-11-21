@@ -227,10 +227,20 @@ func (c *commandContext) serveForeground(parent context.Context, out, errOut io.
 }
 
 func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io.Writer, cfg config.Config, opts serveOptions) error {
+	stopped, err := c.settleStartup(ctx, opts.timeout)
+	if err != nil || stopped {
+		return err
+	}
 	res, err := c.existingDaemon(ctx, errOut, cfg, opts)
 	if err != nil {
 		return err
 	}
+	// Tell `ao service install` that this serve has decided what to run, so
+	// an `ao stop` after install returns reaches a watcher, not a starting
+	// serve that would take the stopped daemon's place.
+	marker := serveAttachMarker(cfg.RunFilePath, os.Getpid())
+	_ = os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
+	defer func() { _ = os.Remove(marker) }()
 	if res == nil {
 		env := serveEnv(os.Environ(), opts.port, telemetryOptedOut(cfg.DataDir), Version)
 		if err := serveForegroundDaemon(env); err != nil {
@@ -246,6 +256,41 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 		return err
 	}
 	return c.watchDaemon(ctx, cfg, res.PID)
+}
+
+// serveAttachMarker is the file a foreground serve with this PID keeps next to
+// the run file once it is running or watching a daemon.
+func serveAttachMarker(runFile string, pid int) string {
+	return filepath.Join(filepath.Dir(runFile), fmt.Sprintf("serve-foreground-%d.attached", pid))
+}
+
+// settleStartup waits out a daemon that is alive but not answering, as one
+// that `ao stop` is shutting down while this serve starts. It reports true
+// when that daemon then stopped cleanly: the stop was meant to stick.
+func (c *commandContext) settleStartup(ctx context.Context, timeout time.Duration) (bool, error) {
+	deadline := c.deps.Now().Add(timeout)
+	settling := false
+	for {
+		st, err := c.inspectDaemon(ctx)
+		if err != nil {
+			return false, err
+		}
+		switch st.State {
+		case stateUnhealthy:
+			settling = true
+		case stateStopped:
+			return settling, nil
+		default:
+			return false, nil
+		}
+		if !c.deps.Now().Before(deadline) {
+			return false, nil // existingDaemon reports the unhealthy daemon
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		c.deps.Sleep(250 * time.Millisecond)
+	}
 }
 
 // waitForReplacement waits briefly for another daemon to become ready for
