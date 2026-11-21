@@ -146,6 +146,13 @@ vi.mock("../hooks/useSessionRename", async (importOriginal) => {
 });
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => cloudSessionState }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => cloudGateState }));
+// Moving a Cloud session here needs its creator and a Cloud that can push its branch.
+const cloudMove = vi.hoisted(() => ({ features: ["session.branch"] as string[] }));
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "user-me" }));
+vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
+	return { ...actual, useCloudOffering: (...args: Parameters<typeof actual.useCloudOffering>) => ({ ...actual.useCloudOffering(...args), features: cloudMove.features }) };
+});
 // Local (dev-only) cloud sign-in is off in these tests; mock it like its cloud
 // siblings so the sign-in row never fires a real settings fetch.
 vi.mock("../hooks/useCloudLocalAuth", () => ({
@@ -1796,11 +1803,29 @@ describe("Sidebar", () => {
 	});
 
 	it("offers to move the owner's Cloud session to this computer, and not a guest's", async () => {
-		const own: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine" } }] };
+		const own: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine", createdByUserId: "user-me" } }] };
 		renderSidebar({ workspaces: [own], expandedProjectIds: ["proj-1"] });
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
 		expect(await screen.findByRole("menuitem", { name: "Move to this computer…" })).toBeTruthy();
 		expect(screen.queryByRole("menuitem", { name: "Move to Orchestrator Cloud…" })).toBeNull();
+		cleanup();
+		// A teammate's session in the same organization is theirs to move.
+		const teammates: WorkspaceSummary = { ...own, sessions: [{ ...session, cloud: { orgId: "org-mine", createdByUserId: "user-other" } }] };
+		renderSidebar({ workspaces: [teammates], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect((await screen.findAllByRole("menuitem")).length).toBeGreaterThan(0);
+		expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
+		cleanup();
+		// A Cloud that cannot push a session's branch cannot move it out.
+		cloudMove.features = [];
+		try {
+			renderSidebar({ workspaces: [own], expandedProjectIds: ["proj-1"] });
+			fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+			expect((await screen.findAllByRole("menuitem")).length).toBeGreaterThan(0);
+			expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
+		} finally {
+			cloudMove.features = ["session.branch"];
+		}
 		cleanup();
 		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [{ ...session, cloud: { orgId: "org-elsewhere", shared: true } }] };
 		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });

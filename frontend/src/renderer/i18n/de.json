@@ -5285,6 +5285,12 @@
 	"move.failedNotRolledBack": "Der Agent hier ist noch gestoppt. Setze ihn über das Session-Menü fort.",
 	"move.agent": "Agent",
 	"move.agentWorking": "Arbeitet. Das Verschieben stoppt ihn zuerst.",
+	"move.cloudAgentNotConnected": "{{agent}} ist in der Orchestrator Cloud nicht verbunden. Verbinde ihn in den Einstellungen und verschiebe dann.",
+	"move.onDefaultBranch": "{{branch}} ist der Standard-Branch des Cloud-Projekts. Nur eine Sitzung auf einem eigenen Branch kann verschoben werden.",
+	"move.noDefaultBranch": "Orchestrator kann den Standard-Branch des Repositorys nicht ermitteln und daher das Cloud-Projekt nicht erstellen. Lege den Standard-Branch in den Projekteinstellungen fest und verschiebe dann.",
+	"move.finishEarlier": "Ein früherer Verschiebeversuch hat diese Sitzung möglicherweise bereits in der Orchestrator Cloud gestartet. Verschieben schließt diesen Vorgang ab.",
+	"move.failedUnknown": "Das Ergebnis ist unbekannt. Prüfe die Sitzung, bevor du es erneut versuchst.",
+	"move.finishGaveUp": "Orchestrator versucht nicht mehr, eine in die Orchestrator Cloud verschobene Sitzung zu archivieren. Archiviere sie auf diesem Computer.",
 	"moveHere.menuItem": "Auf diesen Computer verschieben…",
 	"moveHere.title": "{{title}} auf diesen Computer verschieben",
 	"moveHere.project": "Projekt",
@@ -5306,5 +5312,7 @@
 	"moveHere.deleteFailed": "{{title}} läuft auf diesem Computer. Die Orchestrator Cloud hat ihre Kopie noch nicht gelöscht; Orchestrator versucht es weiter, und der Agent der Cloud-Kopie bleibt gestoppt.",
 	"moveHere.failedPushedWip": "Die nicht committeten Dateien sind jetzt Commit {{commit}} auf {{branch}}, in der Orchestrator Cloud und auf GitHub.",
 	"moveHere.failedRestarted": "Die Sitzung geht in der Orchestrator Cloud weiter, und ihr Agent läuft wieder.",
-	"moveHere.failedNotRestarted": "Die Sitzung bleibt in der Orchestrator Cloud, aber ihr Agent ist gestoppt. Starte ihn in der Sitzung neu."
+	"moveHere.failedNotRestarted": "Die Sitzung bleibt in der Orchestrator Cloud, aber ihr Agent ist gestoppt. Starte ihn in der Sitzung neu.",
+	"moveHere.failedUnknown": "Das Ergebnis ist unbekannt. Prüfe die Sitzung hier und in der Orchestrator Cloud, bevor du es erneut versuchst.",
+	"moveHere.finishGaveUp": "Orchestrator versucht nicht mehr, eine auf diesen Computer verschobene Cloud-Sitzung zu löschen. Lösche sie in der Orchestrator Cloud."
 }

@@ -5265,6 +5265,12 @@
 	"move.failedNotRolledBack": "The agent here is still stopped. Resume it from the session menu.",
 	"move.agent": "Agent",
 	"move.agentWorking": "Working. Moving stops it first.",
+	"move.cloudAgentNotConnected": "{{agent}} isn't connected in Orchestrator Cloud. Connect it in Settings, then move.",
+	"move.onDefaultBranch": "{{branch}} is the Cloud project's default branch. Only a session on its own branch can move.",
+	"move.noDefaultBranch": "Orchestrator can't tell the repository's default branch, so it can't create the Cloud project. Set the project's default branch in its settings, then move.",
+	"move.finishEarlier": "An earlier move may already have started this session in Orchestrator Cloud. Moving finishes that move.",
+	"move.failedUnknown": "The outcome is unknown. Check the session before trying again.",
+	"move.finishGaveUp": "Orchestrator stopped trying to archive a session that moved to Orchestrator Cloud. Archive it on this computer.",
 	"moveHere.menuItem": "Move to this computer…",
 	"moveHere.title": "Move {{title}} to this computer",
 	"moveHere.project": "Project",
@@ -5286,5 +5292,7 @@
 	"moveHere.deleteFailed": "{{title}} runs on this computer. Orchestrator Cloud did not delete its copy yet; Orchestrator keeps trying, and the Cloud copy's agent stays stopped.",
 	"moveHere.failedPushedWip": "The uncommitted files are now commit {{commit}} on {{branch}}, in Orchestrator Cloud and on GitHub.",
 	"moveHere.failedRestarted": "The session continues in Orchestrator Cloud and its agent is running again.",
-	"moveHere.failedNotRestarted": "The session stays in Orchestrator Cloud, but its agent is stopped. Restart it from the session."
+	"moveHere.failedNotRestarted": "The session stays in Orchestrator Cloud, but its agent is stopped. Restart it from the session.",
+	"moveHere.failedUnknown": "The outcome is unknown. Check the session here and in Orchestrator Cloud before trying again.",
+	"moveHere.finishGaveUp": "Orchestrator stopped trying to delete a Cloud session that moved to this computer. Delete it in Orchestrator Cloud."
 }

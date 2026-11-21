@@ -5285,6 +5285,12 @@
 	"move.failedNotRolledBack": "이 컴퓨터의 에이전트가 아직 중지되어 있습니다. 세션 메뉴에서 다시 시작하세요.",
 	"move.agent": "에이전트",
 	"move.agentWorking": "작업 중. 이동하면 먼저 중지됩니다.",
+	"move.cloudAgentNotConnected": "{{agent}}이(가) Orchestrator Cloud에 연결되어 있지 않습니다. 설정에서 연결한 다음 이동하세요.",
+	"move.onDefaultBranch": "{{branch}}은(는) Cloud 프로젝트의 기본 브랜치입니다. 자체 브랜치에 있는 세션만 이동할 수 있습니다.",
+	"move.noDefaultBranch": "저장소의 기본 브랜치를 확인할 수 없어 Cloud 프로젝트를 만들 수 없습니다. 프로젝트 설정에서 기본 브랜치를 지정한 다음 이동하세요.",
+	"move.finishEarlier": "이전 이동에서 이미 이 세션을 Orchestrator Cloud에서 시작했을 수 있습니다. 이동하면 그 이동을 마칩니다.",
+	"move.failedUnknown": "결과를 알 수 없습니다. 다시 시도하기 전에 세션을 확인하세요.",
+	"move.finishGaveUp": "Orchestrator Cloud로 이동한 세션의 보관을 더 이상 시도하지 않습니다. 이 컴퓨터에서 보관하세요.",
 	"moveHere.menuItem": "이 컴퓨터로 이동…",
 	"moveHere.title": "{{title}}을(를) 이 컴퓨터로 이동",
 	"moveHere.project": "프로젝트",
@@ -5306,5 +5312,7 @@
 	"moveHere.deleteFailed": "{{title}}이(가) 이 컴퓨터에서 실행 중입니다. Orchestrator Cloud가 아직 사본을 삭제하지 않았습니다. Orchestrator가 계속 재시도하며, Cloud 사본의 에이전트는 중지된 상태로 유지됩니다.",
 	"moveHere.failedPushedWip": "커밋되지 않은 파일은 이제 Orchestrator Cloud와 GitHub에서 {{branch}}의 커밋 {{commit}}입니다.",
 	"moveHere.failedRestarted": "세션은 Orchestrator Cloud에서 계속되며 에이전트가 다시 실행 중입니다.",
-	"moveHere.failedNotRestarted": "세션은 Orchestrator Cloud에 남아 있지만 에이전트가 중지되었습니다. 세션에서 다시 시작하세요."
+	"moveHere.failedNotRestarted": "세션은 Orchestrator Cloud에 남아 있지만 에이전트가 중지되었습니다. 세션에서 다시 시작하세요.",
+	"moveHere.failedUnknown": "결과를 알 수 없습니다. 다시 시도하기 전에 이 컴퓨터와 Orchestrator Cloud의 세션을 확인하세요.",
+	"moveHere.finishGaveUp": "이 컴퓨터로 이동한 Cloud 세션의 삭제를 더 이상 시도하지 않습니다. Orchestrator Cloud에서 삭제하세요."
 }

@@ -5,6 +5,9 @@ import { repoKey } from "./repo-key";
 
 type DaemonClient = ReturnType<typeof clientForSessionHost>;
 
+/** The session-move feature AO Cloud advertises once createSession takes a branch and a session can move out. */
+export const CLOUD_BRANCH_FEATURE = "session.branch";
+
 /** The AO Cloud project a session moves to; an empty projectId has the move create one. */
 export interface MoveTarget {
 	orgId: string;
@@ -32,6 +35,13 @@ export interface MovePushed {
 }
 
 /**
+ * What a failed move that was not rolled back leaves to the user: "settle"
+ * when Try again finishes it (its message says so), "unknown" when a call got
+ * no answer, so nobody knows how far it got.
+ */
+export type MoveFollowUp = "settle" | "unknown";
+
+/**
  * A failed move. rolledBack says the source agent was resumed. pushed is set
  * once the export pushed the branch: the uncommitted files are then a commit
  * on it, here and on origin, so the session is no longer as it was.
@@ -43,9 +53,36 @@ export class MoveError extends Error {
 		readonly code: string | undefined,
 		readonly rolledBack: boolean,
 		readonly pushed?: MovePushed,
+		readonly followUp?: MoveFollowUp,
 	) {
 		super(message);
 	}
+}
+
+/** The message of a move whose call to this computer's Orchestrator got no answer. */
+const NO_ANSWER = "This computer's Orchestrator did not answer, so the outcome is unknown. Check the session before trying again.";
+
+/**
+ * Makes a daemon call that may throw (no answer, a dropped connection) into
+ * one whose failure is a MoveError that claims nothing was undone.
+ */
+async function unanswered<T>(call: () => Promise<T>, step: MoveStep, pushed?: MovePushed): Promise<T> {
+	try {
+		return await call();
+	} catch {
+		throw new MoveError(NO_ANSWER, step, undefined, false, pushed, "unknown");
+	}
+}
+
+/** The reasoning efforts Orchestrator Cloud's createSession accepts. */
+const CLOUD_EFFORTS = new Set(["default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+
+/** The Cloud reasoning effort for a local one, or undefined to leave Cloud's default. */
+export function cloudReasoningEffort(local: string | undefined): string | undefined {
+	const effort = local?.trim().toLowerCase();
+	if (!effort) return undefined;
+	if (effort === "off") return "none";
+	return CLOUD_EFFORTS.has(effort) ? effort : undefined;
 }
 
 /** The body AO Cloud's createSession takes. */
@@ -94,6 +131,10 @@ export async function moveSession(
 	let projectId = target.projectId;
 	if (!projectId) {
 		if (!input.createProject) throw new MoveError("No Orchestrator Cloud project to move the session into", "project", undefined, true);
+		const defaultBranch = input.createProject.defaultBranch?.trim();
+		if (!defaultBranch || defaultBranch === "auto") {
+			throw new MoveError("Orchestrator could not tell the repository's default branch, so it cannot create the Cloud project.", "project", undefined, true);
+		}
 		// The agent here has not stopped yet, so a failure leaves the session as it was.
 		deps.onStep?.("project");
 		try {
@@ -118,10 +159,23 @@ export async function moveSession(
 				apiErrorCode(error),
 				false,
 				pushed,
+				"settle",
 			);
 		}
-		const resumed = await deps.source.POST("/api/v1/sessions/{sessionId}/resume-agent", path);
-		throw new MoveError(apiErrorMessage(error, fallback), step, apiErrorCode(error), !resumed.error, pushed);
+		let resumed: boolean | undefined;
+		try {
+			resumed = !(await deps.source.POST("/api/v1/sessions/{sessionId}/resume-agent", path)).error;
+		} catch {
+			// No answer: the agent may or may not be running again.
+		}
+		throw new MoveError(
+			resumed === undefined ? `${apiErrorMessage(error, fallback)} ${NO_ANSWER}` : apiErrorMessage(error, fallback),
+			step,
+			apiErrorCode(error),
+			resumed === true,
+			pushed,
+			resumed === undefined ? "unknown" : undefined,
+		);
 	};
 
 	// A create whose answer was lost may still have made the session, and asking
@@ -150,6 +204,7 @@ export async function moveSession(
 				errorCode(failure),
 				false,
 				pushed,
+				"settle",
 			);
 		}
 
@@ -181,21 +236,27 @@ export async function moveSession(
 	}
 
 	deps.onStep?.("stop");
-	const stopped = await deps.source.POST("/api/v1/sessions/{sessionId}/exit-agent", path);
+	const stopped = await unanswered(() => deps.source.POST("/api/v1/sessions/{sessionId}/exit-agent", path), "stop");
 	if (stopped.error && apiErrorCode(stopped.error) !== "AGENT_EXITED") {
 		throw new MoveError(apiErrorMessage(stopped.error, "Could not stop the agent"), "stop", apiErrorCode(stopped.error), false);
 	}
 
 	deps.onStep?.("export");
-	const exported = await deps.source.POST("/api/v1/sessions/{sessionId}/move/export", {
-		...path,
-		body: { moveId, ...(input.sourceLabel ? { sourceLabel: input.sourceLabel } : {}) },
-	});
+	// No answer may still mean the branch was pushed, so nothing resumes the agent.
+	const exported = await unanswered(
+		() =>
+			deps.source.POST("/api/v1/sessions/{sessionId}/move/export", {
+				...path,
+				body: { moveId, ...(input.sourceLabel ? { sourceLabel: input.sourceLabel } : {}) },
+			}),
+		"export",
+	);
 	if (exported.error || !exported.data) return rollback("export", exported.error, "Could not push the session");
 
 	deps.onStep?.("import");
 	const m = exported.data.manifest;
 	const sameAgent = target.harness === cloudHarness(m.harness);
+	const effort = sameAgent ? cloudReasoningEffort(m.effort) : undefined;
 	// Cloud resumes a conversation only in the agent that wrote it.
 	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, moveId, target.harness);
 	const request: CloudSessionRequest = state.current ?? {
@@ -206,7 +267,7 @@ export async function moveSession(
 		prompt: exported.data.handoffNote,
 		branch: m.branch,
 		...(sameAgent && m.model ? { model: m.model } : {}),
-		...(sameAgent && m.effort ? { reasoningEffort: m.effort } : {}),
+		...(effort ? { reasoningEffort: effort } : {}),
 		...(transcriptImportId ? { transcriptImportId } : {}),
 	};
 	state.current = request;
@@ -336,6 +397,7 @@ export async function moveSessionHere(
 			undefined,
 			false,
 			pushed,
+			"settle",
 		);
 	});
 	if (imported.error || !imported.data) {

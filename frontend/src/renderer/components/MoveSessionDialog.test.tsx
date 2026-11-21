@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MoveSessionDialog } from "./MoveSessionDialog";
 import { useUiStore } from "../stores/ui-store";
 import { CloudCpError } from "../lib/cloud-cp";
-import { useUnfinishedMoveStore } from "../lib/move-finish";
+import { useUnfinishedMoveStore, useUnsettledMoveStore } from "../lib/move-finish";
 import { TooltipProvider } from "./ui/tooltip";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -15,12 +15,12 @@ type PostReply = Reply | (() => Reply);
 const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
 	daemon: {
 		posts: {} as Record<string, PostReply>, repo: "", preview: {} as Reply, transcript: {} as Reply, targets: {} as Reply, agents: [] as unknown[],
-		localProjects: [] as { id: string }[], postCalls: [] as { path: string; body: unknown }[],
+		localProjects: [] as { id: string }[], postCalls: [] as { path: string; body: unknown }[], defaultBranch: "main",
 	},
 	uploadCloudTranscript: vi.fn(),
 	navigate: vi.fn(),
 	cloud: {
-		features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true,
+		features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true, connections: [] as unknown[],
 		previewSessionMove: vi.fn(), exportSessionMove: vi.fn(), restartSessionAgent: vi.fn(), deleteSession: vi.fn(), createProject: vi.fn(),
 	},
 }));
@@ -34,7 +34,7 @@ vi.mock("../lib/host-clients", () => ({
 					? daemon.transcript
 					: path === "/api/v1/sessions/move/targets"
 						? daemon.targets
-						: { data: { project: { id: "app", name: "app", defaultBranch: "main", repo: daemon.repo } } }),
+						: { data: { project: { id: "app", name: "app", defaultBranch: daemon.defaultBranch, repo: daemon.repo } } }),
 		POST: vi.fn(async (path: string, init?: { body?: unknown }) => {
 			daemon.postCalls.push({ path, body: init?.body });
 			const reply = daemon.posts[path];
@@ -50,6 +50,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 vi.mock("../lib/cloud-attachments", () => ({ uploadCloudTranscript }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: cloud.signedIn ? { id: "org-1" } : undefined }) }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: cloud.features }) }));
+vi.mock("../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ data: cloud.connections, isPending: false }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudProjectsQuery: () => ({ data: cloud.projects, isPending: false }),
 	useCloudSessionsQuery: () => ({ data: cloud.sessions, isPending: false }),
@@ -92,6 +93,9 @@ beforeEach(() => {
 	uploadCloudTranscript.mockReset();
 	daemon.transcript = { data: { agentSessionId: "aid-1", transcriptGzip: btoa("gz") } };
 	cloud.signedIn = true;
+	cloud.connections = [{ provider: "claude-code", label: "default", validationState: "valid" }];
+	daemon.defaultBranch = "main";
+	useUnsettledMoveStore.getState().set(":app-1", undefined);
 	cloud.features = ["session.branch"];
 	cloud.projects = [{ id: "cloud-proj", displayName: "app", repositoryUrl: "https://github.com/Acme/App" }];
 	cloud.sessions = [];
@@ -142,7 +146,9 @@ it("keeps the agent here stopped while Cloud does not answer, and Try again fini
 	expect(await screen.findByText(/Orchestrator Cloud did not answer, so the session may already be starting there/)).toBeTruthy();
 	// The push already happened, so the session is not as it was.
 	expect(await screen.findByText("The uncommitted files are now commit abc1234 on feat/x, here and on GitHub.")).toBeTruthy();
-	expect(screen.getByText("The agent here is still stopped. Resume it from the session menu.")).toBeTruthy();
+	// Try again finishes the move, so nothing advises resuming the agent here.
+	expect(screen.queryByText("The agent here is still stopped. Resume it from the session menu.")).toBeNull();
+	expect(screen.queryByText("The session continues here, unchanged.")).toBeNull();
 	expect(daemon.postCalls.map((call) => call.path)).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
 	await user.click(screen.getByRole("button", { name: "Try again" }));
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
@@ -159,11 +165,78 @@ it.each([
 	["signed out of AO Cloud", () => { cloud.signedIn = false; }, "Sign in to Orchestrator Cloud to move this session."],
 	["the project has no origin", () => { daemon.repo = ""; daemon.preview = { error: { code: "MOVE_NO_ORIGIN", message: "No origin." } }; }, "No origin."],
 	["a live Cloud session is on the branch", () => { cloud.sessions = [{ id: "cloud-1", projectId: "cloud-proj", branch: "feat/x", isTerminated: false, displayName: "Fix login" }]; }, "The Cloud session Fix login is already on feat/x. Archive it first."],
+	["the agent is not connected in AO Cloud", () => { cloud.connections = []; }, "Claude Code isn't connected in Orchestrator Cloud. Connect it in Settings, then move."],
+	["the session is on the Cloud project's default branch", () => { cloud.projects = [{ id: "cloud-proj", displayName: "app", repositoryUrl: "https://github.com/Acme/App", defaultBranch: "feat/x" }]; }, "feat/x is the Cloud project's default branch. Only a session on its own branch can move."],
+	["the repository's default branch is unknown", () => { daemon.repo = "git@github.com:acme/other.git"; daemon.defaultBranch = "auto"; }, "Orchestrator can't tell the repository's default branch, so it can't create the Cloud project. Set the project's default branch in its settings, then move."],
 ])("explains and disables Move when %s", async (_, setup, message) => {
 	setup();
 	renderDialog();
 	expect(await screen.findByText(message)).toBeTruthy();
 	await waitFor(() => expect(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }).hasAttribute("disabled")).toBe(true));
+});
+
+it("creates the Cloud project on the default branch origin names when the project only knows \"auto\"", async () => {
+	daemon.posts = moveReplies;
+	daemon.repo = "git@github.com:acme/other.git";
+	daemon.defaultBranch = "auto";
+	daemon.preview = { data: { branch: "feat/x", defaultBranch: "trunk", changes: [] } };
+	cloud.createProject.mockResolvedValue({ project: { id: "cloud-new" } });
+	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
+	renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-new", "cloud-9"));
+	expect(cloud.createProject.mock.calls[0][1]).toMatchObject({ defaultBranch: "trunk" });
+});
+
+it("does not say the session is unchanged when this computer's Orchestrator does not answer", async () => {
+	daemon.posts = {
+		...moveReplies,
+		"/api/v1/sessions/{sessionId}/move/export": () => {
+			throw new TypeError("fetch failed");
+		},
+	};
+	renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	expect(await screen.findByText(/did not answer, so the outcome is unknown\. Check the session before trying again\./)).toBeTruthy();
+	expect(screen.queryByText("The session continues here, unchanged.")).toBeNull();
+	expect(screen.queryByText("The agent here is still stopped. Resume it from the session menu.")).toBeNull();
+	expect(daemon.postCalls.map((call) => call.path)).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+	expect(cloud.createSession).not.toHaveBeenCalled();
+});
+
+it("says the outcome is unknown for a failure that is not a move error", async () => {
+	// A reply without a manifest makes the move itself throw.
+	daemon.posts = { ...moveReplies, "/api/v1/sessions/{sessionId}/move/export": { data: {} } };
+	renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	expect(await screen.findByText("The outcome is unknown. Check the session before trying again.")).toBeTruthy();
+	expect(screen.queryByText("The session continues here, unchanged.")).toBeNull();
+});
+
+it("finishes a move whose Cloud create went unanswered after the dialog was closed", async () => {
+	daemon.posts = moveReplies;
+	const unreachable = new Error("fetch failed");
+	cloud.createSession.mockRejectedValueOnce(unreachable).mockRejectedValueOnce(unreachable).mockResolvedValueOnce({ session: { id: "cloud-9" } });
+	const first = renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	expect(await screen.findByText(/Orchestrator Cloud did not answer/)).toBeTruthy();
+	await user.click(screen.getByRole("button", { name: "Cancel" }));
+	first.unmount();
+	daemon.postCalls = [];
+
+	renderDialog();
+	expect(await screen.findByText("An earlier move may already have started this session in Orchestrator Cloud. Moving finishes that move.")).toBeTruthy();
+	await user.click(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
+	const [a, , c] = cloud.createSession.mock.calls;
+	// The same idempotency key and body, so Cloud returns the session it may have made.
+	expect(c).toEqual(a);
+	expect(daemon.postCalls.map((call) => call.path)).toEqual(["/api/v1/sessions/{sessionId}/move/complete"]);
+	expect(useUnsettledMoveStore.getState().moves).toEqual({});
 });
 
 it("creates the Cloud project when Cloud has none for the repository", async () => {
@@ -365,6 +438,14 @@ describe("moving a Cloud session to this computer", () => {
 		expect(daemon.postCalls.find((call) => call.path === "/api/v1/sessions/move/import")?.body).toMatchObject({ projectId: "app-new" });
 	});
 
+	it("explains and disables Move when AO Cloud cannot push a session's branch", async () => {
+		cloud.features = [];
+		renderHere();
+		expect(await screen.findByText("Needs a newer Orchestrator Cloud.")).toBeTruthy();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Move to this computer" }).hasAttribute("disabled")).toBe(true));
+		expect(cloud.exportSessionMove).not.toHaveBeenCalled();
+	});
+
 	it("says nothing moved when the clone fails", async () => {
 		daemon.targets = { data: { targets: [] } };
 		daemon.posts = { "/api/v1/projects/clone": { error: { code: "CLONE_EMPTY_REPOSITORY", message: "Orchestrator needs a repository with at least one commit." } } };
@@ -408,7 +489,7 @@ describe("moving a Cloud session to this computer", () => {
 		const user = userEvent.setup();
 		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
 		expect(await screen.findByText(/Fix login runs on this computer\. .*Orchestrator keeps trying/)).toBeTruthy();
-		expect(useUnfinishedMoveStore.getState().moves).toEqual([{ kind: "delete-cloud", orgId: "org-1", cloudSessionId: "cloud-1" }]);
+		expect(useUnfinishedMoveStore.getState().moves).toEqual([expect.objectContaining({ kind: "delete-cloud", orgId: "org-1", cloudSessionId: "cloud-1" })]);
 		await user.click(screen.getByRole("button", { name: "Open session" }));
 		expect(navigate).toHaveBeenCalledWith("app", "local-9");
 	});

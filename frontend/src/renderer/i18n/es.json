@@ -5433,6 +5433,12 @@
 	"move.failedNotRolledBack": "El agente aquí sigue detenido. Reanúdalo desde el menú de la sesión.",
 	"move.agent": "Agente",
 	"move.agentWorking": "Trabajando. Moverla lo detiene primero.",
+	"move.cloudAgentNotConnected": "{{agent}} no está conectado en Orchestrator Cloud. Conéctalo en Ajustes y luego mueve la sesión.",
+	"move.onDefaultBranch": "{{branch}} es la rama predeterminada del proyecto en la nube. Solo se puede mover una sesión que esté en su propia rama.",
+	"move.noDefaultBranch": "Orchestrator no puede determinar la rama predeterminada del repositorio, así que no puede crear el proyecto en la nube. Define la rama predeterminada en los ajustes del proyecto y luego mueve la sesión.",
+	"move.finishEarlier": "Es posible que un intento anterior ya haya iniciado esta sesión en Orchestrator Cloud. Moverla completa ese intento.",
+	"move.failedUnknown": "Se desconoce el resultado. Revisa la sesión antes de volver a intentarlo.",
+	"move.finishGaveUp": "Orchestrator dejó de intentar archivar una sesión que se movió a Orchestrator Cloud. Archívala en este ordenador.",
 	"moveHere.menuItem": "Mover a este ordenador…",
 	"moveHere.title": "Mover {{title}} a este ordenador",
 	"moveHere.project": "Proyecto",
@@ -5454,5 +5460,7 @@
 	"moveHere.deleteFailed": "{{title}} se ejecuta en este ordenador. Orchestrator Cloud aún no ha eliminado su copia; Orchestrator lo sigue intentando y el agente de la copia en Cloud sigue detenido.",
 	"moveHere.failedPushedWip": "Los archivos sin confirmar son ahora el commit {{commit}} en {{branch}}, en Orchestrator Cloud y en GitHub.",
 	"moveHere.failedRestarted": "La sesión continúa en Orchestrator Cloud y su agente vuelve a ejecutarse.",
-	"moveHere.failedNotRestarted": "La sesión sigue en Orchestrator Cloud, pero su agente está detenido. Reinícialo desde la sesión."
+	"moveHere.failedNotRestarted": "La sesión sigue en Orchestrator Cloud, pero su agente está detenido. Reinícialo desde la sesión.",
+	"moveHere.failedUnknown": "Se desconoce el resultado. Revisa la sesión aquí y en Orchestrator Cloud antes de volver a intentarlo.",
+	"moveHere.finishGaveUp": "Orchestrator dejó de intentar eliminar una sesión en la nube que se movió a este ordenador. Elimínala en Orchestrator Cloud."
 }

@@ -5285,6 +5285,12 @@
 	"move.failedNotRolledBack": "ここのエージェントは停止したままです。セッションメニューから再開してください。",
 	"move.agent": "エージェント",
 	"move.agentWorking": "作業中。移動すると先に停止します。",
+	"move.cloudAgentNotConnected": "{{agent}} は Orchestrator Cloud に接続されていません。設定で接続してから移動してください。",
+	"move.onDefaultBranch": "{{branch}} は Cloud プロジェクトのデフォルトブランチです。移動できるのは専用のブランチ上のセッションだけです。",
+	"move.noDefaultBranch": "リポジトリのデフォルトブランチを特定できないため、Cloud プロジェクトを作成できません。プロジェクトの設定でデフォルトブランチを指定してから移動してください。",
+	"move.finishEarlier": "以前の移動ですでにこのセッションが Orchestrator Cloud で開始されている可能性があります。移動するとその移動を完了します。",
+	"move.failedUnknown": "結果は不明です。再試行する前にセッションを確認してください。",
+	"move.finishGaveUp": "Orchestrator Cloud に移動したセッションのアーカイブを中止しました。このコンピューターでアーカイブしてください。",
 	"moveHere.menuItem": "このコンピュータに移動…",
 	"moveHere.title": "{{title}} をこのコンピュータに移動",
 	"moveHere.project": "プロジェクト",
@@ -5306,5 +5312,7 @@
 	"moveHere.deleteFailed": "{{title}} はこのコンピュータで実行中です。Orchestrator Cloud はまだコピーを削除していません。Orchestrator が再試行を続け、Cloud 側のエージェントは停止したままです。",
 	"moveHere.failedPushedWip": "未コミットのファイルは、Orchestrator Cloud と GitHub の両方で {{branch}} のコミット {{commit}} になりました。",
 	"moveHere.failedRestarted": "セッションは Orchestrator Cloud で続行し、エージェントは再び実行中です。",
-	"moveHere.failedNotRestarted": "セッションは Orchestrator Cloud に残っていますが、エージェントは停止しています。セッションから再起動してください。"
+	"moveHere.failedNotRestarted": "セッションは Orchestrator Cloud に残っていますが、エージェントは停止しています。セッションから再起動してください。",
+	"moveHere.failedUnknown": "結果は不明です。再試行する前に、ここと Orchestrator Cloud のセッションを確認してください。",
+	"moveHere.finishGaveUp": "このコンピューターに移動した Cloud セッションの削除を中止しました。Orchestrator Cloud で削除してください。"
 }

@@ -5433,6 +5433,12 @@
 	"move.failedNotRolledBack": "O agente aqui ainda está parado. Retome-o pelo menu da sessão.",
 	"move.agent": "Agente",
 	"move.agentWorking": "Trabalhando. Mover a sessão o interrompe primeiro.",
+	"move.cloudAgentNotConnected": "{{agent}} não está conectado no Orchestrator Cloud. Conecte-o nas Configurações e depois mova a sessão.",
+	"move.onDefaultBranch": "{{branch}} é o branch padrão do projeto na nuvem. Só uma sessão no próprio branch pode ser movida.",
+	"move.noDefaultBranch": "O Orchestrator não consegue identificar o branch padrão do repositório, então não pode criar o projeto na nuvem. Defina o branch padrão nas configurações do projeto e depois mova a sessão.",
+	"move.finishEarlier": "Uma tentativa anterior pode já ter iniciado esta sessão no Orchestrator Cloud. Mover conclui essa tentativa.",
+	"move.failedUnknown": "O resultado é desconhecido. Verifique a sessão antes de tentar de novo.",
+	"move.finishGaveUp": "O Orchestrator parou de tentar arquivar uma sessão que foi movida para o Orchestrator Cloud. Arquive-a neste computador.",
 	"moveHere.menuItem": "Mover para este computador…",
 	"moveHere.title": "Mover {{title}} para este computador",
 	"moveHere.project": "Projeto",
@@ -5454,5 +5460,7 @@
 	"moveHere.deleteFailed": "{{title}} está rodando neste computador. O Orchestrator Cloud ainda não excluiu sua cópia; o Orchestrator continua tentando, e o agente da cópia no Cloud continua parado.",
 	"moveHere.failedPushedWip": "Os arquivos não commitados agora são o commit {{commit}} em {{branch}}, no Orchestrator Cloud e no GitHub.",
 	"moveHere.failedRestarted": "A sessão continua no Orchestrator Cloud e seu agente está rodando de novo.",
-	"moveHere.failedNotRestarted": "A sessão continua no Orchestrator Cloud, mas seu agente está parado. Reinicie-o pela sessão."
+	"moveHere.failedNotRestarted": "A sessão continua no Orchestrator Cloud, mas seu agente está parado. Reinicie-o pela sessão.",
+	"moveHere.failedUnknown": "O resultado é desconhecido. Verifique a sessão aqui e no Orchestrator Cloud antes de tentar de novo.",
+	"moveHere.finishGaveUp": "O Orchestrator parou de tentar excluir uma sessão na nuvem que foi movida para este computador. Exclua-a no Orchestrator Cloud."
 }

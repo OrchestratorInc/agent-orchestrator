@@ -5433,6 +5433,12 @@
 	"move.failedNotRolledBack": "L'agent ici est toujours arrêté. Reprenez-le depuis le menu de la session.",
 	"move.agent": "Agent",
 	"move.agentWorking": "Au travail. Le déplacement l'arrête d'abord.",
+	"move.cloudAgentNotConnected": "{{agent}} n'est pas connecté dans Orchestrator Cloud. Connectez-le dans les réglages, puis déplacez la session.",
+	"move.onDefaultBranch": "{{branch}} est la branche par défaut du projet Cloud. Seule une session sur sa propre branche peut être déplacée.",
+	"move.noDefaultBranch": "Orchestrator ne parvient pas à déterminer la branche par défaut du dépôt et ne peut donc pas créer le projet Cloud. Définissez la branche par défaut dans les réglages du projet, puis déplacez la session.",
+	"move.finishEarlier": "Une tentative précédente a peut-être déjà démarré cette session dans Orchestrator Cloud. Déplacer la session termine cette tentative.",
+	"move.failedUnknown": "Le résultat est inconnu. Vérifiez la session avant de réessayer.",
+	"move.finishGaveUp": "Orchestrator a cessé d'essayer d'archiver une session déplacée vers Orchestrator Cloud. Archivez-la sur cet ordinateur.",
 	"moveHere.menuItem": "Déplacer vers cet ordinateur…",
 	"moveHere.title": "Déplacer {{title}} vers cet ordinateur",
 	"moveHere.project": "Projet",
@@ -5454,5 +5460,7 @@
 	"moveHere.deleteFailed": "{{title}} tourne sur cet ordinateur. Orchestrator Cloud n'a pas encore supprimé sa copie ; Orchestrator continue d'essayer, et l'agent de la copie Cloud reste arrêté.",
 	"moveHere.failedPushedWip": "Les fichiers non commités sont maintenant le commit {{commit}} sur {{branch}}, dans Orchestrator Cloud et sur GitHub.",
 	"moveHere.failedRestarted": "La session continue dans Orchestrator Cloud et son agent tourne de nouveau.",
-	"moveHere.failedNotRestarted": "La session reste dans Orchestrator Cloud, mais son agent est arrêté. Redémarrez-le depuis la session."
+	"moveHere.failedNotRestarted": "La session reste dans Orchestrator Cloud, mais son agent est arrêté. Redémarrez-le depuis la session.",
+	"moveHere.failedUnknown": "Le résultat est inconnu. Vérifiez la session ici et dans Orchestrator Cloud avant de réessayer.",
+	"moveHere.finishGaveUp": "Orchestrator a cessé d'essayer de supprimer une session Cloud déplacée vers cet ordinateur. Supprimez-la dans Orchestrator Cloud."
 }

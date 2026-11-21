@@ -5265,6 +5265,12 @@
 	"move.failedNotRolledBack": "Buradaki aracı hâlâ durdurulmuş durumda. Oturum menüsünden devam ettirin.",
 	"move.agent": "Aracı",
 	"move.agentWorking": "Çalışıyor. Taşıma önce onu durdurur.",
+	"move.cloudAgentNotConnected": "{{agent}}, Orchestrator Cloud'da bağlı değil. Ayarlar'dan bağlayın, ardından taşıyın.",
+	"move.onDefaultBranch": "{{branch}}, Cloud projesinin varsayılan dalı. Yalnızca kendi dalındaki bir oturum taşınabilir.",
+	"move.noDefaultBranch": "Orchestrator deponun varsayılan dalını belirleyemediği için Cloud projesini oluşturamıyor. Projenin ayarlarında varsayılan dalı belirleyin, ardından taşıyın.",
+	"move.finishEarlier": "Önceki bir taşıma bu oturumu Orchestrator Cloud'da zaten başlatmış olabilir. Taşımak o taşımayı tamamlar.",
+	"move.failedUnknown": "Sonuç bilinmiyor. Yeniden denemeden önce oturumu kontrol edin.",
+	"move.finishGaveUp": "Orchestrator, Orchestrator Cloud'a taşınan bir oturumu arşivlemeyi denemeyi bıraktı. Oturumu bu bilgisayarda arşivleyin.",
 	"moveHere.menuItem": "Bu bilgisayara taşı…",
 	"moveHere.title": "{{title}} oturumunu bu bilgisayara taşı",
 	"moveHere.project": "Proje",
@@ -5286,5 +5292,7 @@
 	"moveHere.deleteFailed": "{{title}} bu bilgisayarda çalışıyor. Orchestrator Cloud kopyasını henüz silmedi; Orchestrator denemeye devam ediyor ve Cloud kopyasının aracısı durdurulmuş kalıyor.",
 	"moveHere.failedPushedWip": "Commit edilmemiş dosyalar artık hem Orchestrator Cloud'da hem GitHub'da {{branch}} üzerindeki {{commit}} commit'i.",
 	"moveHere.failedRestarted": "Oturum Orchestrator Cloud'da devam ediyor ve aracısı yeniden çalışıyor.",
-	"moveHere.failedNotRestarted": "Oturum Orchestrator Cloud'da kalıyor ancak aracısı durdurulmuş durumda. Oturumdan yeniden başlatın."
+	"moveHere.failedNotRestarted": "Oturum Orchestrator Cloud'da kalıyor ancak aracısı durdurulmuş durumda. Oturumdan yeniden başlatın.",
+	"moveHere.failedUnknown": "Sonuç bilinmiyor. Yeniden denemeden önce oturumu burada ve Orchestrator Cloud'da kontrol edin.",
+	"moveHere.finishGaveUp": "Orchestrator, bu bilgisayara taşınan bir Cloud oturumunu silmeyi denemeyi bıraktı. Oturumu Orchestrator Cloud'da silin."
 }

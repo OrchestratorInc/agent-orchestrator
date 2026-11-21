@@ -6,15 +6,17 @@ import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
 import { uploadCloudTranscript, uploadCloudTranscriptSidecar } from "../lib/cloud-attachments";
-import { useUnfinishedMoveStore } from "../lib/move-finish";
-import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
+import { unsettledMoveKey, useUnfinishedMoveStore, useUnsettledMoveStore } from "../lib/move-finish";
+import { agentLabel } from "../lib/agent-options";
+import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { CloudCpError } from "../lib/cloud-cp";
-import { cloudHarness, localHarness, MoveError, moveSession, moveSessionHere, type CloudSessionRequest, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
+import { CLOUD_BRANCH_FEATURE, cloudHarness, localHarness, MoveError, moveSession, moveSessionHere, type MoveDeps, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { repoKey } from "../lib/repo-key";
 import { cn } from "../lib/utils";
@@ -46,9 +48,6 @@ export function MoveSessionDialog() {
 	);
 }
 
-/** The session-move feature AO Cloud advertises once createSession takes a branch. */
-const CLOUD_BRANCH_FEATURE = "session.branch";
-
 /** The feature AO Cloud advertises once a moved session can resume its conversation. */
 const CLOUD_TRANSCRIPT_FEATURE = "session.transcriptImport";
 
@@ -75,13 +74,22 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const [result, setResult] = useState<MoveResult>();
 	const [error, setError] = useState<MoveError | Error>();
 	const moving = step !== undefined && !result && !error;
+	// A move whose Cloud create got no clear answer is kept past this dialog,
+	// so reopening it finishes that move under the same id instead of starting
+	// a second Cloud session. A move for another organization is left alone.
+	const attemptKey = unsettledMoveKey(session.hostId, session.id);
+	const storedAttempt = useRef(useUnsettledMoveStore.getState().moves[attemptKey]).current;
+	const saved = storedAttempt && (!org || storedAttempt.orgId === org.id) ? storedAttempt : undefined;
 	// One move per dialog: Try again reuses its id and Cloud request, so a
 	// Cloud session whose response was lost is returned instead of duplicated.
-	const moveId = useRef(crypto.randomUUID()).current;
-	const cloudRequest = useRef<CloudSessionRequest>(undefined);
+	const moveId = useRef(saved?.moveId ?? crypto.randomUUID()).current;
+	const cloudRequest = useRef<NonNullable<MoveDeps["cloudRequest"]>>(saved ? { current: saved.request, pushed: saved.pushed, createUnsettled: true } : {}).current;
 	// A Cloud project the move created; Try again moves into it instead of creating another.
-	const createdProject = useRef<string>(undefined);
+	// An earlier move being finished goes to the project its request names.
+	const createdProject = useRef<string | undefined>(saved?.projectId ?? saved?.request.projectId);
 	const [steps, setSteps] = useState<MoveStep[]>(STEPS);
+	// Finishing an earlier move needs neither a new preview nor its checks.
+	const finishing = step !== undefined || Boolean(saved);
 
 	const sourceRepo = useQuery({
 		queryKey: ["move-source-repo", sourceHost, session.workspaceId],
@@ -105,21 +113,29 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 		gcTime: 0,
 	});
 	const signedIn = Boolean(cloudClient && org);
-	const loading = signedIn && (sourceRepo.isPending || cloudProjects.isPending || cloudSessions.isPending || preview.isPending);
+	const connections = useProviderConnections(signedIn);
+	const loading = signedIn && (sourceRepo.isPending || cloudProjects.isPending || cloudSessions.isPending || preview.isPending || connections.isPending);
 	const repo = sourceRepo.data?.key ?? "";
 	const project = repo ? (cloudProjects.data ?? []).find((candidate) => repoKey(candidate.repositoryUrl) === repo) : undefined;
+	// The repository's default branch: the daemon resolves it from origin when
+	// the project only knows it as "auto", which Cloud would take literally.
+	const localDefault = sourceRepo.data?.defaultBranch === "auto" ? "" : sourceRepo.data?.defaultBranch;
+	const defaultBranch = preview.data?.defaultBranch || localDefault || "";
 	// Cloud has no project for this GitHub repository: the move creates one first.
 	const newProject = !loading && !project && repo.startsWith("github.com/")
-		? { displayName: sourceRepo.data?.name || repo.split("/").at(-1) || repo, repositoryUrl: `https://${repo}`, defaultBranch: sourceRepo.data?.defaultBranch || "main" }
+		? { displayName: sourceRepo.data?.name || repo.split("/").at(-1) || repo, repositoryUrl: `https://${repo}`, defaultBranch }
 		: undefined;
 	const harness = cloudHarness(session.provider);
 	const branch = preview.data?.branch ?? "";
 	// Cloud refuses a second live session on a branch, but only after the push.
 	// Checked before the first attempt only: after it, the holder can be this move's own session.
 	const branchHolder =
-		project && step === undefined
+		project && !finishing
 			? (cloudSessions.data ?? []).find((s) => s.projectId === project.id && s.branch === branch && !s.isTerminated)
 			: undefined;
+	// Refused here so nothing is pushed: Cloud would start the session on the
+	// project's default branch, and the push would land the work on it.
+	const onCloudDefault = Boolean(project && branch && project.defaultBranch === branch);
 	const unavailable = !signedIn
 		? t("move.signedOut")
 		: loading
@@ -129,16 +145,24 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 					(!repo && preview.error?.message) || t("move.noCloudProject")
 				: !offering.features.includes(CLOUD_BRANCH_FEATURE)
 					? t("move.cloudNeedsUpdate")
-					: !(CLOUD_AGENT_PROVIDERS as readonly string[]).includes(harness)
-						? t("move.cloudAgentUnsupported", { agent: harness })
-						: preview.error
-							? preview.error.message
-							: branchHolder
-								? t("move.branchInUse", { branch, session: branchHolder.displayName })
-								: undefined;
+					: finishing
+						? undefined
+						: !(CLOUD_AGENT_PROVIDERS as readonly string[]).includes(harness)
+							? t("move.cloudAgentUnsupported", { agent: harness })
+							: !isCloudHarnessConnected(connections.data, harness)
+								? t("move.cloudAgentNotConnected", { agent: agentLabel(harness) })
+								: preview.error
+									? preview.error.message
+									: onCloudDefault
+										? t("move.onDefaultBranch", { branch })
+										: newProject && !defaultBranch
+											? t("move.noDefaultBranch")
+											: branchHolder
+												? t("move.branchInUse", { branch, session: branchHolder.displayName })
+												: undefined;
 	// An empty projectId has the move create newProject.
 	const target: MoveTarget | undefined =
-		org && (project || newProject || step !== undefined) && !loading && !unavailable
+		org && (project || newProject || finishing) && !loading && !unavailable
 			? { orgId: org.id, projectId: createdProject.current ?? project?.id ?? "", harness }
 			: undefined;
 	const changes = preview.data?.changes ?? [];
@@ -177,6 +201,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 						: {}),
 				},
 			);
+			useUnsettledMoveStore.getState().set(attemptKey, undefined);
 			if (moved.completeError) {
 				// The session runs in Cloud; recording that here is retried until it lands.
 				useUnfinishedMoveStore.getState().add({
@@ -190,6 +215,14 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 			// Say so when the conversation was to move but only the note did.
 			showGlobalToast(t("move.done"), carriesTranscript && moved.conversation === "note" ? t("move.doneNote") : undefined, { tone: "success" });
 		} catch (failure) {
+			// Kept only while Cloud may hold a session of this move; otherwise a
+			// later move starts afresh, from the session as it is then.
+			useUnsettledMoveStore.getState().set(
+				attemptKey,
+				cloudRequest.createUnsettled && cloudRequest.current
+					? { moveId, orgId: target.orgId, request: cloudRequest.current, pushed: cloudRequest.pushed, projectId: createdProject.current }
+					: undefined,
+			);
 			setError(failure instanceof Error ? failure : new Error(String(failure)));
 		} finally {
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(sourceHost) });
@@ -225,6 +258,8 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 							</p>
 						) : unavailable ? (
 							<p className="text-sm text-settings-muted">{unavailable}</p>
+						) : saved ? (
+							<p className="text-sm text-settings-muted">{t("move.finishEarlier")}</p>
 						) : (
 							<>
 								<dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
@@ -282,13 +317,12 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 										: t("move.failedPushed", { branch: error.pushed.branch })}
 								</p>
 							) : null}
-							<p className="text-settings-muted">
-								{error instanceof MoveError && !error.rolledBack
-									? t("move.failedNotRolledBack")
-									: error instanceof MoveError && error.pushed
-										? t("move.failedResumed")
-										: t("move.failedRolledBack")}
-							</p>
+							{moveFailureNote(error, {
+								unknown: t("move.failedUnknown"),
+								notRolledBack: t("move.failedNotRolledBack"),
+								resumed: t("move.failedResumed"),
+								rolledBack: t("move.failedRolledBack"),
+							})}
 						</div>
 					) : null}
 					{result?.completeError ? (
@@ -391,6 +425,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const { client: cloudClient } = useCloudCp();
+	const offering = useCloudOffering(true, orgId);
 	const cloudProjects = useCloudProjectsQuery();
 	const localProjects = useQuery(workspaceQueryOptions);
 	const readiness = useAgentReadinessQuery();
@@ -445,17 +480,19 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 		? t("move.signedOut")
 		: loading
 			? undefined
-			: preview.error
-				? preview.error instanceof CloudCpError && (preview.error.status === 0 || preview.error.status >= 500)
-					? t("moveHere.sandboxUnreachable")
-					: preview.error.message
-				: !repo
-					? t("moveHere.noRepository")
-					: agent?.effectiveReadiness === "not_ready"
-						? t("moveHere.agentNotSetUp", { agent: agent.label })
-						: targets.error
-							? targets.error.message
-							: target?.refusal?.message;
+			: !offering.features.includes(CLOUD_BRANCH_FEATURE)
+				? t("move.cloudNeedsUpdate")
+				: preview.error
+					? preview.error instanceof CloudCpError && (preview.error.status === 0 || preview.error.status >= 500)
+						? t("moveHere.sandboxUnreachable")
+						: preview.error.message
+					: !repo
+						? t("moveHere.noRepository")
+						: agent?.effectiveReadiness === "not_ready"
+							? t("moveHere.agentNotSetUp", { agent: agent.label })
+							: targets.error
+								? targets.error.message
+								: target?.refusal?.message;
 	// Try again moves into the project the first attempt chose or cloned, so it needs neither.
 	const ready = !loading && !unavailable && (step !== undefined || target !== undefined || cloneInto !== undefined);
 	const changes = preview.data?.changes ?? [];
@@ -627,13 +664,16 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 										: t("move.failedPushed", { branch: error.pushed.branch })}
 								</p>
 							) : null}
-							<p className="text-settings-muted">
-								{error instanceof MoveError && error.step === "clone"
-									? t("moveHere.failedClone")
-									: error instanceof MoveError && !error.rolledBack
-										? t("moveHere.failedNotRestarted")
-										: t("moveHere.failedRestarted")}
-							</p>
+							{error instanceof MoveError && error.step === "clone" ? (
+								<p className="text-settings-muted">{t("moveHere.failedClone")}</p>
+							) : (
+								moveFailureNote(error, {
+									unknown: t("moveHere.failedUnknown"),
+									notRolledBack: t("moveHere.failedNotRestarted"),
+									resumed: t("moveHere.failedRestarted"),
+									rolledBack: t("moveHere.failedRestarted"),
+								})
+							)}
 						</div>
 					) : null}
 					{result?.deleteError ? (
@@ -659,6 +699,25 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 			</DialogContent>
 		</Dialog>
 	);
+}
+
+/**
+ * The line under a failed move's error that says where the session stands.
+ * Nothing is claimed for a failure that is not a MoveError, and a MoveError
+ * whose message already says what to do (Try again finishes the move, or
+ * check the session) gets no line that could contradict it.
+ */
+function moveFailureNote(error: Error, notes: { unknown: string; notRolledBack: string; resumed: string; rolledBack: string }) {
+	const note = !(error instanceof MoveError)
+		? notes.unknown
+		: error.followUp
+			? undefined
+			: !error.rolledBack
+				? notes.notRolledBack
+				: error.pushed
+					? notes.resumed
+					: notes.rolledBack;
+	return note ? <p className="text-settings-muted">{note}</p> : null;
 }
 
 function homePath(path: string): string {

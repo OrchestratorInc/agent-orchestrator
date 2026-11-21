@@ -4,12 +4,15 @@ import { useTranslation } from "react-i18next";
 import { Archive, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Laptop, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { useIsCloudSessionCreator } from "../hooks/useCloudAgentSwitch";
 import { useCloudGate } from "../hooks/useCloudGate";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { CLOUD_BRANCH_FEATURE } from "../lib/move-session";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
 import { isOrchestratorSession, primaryPR, sessionIsActive, type WorkspaceSession } from "../types/workspace";
@@ -68,6 +71,11 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	const openMoveSession = useUiStore((state) => state.openMoveSession);
 	// Sessions move between this computer and AO Cloud, so only they read this daemon's settings.
 	const { cloudEnabled } = useCloudGate(Boolean(session && !session.hostId));
+	// Only the person who started a Cloud session may move it, and only once
+	// its organization's Cloud can push a session's branch.
+	const cloudOrgId = session?.cloud?.orgId;
+	const cloudOffering = useCloudOffering(Boolean(cloudOrgId), cloudOrgId);
+	const cloudCreator = useIsCloudSessionCreator(session?.cloud ? session : undefined);
 	if (!session) return [];
 
 	const branch = sessionBranchPresentation(session).branch;
@@ -79,8 +87,14 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	const canRenameAndPin = !session.cloud?.shared;
 	// A live worker on this computer can move to AO Cloud when Cloud is on.
 	const canMove = cloudEnabled && !session.cloud && !isOrchestratorSession(session) && sessionIsActive(session);
-	// A live worker of this person's in AO Cloud can move to this computer.
-	const canMoveHere = cloudEnabled && Boolean(session.cloud && !session.cloud.shared) && !isOrchestratorSession(session) && sessionIsActive(session);
+	// A live worker this person started in AO Cloud can move to this computer.
+	const canMoveHere =
+		cloudEnabled &&
+		Boolean(session.cloud && !session.cloud.shared) &&
+		cloudCreator &&
+		cloudOffering.features.includes(CLOUD_BRANCH_FEATURE) &&
+		!isOrchestratorSession(session) &&
+		sessionIsActive(session);
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
 			.catch((error: unknown) => {

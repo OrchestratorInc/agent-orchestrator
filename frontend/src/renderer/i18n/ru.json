@@ -5573,6 +5573,12 @@
 	"move.failedNotRolledBack": "Агент здесь всё ещё остановлен. Возобновите его из меню сессии.",
 	"move.agent": "Агент",
 	"move.agentWorking": "Работает. Перенос сначала остановит его.",
+	"move.cloudAgentNotConnected": "{{agent}} не подключён в Orchestrator Cloud. Подключите его в настройках, затем перенесите сессию.",
+	"move.onDefaultBranch": "{{branch}} — ветка по умолчанию облачного проекта. Перенести можно только сессию в собственной ветке.",
+	"move.noDefaultBranch": "Orchestrator не может определить ветку репозитория по умолчанию, поэтому не может создать облачный проект. Укажите ветку по умолчанию в настройках проекта, затем перенесите сессию.",
+	"move.finishEarlier": "Предыдущая попытка переноса, возможно, уже запустила эту сессию в Orchestrator Cloud. Перенос завершит её.",
+	"move.failedUnknown": "Результат неизвестен. Проверьте сессию, прежде чем пробовать снова.",
+	"move.finishGaveUp": "Orchestrator перестал пытаться архивировать сессию, перенесённую в Orchestrator Cloud. Архивируйте её на этом компьютере.",
 	"moveHere.menuItem": "Перенести на этот компьютер…",
 	"moveHere.title": "Перенести {{title}} на этот компьютер",
 	"moveHere.project": "Проект",
@@ -5594,5 +5600,7 @@
 	"moveHere.deleteFailed": "{{title}} работает на этом компьютере. Orchestrator Cloud ещё не удалил свою копию; Orchestrator продолжает попытки, а агент копии в Cloud остаётся остановленным.",
 	"moveHere.failedPushedWip": "Незакоммиченные файлы теперь коммит {{commit}} в {{branch}}, в Orchestrator Cloud и на GitHub.",
 	"moveHere.failedRestarted": "Сессия продолжается в Orchestrator Cloud, и её агент снова работает.",
-	"moveHere.failedNotRestarted": "Сессия остаётся в Orchestrator Cloud, но её агент остановлен. Перезапустите его из сессии."
+	"moveHere.failedNotRestarted": "Сессия остаётся в Orchestrator Cloud, но её агент остановлен. Перезапустите его из сессии.",
+	"moveHere.failedUnknown": "Результат неизвестен. Проверьте сессию здесь и в Orchestrator Cloud, прежде чем пробовать снова.",
+	"moveHere.finishGaveUp": "Orchestrator перестал пытаться удалить облачную сессию, перенесённую на этот компьютер. Удалите её в Orchestrator Cloud."
 }

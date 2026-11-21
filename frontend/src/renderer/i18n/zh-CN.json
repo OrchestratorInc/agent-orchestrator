@@ -5267,6 +5267,12 @@
 	"move.failedNotRolledBack": "这里的代理仍处于停止状态。请从会话菜单恢复它。",
 	"move.agent": "智能体",
 	"move.agentWorking": "正在工作。移动会先停止它。",
+	"move.cloudAgentNotConnected": "{{agent}} 尚未在 Orchestrator Cloud 中连接。请在设置中连接后再移动。",
+	"move.onDefaultBranch": "{{branch}} 是该 Cloud 项目的默认分支。只有位于自己分支上的会话才能移动。",
+	"move.noDefaultBranch": "Orchestrator 无法确定仓库的默认分支，因此无法创建 Cloud 项目。请在项目设置中指定默认分支后再移动。",
+	"move.finishEarlier": "之前的一次移动可能已经在 Orchestrator Cloud 中启动了此会话。移动将完成那次移动。",
+	"move.failedUnknown": "结果未知。请先检查会话再重试。",
+	"move.finishGaveUp": "Orchestrator 已停止尝试归档一个已移动到 Orchestrator Cloud 的会话。请在这台电脑上归档它。",
 	"moveHere.menuItem": "移动到此电脑…",
 	"moveHere.title": "将 {{title}} 移动到此电脑",
 	"moveHere.project": "项目",
@@ -5288,5 +5294,7 @@
 	"moveHere.deleteFailed": "{{title}} 正在此电脑上运行。Orchestrator Cloud 尚未删除其副本；Orchestrator 会继续重试，Cloud 副本的智能体保持停止。",
 	"moveHere.failedPushedWip": "未提交的文件现在是 {{branch}} 上的提交 {{commit}}，位于 Orchestrator Cloud 和 GitHub 上。",
 	"moveHere.failedRestarted": "会话在 Orchestrator Cloud 中继续，其智能体已重新运行。",
-	"moveHere.failedNotRestarted": "会话仍在 Orchestrator Cloud 中，但其智能体已停止。请在会话中重新启动它。"
+	"moveHere.failedNotRestarted": "会话仍在 Orchestrator Cloud 中，但其智能体已停止。请在会话中重新启动它。",
+	"moveHere.failedUnknown": "结果未知。请先检查这台电脑和 Orchestrator Cloud 中的会话再重试。",
+	"moveHere.finishGaveUp": "Orchestrator 已停止尝试删除一个已移动到这台电脑的 Cloud 会话。请在 Orchestrator Cloud 中删除它。"
 }

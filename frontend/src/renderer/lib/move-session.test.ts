@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
-import { MoveError, moveSession, moveSessionHere, type MoveDeps, type MoveHereDeps } from "./move-session";
+import { cloudReasoningEffort, MoveError, moveSession, moveSessionHere, type MoveDeps, type MoveHereDeps } from "./move-session";
 
 type Reply = { data?: unknown; error?: unknown };
 
@@ -506,5 +506,66 @@ describe("moveSessionHere", () => {
 		const cp = cloudFake({ deleteSession: async () => { throw new CloudCpError("not found", { status: 404 }); } });
 		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });
 		expect(result.deleteError).toBeUndefined();
+	});
+});
+
+describe("moveSession when this computer's Orchestrator does not answer", () => {
+	const unknown = /did not answer, so the outcome is unknown\. Check the session before trying again\./;
+
+	it.each([
+		["stopping the agent", {}, "stop"],
+		["the push", { "/api/v1/sessions/{sessionId}/exit-agent": ok() }, "export"],
+	] as const)("claims nothing was undone when %s gets no answer", async (_, replies, step) => {
+		const calls: string[] = [];
+		const cp = cloud();
+		const error = await moveSession({ sessionId: "app-1", moveId: "m-1", target }, { source: fakeDaemon(replies, calls), cloud: cp }).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(MoveError);
+		expect(error).toMatchObject({ step, rolledBack: false, followUp: "unknown" });
+		expect((error as MoveError).message).toMatch(unknown);
+		// Nothing resumes the agent: the push may have happened.
+		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+		expect(cp.createSession).not.toHaveBeenCalled();
+	});
+
+	it("does not say the agent was resumed when resuming it gets no answer", async () => {
+		const calls: string[] = [];
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": fail("MOVE_REMOTE_AHEAD", "Origin's branch has commits this machine does not."),
+		}, calls);
+		const error = await moveSession({ sessionId: "app-1", moveId: "m-1", target }, { source, cloud: cloud() }).catch((e: unknown) => e);
+		expect(calls).toContain("/api/v1/sessions/{sessionId}/resume-agent");
+		expect(error).toMatchObject({ step: "export", code: "MOVE_REMOTE_AHEAD", rolledBack: false, followUp: "unknown" });
+		expect((error as MoveError).message).toMatch(/^Origin's branch has commits this machine does not\. .*outcome is unknown/);
+	});
+});
+
+describe("moveSession before pushing", () => {
+	it("refuses to create a Cloud project on an unknown default branch, before stopping the agent", async () => {
+		for (const defaultBranch of ["auto", "", " "]) {
+			const calls: string[] = [];
+			const cp = cloud();
+			const error = await moveSession(
+				{ sessionId: "app-1", moveId: "m-1", target: { ...target, projectId: "" }, createProject: { displayName: "app", repositoryUrl: "https://github.com/acme/app", defaultBranch } },
+				{ source: fakeDaemon({}, calls), cloud: cp },
+			).catch((e: unknown) => e);
+			expect(error).toMatchObject({ step: "project", rolledBack: true });
+			expect(cp.createProject).not.toHaveBeenCalled();
+			expect(calls).toEqual([]);
+		}
+	});
+
+	it("sends Cloud only a reasoning effort it accepts", async () => {
+		for (const [local, sent] of [["xhigh", "xhigh"], ["off", "none"], ["HIGH", "high"], ["turbo", undefined], ["", undefined]] as const) {
+			const source = fakeDaemon({
+				"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+				"/api/v1/sessions/{sessionId}/move/export": ok({ ...exported, manifest: { ...exported.manifest, effort: local } }),
+				"/api/v1/sessions/{sessionId}/move/complete": ok(),
+			}, []);
+			const cp = cloud();
+			await moveSession({ sessionId: "app-1", moveId: "m-1", target }, { source, cloud: cp });
+			expect(cp.createSession.mock.calls[0][1].reasoningEffort).toBe(sent);
+		}
+		expect(cloudReasoningEffort(undefined)).toBeUndefined();
 	});
 });
