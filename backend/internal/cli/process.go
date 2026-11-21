@@ -28,3 +28,20 @@ func startProcess(cfg processStartConfig) error {
 	go func() { _ = cmd.Wait() }()
 	return nil
 }
+
+// startDetachedProcess starts cfg detached like startProcess, and also
+// returns the child's PID and a channel that reports when it exits, so a
+// caller waiting for it to become ready can stop early if it dies.
+func startDetachedProcess(cfg processStartConfig) (startedProcess, error) {
+	cmd := exec.Command(cfg.Path, cfg.Args...) //nolint:forbidigo // the daemon must outlive this CLI process.
+	cmd.Env = cfg.Env
+	cmd.Stdout = cfg.Stdout
+	cmd.Stderr = cfg.Stderr
+	cmd.SysProcAttr = detachSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		return startedProcess{}, err
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	return startedProcess{PID: cmd.Process.Pid, Exited: exited}, nil
+}
