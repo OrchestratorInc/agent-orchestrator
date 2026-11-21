@@ -429,3 +429,111 @@ func TestReviewTriggerSendsWhatTheCLISends(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionWaitHoldsWhileAChatTurnIsQueuedOrRunning(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	turns := 0
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2": fixed(200, `{"session":{"id":"ao-2","mode":"chat","provisionState":"ready","activity":{"state":"idle"}}}`),
+		"GET /api/v1/sessions/ao-2/conversation": func() (int, string) {
+			turns++
+			switch {
+			case turns <= 2:
+				return 200, `{"turns":[{"state":"queued"}]}`
+			case turns <= 4:
+				return 200, `{"turns":[{"state":"completed"},{"state":"running"}]}`
+			}
+			return 200, `{"turns":[{"state":"completed"},{"state":"completed"}]}`
+		},
+	})
+	if text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2", "ao-2"}}); isError || !strings.Contains(text, `"timedOut":false`) {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	if turns != 4+quietPollsAfterWork {
+		t.Errorf("conversation reads = %d, want %d: four with a turn in flight, then two quiet", turns, 4+quietPollsAfterWork)
+	}
+	if got := daemon.last(t, "GET", "/api/v1/sessions/ao-2/conversation").query; got != "limit=1" {
+		t.Errorf("conversation query = %q", got)
+	}
+}
+
+func TestSessionWaitKeepsWaitingThroughADaemonError(t *testing.T) {
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	reads := 0
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2": func() (int, string) {
+			reads++
+			if reads <= 3 {
+				return 500, `{"message":"database is busy","code":"INTERNAL"}`
+			}
+			return 200, `{"session":{"id":"ao-2","isTerminated":true}}`
+		},
+	})
+	text, isError := callTool(t, "session_wait", map[string]any{"sessionIds": []string{"ao-2"}})
+	if isError || !strings.Contains(text, `"timedOut":false`) || !strings.Contains(text, `"isTerminated":true`) || strings.Contains(text, "database is busy") {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	if reads != 3+quietPollsAfterWork {
+		t.Errorf("reads = %d, want %d", reads, 3+quietPollsAfterWork)
+	}
+}
+
+func TestSessionWaitDoesNotBlockOtherRequestsAndCanBeCancelled(t *testing.T) {
+	waitPollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { waitPollInterval = 2 * time.Second })
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2": fixed(200, `{"session":{"id":"ao-2","provisionState":"provisioning"}}`),
+	})
+	started := time.Now()
+	replies := runMCP(t,
+		mcpCall("session_wait", map[string]any{"sessionIds": []string{"ao-2"}, "timeoutSec": 110}),
+		`{"jsonrpc":"2.0","id":8,"method":"ping"}`,
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}`,
+	)
+	if len(replies) != 2 || string(replies[0].ID) != "8" || string(replies[1].ID) != "7" {
+		t.Fatalf("replies = %+v", replies)
+	}
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Errorf("a cancelled wait took %s", elapsed)
+	}
+	if !strings.Contains(replies[1].Result.Content[0].Text, `"timedOut":true`) {
+		t.Errorf("wait reply = %+v", replies[1].Result)
+	}
+}
+
+func TestArgumentsAreCheckedAgainstTheirDeclaredTypes(t *testing.T) {
+	daemon := startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-1/conversation": fixed(200, bypassConversation),
+		"GET /api/v1/sessions/ao-1":              fixed(200, `{"session":{"id":"ao-1","projectId":"proj"}}`),
+		"POST /api/v1/sessions":                  fixed(200, `{"session":{"id":"ao-9"}}`),
+	})
+	if text, isError := callTool(t, "session_read", map[string]any{"sessionId": "ao-2", "limit": "20"}); !isError || !strings.Contains(text, "limit must be of type integer") {
+		t.Fatalf("isError = %v, text = %s", isError, text)
+	}
+	if len(daemon.seen()) != 0 {
+		t.Fatalf("a refused call reached the daemon: %+v", daemon.seen())
+	}
+	if text, isError := callTool(t, "session_spawn", map[string]any{"prompt": "fix it", "model": "", "branch": " "}); isError {
+		t.Fatalf("blank optional strings were refused: %s", text)
+	}
+	if body := daemon.last(t, "POST", "/api/v1/sessions").body; strings.Contains(body, "model") || strings.Contains(body, "branch") {
+		t.Errorf("spawn body = %s", body)
+	}
+}
+
+func TestManyTurnsStayValidJSON(t *testing.T) {
+	turn := `{"userRequest":"` + strings.Repeat("q", 5000) + `","agentResponse":"` + strings.Repeat("a", 5000) + `"}`
+	startFakeDaemon(t, map[string]func() (int, string){
+		"GET /api/v1/sessions/ao-2/history": fixed(200, `{"total":20,"turns":[`+strings.Repeat(turn+",", 19)+turn+`]}`),
+	})
+	text, isError := callTool(t, "session_read", map[string]any{"sessionId": "ao-2", "limit": 20})
+	var history struct {
+		Total int
+		Turns []map[string]string
+	}
+	if err := json.Unmarshal([]byte(text), &history); isError || err != nil || history.Total != 20 || len(history.Turns) != 20 {
+		t.Fatalf("isError = %v, err = %v, total = %d, turns = %d, bytes = %d", isError, err, history.Total, len(history.Turns), len(text))
+	}
+}

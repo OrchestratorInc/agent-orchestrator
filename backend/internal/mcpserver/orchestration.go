@@ -9,12 +9,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 )
 
 const (
 	maxWaitSessions            = 20
 	maxWaitSeconds             = 110
+	defaultWaitSeconds         = 50
+	sessionReadBudget          = 36_000
 	quietPollsAfterWork        = 2
 	quietPollsNeverSeenWorking = 5
 )
@@ -69,10 +73,11 @@ func callSessionRead(ctx context.Context, s *server, args map[string]any) (any, 
 	if err := s.daemon.DoJSON(ctx, http.MethodGet, sessionPath(stringArg(args, "sessionId"), "/history?"+query.Encode()), nil, &history); err != nil {
 		return nil, err
 	}
+	perText := min(maxTurnTextChars, sessionReadBudget/(2*max(len(history.Turns), 1)))
 	for _, turn := range history.Turns {
 		for _, key := range []string{"userRequest", "agentResponse"} {
 			if text, ok := turn[key].(string); ok {
-				turn[key] = clip(text)
+				turn[key] = clip(text, perText)
 			}
 		}
 	}
@@ -92,58 +97,103 @@ func sessionSettled(session map[string]any) bool {
 	return session["activity"] != "active"
 }
 
-func callSessionWait(ctx context.Context, s *server, args map[string]any) (any, error) {
+func (s *server) chatTurnInFlight(ctx context.Context, id string) (inFlight, known bool) {
+	var conversation struct {
+		Turns []struct {
+			State string `json:"state"`
+		} `json:"turns"`
+	}
+	if err := s.daemon.DoJSON(ctx, http.MethodGet, sessionPath(id, "/conversation?limit=1"), nil, &conversation); err != nil {
+		return false, false
+	}
+	for _, turn := range conversation.Turns {
+		if turn.State == "queued" || turn.State == "running" {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+func waitSessionIDs(args map[string]any) ([]string, error) {
 	raw, _ := args["sessionIds"].([]any)
 	ids := make([]string, 0, len(raw))
 	for _, value := range raw {
-		if id, ok := value.(string); ok && id != "" {
+		id, _ := value.(string)
+		if id = strings.TrimSpace(id); id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}
 	if len(ids) == 0 || len(ids) > maxWaitSessions {
 		return nil, fmt.Errorf("sessionIds must list 1 to %d sessions", maxWaitSessions)
 	}
-	timeout := min(max(intArg(args, "timeoutSec", maxWaitSeconds), 1), maxWaitSeconds)
+	return ids, nil
+}
+
+func callSessionWait(ctx context.Context, s *server, args map[string]any) (any, error) {
+	ids, err := waitSessionIDs(args)
+	if err != nil {
+		return nil, err
+	}
+	timeout := min(max(intArg(args, "timeoutSec", defaultWaitSeconds), 1), maxWaitSeconds)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	quiet, worked := map[string]int{}, map[string]bool{}
+	var lastRound []map[string]any
 	for {
-		sessions := make([]map[string]any, 0, len(ids))
+		round := make([]map[string]any, 0, len(ids))
 		done := true
 		for _, id := range ids {
 			var response struct {
 				Session map[string]any `json:"session"`
 			}
 			if err := s.daemon.DoJSON(ctx, http.MethodGet, sessionPath(id, ""), nil, &response); err != nil {
-				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					return map[string]any{"timedOut": true, "sessions": sessions}, nil
+				if ctx.Err() != nil {
+					break
 				}
-				sessions = append(sessions, map[string]any{"id": id, "error": err.Error()})
+				round = append(round, map[string]any{"id": id, "error": err.Error()})
+				if !strings.Contains(err.Error(), "NOT_FOUND") {
+					quiet[id], done = 0, false
+				}
 				continue
 			}
 			summary := sessionSummary(response.Session)
-			sessions = append(sessions, summary)
+			round = append(round, summary)
+			busy, exact := !sessionSettled(summary), false
 			if summary["activity"] == "active" {
 				worked[id] = true
 			}
-			if !sessionSettled(summary) {
+			if !busy && summary["mode"] == "chat" && summary["isTerminated"] != true {
+				if busy, exact = s.chatTurnInFlight(ctx, id); busy {
+					worked[id] = true
+				}
+			}
+			if busy {
 				quiet[id], done = 0, false
 				continue
 			}
 			quiet[id]++
 			needed := quietPollsNeverSeenWorking
-			if worked[id] || summary["isTerminated"] == true || summary["provisionState"] == "failed" {
+			if exact || worked[id] || summary["isTerminated"] == true || summary["provisionState"] == "failed" {
 				needed = quietPollsAfterWork
 			}
 			done = done && quiet[id] >= needed
 		}
+		if len(round) == len(ids) {
+			lastRound = round
+		}
+		if ctx.Err() != nil {
+			if lastRound == nil {
+				lastRound = round
+			}
+			return map[string]any{"timedOut": true, "sessions": lastRound}, nil
+		}
 		if done {
-			return map[string]any{"timedOut": false, "sessions": sessions}, nil
+			return map[string]any{"timedOut": false, "sessions": lastRound}, nil
 		}
 		select {
 		case <-ctx.Done():
-			return map[string]any{"timedOut": true, "sessions": sessions}, nil
+			return map[string]any{"timedOut": true, "sessions": lastRound}, nil
 		case <-time.After(waitPollInterval):
 		}
 	}

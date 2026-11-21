@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -74,11 +75,42 @@ func (s *server) serveMCP(ctx context.Context, in io.Reader, out io.Writer) erro
 	reader := bufio.NewReader(in)
 	encoder := json.NewEncoder(out)
 	state := &mcpState{}
+	var write, waitsMu sync.Mutex
+	var waits sync.WaitGroup
+	cancelWait := map[string]context.CancelFunc{}
+	defer waits.Wait()
+	reply := func(resp *mcpResponse) error {
+		if resp == nil {
+			return nil
+		}
+		write.Lock()
+		defer write.Unlock()
+		return encoder.Encode(resp)
+	}
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if line = bytes.TrimSpace(line); len(line) > 0 {
-			if resp := s.handleMCP(ctx, state, line); resp != nil {
-				if err := encoder.Encode(resp); err != nil {
+			switch id, kind := classifyMCPLine(line); kind {
+			case mcpLineCancel:
+				waitsMu.Lock()
+				if cancel := cancelWait[id]; cancel != nil {
+					cancel()
+				}
+				waitsMu.Unlock()
+			case mcpLineWait:
+				waitCtx, cancel := context.WithCancel(ctx)
+				waitsMu.Lock()
+				cancelWait[id] = cancel
+				waitsMu.Unlock()
+				waits.Go(func() {
+					defer cancel()
+					_ = reply(s.handleMCP(waitCtx, state, line))
+					waitsMu.Lock()
+					delete(cancelWait, id)
+					waitsMu.Unlock()
+				})
+			default:
+				if err := reply(s.handleMCP(ctx, state, line)); err != nil {
 					return err
 				}
 			}
@@ -90,6 +122,35 @@ func (s *server) serveMCP(ctx context.Context, in io.Reader, out io.Writer) erro
 			return readErr
 		}
 	}
+}
+
+type mcpLineKind int
+
+const (
+	mcpLineOther mcpLineKind = iota
+	mcpLineWait
+	mcpLineCancel
+)
+
+func classifyMCPLine(line []byte) (string, mcpLineKind) {
+	var peek struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			Name      string          `json:"name"`
+			RequestID json.RawMessage `json:"requestId"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(line, &peek) != nil {
+		return "", mcpLineOther
+	}
+	switch {
+	case peek.Method == "notifications/cancelled":
+		return string(peek.Params.RequestID), mcpLineCancel
+	case peek.Method == "tools/call" && peek.Params.Name == "session_wait" && peek.ID != nil:
+		return string(peek.ID), mcpLineWait
+	}
+	return "", mcpLineOther
 }
 
 // handleMCP answers one message; a notification gets no reply.

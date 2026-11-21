@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -84,8 +85,27 @@ func (s *server) callCatalog(ctx context.Context, t catalogTool, raw json.RawMes
 			delete(args, name)
 			continue
 		}
-		if text, isString := value.(string); prop["type"] == "string" && (!isString || strings.TrimSpace(text) == "") {
-			return mcpToolError(fmt.Errorf("%s must be a non-empty string", name))
+		kind, _ := prop["type"].(string)
+		valid := true
+		switch kind {
+		case "string":
+			var text string
+			if text, valid = value.(string); valid && strings.TrimSpace(text) == "" {
+				delete(args, name)
+			}
+		case "integer":
+			var number float64
+			number, valid = value.(float64)
+			valid = valid && number == math.Trunc(number)
+		case "boolean":
+			_, valid = value.(bool)
+		case "array":
+			_, valid = value.([]any)
+		case "object":
+			_, valid = value.(map[string]any)
+		}
+		if !valid {
+			return mcpToolError(fmt.Errorf("%s must be of type %s", name, kind))
 		}
 	}
 	for _, name := range t.required {
@@ -241,11 +261,11 @@ func sessionSummary(session map[string]any) map[string]any {
 	return out
 }
 
-func clip(text string) string {
-	if len(text) <= maxTurnTextChars {
+func clip(text string, limit int) string {
+	if len(text) <= limit {
 		return text
 	}
-	return strings.ToValidUTF8(text[:maxTurnTextChars], "") + fmt.Sprintf(" [cut: %d more bytes]", len(text)-maxTurnTextChars)
+	return strings.ToValidUTF8(text[:limit], "") + fmt.Sprintf(" [cut: %d more bytes]", len(text)-limit)
 }
 
 func stringProp(desc string) map[string]any {
@@ -345,7 +365,7 @@ var catalog = []catalogTool{
 		props: map[string]any{
 			"sessionIds": map[string]any{"type": "array", "minItems": 1, "maxItems": maxWaitSessions, "items": map[string]any{"type": "string"},
 				"description": "Sessions to wait for."},
-			"timeoutSec": intProp("Seconds to wait. Defaults to 110, the most one call can wait.", 1, maxWaitSeconds),
+			"timeoutSec": intProp("Seconds to wait. Defaults to 50; 110 is the most one call can wait.", 1, maxWaitSeconds),
 		},
 		required: []string{"sessionIds"},
 		call:     callSessionWait,
