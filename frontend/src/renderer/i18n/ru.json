@@ -2293,7 +2293,7 @@
 	"settings.harness.endpoint.authStyleApiKey": "Заголовок API-ключа",
 	"settings.harness.endpoint.model": "Модель (необязательно)",
 	"settings.harness.endpoint.modelPlaceholder": "Использовать модель по умолчанию",
-	"settings.harness.endpoint.storageNote": "Хранится на этом устройстве в папке данных Orchestrator и доступно только вашей учётной записи. Ключ больше не будет показан.",
+	"settings.harness.endpoint.storageNote": "Хранится в папке данных Orchestrator на хосте, где запускаются эти сеансы, и доступно только его учётной записи-владельцу. Ключ больше не будет показан.",
 	"settings.harness.endpoint.save": "Сохранить",
 	"settings.harness.endpoint.saving": "Сохранение…",
 	"settings.harness.endpoint.remove": "Удалить",

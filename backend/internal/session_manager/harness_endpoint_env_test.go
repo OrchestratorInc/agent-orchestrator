@@ -1,13 +1,16 @@
 package sessionmanager
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
@@ -47,5 +50,51 @@ func TestRuntimeEnvAppliesCustomHarnessEndpoint(t *testing.T) {
 	}
 	if _, ok := goose["ANTHROPIC_BASE_URL"]; ok || goose["ANTHROPIC_API_KEY"] != "ao-saved" {
 		t.Fatalf("endpoint leaked into another harness or replaced its key: %v", goose)
+	}
+}
+
+// savedAPIKeyAccount is a session bound to a saved Anthropic API-key account.
+type savedAPIKeyAccount struct {
+	ports.AgentAccountLaunchEnv
+}
+
+func (savedAPIKeyAccount) SessionLaunchEnv(context.Context, domain.SessionID) (map[string]string, error) {
+	return map[string]string{"ANTHROPIC_API_KEY": "sk-account", "ANTHROPIC_BASE_URL": "https://api.anthropic.com"}, nil
+}
+
+func (a savedAPIKeyAccount) SessionLaunchEnvWith(ctx context.Context, id domain.SessionID, _ string) (map[string]string, error) {
+	return a.SessionLaunchEnv(ctx, id)
+}
+
+// A bound account's saved key must never reach the custom endpoint: the base
+// URL and key both come from the endpoint, whichever auth style it uses.
+func TestRuntimeEnvKeepsAccountKeyAwayFromCustomEndpoint(t *testing.T) {
+	for _, style := range []harnessendpoint.AuthStyle{harnessendpoint.AuthBearer, harnessendpoint.AuthAPIKey} {
+		dir := t.TempDir()
+		if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", AuthStyle: style, APIKey: "sk-endpoint"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		manager := &Manager{
+			dataDir:       dir,
+			executable:    func() (string, error) { return filepath.Join(dir, "ao"), nil },
+			logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+			agentAccounts: savedAPIKeyAccount{},
+		}
+		env, err := manager.runtimeEnvChecked("session", "project", "", nil, "", "claude-code")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" {
+			t.Fatalf("%s: base URL = %q", style, env["ANTHROPIC_BASE_URL"])
+		}
+		for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+			if env[key] == "sk-account" {
+				t.Fatalf("%s: account key reached the endpoint via %s: %v", style, key, env)
+			}
+		}
+		keyVar := map[harnessendpoint.AuthStyle]string{harnessendpoint.AuthBearer: "ANTHROPIC_AUTH_TOKEN", harnessendpoint.AuthAPIKey: "ANTHROPIC_API_KEY"}[style]
+		if env[keyVar] != "sk-endpoint" {
+			t.Fatalf("%s: %s = %q, want the endpoint key", style, keyVar, env[keyVar])
+		}
 	}
 }
