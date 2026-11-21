@@ -34,6 +34,7 @@ describe("hostUpdateAction", () => {
 describe("host update flow", () => {
 	beforeEach(() => {
 		useHostUpdateStore.setState({ byUrl: {} });
+		localStorage.clear();
 		vi.restoreAllMocks();
 	});
 
@@ -110,6 +111,36 @@ describe("host update flow", () => {
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
 	});
 
+	it("ignores an idle read issued while the start was still pending", async () => {
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		let accept!: (value: HostUpdateView) => void;
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockReturnValue(new Promise((done) => { accept = done; }));
+		let answer!: (value: HostUpdateView) => void;
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockReturnValueOnce(new Promise((done) => { answer = done; }));
+		const started = startHostUpdate(URL);
+		const read = refreshHostUpdate(URL);
+		accept(view("0.14.10", "updating"));
+		await started;
+		answer(view("0.14.10"));
+		await read;
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
+	});
+
+	it("keeps following a host that reports its update running past ten minutes", async () => {
+		const refreshed = vi.fn();
+		window.addEventListener("ao:remote-hosts-changed", refreshed);
+		const read = vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10", "updating"), updating: { from: "0.14.10", since: Date.now() - 11 * 60_000 } });
+		await refreshHostUpdate(URL);
+		read.mockResolvedValue(null);
+		await refreshHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
+		read.mockResolvedValue(view("0.15.0"));
+		await refreshHostUpdate(URL);
+		expect(refreshed).toHaveBeenCalledOnce();
+		window.removeEventListener("ao:remote-hosts-changed", refreshed);
+	});
+
 	it("adopts a finished update when the start response was lost", async () => {
 		const refreshed = vi.fn();
 		window.addEventListener("ao:remote-hosts-changed", refreshed);
@@ -164,6 +195,7 @@ describe("host update flow", () => {
 		} });
 		autoUpdateHosts();
 		expect(start).toHaveBeenCalledExactlyOnceWith(behind);
+		expect(JSON.parse(localStorage.getItem("ao.autoUpdateRemoteHostAttempts") ?? "{}")).toEqual({ [behind]: "0.15.0" });
 		await Promise.resolve();
 		useHostUpdateStore.getState().patch(behind, { view: view("0.14.10"), updating: undefined, error: undefined });
 		autoUpdateHosts();
