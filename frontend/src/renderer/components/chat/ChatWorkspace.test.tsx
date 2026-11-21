@@ -3344,46 +3344,89 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", "The controller is not connected");
 	});
 
-	it("offers Restore, not Resume, on a terminated session", async () => {
-		const user = userEvent.setup();
+	it("opens an archived chat as an ordinary one, without restoring it", async () => {
 		const restore = vi.fn();
+		const send = vi.fn();
 		render(
 			<ChatWorkspace
-				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
-				session={{ ...chatSession, isTerminated: true }}
+				snapshot={{ ...chatFixtureSettled, sessionId: "archived-open", controller: { state: "stopped" } }}
+				session={{ ...chatSession, id: "archived-open", isTerminated: true }}
 				onResumeAgent={restore}
+				onSend={send}
 				onOpenShell={vi.fn()}
 			/>,
 		);
 
-		// Archiving is a normal end, not a failure.
+		// No archived banner, no Restore or Resume, no shell in a worktree that may be gone.
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.getByText("Session terminated")).toBeInTheDocument();
-		expect(screen.getByText("History is kept. Restore the session to continue.")).toBeInTheDocument();
-		expect(screen.getByText("Restore the session to continue")).toBeInTheDocument();
+		expect(screen.queryByText("Session terminated")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
-		// A shell here would open in the project root once the worktree is gone.
 		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+		const composer = screen.getByRole("combobox", { name: "Message the agent" });
+		expect(composer).toHaveAttribute("contenteditable", "true");
+		expect(composer).toHaveAttribute("aria-placeholder", "Message the agent");
 
-		await user.click(screen.getByRole("button", { name: "Restore session" }));
-		expect(restore).toHaveBeenCalledOnce();
+		// Typing is not sending: nothing restores yet.
+		await typeInLexicalEditor(composer, "pick this back up");
+		expect(restore).not.toHaveBeenCalled();
+		expect(send).not.toHaveBeenCalled();
 	});
 
-	it("keeps the composer locked while a terminated session restores", () => {
+	it("sends from an archived chat once, and keeps the composer usable while it restores", async () => {
+		const user = userEvent.setup();
+		const restore = vi.fn();
+		const send = vi.fn().mockResolvedValue(undefined);
+		const view = (resumingAgent: boolean) => (
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, sessionId: "archived-send", controller: { state: "stopped" } }}
+				session={{ ...chatSession, id: "archived-send", isTerminated: true }}
+				onResumeAgent={restore}
+				onSend={send}
+				resumingAgent={resumingAgent}
+			/>
+		);
+		const { rerender } = render(view(false));
+		const composer = screen.getByRole("combobox", { name: "Message the agent" });
+		await typeInLexicalEditor(composer, "continue from here");
+		await user.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(send).toHaveBeenCalledOnce());
+		expect(send.mock.calls[0]?.[0]).toBe("continue from here");
+		// The surface's send restores; the chat itself never asks for one.
+		expect(restore).not.toHaveBeenCalled();
+
+		// While the send's restore runs, nothing announces it and typing goes on.
+		rerender(view(true));
+		expect(screen.queryByText("Restoring session")).not.toBeInTheDocument();
+		expect(composer).toHaveAttribute("contenteditable", "true");
+		expect(send).toHaveBeenCalledOnce();
+	});
+
+	it("gives the draft back with the reason when the archived chat cannot be restored", async () => {
+		const user = userEvent.setup();
+		const send = vi.fn()
+			.mockRejectedValueOnce(Object.assign(new Error("Workspace restore failed"), { code: "SESSION_RESTORE_FAILED" }))
+			.mockResolvedValue(undefined);
 		render(
 			<ChatWorkspace
-				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
-				session={{ ...chatSession, isTerminated: true }}
+				snapshot={{ ...chatFixtureSettled, sessionId: "archived-refused", controller: { state: "stopped" } }}
+				session={{ ...chatSession, id: "archived-refused", isTerminated: true }}
 				onResumeAgent={vi.fn()}
-				resumingAgent
+				onSend={send}
 			/>,
 		);
+		const composer = screen.getByRole("combobox", { name: "Message the agent" });
+		await typeInLexicalEditor(composer, "try again later");
+		await user.click(screen.getByRole("button", { name: "Send message" }));
 
-		// The banner title and the composer placeholder both say so.
-		expect(screen.getAllByText("Restoring session")).toHaveLength(2);
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
-		// A message sent now would reach a session the daemon still calls terminated.
-		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+		await screen.findByText("Workspace restore failed");
+		await waitFor(() => expect(composer).toHaveTextContent("try again later"));
+		expect(composer).toHaveAttribute("contenteditable", "true");
+
+		// Sending again retries the restore with the same text.
+		await user.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+		expect(send.mock.calls[1]?.[0]).toBe("try again later");
 	});
 
 	it("does not wait for a reconnect on a terminated session", () => {
@@ -3396,7 +3439,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		expect(screen.queryByText("Reconnecting to the agent…")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
 	});
 
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {

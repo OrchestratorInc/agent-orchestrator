@@ -8,6 +8,7 @@ import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
 import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
+import { useRestoreSession } from "../../hooks/useRestoreSession";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
@@ -1536,6 +1537,7 @@ export function CloudSessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser);
 	const { client, ready, userId, baseUrl } = useCloudCp();
+	const restoreSession = useRestoreSession();
 	// A shared session's live state: who else has it open, who holds its
 	// composer (the lock on talking to the agent), and the model and settings
 	// its owner chose.
@@ -2516,28 +2518,40 @@ export function CloudSessionChatSurface({
 				});
 				// A new message replaces an earlier switch's failure.
 				setSwitchError(undefined);
-				if (!pendingSwitch) return sendMessage();
-				// The switch starts first; the message, sent while it runs, waits for
-				// the new agent. Nothing was sent if the switch is refused, so the
-				// draft stays and the pick is dropped.
-				return cloudSwitch.start(pendingSwitch).then(
-					() => {
-						setChosenSwitch(undefined);
-						if (cloud) {
-							const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
-							rememberAgentSwitchPick(targetKey, pendingSwitch);
-							// Settings held from an earlier spell on that agent (a switch back) are
-							// stale now: drop them, so the agent's saved choice is read once it runs.
-							setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
-						}
-						return sendMessage(true);
-					},
-					(error: unknown) => {
-						setChosenSwitch(undefined);
-						setSwitchError(error);
-						throw Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
-					},
-				);
+				const deliver = () => {
+					if (!pendingSwitch) return sendMessage();
+					// The switch starts first; the message, sent while it runs, waits for
+					// the new agent. Nothing was sent if the switch is refused, so the
+					// draft stays and the pick is dropped.
+					return cloudSwitch.start(pendingSwitch).then(
+						() => {
+							setChosenSwitch(undefined);
+							if (cloud) {
+								const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
+								rememberAgentSwitchPick(targetKey, pendingSwitch);
+								// Settings held from an earlier spell on that agent (a switch back) are
+								// stale now: drop them, so the agent's saved choice is read once it runs.
+								setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
+							}
+							return sendMessage(true);
+						},
+						(error: unknown) => {
+							setChosenSwitch(undefined);
+							setSwitchError(error);
+							throw Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
+						},
+					);
+				};
+				// An archived session is restored by sending to it, as a local one is: the
+				// message goes once the control plane took the restore, and none goes if it
+				// refused. One shared from another organization is the sharer's to restore.
+				if (session.isTerminated !== true || readOnly || cloud?.shared) return deliver();
+				return restoreSession(session.id).then((restored) => {
+					if (restored.status !== "success") {
+						throw Object.assign(new Error(restored.message), { code: "SESSION_RESTORE_FAILED" });
+					}
+					return deliver();
+				});
 			}}
 			session={chatSession}
 			settingsReady={!startStopped}

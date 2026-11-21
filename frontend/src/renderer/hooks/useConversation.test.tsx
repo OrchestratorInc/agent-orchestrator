@@ -1605,6 +1605,119 @@ describe("controller recovery", () => {
 		await waitFor(() => expect(result.current.resumeError).toBe("Unable to restore session"));
 		apiErrorMessageMock.mockReset();
 	});
+
+	describe("sending to an archived chat", () => {
+		const RESTORE = "/api/v1/sessions/{sessionId}/restore";
+		const MESSAGES = "/api/v1/sessions/{sessionId}/conversation/messages";
+		const archived = { id: "ao-1", workspaceId: "project-1", isTerminated: true, status: "terminated" };
+		function archivedClient() {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			queryClient.setQueryData(workspaceQueryKey, [{ id: "project-1", sessions: [archived] }]);
+			return queryClient;
+		}
+		const archivedInCache = (queryClient: QueryClient) =>
+			(queryClient.getQueryData(workspaceQueryKey) as { sessions: { isTerminated?: boolean }[] }[])[0]?.sessions[0]?.isTerminated;
+		const paths = () => postMock.mock.calls.map(([path]) => path);
+		const sentIds = () => postMock.mock.calls
+			.filter(([path]) => path === MESSAGES)
+			.map(([, request]) => (request as { body: { clientMessageId: string } }).body.clientMessageId);
+
+		it("shows the message at once, restores, then sends it once after the restore", async () => {
+			const restored = deferred<{ data: object; error: undefined }>();
+			postMock.mockImplementation((path: string) => path === RESTORE
+				? restored.promise
+				: Promise.resolve({ data: { turnId: "turn-1", state: "running" }, error: undefined }));
+			const queryClient = archivedClient();
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), {
+				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+			});
+
+			let sending: Promise<unknown> = Promise.resolve();
+			act(() => {
+				sending = result.current.send({ text: "pick this up", clientMessageId: "m1" });
+			});
+			await waitFor(() => expect(result.current.localEchos.map((echo) => echo.clientMessageId)).toEqual(["m1"]));
+			expect(result.current.localEchos[0]?.text).toBe("pick this up");
+			expect(paths()).toEqual([RESTORE]);
+			// Nothing marks it active before the daemon confirms the restore.
+			expect(archivedInCache(queryClient)).toBe(true);
+			// A second Enter while restoring cannot send the message twice.
+			await expect(result.current.send({ text: "pick this up", clientMessageId: "m2" })).rejects.toThrow();
+
+			await act(async () => {
+				restored.resolve({ data: {}, error: undefined });
+				await sending;
+			});
+			expect(paths().filter((path) => path === RESTORE)).toHaveLength(1);
+			expect(paths().indexOf(RESTORE)).toBeLessThan(paths().indexOf(MESSAGES));
+			expect(sentIds()).toEqual(["m1"]);
+		});
+
+		it("sends nothing and keeps the session archived when the restore fails", async () => {
+			apiErrorMessageMock.mockImplementation((error: { message?: string }, fallback: string) => error?.message ?? fallback);
+			postMock.mockResolvedValue({ data: undefined, error: { code: "WORKSPACE_RESTORE_FAILED", message: "Workspace restore failed" }, response: { status: 500 } });
+			const queryClient = archivedClient();
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), {
+				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+			});
+
+			let failure: unknown;
+			await act(async () => {
+				failure = await result.current.send({ text: "keep me", clientMessageId: "m1" }).catch((error: unknown) => error);
+			});
+			expect(failure).toMatchObject({ code: "SESSION_RESTORE_FAILED", message: "Workspace restore failed" });
+			expect(paths()).toEqual([RESTORE]);
+			expect(result.current.localEchos).toEqual([]);
+			expect(archivedInCache(queryClient)).toBe(true);
+
+			// The failed attempt released the session: sending again retries the restore.
+			await act(async () => {
+				await result.current.send({ text: "keep me", clientMessageId: "m2" }).catch(() => undefined);
+			});
+			expect(paths()).toEqual([RESTORE, RESTORE]);
+		});
+
+		it("sends when another window restored the session first", async () => {
+			postMock.mockImplementation((path: string) => Promise.resolve(path === RESTORE
+				? { data: undefined, error: { code: "SESSION_NOT_RESTORABLE", message: "Session is not restorable" }, response: { status: 409 } }
+				: { data: { turnId: "turn-1", state: "running" }, error: undefined }));
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+
+			await act(async () => {
+				await result.current.send({ text: "already back", clientMessageId: "m1" });
+			});
+			expect(paths()).toEqual([RESTORE, MESSAGES]);
+			expect(sentIds()).toEqual(["m1"]);
+		});
+
+		it("retries an unanswered send after a restore with the same message id", async () => {
+			let restores = 0;
+			let sends = 0;
+			postMock.mockImplementation((path: string) => {
+				if (path === RESTORE) {
+					restores += 1;
+					// The first restore took; the session is live by the retry.
+					return Promise.resolve(restores === 1
+						? { data: {}, error: undefined }
+						: { data: undefined, error: { code: "SESSION_NOT_RESTORABLE", message: "Session is not restorable" }, response: { status: 409 } });
+				}
+				sends += 1;
+				// The first send's answer is lost; the daemon answers the retry as a duplicate.
+				return sends === 1 ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve({ data: { duplicate: true }, error: undefined });
+			});
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+
+			await act(async () => {
+				await expect(result.current.send({ text: "once", clientMessageId: "m1" })).rejects.toBeInstanceOf(TypeError);
+			});
+			await act(async () => {
+				await result.current.send({ text: "once", clientMessageId: "m1" });
+			});
+			expect(paths()).toEqual([RESTORE, MESSAGES, RESTORE, MESSAGES]);
+			expect(sentIds()).toEqual(["m1", "m1"]);
+			expect(result.current.localEchos).toEqual([]);
+		});
+	});
 });
 
 describe("useConversationSkills polling", () => {

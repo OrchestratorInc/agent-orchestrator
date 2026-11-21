@@ -53,7 +53,7 @@ import {
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
+import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
@@ -2273,7 +2273,8 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock ? null : (
+					{/* An archived chat reads as an ordinary one: sending to it restores it. */}
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock || terminated ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -2282,7 +2283,6 @@ function ChatWorkspaceContent({
 							transitioning={controllerTransitioning || agentResuming}
 							automaticWakePending={suppressStopped}
 							reconnecting={startupReconnecting}
-							terminated={terminated}
 							onResume={newWorkDisabled ? undefined : onResumeAgent}
 							resuming={resumingAgent}
 							resumeError={resumeError}
@@ -2500,7 +2500,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
 										// keeps its look; the agent and model can still be changed.
@@ -2519,8 +2519,6 @@ function ChatWorkspaceContent({
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
-												: terminated && snapshot.controller.state === "stopped"
-												? t(resumingAgent ? "shell.restoringSession" : "chat.archived.placeholder")
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting
@@ -3098,7 +3096,6 @@ function ControllerBanner({
 	transitioning,
 	automaticWakePending,
 	reconnecting,
-	terminated = false,
 	onResume,
 	resuming,
 	resumeError,
@@ -3119,8 +3116,6 @@ function ControllerBanner({
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
 	reconnecting?: boolean;
-	/** The session is archived, so `onResume` restores it instead of resuming its agent. */
-	terminated?: boolean;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -3133,8 +3128,7 @@ function ControllerBanner({
 }) {
 	const { t } = useTranslation();
 	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
-	// An archived session is restored, never resumed, so it is not "open elsewhere".
-	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped" && !terminated;
+	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped";
 	const resumeRef = useRef(onResume);
 	resumeRef.current = onResume;
 	// The other app releases the chat without telling AO (Codex can hold a closed
@@ -3176,29 +3170,27 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: terminated
-				? t(waking ? "shell.restoringSession" : "terminal.sessionTerminated")
-				: waking
-					? "Waking agent…"
-					: restarting
-						? "Reconnecting to the agent…"
-						: openElsewhere
-							? t("chat.controller.openElsewhere")
-							: needsResume
-								? t("chat.controller.couldNotConnect")
-								: "The agent controller stopped",
-			tone: terminated || waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
+			title: waking
+				? "Waking agent…"
+				: restarting
+					? "Reconnecting to the agent…"
+					: openElsewhere
+						? t("chat.controller.openElsewhere")
+						: needsResume
+							? t("chat.controller.couldNotConnect")
+							: "The agent controller stopped",
+			tone: waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
 	if (!shown) return null;
 	const loading = controller.state === "connecting" || waking || restarting;
 	const actionable = controller.state === "stopped" && !waking && !restarting;
-	if (actionable && !terminated && signInRequired) return null;
+	if (actionable && signInRequired) return null;
 
 	return (
 		<div
-			role={actionable && !terminated ? "alert" : "status"}
+			role={actionable ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
@@ -3207,14 +3199,12 @@ function ControllerBanner({
 					aria-hidden="true"
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
 				/>
-			) : terminated ? (
-				<Archive aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0", shown.tone)} />
 			) : (
 				<TriangleAlert aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0", shown.tone)} />
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{controller.state === "stopped" && waking && !terminated ? (
+				{controller.state === "stopped" && waking ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
 				) : restarting ? (
 					<span className="text-xs leading-snug text-muted-foreground">Orchestrator restarted. History is kept.</span>
@@ -3224,15 +3214,13 @@ function ControllerBanner({
 				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							{terminated
-								? t("chat.archived.body")
-								: openElsewhere
-									? [
-										t("chat.controller.openElsewhereBody"),
-										harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
-										t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
-									].filter(Boolean).join(" ")
-									: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
+							{openElsewhere
+								? [
+									t("chat.controller.openElsewhereBody"),
+									harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
+									t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
+								].filter(Boolean).join(" ")
+								: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
 						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
@@ -3248,11 +3236,11 @@ function ControllerBanner({
 									onClick={resumeClick}
 									disabled={resuming}
 								>
-									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : needsResume || openElsewhere ? t("chat.controller.retry") : "Resume agent"}
+									{resuming ? "Resuming…" : needsResume || openElsewhere ? t("chat.controller.retry") : "Resume agent"}
 								</Button>
 							) : null}
 							{/* Once the worktree is gone a shell would open in the project root. */}
-							{onOpenShell && !needsResume && !terminated ? (
+							{onOpenShell && !needsResume ? (
 								<Button
 									type="button"
 									size="sm"
