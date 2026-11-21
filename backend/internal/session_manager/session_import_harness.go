@@ -24,6 +24,7 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 	domain.HarnessDroid:      {configEnvKey: "FACTORY_HOME_OVERRIDE", configValue: filepath.Dir},
 	domain.HarnessKimi:       {configEnvKey: "KIMI_CODE_HOME"},
 	domain.HarnessAgy:        {configEnvKey: "GEMINI_HOME"},
+	domain.HarnessDeepSeek:   {configEnvKey: "DSH_HOME"},
 	domain.HarnessClaudeCode: {configEnvKey: "CLAUDE_CONFIG_DIR"},
 	domain.HarnessCline:      {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
 	domain.HarnessCodewhale:  {configEnvKey: "CODEWHALE_HOME", ownedElsewhere: codewhaleImportOwnedElsewhere, adoptedOwnedElsewhere: codewhaleAdoptedImportOwnedElsewhere},
