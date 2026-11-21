@@ -1,5 +1,5 @@
 import { fetch as expoFetch } from "expo/fetch";
-import { demoEventStream, isDemoUrl } from "../demoMachine/transport";
+import { demoTransport } from "../demoMachine/entry";
 import { ApiError, ATTACHMENT_REQUEST_TIMEOUT_MS, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { resolveDefaultChoices } from "./turnSettingsModel";
@@ -474,8 +474,9 @@ export async function streamGlobalConversationEvents(
 	const url = `${httpBase(cfg)}${API}/events?after=${Math.max(0, after)}`;
 	const init = { headers: { ...authHeaders(cfg), Accept: "text/event-stream" }, signal };
 	// The in-app demo machine (development builds only) streams its own events.
-	const res = isDemoUrl(url)
-		? (await demoEventStream(url, init)) as unknown as Awaited<ReturnType<typeof expoFetch>>
+	const demo = demoTransport();
+	const res = demo?.isDemoUrl(url)
+		? (await demo.demoEventStream(url, init)) as unknown as Awaited<ReturnType<typeof expoFetch>>
 		: await expoFetch(url, init);
 	if (!res.ok) throw await streamError(res);
 	if (!res.body) throw new Error("Couldn't open live updates from your machine.");

@@ -4,9 +4,10 @@
 // "replying" so the live-update path runs the way it does against a real agent.
 // See ./transport.ts for how requests reach it and ./index.ts for the switch.
 
+import { DEMO_HOST_ID } from "./id";
 import { demoArtifacts, demoArtifactText, demoFile, demoManifest, demoSearch, demoTree } from "./workspace";
 
-export const DEMO_HOST_ID = "demo-machine";
+export { DEMO_HOST_ID };
 export const DEMO_HOSTNAME = "demo.ao.invalid";
 export const DEMO_PORT = 3011;
 

@@ -84,14 +84,17 @@ vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({
 vi.mock("./config", () => ({ isConfigured: () => false }));
 vi.mock("./hosts", () => ({ activeHost: async () => fixtures.hosts.find((host) => host.id === fixtures.activeId) ?? fixtures.hosts[0], loadHosts: async () => [...fixtures.hosts] }));
 // The development build's demo machine: pairing it saves a machine and makes it the default.
-vi.mock("./demoMachine", () => ({
-	DEMO_HOST_ID: "demo",
-	DEMO_NETWORKS: { fast: { label: "Fast", latencyMs: 30 } },
-	addDemoMachine: async () => { fixtures.hosts.push({ ...fixtures.hosts[0]!, id: "demo", name: "Demo machine", lastConnected: 3 }); },
-	removeDemoMachine: async () => { fixtures.hosts = fixtures.hosts.filter((host) => host.id !== "demo"); },
-	chooseDemoNetwork: vi.fn(),
-	useDemoNetwork: () => "fast",
-}));
+vi.mock("./demoMachine/entry", () => {
+	const demo = {
+		DEMO_HOST_ID: "demo",
+		DEMO_NETWORKS: { fast: { label: "Fast", latencyMs: 30 } },
+		addDemoMachine: async () => { fixtures.hosts.push({ ...fixtures.hosts[0]!, id: "demo", name: "Demo machine", lastConnected: 3 }); },
+		removeDemoMachine: async () => { fixtures.hosts = fixtures.hosts.filter((host) => host.id !== "demo"); },
+		chooseDemoNetwork: vi.fn(),
+		useDemoNetwork: () => "fast",
+	};
+	return { demoMachine: () => demo, demoTransport: () => null };
+});
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: fixtures.select, success: vi.fn(), error: vi.fn() } }));
 vi.mock("./inAppUpdates", () => ({ checkStore: fixtures.checkStore, openOrStartUpdate: fixtures.openOrStartUpdate }));
 vi.mock("./storeUpdatePrompt", () => ({ promptStoreUpdate: fixtures.prompt }));
