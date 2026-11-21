@@ -56,8 +56,10 @@ describe("composer tab", () => {
 		const tab = screen.getByRole("region", { name: "Background tasks" });
 		expect(within(tab).getByText("Dev server")).toBeVisible();
 		expect(within(tab).getByText("12m")).toBeVisible();
-		// A dev server is meant to keep running: no spinner.
-		expect(within(tab).queryByRole("img")).toBeNull();
+		// A dev server is meant to keep running: no spinner or dot, but screen readers hear its state.
+		const row = within(tab).getByText("Dev server").closest("li")!;
+		expect(within(row).queryByRole("img")).toBeNull();
+		expect(row).toHaveTextContent("Running");
 		await userEvent.click(within(tab).getByRole("button", { name: "Stop Dev server" }));
 		expect(mutateMock).toHaveBeenCalledWith("shell");
 		// One request at a time: the square waits for the task to leave.
@@ -65,12 +67,42 @@ describe("composer tab", () => {
 	});
 
 	it("names a raw shell command by what it does", async () => {
-		queryMock.mockReturnValue({ data: readingOf([shell("dev", "PORT=3000 npm run dev > /tmp/ronish-dev.log 2>&1")]) });
+		queryMock.mockReturnValue({ data: readingOf([shell("dev", "PORT=3000 npm run dev > /tmp/dev.log 2>&1")]) });
 		render(<SessionBackgroundTasks session={session} />);
 		const tab = screen.getByRole("region", { name: "Background tasks" });
 		expect(within(tab).getByText("Dev server on port 3000")).toBeVisible();
-		expect(tab).not.toHaveTextContent("/tmp/ronish-dev.log");
+		expect(tab).not.toHaveTextContent("/tmp/dev.log");
 		expect(within(tab).getByRole("button", { name: "Stop Dev server on port 3000" })).toBeVisible();
+		// The label is the summary; the tooltip keeps the command.
+		expect(within(tab).getByText("Dev server on port 3000")).toHaveAttribute("title", "PORT=3000 npm run dev > /tmp/dev.log 2>&1");
+	});
+
+	it("tells like tasks apart by folder, then by command", async () => {
+		render(<ComposerBackgroundTasks sessionId="s" reading={readingOf([
+			shell("web", "cd frontend && npm run dev"),
+			shell("api", "cd backend && npm run dev"),
+			shell("a", "npm run test -- a"),
+			shell("b", "npm run test -- b"),
+		])} />);
+		await userEvent.click(screen.getByRole("button", { name: /4 running/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Stop Dev server · backend" }));
+		expect(mutateMock).toHaveBeenCalledWith("api");
+		expect(screen.getByRole("button", { name: "Stop Dev server · frontend" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Stop npm run test -- a" })).toBeVisible();
+	});
+
+	it("shows nothing but the kind for a blank description", () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("blank", "   ")]) });
+		render(<SessionBackgroundTasks session={session} />);
+		expect(screen.getByRole("button", { name: "Stop Shell" })).toBeVisible();
+	});
+
+	it("names a failed task without saying it is still going", () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("t", "npm run test", { state: "failed", endedAt: ago(1_000) })]) });
+		render(<SessionBackgroundTasks session={session} />);
+		const row = screen.getByText("Tests").closest("li")!;
+		expect(within(row).getByRole("img", { name: "Failed" })).toBeVisible();
+		expect(row).not.toHaveTextContent("Running");
 	});
 
 	it("offers no stop where the provider cannot stop the task", () => {
@@ -117,7 +149,7 @@ describe("composer tab", () => {
 		expect(toggle).toHaveAttribute("aria-expanded", "true");
 		const rows = within(screen.getByRole("list")).getAllByRole("listitem");
 		// Failures stay above the five-row cap, without a stop.
-		expect(rows.map((row) => row.textContent)).toEqual(["Run the Go linter2m", "Start the renderer dev server12m", "Watch the composer tests9m"]);
+		expect(rows.map((row) => row.textContent)).toEqual(["Run the Go linter2m", "Start the renderer dev serverRunning12m", "Watch the composer testsRunning9m"]);
 		// The red dot ends the row, in the stop square's place, after the time.
 		expect(rows[0].lastElementChild).toContainElement(within(rows[0]).getByRole("img", { name: "Failed" }));
 		expect(within(rows[0]).queryByRole("button")).toBeNull();

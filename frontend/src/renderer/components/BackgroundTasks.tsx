@@ -44,19 +44,40 @@ export function BackgroundTasksBadge({ session, reading, stale = false }: {
 	);
 }
 
+type TaskName = { name: string; dir?: string };
+
 /** A shell task by what it does ("Dev server on port 3000"), not the command line its provider ran. */
-export function backgroundTaskName(task: BackgroundTask, t: TFunction): string {
-	if (!task.description) return t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other");
-	if (task.kind !== "shell") return task.description;
-	const label = shellTaskLabel(task.description);
+function taskName(task: BackgroundTask, t: TFunction): TaskName {
+	const description = task.description?.trim();
+	if (!description) return { name: t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other") };
+	if (task.kind !== "shell") return { name: description };
+	const label = shellTaskLabel(description);
+	const named = (name: string) => ({ name, dir: label.dir });
 	switch (label.kind) {
-		case "devServer": return label.port ? t("backgroundTasks.label.devServerPort", { port: label.port }) : t("backgroundTasks.label.devServer");
-		case "tests": return t("backgroundTasks.label.tests");
-		case "build": return t("backgroundTasks.label.build");
-		case "lint": return t("backgroundTasks.label.lint");
-		case "install": return t("backgroundTasks.label.install");
-		case "command": return label.text;
+		case "devServer": return named(label.port ? t("backgroundTasks.label.devServerPort", { port: label.port }) : t("backgroundTasks.label.devServer"));
+		case "tests": return named(t("backgroundTasks.label.tests"));
+		case "build": return named(t("backgroundTasks.label.build"));
+		case "lint": return named(t("backgroundTasks.label.lint"));
+		case "install": return named(t("backgroundTasks.label.install"));
+		case "command": return named(label.text);
 	}
+}
+
+/**
+ * Each task's name, told apart from the others: two "Dev server" rows become
+ * "Dev server · frontend" and "Dev server · backend", or their commands when
+ * no folder separates them.
+ */
+export function backgroundTaskNames(tasks: BackgroundTask[], t: TFunction): Map<BackgroundTask, string> {
+	const named = tasks.map((task) => ({ task, ...taskName(task, t) }));
+	const count = (key: string, keys: string[]) => keys.filter((other) => other === key).length;
+	const names = named.map(({ name }) => name);
+	const withDirs = named.map(({ name, dir }) => (dir ? `${name} · ${dir}` : name));
+	return new Map(named.map(({ task, name, dir }, i) => {
+		if (count(name, names) < 2) return [task, name];
+		if (dir && count(withDirs[i], withDirs) < 2) return [task, withDirs[i]];
+		return [task, task.description?.trim() || name];
+	}));
 }
 
 const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
@@ -160,7 +181,7 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	const listId = useId();
 	const tasks = useMemo(() => composerBackgroundTasks(reading), [reading]);
 	// Parsed once per reading, not on every elapsed-time tick.
-	const names = useMemo(() => new Map(tasks.map((task) => [task, backgroundTaskName(task, t)])), [tasks, t]);
+	const names = useMemo(() => backgroundTaskNames(tasks, t), [tasks, t]);
 	const live = tasks.filter(isLive);
 	const failedCount = tasks.length - live.length;
 	const now = useNow(tasks);
@@ -288,9 +309,11 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 					? tasks.map((task) => (
 							<li key={`${task.id}:${task.runId ?? ""}`} data-task-id={task.id} className="flex h-8 min-w-0 items-center gap-2">
 								{!several ? <SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : null}
-								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>
+								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={task.description?.trim() || name(task)}>
 									{name(task)}
 								</span>
+								{/* A live task shows no mark; say its state to screen readers, as failures say theirs. */}
+								{task.state === "running" ? <span className="sr-only">{t("backgroundTasks.state.running")}</span> : null}
 								{time(task)}
 								{trailing(task)}
 							</li>

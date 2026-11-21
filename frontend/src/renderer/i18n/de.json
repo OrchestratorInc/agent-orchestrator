@@ -5280,10 +5280,10 @@
 	"backgroundTasks.stopFailed": "Stoppen fehlgeschlagen",
 	"backgroundTasks.label.devServer": "Entwicklungsserver",
 	"backgroundTasks.label.devServerPort": "Entwicklungsserver auf Port {{port}}",
-	"backgroundTasks.label.tests": "Tests laufen",
-	"backgroundTasks.label.build": "Build läuft",
-	"backgroundTasks.label.lint": "Linting läuft",
-	"backgroundTasks.label.install": "Abhängigkeiten werden installiert",
+	"backgroundTasks.label.tests": "Tests",
+	"backgroundTasks.label.build": "Build",
+	"backgroundTasks.label.lint": "Lint",
+	"backgroundTasks.label.install": "Installation der Abhängigkeiten",
 	"backgroundTasks.shells_one": "1 Shell läuft noch",
 	"backgroundTasks.shells_other": "{{count}} Shells laufen noch",
 	"backgroundTasks.agents_one": "1 Hintergrundagent läuft",
@@ -5293,5 +5293,6 @@
 	"backgroundTasks.stale": "veraltet",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Hintergrundaufgabe",
+	"backgroundTasks.state.running": "Läuft",
 	"backgroundTasks.state.failed": "Fehlgeschlagen"
 }
