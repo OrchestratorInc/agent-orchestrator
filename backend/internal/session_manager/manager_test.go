@@ -2129,6 +2129,72 @@ func TestSpawn_WorkerParentCannotExceedProjectPermission(t *testing.T) {
 	}
 }
 
+// A worker an orchestrator spawns without --model runs the orchestrator's
+// current model when both use the same agent, as Cloud workers do: the
+// orchestrator's Chat pick, else the model it launched with, with its effort.
+func TestSpawn_InheritsOrchestratorModel(t *testing.T) {
+	const parent domain.SessionID = "mer-0"
+	type spawnResult struct{ model, effort string }
+	spawnWorker := func(t *testing.T, parentRec *domain.SessionRecord, chat *domain.ConversationSettings, cfg ports.SpawnConfig) spawnResult {
+		t.Helper()
+		st := newFakeStore()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+			Worker:       domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "project-worker-model"}},
+			Orchestrator: domain.RoleOverride{Harness: domain.HarnessCodex},
+		}}
+		if parentRec != nil {
+			st.sessions[parentRec.ID] = *parentRec
+		}
+		if chat != nil {
+			st.conversations[parent] = domain.ConversationRecord{SessionID: parent, Settings: *chat}
+		}
+		agent := &recordingAgent{}
+		lookPath := func(string) (string, error) { return "/bin/true", nil }
+		m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+		cfg.ProjectID, cfg.Kind = "mer", domain.KindWorker
+		if _, _, _, err := m.Spawn(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+		return spawnResult{agent.lastConfig.Model, agent.lastConfig.Effort}
+	}
+	orchestrator := func(harness domain.AgentHarness, kind domain.SessionKind, project domain.ProjectID) *domain.SessionRecord {
+		return &domain.SessionRecord{ID: parent, ProjectID: project, Kind: kind, Harness: harness,
+			Metadata: domain.SessionMetadata{Model: "orchestrator-launch-model", Effort: "high"}}
+	}
+	chatPick := &domain.ConversationSettings{Model: "orchestrator-chat-model", ReasoningEffort: "xhigh"}
+	explicitEffort := "low"
+
+	for _, tc := range []struct {
+		name   string
+		parent *domain.SessionRecord
+		chat   *domain.ConversationSettings
+		cfg    ports.SpawnConfig
+		want   spawnResult
+	}{
+		{name: "orchestrator's Chat pick", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatPick,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"orchestrator-chat-model", "xhigh"}},
+		{name: "orchestrator's launch model without a Chat pick", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"),
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"orchestrator-launch-model", "high"}},
+		{name: "explicit --model wins", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatPick,
+			cfg: ports.SpawnConfig{ParentSessionID: parent, AgentConfig: ports.AgentConfig{Model: "explicit-model"}}, want: spawnResult{"explicit-model", ""}},
+		{name: "explicit effort is kept with the inherited model", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatPick,
+			cfg: ports.SpawnConfig{ParentSessionID: parent, AgentConfig: ports.AgentConfig{Effort: explicitEffort}, EffortOverride: true}, want: spawnResult{"orchestrator-chat-model", "low"}},
+		{name: "orchestrator on another agent", parent: orchestrator(domain.HarnessClaudeCode, domain.KindOrchestrator, "mer"), chat: chatPick,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"project-worker-model", ""}},
+		{name: "parent is a worker", parent: orchestrator(domain.HarnessCodex, domain.KindWorker, "mer"), chat: chatPick,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"project-worker-model", ""}},
+		{name: "parent in another project", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "other"), chat: chatPick,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"project-worker-model", ""}},
+		{name: "no parent", cfg: ports.SpawnConfig{}, want: spawnResult{"project-worker-model", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := spawnWorker(t, tc.parent, tc.chat, tc.cfg); got != tc.want {
+				t.Fatalf("worker launched with %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 type rejectingHarnessUseGate struct {
 	harness domain.AgentHarness
 }

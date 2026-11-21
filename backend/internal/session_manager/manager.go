@@ -1282,6 +1282,21 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
 	explicitModel := cfg.AgentConfig.Model != ""
+	// A worker its orchestrator spawns without --model runs the orchestrator's
+	// current model when both use the same agent, as Cloud workers do. It is
+	// still inherited, not explicit, for the checks below.
+	if cfg.ParentSessionID != "" && !explicitModel {
+		model, effort, err := m.inheritedSpawnModel(ctx, cfg.ProjectID, cfg.ParentSessionID, cfg.Harness)
+		if err != nil {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+		}
+		if model != "" {
+			cfg.AgentConfig.Model = model
+			if !cfg.EffortOverride && cfg.AgentConfig.Effort == "" {
+				cfg.AgentConfig.Effort = effort
+			}
+		}
+	}
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
@@ -2370,6 +2385,35 @@ func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domai
 		return conversation.Settings.ApprovalMode, true, true, nil
 	}
 	return parent.Metadata.Permissions, true, true, nil
+}
+
+// inheritedSpawnModel is the model and effort an orchestrator runs now: its
+// Chat pick, else what it launched with. A model only means something to its
+// own agent, so a worker on another agent inherits nothing; like permissions,
+// neither does a spawn from a worker or a stale or cross-project parent.
+func (m *Manager) inheritedSpawnModel(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID, harness domain.AgentHarness) (string, string, error) {
+	parent, ok, err := m.store.GetSession(ctx, parentID)
+	if err != nil {
+		return "", "", fmt.Errorf("load parent session %s: %w", parentID, err)
+	}
+	if !ok || parent.ProjectID != projectID || parent.Kind != domain.KindOrchestrator || parent.Harness != harness {
+		return "", "", nil
+	}
+	model, effort := parent.Metadata.Model, parent.Metadata.Effort
+	if conversations, ok := m.store.(conversationSettingsStore); ok {
+		conversation, err := conversations.ConversationForSession(ctx, parentID)
+		switch {
+		case errors.Is(err, domain.ErrNoConversation):
+		case err != nil:
+			return "", "", fmt.Errorf("load parent conversation %s: %w", parentID, err)
+		case conversation.Settings.Model != "":
+			// A model picked in Chat comes with the effort picked for it.
+			model, effort = conversation.Settings.Model, conversation.Settings.ReasoningEffort
+		case conversation.Settings.ReasoningEffort != "":
+			effort = conversation.Settings.ReasoningEffort
+		}
+	}
+	return model, effort, nil
 }
 
 // loadProject loads the project record so spawn can resolve its per-project
