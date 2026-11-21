@@ -57,6 +57,11 @@ var ErrAgentModelDiscoveryCredentialRejected = errors.New("agent: credential rej
 // The agent CLI renews such a login on its next run; it is not a sign-out.
 var ErrAgentModelDiscoveryCredentialExpired = errors.New("agent: stored login expired while listing models")
 
+// ErrAgentModelConfigurationMissing marks a discovery that found no model
+// configuration for an agent that reads its models from config files. It is
+// setup state, not a transient failure: nothing changes it but the user.
+var ErrAgentModelConfigurationMissing = errors.New("model configuration was not found")
+
 // AgentAuthStatus describes the result of a short local auth probe for an
 // installed agent. It is advisory only: credentials, quota, selected model
 // availability, or CLI state can still fail at session spawn/model-call time.
