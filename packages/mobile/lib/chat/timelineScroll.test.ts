@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atTail, followsAfterRest, openingRow, RESUME_SLOP, TAIL_SLOP } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, tailFollowStep, TAIL_SLOP } from "./timelineScroll";
 
 const metrics = (offset: number) => ({ contentOffset: { x: 0, y: offset }, contentSize: { width: 390, height: 3000 }, layoutMeasurement: { width: 390, height: 800 } });
 
@@ -53,5 +53,33 @@ describe("openingRow", () => {
 		expect(openingRow(30, 4)).toBe(26);
 		expect(openingRow(4, 4)).toBe(0);
 		expect(openingRow(2, 4)).toBe(0);
+	});
+});
+
+
+describe("tailFollowStep", () => {
+	it("moves toward a growing end across frames and settles at the measured end", () => {
+		const first = tailFollowStep(100, 120, 600, 16, 20, 0);
+		expect(first).toBeGreaterThan(100);
+		expect(first).toBeLessThan(120);
+		const second = tailFollowStep(first, 140, 600, 16, 20, 0);
+		expect(second).toBeGreaterThan(first);
+		expect(second).toBeLessThan(140);
+		let position = second;
+		for (let i = 1; i <= 60; i++) position = tailFollowStep(position, 140, 600, 16, 20, i * 16);
+		expect(position).toBe(140);
+	});
+
+	it("uses recent growth as a lead without scrolling past measured content", () => {
+		const recent = tailFollowStep(100, 120, 600, 16, 20, 0);
+		const old = tailFollowStep(100, 120, 600, 16, 20, 250);
+		expect(recent).toBeGreaterThan(old);
+		expect(tailFollowStep(119, 120, 600, 16, 80, 0)).toBe(120);
+	});
+
+	it("snaps on shrink, a long interruption, or an end beyond one screen", () => {
+		expect(tailFollowStep(200, 120, 600, 16, 0, 0)).toBe(120);
+		expect(tailFollowStep(100, 150, 600, 1200, 20, 0)).toBe(150);
+		expect(tailFollowStep(100, 800, 600, 16, 700, 0)).toBe(800);
 	});
 });

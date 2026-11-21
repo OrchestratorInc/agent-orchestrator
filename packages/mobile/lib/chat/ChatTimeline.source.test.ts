@@ -139,7 +139,7 @@ describe("a turn's action row", () => {
 		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
 	});
 	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
-		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
+		expect(source).toContain("{renderRows(partition.settled ? [...partition.notices, ...partition.final] : partition.work)}{actions}{summary}");
 		expect(source).not.toContain("styles.responseActions");
 		const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function ChangedFiles"));
 		expect(summary).not.toContain("TurnRollbackButton");
@@ -154,14 +154,14 @@ describe("jump to latest", () => {
 	});
 	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
 	it("lets only a drag stop following the newest message", () => {
-		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);");
+		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) queueTailFollow();");
 	});
 	// A follow is queued a frame ahead. Output that arrived just before a drag
 	// queued one that then ran mid-fling, carried the list back to its end, and
 	// that end restarted the follow: the reader could never scroll away.
 	it("never follows new output while the person scrolls", () => {
-		expect(source).toContain("if (!followsTail.current || dragging.current) return;");
-		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
+		expect(source).toContain("if (!listRef.current || !followsTail.current || dragging.current) {");
+		expect(source).toContain("if (followsTail.current && !dragging.current) queueTailFollow();");
 	});
 	it("follows again only once the person comes to rest right at the end", () => {
 		expect(source).toContain("const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
@@ -171,10 +171,10 @@ describe("jump to latest", () => {
 	// followed. It must not count against coming to rest at the end, and a
 	// follow that resumes catches up on it.
 	it("keeps the release's verdict through Android's still momentum and catches up when the follow resumes", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollBeginDrag={() => { cancelTailFollow(); dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);");
-		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
+		expect(source).toContain("if (followsTail.current) queueTailFollow();\n\t};");
 		expect(source).not.toContain("grewWhileDragging");
 	});
 	// The jump shows whenever the list is not following, on every path: a drag
@@ -200,7 +200,7 @@ describe("jump to latest", () => {
 	});
 	// Each platform's own floating control (see JumpToLatest), not a bordered pill.
 	it("floats the native control over the list", () => {
-		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
+		expect(source).toContain("const start = end - viewportHeight.current;");
 		// Floating above what sits over the list's end, so it never moves the
 		// composer or the conversation, and fading rather than popping.
 		// It steps aside while the composer is open; only the jump re-renders for it.
@@ -410,14 +410,14 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollBeginDrag={() => { cancelTailFollow(); dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
 		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");
 		// A scroll event alone never turns the follow off: rows drawn above change
 		// the content's size mid-drag without the person having left the end.
 		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
-		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
+		expect(source).toContain("if (followsTail.current && !dragging.current) queueTailFollow();");
 	});
 	// A follow from JS mid-keyboard jumped the list to the keyboard's end and back.
 	// A tap on a reply gives its selectable text focus; the list scrolled that

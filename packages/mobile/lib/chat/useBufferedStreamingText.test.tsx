@@ -50,19 +50,20 @@ it("shows the first snapshot immediately and reveals the next burst in whole gra
 	expect(rendered).toBe(first);
 	await advance(16);
 	expect(rendered.length).toBeGreaterThan(first.length);
-	expect(rendered.length).toBeLessThan(latest.length);
+	expect(rendered).toBe(first + grapheme);
 	expect(rendered).toBe(first + grapheme.repeat((rendered.length - first.length) / grapheme.length));
 	await advance(1200);
 	expect(rendered).toBe(latest);
 });
 
-it("shows corrections and final snapshots immediately even when some text is still buffered", async () => {
+it("shows corrections immediately and drains a short final burst", async () => {
 	await show("First");
 	await show("First draft with a buffered burst");
 	await show("First correction");
 	expect(rendered).toBe("First correction");
 	await show("First correction with a last burst");
 	await show("First correction with a last burst", false);
+	expect(rendered).toBe("First correction");
 	await advance(500);
 	expect(rendered).toBe("First correction with a last burst");
 });

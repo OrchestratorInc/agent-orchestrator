@@ -17,8 +17,11 @@ import {
 type Buffer = {
 	visible: string;
 	target: string;
+	streaming: boolean;
+	finishing: boolean;
 	graphemes: string[];
 	visibleCount: number;
+	credit: number;
 	frame?: number;
 	lastFrameAt?: number;
 	snapshotTimer?: ReturnType<typeof setTimeout>;
@@ -26,10 +29,21 @@ type Buffer = {
 	gapMs?: number;
 };
 
-/** Pace the display of incoming snapshots. The first snapshot and finished replies are shown whole. */
+const MIN_SETTLE_MS = 260;
+const FINISH_SETTLE_MS = 110;
+const FINISH_MAX_BACKLOG = 480;
+const BASE_GRAPHEMES_PER_SECOND = 50;
+const MAX_GRAPHEMES_PER_SECOND = 140;
+
+function canFinish(visible: string, target: string): boolean {
+	const remaining = target.length - visible.length;
+	return remaining > 0 && remaining <= FINISH_MAX_BACKLOG && target.length <= STREAM_SMOOTH_MAX_CHARS && target.startsWith(visible);
+}
+
+/** Pace new snapshots and drain a short final burst, as desktop Cloud chat does. */
 export function useBufferedStreamingText(text: string, streaming: boolean, reducedMotion: boolean): string {
 	const [visible, setVisible] = useState(text);
-	const buffer = useRef<Buffer>({ visible: text, target: text, graphemes: [], visibleCount: 0 });
+	const buffer = useRef<Buffer>({ visible: text, target: text, streaming, finishing: false, graphemes: [], visibleCount: 0, credit: 0 });
 	const publish = useCallback((next: string) => {
 		buffer.current.visible = next;
 		setVisible(next);
@@ -41,15 +55,19 @@ export function useBufferedStreamingText(text: string, streaming: boolean, reduc
 		current.frame = undefined;
 		current.snapshotTimer = undefined;
 		current.lastFrameAt = undefined;
+		current.credit = 0;
 	}, []);
 	useEffect(() => cancel, [cancel]);
 
 	useEffect(() => {
 		const current = buffer.current;
 		const previousTarget = current.target;
+		current.finishing = !streaming && (current.streaming || current.finishing) && canFinish(current.visible, text);
+		current.streaming = streaming;
 		current.target = text;
-		if (!streaming || reducedMotion || AppState.currentState === "background" || !text.startsWith(previousTarget)) {
+		if ((!streaming && !current.finishing) || reducedMotion || AppState.currentState === "background" || !text.startsWith(previousTarget)) {
 			cancel();
+			current.finishing = false;
 			current.lastGrowthAt = undefined;
 			current.gapMs = undefined;
 			publish(text);
@@ -58,7 +76,7 @@ export function useBufferedStreamingText(text: string, streaming: boolean, reduc
 		if (text === previousTarget && text === current.visible) return;
 
 		const now = performance.now();
-		if (text !== previousTarget) {
+		if (streaming && text !== previousTarget) {
 			if (current.lastGrowthAt !== undefined) current.gapMs = streamGapMs(current.gapMs, now - current.lastGrowthAt);
 			current.lastGrowthAt = now;
 		}
@@ -85,7 +103,8 @@ export function useBufferedStreamingText(text: string, streaming: boolean, reduc
 			current.frame = undefined;
 			const frameAt = performance.now();
 			if (AppState.currentState === "background" || frameAt - (current.lastFrameAt ?? now) > STREAM_STALL_MS) {
-				current.lastFrameAt = undefined;
+				cancel();
+				current.finishing = false;
 				publish(current.target);
 				return;
 			}
@@ -93,18 +112,29 @@ export function useBufferedStreamingText(text: string, streaming: boolean, reduc
 			if (elapsed >= STREAM_MIN_FRAME_MS) {
 				current.lastFrameAt = frameAt;
 				const backlog = current.graphemes.length - current.visibleCount;
-				const settle = current.gapMs === undefined ? STREAM_SETTLE_MS : streamSettleMs(current.gapMs);
-				const count = streamRevealCount(backlog, Math.min(elapsed, STREAM_MAX_FRAME_DELTA_MS), settle);
+				const settle = current.finishing ? FINISH_SETTLE_MS : Math.max(MIN_SETTLE_MS, current.gapMs === undefined ? STREAM_SETTLE_MS : streamSettleMs(current.gapMs));
+				const delta = Math.min(elapsed, STREAM_MAX_FRAME_DELTA_MS);
+				const reveal = streamRevealCount(backlog, delta, settle);
+				// Keep large snapshots from revealing a whole line in the first frame.
+				// A bigger backlog catches up faster while the cap keeps it readable.
+				const rate = Math.min(MAX_GRAPHEMES_PER_SECOND, Math.max(BASE_GRAPHEMES_PER_SECOND, backlog));
+				const budget = current.credit + rate * delta / 1000;
+				const count = current.finishing ? reveal : Math.min(reveal, Math.floor(budget));
+				current.credit = budget % 1;
 				const nextCount = Math.min(current.graphemes.length, current.visibleCount + count);
 				const next = current.visible + current.graphemes.slice(current.visibleCount, nextCount).join("");
 				current.visibleCount = nextCount;
 				publish(next);
 			}
 			if (current.visibleCount < current.graphemes.length) current.frame = requestAnimationFrame(tick);
-			else current.lastFrameAt = undefined;
+			else {
+				current.lastFrameAt = undefined;
+				current.finishing = false;
+			}
 		};
 		current.frame = requestAnimationFrame(tick);
 	}, [cancel, publish, reducedMotion, streaming, text]);
 
-	return streaming && !reducedMotion && text.startsWith(visible) ? visible : text;
+	const finishing = (buffer.current.streaming || buffer.current.finishing) && canFinish(visible, text);
+	return !reducedMotion && (streaming || finishing) && text.startsWith(visible) ? visible : text;
 }

@@ -13,6 +13,15 @@ export const TAIL_SLOP = 120;
  */
 export const RESUME_SLOP = 48;
 
+/** One frame toward the measured end, with a short lead after content grows. */
+export function tailFollowStep(offset: number, end: number, viewport: number, elapsedMs: number, growth: number, growthAgeMs: number): number {
+	const gap = end - offset;
+	if (gap <= 0.5 || gap > viewport || elapsedMs >= 1000) return end;
+	const lead = Math.min(24, growth * 0.35) * Math.max(0, 1 - Math.max(0, growthAgeMs) / 150);
+	const fraction = 1 - Math.exp(-Math.min(elapsedMs, 50) / 85);
+	return Math.min(end, offset + (gap + lead) * fraction);
+}
+
 /**
  * Whether the list is scrolled to (or within a thumb's slop of) its newest
  * message. `inset` is room the list has made below its content (the keyboard's).
