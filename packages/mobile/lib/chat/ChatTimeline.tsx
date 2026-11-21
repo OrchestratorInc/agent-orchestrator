@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	FlatList,
 	Image,
@@ -33,6 +33,8 @@ import { FoldBody, FoldChevron } from "./TurnFoldMotion";
 import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { useReducedMotion } from "../useReducedMotion";
+import { useBufferedStreamingText } from "./useBufferedStreamingText";
 import { FirstLineMarker } from "./FirstLineMarker";
 import { ProviderSwitchMarker } from "./ProviderSwitchMarker";
 import { RenderFrame } from "./RenderFrame";
@@ -104,7 +106,6 @@ import {
 	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
-	streamingCursorMessageId,
 	summarizeActivities,
 	type ActivityNode,
 	type ConversationGroup,
@@ -134,9 +135,30 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
+type StreamPlayback = { conversationId: string; playedThrough: number };
+const StreamMotion = createContext<{ reducedMotion: boolean; playback: StreamPlayback; latestReplyId?: string } | null>(null);
+
+function streamPlayback(snapshot: ConversationSnapshot): StreamPlayback {
+	// Existing replies may be mid-stream when the reader opens the chat.
+	return { conversationId: snapshot.conversationId, playedThrough: snapshot.latestSequence };
+}
+
 /** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
 export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
-	return <KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>;
+	const { snapshot } = props;
+	const reducedMotion = useReducedMotion();
+	const [playback, setPlayback] = useState(() => streamPlayback(snapshot));
+	if (playback.conversationId !== snapshot.conversationId) setPlayback(streamPlayback(snapshot));
+	const latestReplyId = useMemo(
+		() => snapshot.items.filter((item) => item.kind === "message" && item.role === "assistant").at(-1)?.id,
+		[snapshot.items],
+	);
+	const motion = useMemo(() => ({ reducedMotion, playback, latestReplyId }), [reducedMotion, playback, latestReplyId]);
+	return (
+		<StreamMotion.Provider value={motion}>
+			<KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>
+		</StreamMotion.Provider>
+	);
 });
 
 function Timeline({
@@ -665,18 +687,18 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
+	const turnSettled = Boolean(group.turn && group.turn.state !== "running" && group.turn.state !== "queued");
 	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
 	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
 		: group.items, group.turn);
-	const cursorMessageId = streamingCursorMessageId(items);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
 		: undefined;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} turnSettled={turnSettled} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -701,8 +723,9 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	return <View>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
-		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
-		{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}
+		{partition.settled && workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null}
+		{/* Keep the final reply in the same keyed list while its buffer drains. */}
+		{renderRows(partition.settled ? [...partition.notices, ...partition.final] : partition.work)}{actions}{summary}
 	</View>;
 }
 
@@ -714,11 +737,40 @@ function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: numbe
 	</Animated.View>;
 }
 
+function AssistantReply({ message, completed, turnSettled, conversationId }: {
+	message: ConversationMessage;
+	turnSettled: boolean;
+	completed: boolean;
+	conversationId: string;
+}) {
+	const motion = useContext(StreamMotion);
+	const reducedMotion = motion?.reducedMotion ?? false;
+	const playback = motion?.playback;
+	const [playFromStart] = useState(() => Boolean(
+		playback && message.id === motion?.latestReplyId && message.sequence > playback.playedThrough,
+	));
+	useLayoutEffect(() => {
+		if (playback) playback.playedThrough = Math.max(playback.playedThrough, message.sequence);
+	}, [message.sequence, playback]);
+	const streaming = message.streaming === true && !turnSettled;
+	const text = useBufferedStreamingText(message.text, streaming, reducedMotion, playFromStart);
+	return (
+		<ChatMarkdown
+			text={text}
+			streaming={streaming}
+			fadeStreamingText={streaming && !reducedMotion}
+			continuousSelection
+			selectionSource={completed && !streaming ? { conversationId, messageId: message.id, revision: message.revision } : undefined}
+		/>
+	);
+}
+
 const TimelineItem = memo(function TimelineItem({
 	item,
 	sessionId,
 	conversationId,
 	completed,
+	turnSettled,
 	approvalPending,
 	inputPending,
 	onDecide,
@@ -726,12 +778,12 @@ const TimelineItem = memo(function TimelineItem({
 	onEdit,
 	editor,
 	answeredBelow,
-	showCursor = false,
 }: {
 	item: ConversationItem;
 	sessionId: string;
 	conversationId: string;
 	completed: boolean;
+	turnSettled: boolean;
 	approvalPending: boolean;
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
@@ -741,7 +793,6 @@ const TimelineItem = memo(function TimelineItem({
 	/** Shown in place of the bubble while this prompt is being edited. */
 	editor?: ReactNode;
 	answeredBelow?: number;
-	showCursor?: boolean;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	// The long-press menu hosts the bubble in a SwiftUI view sized to its
@@ -788,7 +839,7 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				<AssistantReply message={item} completed={completed} turnSettled={turnSettled} conversationId={conversationId} />
 			</View>
 		);
 	}

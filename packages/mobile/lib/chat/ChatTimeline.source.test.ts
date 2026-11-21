@@ -62,19 +62,6 @@ describe("chat under the clear header", () => {
 	});
 });
 
-describe("streaming response layout", () => {
-	it("keeps the live cursor inside the response instead of adding a new block", () => {
-		expect(source).toContain('showCursor ? `${item.text || ""} ▍`');
-		expect(source).not.toContain("styles.streamingDot");
-	});
-
-	it("draws the cursor on the turn's newest reply only", () => {
-		expect(source).toContain("streamingCursorMessageId(items)");
-		expect(source).toContain("showCursor={row.items[0].id === cursorMessageId}");
-		expect(source).not.toContain('item.streaming ? `${item.text || ""} ▍`');
-	});
-});
-
 describe("empty conversation", () => {
 	it("uses the AO mascot instead of a generic chat icon", () => {
 		const emptyConversation = source.slice(source.indexOf("function EmptyConversation"), source.indexOf("function LabelValue"));
@@ -139,7 +126,7 @@ describe("a turn's action row", () => {
 		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
 	});
 	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
-		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
+		expect(source).toContain("{renderRows(partition.settled ? [...partition.notices, ...partition.final] : partition.work)}{actions}{summary}");
 		expect(source).not.toContain("styles.responseActions");
 		const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function ChangedFiles"));
 		expect(summary).not.toContain("TurnRollbackButton");
