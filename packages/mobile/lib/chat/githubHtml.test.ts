@@ -211,8 +211,8 @@ describe("hostile and unusual comment HTML", () => {
 	it("keeps a <pre> holding a fence line as one code block, in both mobile parsers", () => {
 		const text = markdownOf("<pre>a\n```\nb</pre>\n[x](https://github.com/o/r)");
 		expect(text).toBe("```\na\n\u200B```\nb\n```\n\n[x](https://github.com/o/r)");
-		// ChatMarkdown's parser draws exactly one code block, then the link as prose.
-		expect(parseBlocks(text)).toEqual([{ kind: "code", language: undefined, text: "a\n\u200B```\nb" }, { kind: "paragraph", text: "[x](https://github.com/o/r)" }]);
+		// ChatMarkdown's parser draws exactly one code block, guard gone, then the link as prose.
+		expect(parseBlocks(text)).toEqual([{ kind: "code", language: undefined, text: "a\n```\nb" }, { kind: "paragraph", text: "[x](https://github.com/o/r)" }]);
 		// safeMarkdown leaves the whole block as code and still checks the link after it.
 		expect(safeMarkdown(text)).toBe(`${text.slice(0, text.lastIndexOf("\n\n"))}\n\n[x](https://github.com/o/r) (github.com)`);
 	});

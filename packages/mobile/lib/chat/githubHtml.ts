@@ -20,6 +20,8 @@
  * watched PR cannot stall the chat (Hermes has no regex JIT).
  */
 
+import { FENCE_GUARD } from "./markdownBlocks";
+
 export type GitHubSegment =
 	| { kind: "markdown"; text: string }
 	| { kind: "details"; summary: string; body: GitHubSegment[] };
@@ -91,10 +93,11 @@ const unshelve = (shelf: Shelf, text: string) => text.replace(/\u0000(\d+)\u0000
  * at a ``` line and closes it at the next line that starts with ```, whatever its
  * length, and knows no ~~~ fences; safeMarkdown closes at any line of three
  * backticks or tildes. So every block is drawn with ```, and a line inside that
- * would read as a fence starts with a zero-width space, which neither reads as one.
+ * would read as a fence starts with FENCE_GUARD, which neither reads as one; the
+ * parser drops it again, so the block draws and copies as written.
  */
 function codeBlock(code: string, language = ""): string {
-	const lines = code === "" ? [] : code.split("\n").map((line) => /^ {0,3}(?:`{3}|~{3})/.test(line) ? `​${line}` : line);
+	const lines = code === "" ? [] : code.split("\n").map((line) => /^ {0,3}(?:`{3}|~{3})/.test(line) ? FENCE_GUARD + line : line);
 	return ["```" + language, ...lines, "```"].join("\n");
 }
 

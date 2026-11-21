@@ -142,3 +142,11 @@ it("names a section by its summary's words, not the link markup inside it", () =
 	const section = renderer!.root.find((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.startsWith("See"));
 	expect(section.props.accessibilityLabel).toBe("See the docs and x");
 });
+
+it("copies a suggestion block holding a fence exactly as the reviewer wrote it", async () => {
+	const { setStringAsync } = await import("expo-clipboard");
+	const suggestion = "````suggestion\nRun:\n```sh\nnpm test\n```\n````";
+	draw(message(reviewComment.replace(UNSAFE, suggestion)));
+	act(() => renderer!.root.findByProps({ accessibilityLabel: "Copy code" }).props.onPress());
+	expect(setStringAsync).toHaveBeenLastCalledWith("Run:\n```sh\nnpm test\n```");
+});
