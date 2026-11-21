@@ -57,7 +57,7 @@ export type RemotesIpcDeps = {
 	pair?: (entry: Pick<RemoteEntry, "url" | "hostId">, secret: string, device: { name: string; platform: string }) => Promise<PairDeviceResult>;
 	authErrorCode?: (entry: RemoteEntry) => Promise<string | undefined>;
 	deviceName?: () => Promise<string>;
-	hostUpdate?: { read: (entry: RemoteEntry) => Promise<HostUpdateView | null>; start: (entry: RemoteEntry) => Promise<HostUpdateView> };
+	hostUpdate?: { read: (entry: RemoteEntry) => Promise<HostUpdateView | null>; start: (entry: RemoteEntry) => Promise<HostUpdateView | null> };
 };
 
 class LocalIdentityUnavailableError extends ExpectedIpcError {

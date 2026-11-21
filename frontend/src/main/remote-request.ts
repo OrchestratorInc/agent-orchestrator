@@ -184,16 +184,15 @@ export async function readHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = 
 	}
 }
 
-export async function startHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 15_000): Promise<HostUpdateView> {
+export async function startHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 15_000): Promise<HostUpdateView | null> {
 	const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update").href, {
 		method: "POST",
 		redirect: "error",
 		headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}) },
 		signal: AbortSignal.timeout(timeoutMs),
-	});
+	}).catch(() => null);
+	if (!response || response.status >= 502) return null;
 	const body = (await response.json().catch(() => null)) as { message?: unknown } | null;
 	if (!response.ok) throw new Error(typeof body?.message === "string" && body.message ? body.message : `the host refused the update (${response.status})`);
-	const view = parseHostUpdate(body);
-	if (!view) throw new Error("the host returned an invalid update status");
-	return view;
+	return parseHostUpdate(body);
 }

@@ -141,6 +141,21 @@ describe("host update flow", () => {
 		window.removeEventListener("ao:remote-hosts-changed", refreshed);
 	});
 
+	it("keeps following an update whose start got no answer while the host restarts", async () => {
+		const refreshed = vi.fn();
+		window.addEventListener("ao:remote-hosts-changed", refreshed);
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(null);
+		const read = vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(null);
+		await startHostUpdate(URL);
+		await refreshHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
+		read.mockResolvedValue(view("0.15.0"));
+		await refreshHostUpdate(URL);
+		expect(refreshed).toHaveBeenCalledOnce();
+		window.removeEventListener("ao:remote-hosts-changed", refreshed);
+	});
+
 	it("adopts a finished update when the start response was lost", async () => {
 		const refreshed = vi.fn();
 		window.addEventListener("ao:remote-hosts-changed", refreshed);

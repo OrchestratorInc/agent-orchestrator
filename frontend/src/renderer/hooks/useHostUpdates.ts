@@ -95,7 +95,8 @@ export async function startHostUpdate(url: string): Promise<void> {
 	patch(url, { updating, error: undefined });
 	starting.add(url);
 	try {
-		patch(url, { view: await aoBridge.remotes.startHostUpdate(url), updating, error: undefined });
+		const view = await aoBridge.remotes.startHostUpdate(url);
+		patch(url, { ...(view ? { view } : {}), updating, error: undefined });
 	} catch (cause) {
 		const view = await aoBridge.remotes.hostUpdate(url).catch(() => null);
 		if (view?.state === "updating") patch(url, { view, updating, error: undefined });

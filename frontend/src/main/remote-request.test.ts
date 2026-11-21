@@ -82,6 +82,9 @@ describe("host update", () => {
 	it("starts an update and surfaces the host's refusal", async () => {
 		await expect(startHostUpdate(entry, fakeFetch(202, { version: "0.14.10", supported: true, state: "updating" }))).resolves.toMatchObject({ state: "updating" });
 		await expect(startHostUpdate(entry, fakeFetch(409, { code: "HOST_UPDATE_UNSUPPORTED", message: "update Orchestrator on that computer" }))).rejects.toThrow("update Orchestrator on that computer");
+		await expect(startHostUpdate(entry, fakeFetch(500, { message: "could not start the update: no user bus" }))).rejects.toThrow("no user bus");
+		await expect(startHostUpdate(entry, fakeFetch(530))).resolves.toBeNull();
+		await expect(startHostUpdate(entry, vi.fn<typeof fetch>(async () => { throw new TypeError("fetch failed"); }))).resolves.toBeNull();
 	});
 });
 

@@ -999,7 +999,7 @@ const api = {
 		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
 		hostUpdate: (url: string) => ipcRenderer.invoke("remotes:hostUpdate", url) as Promise<HostUpdateView | null>,
-		startHostUpdate: (url: string) => ipcRenderer.invoke("remotes:startHostUpdate", url) as Promise<HostUpdateView>,
+		startHostUpdate: (url: string) => ipcRenderer.invoke("remotes:startHostUpdate", url) as Promise<HostUpdateView | null>,
 		// The name this machine is listed under on the account's other devices.
 		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
