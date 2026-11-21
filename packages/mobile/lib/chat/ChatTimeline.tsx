@@ -67,7 +67,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, followsAfterRest, openingRow, RESUME_SLOP, tailFollowStep, type Release } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -220,7 +220,6 @@ function Timeline({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const reducedMotion = useContext(ReduceStreamingMotion);
 	const olderFeedback = usePressFeedback("button");
 	const listRef = useRef<FlatList<ConversationGroup>>(null);
 	// Follows new output only while the person is at the newest message: a drag
@@ -228,20 +227,6 @@ function Timeline({
 	// above as they scroll up change the content's size, and that must not read
 	// as a reason to pull them back down.
 	const followsTail = useRef(true);
-	const tailFrame = useRef<number | undefined>(undefined);
-	const tailFlight = useRef<{ offset: number; at: number } | undefined>(undefined);
-	const tailGrowth = useRef<{ height: number; at: number } | undefined>(undefined);
-	const cancelTailFollow = useCallback(() => {
-		if (tailFrame.current !== undefined) cancelAnimationFrame(tailFrame.current);
-		tailFrame.current = undefined;
-		tailFlight.current = undefined;
-		tailGrowth.current = undefined;
-	}, []);
-	useEffect(() => cancelTailFollow, [cancelTailFollow]);
-	const followTailRef = useRef<() => void>(() => {});
-	const queueTailFollow = useCallback(() => {
-		if (tailFrame.current === undefined) tailFrame.current = requestAnimationFrame(() => followTailRef.current());
-	}, []);
 	// The list's own height and its content's, for `scrollToLatest`.
 	const viewportHeight = useRef(0);
 	const contentHeight = useRef(0);
@@ -348,7 +333,7 @@ function Timeline({
 	if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;
 	const edits = editsRef.current;
 	const latestForkTurnId = useMemo(() => latestForkableTurnId(snapshot.turns), [snapshot.turns]);
-	const stopFollowingTail = useCallback(() => { followsTail.current = false; cancelTailFollow(); }, [cancelTailFollow]);
+	const stopFollowingTail = useCallback(() => { followsTail.current = false; }, []);
 	const { editDraft, editing, detached, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
 	// Back closes the edit first, as Escape does on the desktop, rather than
 	// leaving the conversation with the draft. A JS back listener never hears
@@ -368,7 +353,6 @@ function Timeline({
 	// and nothing scrolls until the list has measured itself (the content can
 	// report its size first; `onLayout` then makes the scroll).
 	const scrollToLatest = (animated: boolean) => {
-		cancelTailFollow();
 		const scroll = listRef.current?.getNativeScrollRef() as { scrollToEnd?(options: { animated: boolean }): void } | null | undefined;
 		const clampsUnderHeader = Platform.OS === "ios" && underHeader > 0;
 		if (clampsUnderHeader && !viewportHeight.current) return;
@@ -381,63 +365,24 @@ function Timeline({
 		else if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
 		else listRef.current?.scrollToEnd({ animated });
 	};
-	const tailOffset = () => contentHeight.current - viewportHeight.current + keyboardInset.current;
-	// One frame loop follows the moving end. A content-size event only updates
-	// its target, so a new line never restarts a native ease-in.
-	followTailRef.current = () => {
-		tailFrame.current = undefined;
-		if (!listRef.current || !followsTail.current || dragging.current) {
-			cancelTailFollow();
-			return;
-		}
+	// The follow to the newest message that output and measuring rows ask for.
+	// It runs a frame after it was asked for, so it checks again: a drag that
+	// began in between has stopped the follow, and scrolling to the end then
+	// carried the person back mid-fling.
+	const followTail = () => {
+		if (!followsTail.current || dragging.current) return;
 		if (keyboardOffset !== undefined && keyboardMoving.value) {
-			cancelTailFollow();
 			followAfterKeyboard.current = true;
 			return;
 		}
-		const end = tailOffset();
-		if (!opened || reducedMotion || !viewportHeight.current || end <= 0) {
-			scrollToLatest(false);
-			return;
-		}
-		const current = tailFlight.current;
-		const from = current?.offset ?? scrollOffset.current;
-		const now = performance.now();
-		const elapsed = current ? now - current.at : 16;
-		const growth = tailGrowth.current;
-		const offset = tailFollowStep(from, end, viewportHeight.current, elapsed, growth ? growth.height : 0, growth ? now - growth.at : 0);
-		if (offset !== from) {
-			listRef.current.scrollToOffset({ offset, animated: false });
-			scrollOffset.current = offset;
-		}
-		tailFlight.current = offset < end ? { offset, at: now } : undefined;
-		if (tailFlight.current) queueTailFollow();
+		scrollToLatest(false);
 	};
 	latestFollow.current = () => {
 		if (!followAfterKeyboard.current) return;
 		followAfterKeyboard.current = false;
-		if (followsTail.current && !dragging.current) scrollToLatest(false);
+		if (followsTail.current) scrollToLatest(false);
 	};
-	const jumpToLatest = () => {
-		cancelTailFollow();
-		dragging.current = false;
-		releasedAt.current = undefined;
-		followsTail.current = true;
-		setShowJump(false);
-		const end = tailOffset();
-		if (reducedMotion || !viewportHeight.current || end <= 0) {
-			scrollToLatest(false);
-			return;
-		}
-		// As on desktop, a deliberate jump from far up glides the last screen.
-		const start = end - viewportHeight.current;
-		if (start > scrollOffset.current) {
-			listRef.current?.scrollToOffset({ offset: start, animated: false });
-			scrollOffset.current = start;
-			tailFlight.current = { offset: start, at: performance.now() };
-		}
-		queueTailFollow();
-	};
+	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -446,13 +391,12 @@ function Timeline({
 		// turn never matched and the jump silently did nothing.
 		const index = groups.findIndex((group) => group.anchor === jumpToSequence || group.items.some((item) => item.sequence === jumpToSequence));
 		if (index >= 0) {
-			cancelTailFollow();
 			followsTail.current = index === groups.length - 1;
 			setShowJump(!followsTail.current);
 			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [cancelTailFollow, groups, jumpToSequence, jumpViewPosition, onJumpHandled]);
+	}, [groups, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
 	// The keyboard shrinks the list, so bring the prompt being edited back into view.
 	const editingTurnId = editDraft?.turnId;
@@ -560,7 +504,7 @@ function Timeline({
 		// follow) as momentum ending too. Only a drag decides whether to follow;
 		// one of ours that landed short of an end still moving goes again.
 		if (!dragging.current) {
-			if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) queueTailFollow();
+			if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);
 			return;
 		}
 		dragging.current = false;
@@ -570,7 +514,7 @@ function Timeline({
 		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
 		setShowJump(!followsTail.current);
 		// A follow that resumes catches up on output that arrived meanwhile.
-		if (followsTail.current) queueTailFollow();
+		if (followsTail.current) requestAnimationFrame(followTail);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
@@ -623,9 +567,9 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { cancelTailFollow(); dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
 							onScrollEndDrag={(event) => settle(event, true)}
-							onMomentumScrollBegin={() => { cancelTailFollow(); dragging.current = true; }}
+							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
@@ -652,13 +596,11 @@ function Timeline({
 								settleOpening();
 							}}
 							onContentSizeChange={(_width, height) => {
-								const growth = height - contentHeight.current;
 								contentHeight.current = height;
-								if (opened && growth > 0 && followsTail.current && !dragging.current) tailGrowth.current = { height: growth, at: performance.now() };
 								measureFill();
 								notifyRenderViewport();
 								// Not while the person scrolls: a drag or its fling owns the list.
-								if (followsTail.current && !dragging.current) queueTailFollow();
+								if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
@@ -769,7 +711,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
 		{partition.settled && workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null}
-		{/* Keep the final reply in the same keyed list when the work folds. */}
+		{/* Keep the final reply in the same keyed list while its buffer drains. */}
 		{renderRows(partition.settled ? [...partition.notices, ...partition.final] : partition.work)}{actions}{summary}
 	</View>;
 }
