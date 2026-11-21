@@ -72,7 +72,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
+import { CloudPRGitStepButton, PRActionButton, PRMergeOutsideAO } from "./PRActions";
 import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
@@ -89,7 +89,7 @@ import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prMergeRoute, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -1141,6 +1141,7 @@ function PRViewSummaryCard({
 	const detailsFailed = usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
 	const presentation = prCardPresentation(pr, { noChecks });
 	const canMerge = prCanMerge(pr, { noChecks }) && Boolean(pr.url && pr.headSha);
+	const mergeOutsideAO = cloudMergeOutsideAO(pr, canMerge, cloudOrgId);
 	const mergePr = useMutation({
 		// Cloud sessions merge from here; a local session merges from its action button.
 		mutationFn: async () => {
@@ -1183,7 +1184,7 @@ function PRViewSummaryCard({
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
-				canMerge && asksToMerge ? (
+				mergeOutsideAO ? mergeOutsideAO : canMerge && asksToMerge ? (
 					<Button
 						aria-label={t("pr.merge.requestFor", { number: pr.number })}
 						className="gap-1 px-2"
@@ -1299,6 +1300,20 @@ function PRViewSummaryCard({
 	);
 }
 
+/**
+ * A Cloud PR's merge control when AO can't merge it as the person (its
+ * mergeAccess): "Merge on GitHub" once it is ready, or, without write access,
+ * a note that a maintainer has to merge it while it is open. Undefined when
+ * Merge works as usual, as on every local PR.
+ */
+function cloudMergeOutsideAO(pr: SessionPRSummary, canMerge: boolean, cloudOrgId?: string): ReactNode {
+	if (!cloudOrgId) return undefined;
+	const route = prMergeRoute(pr);
+	if (route === "maintainer" && pr.state === "open") return <PRMergeOutsideAO pr={pr} route="maintainer" />;
+	if (route === "github" && canMerge) return <PRMergeOutsideAO pr={pr} route="github" />;
+	return undefined;
+}
+
 /** The card as it was before the PR view; shown while that preview is off. Delete with the prView flag. */
 function ClassicPRSummaryCard({
 	canOpenReviews,
@@ -1333,6 +1348,7 @@ function ClassicPRSummaryCard({
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	const presentation = prCardPresentation(pr);
 	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
+	const mergeOutsideAO = cloudMergeOutsideAO(pr, canMerge, cloudOrgId);
 	const mergePr = useMutation({
 		mutationFn: async () => {
 			if (usePreviewData) return;
@@ -1395,7 +1411,7 @@ function ClassicPRSummaryCard({
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
-				canMerge && asksToMerge ? (
+				mergeOutsideAO ? mergeOutsideAO : canMerge && asksToMerge ? (
 					<Button
 						aria-label={t("pr.merge.requestFor", { number: pr.number })}
 						className="gap-1 px-2"

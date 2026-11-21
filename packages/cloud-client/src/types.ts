@@ -110,6 +110,7 @@ export type PullRequestReviewSummary = Schemas["PullRequestReviewSummary"];
 export type PullRequestConflictFile = Schemas["PullRequestConflictFile"];
 export type PullRequestMergeabilitySummary =
   Schemas["PullRequestMergeabilitySummary"];
+export type PullRequestMergeAccess = Schemas["PullRequestMergeAccess"];
 export type PullRequestSummary = Schemas["PullRequestSummary"];
 export type SessionPullRequests = Schemas["SessionPullRequests"];
 
