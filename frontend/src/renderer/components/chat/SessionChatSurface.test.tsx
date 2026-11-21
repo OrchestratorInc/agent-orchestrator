@@ -88,6 +88,7 @@ const configState = vi.hoisted(() => ({
 }));
 
 const sideMocks = vi.hoisted(() => ({
+	limitCodexNativeImages: undefined as boolean | undefined,
 	create: vi.fn(),
 	send: vi.fn(),
 	show: vi.fn(),
@@ -162,6 +163,7 @@ vi.mock("./ChatWorkspace", async () => {
 		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
 			agentSwitch,
+			limitCodexNativeImages,
 			agentInputDisabled,
 			annotationNavigationRequest,
 			headerActions,
@@ -191,6 +193,7 @@ vi.mock("./ChatWorkspace", async () => {
 			findRequest?: { id: string; query: string; messageId?: string };
 			onFindRequestHandled?: (id: string) => void;
 			agentSwitch?: AgentSwitchProps;
+			limitCodexNativeImages?: boolean;
 			annotationNavigationRequest?: { id: string; text: string; messageId?: string };
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
@@ -210,6 +213,7 @@ vi.mock("./ChatWorkspace", async () => {
 			sideMocks.workspaceSend = onSend;
 			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
+			sideMocks.limitCodexNativeImages = limitCodexNativeImages;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -329,6 +333,19 @@ describe("SessionChatSurface recovery", () => {
 	])("tells the commands whether %s can only be restored", (_name, target, terminated) => {
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={target} /></Wrapper>);
 		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated]);
+	});
+});
+
+describe("SessionChatSurface send attachment policy", () => {
+	it.each([
+		{ source: "claude-code", target: "codex", before: false, after: true },
+		{ source: "codex", target: "claude-code", before: true, after: false },
+	] as const)("uses the destination policy for a pending $source to $target switch", async ({ source, target, before, after }) => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: source, capabilities: ["images"] };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.limitCodexNativeImages).toBe(before);
+		await act(async () => sideMocks.agentSwitch?.onPendingChange({ harness: target }));
+		expect(sideMocks.limitCodexNativeImages).toBe(after);
 	});
 });
 
