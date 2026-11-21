@@ -236,9 +236,67 @@ describe("spawn draft", () => {
 	// Start stops rather than send a task whose draft has no id on the phone.
 	it("stops a Start whose draft save was dropped, and clears only its own draft once started", () => {
 		const send = spawn.slice(spawn.indexOf("const saved = await saveBeforeStart("), spawn.indexOf("if (projectId === STANDALONE_PROJECT)"));
-		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;", "await spawn({ ...request, clientRequestId: sent.id });");
+		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\thaptics.error();\n\t\t\t\tsetError(START_DROPPED_NOTICE);\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}", "await spawn({ ...request, clientRequestId: sent.id });");
 		expect(send).toContain("void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});");
 		expect(spawn).not.toContain("then(clearSpawnDraft)");
+	});
+
+	// A dropped Start used to stop silently: Start seemed to do nothing. It
+	// says why, sends no task, and the line goes once the form is edited.
+	describe("a Start whose draft save was dropped", () => {
+		const onSpawn = between(spawn, "const onSpawn = async () => {", "// While a request runs, the back swipe is off too");
+		const dropped = between(onSpawn, "if (saved === \"dropped\") {", "}");
+
+		it("shows the notice in the page's Start error line and sends no task", () => {
+			expect(dropped).toContain("setError(START_DROPPED_NOTICE);");
+			expect(dropped).toContain("return;");
+			expect(dropped).not.toContain("spawn(");
+			// The only request a Start sends comes after the dropped check.
+			expect(onSpawn.match(/await spawn\(/g)).toHaveLength(1);
+			expectBefore(onSpawn, "if (saved === \"dropped\") {", "await spawn({ ...request, clientRequestId: sent.id });");
+			expect(spawn).toContain("{error ? <Text accessibilityRole=\"alert\" style={styles.error}>{error}</Text> : null}");
+		});
+
+		it("clears the notice when Start is pressed again, before the next save", () => {
+			expectBefore(onSpawn, "setError(null);", "const saved = await saveBeforeStart(");
+		});
+
+		it("clears the notice on every edit the user makes to the form", () => {
+			expect(spawn).toContain("const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {\n\t\tsetError(errorAfterEdit);\n\t\tchange(...args);\n\t};");
+			const controls = between(spawn, "<SpawnComposerControls", "onSpawn={() => { void onSpawn(); }}");
+			for (const prop of [
+				"onSelectHost={edited(chooseHost)}",
+				"onSelectProject={edited(changeProject)}",
+				"onSelectAccount={edited(setAccountPick)}",
+				"onSelectHarness={edited(selectAgent)}",
+				"onSelectModel={edited(selectModel)}",
+				"onSelectAgentModel={edited(selectAgentModel)}",
+				"onSelectApprovalMode={edited((next: string) => setApprovalChoice(next as ApprovalMode))}",
+				"onSelectEffort={edited(selectEffort)}",
+				"onChoosePhoto={edited(() => { void pickPhotos(); })}",
+				"onChooseFile={edited(() => { void pickFiles(); })}",
+				"onPasteImages={busy ? null : edited(pasteImages)}",
+				"onChangePrompt={edited(setPrompt)}",
+				"onRemove={edited((key: string) => {",
+			]) expect(controls).toContain(prop);
+			// Every handler the controls take goes through it, so a new one can't skip it.
+			const handlers = [...controls.matchAll(/\n\t+(on[A-Z]\w*)=\{(.*)/g)];
+			expect(handlers.length).toBeGreaterThan(10);
+			for (const [, name, value] of handlers) {
+				// Opens the model sheet; the pick it answers with is wrapped below.
+				if (name === "onBrowseModels") continue;
+				expect(value, name).toMatch(/^(busy \? null : )?edited\(/);
+			}
+			expect(spawn).toContain("onSelect: edited((id: string) => selectAgentModel(agentId, id || \"__auto__\")),");
+			// Dictation types into the prompt too.
+			expectBefore(between(spawn, "const voice = useVoiceInput({", "const listening ="), "setError(errorAfterEdit);", "setPrompt((old) =>");
+		});
+
+		it("leaves a Start that saved its draft to send the task as before", () => {
+			const sent = onSpawn.slice(onSpawn.indexOf("if (saved === \"dropped\") {"));
+			expectBefore(sent, "return;\n\t\t\t}\n\t\t\tconst session = await spawn({ ...request, clientRequestId: sent.id });", "router.replace({");
+			expect(sent.slice(sent.indexOf("const session = await spawn(")).includes("START_DROPPED_NOTICE")).toBe(false);
+		});
 	});
 
 	// Saved before the machine is picked, a restored draft keeps its machine.

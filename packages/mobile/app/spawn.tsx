@@ -22,7 +22,7 @@ import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pa
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
-import { spawnHostState, spawnNotices } from "../lib/spawnNotices";
+import { errorAfterEdit, spawnHostState, spawnNotices, START_DROPPED_NOTICE } from "../lib/spawnNotices";
 import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
@@ -328,7 +328,11 @@ export default function SpawnScreen() {
 	const [reloadKey, setReloadKey] = useState(0);
 	// Spoken text lands in the prompt the way it does in the chat composer:
 	// appended, so dictation can extend what was typed rather than replace it.
-	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
+	// Dictation edits the form too, so it clears a dropped Start's notice.
+	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => {
+		setError(errorAfterEdit);
+		setPrompt((old) => old ? `${old} ${spoken}` : spoken);
+	}, []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
 	// The composer docks to the bottom as the chat's does, on the same keyboard
 	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
@@ -617,6 +621,14 @@ export default function SpawnScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [connection]);
 
+	// A change the user makes to the form. The notice a dropped Start left
+	// asked for one, so it goes; changes the page makes itself (an account
+	// change emptying the composer) leave it.
+	const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {
+		setError(errorAfterEdit);
+		change(...args);
+	};
+
 	// A level belongs to the model it was picked for, so a new model starts at its own default.
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); };
 	// A cleared catalog is not loaded any more: picking the same agent or
@@ -709,7 +721,7 @@ export default function SpawnScreen() {
 			// A cloud task browses Orchestrator Cloud's catalog, not the machine's.
 			...(cloudSelected ? { hostId: CLOUD_HOST_ID } : {}),
 			// The sheet's default row answers "".
-			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
+			onSelect: edited((id: string) => selectAgentModel(agentId, id || "__auto__")),
 		}));
 	};
 	/** Adds picks to the task; resolves to how many were added. `notice` says what a paste left out. */
@@ -848,9 +860,12 @@ export default function SpawnScreen() {
 			// deleted instead, so none without this id can be restored and sent again.
 			const saved = await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });
 			// Dropped while it waited: the account changed or this machine was
-			// forgotten, which emptied the draft, and the task it held does not start.
+			// forgotten, which emptied the draft, and the task it held does not
+			// start. It says so, rather than Start seeming to do nothing.
 			if (saved === "dropped") {
 				holding.current = false;
+				haptics.error();
+				setError(START_DROPPED_NOTICE);
 				setBusy(false);
 				return;
 			}
@@ -929,47 +944,47 @@ export default function SpawnScreen() {
 				<SpawnComposerControls
 					hosts={hostOptions}
 					hostId={selectedHostId}
-					onSelectHost={chooseHost}
+					onSelectHost={edited(chooseHost)}
 					projects={cloudSelected
 						// Cloud sessions always run in a project; a new one is created from here.
 						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
-					onSelectProject={changeProject}
+					onSelectProject={edited(changeProject)}
 					accounts={accountOptions}
 					accountId={shownAccountId}
-					onSelectAccount={setAccountPick}
+					onSelectAccount={edited(setAccountPick)}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
-					onSelectHarness={selectAgent}
+					onSelectHarness={edited(selectAgent)}
 					models={currentModels.map((item) => ({ id: item.id, label: item.label }))}
 					agentModels={agentMenuModels}
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
-					onSelectModel={selectModel}
-					onSelectAgentModel={selectAgentModel}
+					onSelectModel={edited(selectModel)}
+					onSelectAgentModel={edited(selectAgentModel)}
 					usesDefaultModel={!displayedModel}
 					onBrowseModels={browseModels}
 					approvalModes={approvalOptions(harness)}
 					approvalMode={approvalMode}
-					onSelectApprovalMode={(next) => setApprovalChoice(next as ApprovalMode)}
+					onSelectApprovalMode={edited((next: string) => setApprovalChoice(next as ApprovalMode))}
 					effortChoices={effortChoices}
-					onSelectEffort={selectEffort}
-					onChoosePhoto={() => { void pickPhotos(); }}
-					onChooseFile={() => { void pickFiles(); }}
-					onPasteImages={busy ? null : pasteImages}
+					onSelectEffort={edited(selectEffort)}
+					onChoosePhoto={edited(() => { void pickPhotos(); })}
+					onChooseFile={edited(() => { void pickFiles(); })}
+					onPasteImages={busy ? null : edited(pasteImages)}
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
-					onChangePrompt={setPrompt}
+					onChangePrompt={edited(setPrompt)}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
 					attachments={<ComposerAttachmentTray
 						items={trayItems}
-						onRemove={(key) => {
+						onRemove={edited((key: string) => {
 							const item = attachments[trayItems.findIndex((candidate) => candidate.key === key)];
 							if (!item) return;
 							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
 							setAttachments(attachmentsRef.current);
-						}}
+						})}
 					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
