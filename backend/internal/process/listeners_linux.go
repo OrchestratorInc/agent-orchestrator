@@ -12,7 +12,7 @@ import (
 
 // ListenersWithEnv returns the TCP listeners of processes whose environment
 // holds name=value, leaving out processes running skipExecutable.
-func ListenersWithEnv(_ context.Context, name, value, skipExecutable string) ([]Listener, error) {
+func ListenersWithEnv(ctx context.Context, name, value, skipExecutable string) ([]Listener, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
@@ -20,6 +20,9 @@ func ListenersWithEnv(_ context.Context, name, value, skipExecutable string) ([]
 	want := []byte(name + "=" + value)
 	var pids []int
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil {
 			continue
@@ -45,6 +48,9 @@ func ListenersWithEnv(_ context.Context, name, value, skipExecutable string) ([]
 	}
 	var listeners []Listener
 	for _, pid := range pids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		dir := "/proc/" + strconv.Itoa(pid)
 		fds, err := os.ReadDir(dir + "/fd")
 		if err != nil {

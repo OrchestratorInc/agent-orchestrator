@@ -29,7 +29,7 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	 * Browser. Schemes other than http(s) and mailto open nothing.
 	 */
 	systemBrowser?: boolean;
-	externalUrl?: (url: string) => Promise<string>;
+	externalUrl?: (url: string) => Promise<string | undefined>;
 	filePath?: string;
 	/** A displayed filesystem path whose click navigates elsewhere, such as an artifact link. */
 	menuPath?: string;
@@ -49,7 +49,8 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	const hasHoverPreview = !noHoverPreview && (webLink || Boolean(hoverPreview));
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
-	const openExternally = (url: string) => void (externalUrl ? externalUrl(url).then(openLinkInSystemBrowser) : openLinkInSystemBrowser(url));
+	const openExternally = (url: string) => void (externalUrl ? externalUrl(url).then((resolved) => resolved ? openLinkInSystemBrowser(resolved) : undefined) : openLinkInSystemBrowser(url));
+	const copy = (url: string) => void (externalUrl ? externalUrl(url).then((resolved) => resolved ? aoBridge.clipboard.writeText(resolved) : undefined) : aoBridge.clipboard.writeText(url));
 	const anchorRef = useRef<HTMLAnchorElement>(null);
 	useImperativeHandle(ref, () => anchorRef.current as HTMLAnchorElement);
 	// Gaining or losing a card remounts the anchor, so that re-runs this too.
@@ -123,7 +124,7 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 				)}
 				{(showBrowserAction || (filePath && onFileOpen)) && <ContextMenuSeparator />}
 				{contextPath && pathMenuContext ? <ChatPathMenuItems path={contextPath} /> : (
-					<ContextMenuItem onSelect={() => void aoBridge.clipboard.writeText(href)}>
+					<ContextMenuItem onSelect={() => copy(href)}>
 						<Copy aria-hidden="true" />
 						{t("link.copy")}
 					</ContextMenuItem>

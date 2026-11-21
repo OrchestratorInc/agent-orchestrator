@@ -64,16 +64,19 @@ function hosts(table: Record<string, Host>) {
 }
 
 function fakeSession() {
-	const state: { proxy?: Electron.ProxyConfig; closed: number; redirect?: (url: string) => string | undefined } = { closed: 0 };
+	const state: { proxy?: Electron.ProxyConfig; closed: number; failProxy?: boolean; respond?: (url: string) => Electron.CallbackResponse } = { closed: 0 };
 	const session: RoutedSession = {
-		setProxy: async (config) => { state.proxy = config; },
+		setProxy: async (config) => {
+			if (state.failProxy) throw new Error("proxy refused");
+			state.proxy = config;
+		},
 		closeAllConnections: async () => { state.closed++; },
 		webRequest: {
 			onBeforeRequest: (_filter, listener) => {
-				state.redirect = (url) => {
-					let redirected: string | undefined;
-					listener({ url }, (response) => { redirected = response.redirectURL; });
-					return redirected;
+				state.respond = (url) => {
+					let response: Electron.CallbackResponse = {};
+					listener({ url }, (given) => { response = given; });
+					return response;
 				};
 			},
 		},
@@ -95,9 +98,22 @@ describe("loopback tunnels", () => {
 		expect(await socksConnect(socksPort, "localhost", 5173, "hello")).toEqual({ code: 0, echoed: "hello" });
 		expect((await socksConnect(socksPort, "localhost", 5174)).code).toBe(0x04);
 		expect((await socksConnect(socksPort, "example.com", 5173)).code).toBe(0x02);
-		expect(state.redirect?.("http://0.0.0.0:5173/a?b#c")).toBe("http://localhost:5173/a?b#c");
-		expect(state.redirect?.("http://[::]:5173/")).toBe("http://localhost:5173/");
-		expect(state.redirect?.("http://localhost:5173/")).toBeUndefined();
+		expect(state.respond?.("http://0.0.0.0:5173/a?b#c").redirectURL).toBe("http://localhost:5173/a?b#c");
+		expect(state.respond?.("http://[::]:5173/").redirectURL).toBe("http://localhost:5173/");
+		expect(state.respond?.("http://localhost:5173/").redirectURL).toBeUndefined();
+	});
+
+	it("keeps a partition it could not route away from this computer's localhost until routing works", async () => {
+		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} } }));
+		const { session, state } = fakeSession();
+		state.failProxy = true;
+		await expect(tunnels.route(session, "h_box")).rejects.toThrow("proxy refused");
+		for (const url of ["http://localhost:5173/", "ws://127.0.0.1:5173/hmr", "http://0.0.0.0:3000/", "http://[::1]:8080/"]) expect(state.respond?.(url).cancel).toBe(true);
+		for (const url of ["https://example.com/", "http://ao-preview-abc.localhost:3011/"]) expect(state.respond?.(url).cancel).toBe(false);
+
+		state.failProxy = false;
+		await tunnels.route(session, "h_box");
+		expect(state.respond?.("http://localhost:5173/")).toEqual({});
 	});
 
 	it("tells a host on this computer, a remote host and one that does not share apart", async () => {
@@ -131,6 +147,7 @@ describe("loopback tunnels", () => {
 		expect(await tunnels.localUrl("h_box", `http://ao-preview-${"0".repeat(32)}.localhost:${echo}/`)).toBeUndefined();
 		expect(await tunnels.localUrl("h_same", `http://localhost:${echo}/`)).toBeUndefined();
 		expect(await tunnels.localUrl("h_box", "https://example.com/")).toBeUndefined();
+		await expect(tunnels.localUrl("h_off", `http://localhost:${echo}/`)).rejects.toThrow(/Share localhost/);
 		tunnels.stop("h_box", echo);
 
 		await expect(tunnels.forward("h_same", echo)).rejects.toThrow(/runs on this computer/);

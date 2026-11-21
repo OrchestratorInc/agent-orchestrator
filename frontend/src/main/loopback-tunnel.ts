@@ -27,6 +27,9 @@ const MAX_FORWARD_CONNECTIONS = 64;
 const PROBE_TIMEOUT_MS = 3_000;
 const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
 const UNSPECIFIED_URLS = ["*://0.0.0.0/*", "*://[::]/*"];
+const PREVIEW_HOST = /^ao-preview-.*\.localhost\.?$/;
+
+class SameHostError extends Error {}
 
 export function isLoopbackName(host: string): boolean {
 	const name = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
@@ -34,6 +37,16 @@ export function isLoopbackName(host: string): boolean {
 	if (!ipaddr.isValid(name)) return false;
 	const range = ipaddr.process(name).range();
 	return range === "loopback" || range === "unspecified";
+}
+
+function hostLocalUrl(url: string): URL | undefined {
+	try {
+		const parsed = new URL(url);
+		const host = parsed.hostname.toLowerCase();
+		return /^(http|ws)s?:$/.test(parsed.protocol) && isLoopbackName(host) && !PREVIEW_HOST.test(host) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function unspecifiedToLocalhost(url: string): string | undefined {
@@ -91,6 +104,10 @@ function listen(server: Server, port: number): Promise<number> {
 function answers(host: string, port: number): Promise<boolean> {
 	return new Promise((resolve) => {
 		const probe = connect(port, host);
+		probe.setTimeout(1_000, () => {
+			probe.destroy();
+			resolve(false);
+		});
 		probe.once("connect", () => {
 			probe.destroy();
 			resolve(true);
@@ -180,7 +197,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		const removal = removals.get(hostId);
 		const started = generation;
 		const reached = await reach(hostId);
-		if (reached === "same") throw new Error("This host runs on this computer, so its ports are already on localhost here.");
+		if (reached === "same") throw new SameHostError("This host runs on this computer, so its ports are already on localhost here.");
 		if (reached === "off") throw new Error("Can't reach this host's localhost. Check that the host is online, up to date, and has Share localhost on in Settings → Mobile.");
 		const clients = new Set<Socket>();
 		const server = createServer((client) => {
@@ -222,7 +239,10 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 					});
 					await session.closeAllConnections();
 				})();
-				ready.catch(() => routed.delete(session));
+				ready.catch(() => {
+					routed.delete(session);
+					session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => callback({ cancel: Boolean(hostLocalUrl(details.url)) }));
+				});
 				routed.set(session, ready);
 			}
 			return ready;
@@ -241,15 +261,13 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 			return started;
 		},
 		async localUrl(hostId: string, url: string): Promise<string | undefined> {
-			let parsed: URL;
-			try {
-				parsed = new URL(url);
-			} catch {
-				return undefined;
-			}
+			const parsed = hostLocalUrl(url);
+			if (!parsed || parsed.protocol.startsWith("ws")) return undefined;
 			const host = parsed.hostname.toLowerCase();
-			if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !isLoopbackName(host) || /^ao-preview-.*\.localhost\.?$/.test(host)) return undefined;
-			const forward = await this.forward(hostId, Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80))).catch(() => undefined);
+			const forward = await this.forward(hostId, Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80))).catch((error: unknown) => {
+				if (error instanceof SameHostError) return undefined;
+				throw error;
+			});
 			if (!forward) return undefined;
 			if (!/\.localhost\.?$/.test(host)) parsed.hostname = "localhost";
 			parsed.port = String(forward.localPort);

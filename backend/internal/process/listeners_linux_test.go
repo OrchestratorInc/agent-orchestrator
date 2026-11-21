@@ -1,9 +1,19 @@
 package process
 
 import (
+	"context"
+	"errors"
 	"maps"
 	"testing"
 )
+
+func TestListenersWithEnvStopsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ListenersWithEnv(ctx, "PATH", "", ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
 
 func TestParseProcNetListenersKeepsLoopbackAndUnspecifiedListeners(t *testing.T) {
 	table := `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode

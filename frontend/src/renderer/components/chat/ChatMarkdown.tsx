@@ -49,6 +49,7 @@ import { cn } from "../../lib/utils";
 import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
+import { appI18n } from "../../i18n";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
@@ -212,7 +213,7 @@ function chatUrlTransform(url: string, key: string): string | undefined {
 	// the click still goes through the workspace-confined preview endpoint.
 	if (isAoLink(url)) return url;
 	if (key === "href" && isPotentialWorkspaceFileLink(url)) return url;
-	return defaultUrlTransform(url);
+	return defaultUrlTransform(url.replace(/^(https?:\/\/)%5B([^/?#]*)%5D/i, "$1[$2]"));
 }
 
 const streamUrlTransform = (url: string, key: "href" | "src") => {
@@ -533,7 +534,11 @@ function InlineLinkFavicon({ href }: { href: string }) {
 	);
 }
 
-const hostExternalUrl = (hostId: string, url: string) => aoBridge.remotes.externalUrl(hostId, url).catch(() => url);
+const hostExternalUrl = (hostId: string, url: string): Promise<string | undefined> =>
+	aoBridge.remotes.externalUrl(hostId, url).catch((error: unknown) => {
+		useUiStore.getState().showGlobalToast(appI18n.t("sessionServers.forwardFailed"), error instanceof Error ? error.message : undefined, "error");
+		return undefined;
+	});
 
 function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
@@ -687,7 +692,7 @@ function MermaidFence({ code }: { code: string }) {
 		if (hostLocalLinks && !external) return;
 		event.preventDefault();
 		event.stopPropagation();
-		if (hostLocalLinks && sessionLinkHostId) void hostExternalUrl(sessionLinkHostId, href).then(openLinkInSystemBrowser);
+		if (hostLocalLinks && sessionLinkHostId) void hostExternalUrl(sessionLinkHostId, href).then((resolved) => resolved ? openLinkInSystemBrowser(resolved) : undefined);
 	};
 	const diagram = <MermaidBlock code={code} onLinkOpen={onLinkOpen} />;
 	return remoteHost

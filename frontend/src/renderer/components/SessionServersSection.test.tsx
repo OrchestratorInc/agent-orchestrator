@@ -48,6 +48,18 @@ describe("SessionServersSection", () => {
 		expect(screen.getByRole("button", { name: "Stop forwarding port 5173" })).toBeInTheDocument();
 	});
 
+	it("keeps a forward stoppable after its server stops listening", async () => {
+		getMock.mockResolvedValue({ data: { servers: [] } });
+		vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("tunnel");
+		vi.spyOn(aoBridge.remotes, "portForwards").mockResolvedValue([{ hostId: "box-a", remotePort: 3000, localPort: 3000 }, { hostId: "box-b", remotePort: 4000, localPort: 4000 }]);
+		const stop = vi.spyOn(aoBridge.remotes, "stopPortForward").mockResolvedValue(undefined);
+		renderSection();
+
+		fireEvent.click(await screen.findByRole("button", { name: "Stop forwarding port 3000" }));
+		expect(stop).toHaveBeenCalledWith("box-a", 3000);
+		expect(screen.queryByText("4000")).toBeNull();
+	});
+
 	it("drops the servers once the session stops", async () => {
 		getMock.mockResolvedValue({ data: { servers: [{ port: 5173, pid: 41, command: "node" }] } });
 		vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("tunnel");

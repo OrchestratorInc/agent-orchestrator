@@ -889,12 +889,18 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const externalURL = async (url: string): Promise<string> => {
 		if (!session.hostId) return url;
 		// A disconnected host has no other address for it: keep the one shown.
-		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
+		return aoBridge.remotes.externalUrl(session.hostId, url).catch((error: unknown) => {
+			if (isHostLocalWebLink(url) && !/^https?:\/\/ao-preview-/i.test(url)) throw error;
+			return url;
+		});
 	};
 
 	const openCurrentPageExternally = async () => {
 		if (!isWebLink(navState.url) || agentPageOnHost) return;
-		await openLinkInSystemBrowser(await externalURL(navState.url));
+		const url = await externalURL(navState.url).catch((error: unknown) => {
+			showGlobalToast(t("sessionServers.forwardFailed"), error instanceof Error ? error.message : undefined, "error");
+		});
+		if (url) await openLinkInSystemBrowser(url);
 	};
 
 	const copyCurrentURL = async () => {

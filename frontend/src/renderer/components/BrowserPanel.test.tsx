@@ -767,6 +767,19 @@ describe("BrowserPanel", () => {
 		writeText.mockRestore();
 	});
 
+	it("does not open a remote tab's localhost on this computer when its forward fails", async () => {
+		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/app" };
+		const externalUrl = vi.spyOn(window.ao!.remotes, "externalUrl").mockRejectedValue(new Error("Can't reach this host's localhost."));
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /open in system browser/i }));
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({ title: "Couldn't forward the port", tone: "error" }));
+		expect(openExternal).not.toHaveBeenCalled();
+		externalUrl.mockRestore();
+		openExternal.mockRestore();
+	});
+
 	it.each([
 		["a page on the host's own localhost", "http://localhost:3000/settings", "R1"],
 		["its viewer, before the first report", "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:41000/v/cdp?embed=1", ""],

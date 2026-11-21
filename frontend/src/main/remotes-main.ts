@@ -385,7 +385,10 @@ export function registerRemotesIpc(
 		const account = await accountID();
 		refuseSelf(hostId, await localIdentity());
 		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during remote connection.");
-		return await tunnels.localUrl(hostId, url) ?? registry.externalUrl(hostId, url);
+		const local = await tunnels.localUrl(hostId, url).catch((error: unknown) => {
+			throw new ExpectedIpcError(error instanceof Error ? error.message : String(error));
+		});
+		return local ?? registry.externalUrl(hostId, url);
 	});
 	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => {
 		await requireAccount();

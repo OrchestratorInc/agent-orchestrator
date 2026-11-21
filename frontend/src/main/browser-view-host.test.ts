@@ -2691,7 +2691,9 @@ describe("browser profile partitions and replacement", () => {
 		const prepare = vi.fn(() => Promise.reject(new Error("no proxy")));
 		const { invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, undefined, prepare);
 		const state = (await invoke("browser:ensure", "worker-1")) as { viewId: string };
-		await expect(invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" })).resolves.not.toThrow();
+		const loaded = (await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" })) as BrowserNavState;
+		expect(loaded.url).toBe("https://example.test/");
+		expect(loaded.error).toBeUndefined();
 		expect(warn).toHaveBeenCalledWith("Unable to route the browser partition through its host", expect.any(Error));
 		warn.mockRestore();
 	});

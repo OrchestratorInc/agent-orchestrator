@@ -365,8 +365,26 @@ describe("ChatMarkdown", () => {
 		fireEvent(screen.getByRole("link", { name: "preview" }), new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
 		await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
 		expect(openExternal).not.toHaveBeenCalledWith("http://localhost:5173/app");
+
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		fireEvent.contextMenu(screen.getByRole("link", { name: "preview" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Copy link" }));
+		await waitFor(() => expect(writeText).toHaveBeenCalledWith("http://localhost:51000/app"));
+
+		externalUrl.mockRejectedValueOnce(new Error("Can't reach this host's localhost."));
+		fireEvent.click(screen.getByRole("link", { name: "preview" }), { metaKey: true });
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({ title: "Couldn't forward the port", body: "Can't reach this host's localhost.", tone: "error" }));
+		expect(openExternal).toHaveBeenCalledTimes(2);
+		writeText.mockRestore();
 		externalUrl.mockRestore();
 		openExternal.mockRestore();
+	});
+
+	it("opens a remote IPv6 host-local link in the Browser", () => {
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks sessionLinkHostId="box-a"><ChatMarkdown text="[preview](http://[::1]:5173/app)" /></ChatLinkProvider>);
+		fireEvent.click(screen.getByRole("link", { name: "preview" }));
+		expect(onLinkOpen).toHaveBeenCalledWith("http://[::1]:5173/app");
 	});
 
 	it("scopes a session preview to the chat source", async () => {

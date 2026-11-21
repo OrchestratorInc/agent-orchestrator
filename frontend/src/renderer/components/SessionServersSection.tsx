@@ -31,16 +31,18 @@ export function SessionServersSection({ session, hostId, visible }: { session: W
 	const reach = useLoopbackReach(hostId);
 	const { forwards, forward, stop } = usePortForwards();
 	const openInBrowser = useSessionBrowserLink(session);
-	if (servers.length === 0 || !sessionIsActive(session)) return null;
 	const tunnelHost = hostId && reach === "tunnel" ? hostId : undefined;
+	const hostForwards = tunnelHost ? forwards.filter((item) => item.hostId === tunnelHost) : [];
+	const rows = [...servers, ...hostForwards.filter((item) => !servers.some((server) => server.port === item.remotePort)).map((item) => ({ port: item.remotePort, command: "" }))];
+	if (rows.length === 0 || !sessionIsActive(session)) return null;
 	const forwardFailed = (error: unknown) =>
 		showGlobalToast(t("sessionServers.forwardFailed"), error instanceof Error ? error.message : undefined, "error");
 
 	return (
 		<InspectorSection surface={false} title={t("sessionServers.title")}>
 			<ul className="m-0 flex list-none flex-col p-0 text-sm" data-testid="session-servers">
-				{servers.map((server) => {
-					const forwarded = tunnelHost ? forwards.find((item) => item.hostId === tunnelHost && item.remotePort === server.port) : undefined;
+				{rows.map((server) => {
+					const forwarded = hostForwards.find((item) => item.remotePort === server.port);
 					return (
 						<li className="flex min-h-7 items-center gap-2" key={server.port}>
 							<Pressable
