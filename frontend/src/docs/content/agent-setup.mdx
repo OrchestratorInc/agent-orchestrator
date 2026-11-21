@@ -45,13 +45,13 @@ An AppImage install can't be linked, and its bundled `ao` isn't at a fixed path.
 
 ## 3. Start the app and check the daemon
 
-Open the desktop app. On macOS you can do it from a terminal by its bundle id:
+Open the desktop app. On macOS you can do it from a terminal by its path:
 
 ```bash
-open -b dev.agent-orchestrator.desktop
+open "/Applications/Agent Orchestrator.app"
 ```
 
-Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
+If the app was installed for one user only, it is in `~/Applications/Agent Orchestrator.app` instead. Once `ao` works, `ao start` also opens the installed app. Don't use `open -a "Orchestrator"`: that name also matches a helper app inside the bundle, which doesn't start the daemon.
 
 Then check that its daemon is ready:
 
