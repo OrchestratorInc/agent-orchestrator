@@ -6369,6 +6369,9 @@ export interface components {
             displayName: string;
             sessionId: string;
         };
+        ControllersInterruptConversationRequest: {
+            turnId?: string;
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -7430,9 +7433,6 @@ export interface components {
             phase?: "downloading" | "installing";
             /** @description Seconds until the next installer download attempt. */
             retryInSeconds?: number;
-        };
-        InterruptConversationRequest: {
-            turnId?: string;
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
@@ -21292,7 +21292,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["InterruptConversationRequest"];
+                "application/json": components["schemas"]["ControllersInterruptConversationRequest"];
             };
         };
         responses: {

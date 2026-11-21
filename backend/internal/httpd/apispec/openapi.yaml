@@ -9007,7 +9007,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/InterruptConversationRequest'
+              $ref: '#/components/schemas/ControllersInterruptConversationRequest'
       responses:
         "204":
           description: No Content
@@ -18751,6 +18751,11 @@ components:
       - sessionId
       - displayName
       type: object
+    ControllersInterruptConversationRequest:
+      properties:
+        turnId:
+          type: string
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -21548,11 +21553,6 @@ components:
           description: Seconds until the next installer download attempt.
           minimum: 1
           type: integer
-      type: object
-    InterruptConversationRequest:
-      properties:
-        turnId:
-          type: string
       type: object
     InvokeCueRequest:
       properties:
