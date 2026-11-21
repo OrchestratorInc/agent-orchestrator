@@ -291,6 +291,30 @@ describe("CloudSessionChatSurface", () => {
 		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenLastCalledWith("org-1", session.id, { after: 2, before: CLOUD_CHAT_NEWEST, limit: 500 }));
 	});
 
+	it("opens a new orchestrator still starting as a new chat, not one being restored", async () => {
+		const starting = {
+			...session, kind: "orchestrator", runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" },
+		} satisfies WorkspaceSession;
+		cloudMocks.listChatEvents.mockReset().mockImplementation(() => new Promise(() => {}));
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		const firstFrames = async (subject: WorkspaceSession) => {
+			cloudMocks.chatProps.mockClear();
+			const view = render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><CloudSessionChatSurface session={subject} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			const pending = cloudMocks.chatProps.mock.calls.map((call) => call[0].historyPending);
+			view.unmount();
+			return pending;
+		};
+		// Its read has not answered, yet a first start has no history to wait for.
+		expect(await firstFrames(starting)).not.toContain(true);
+		// Woken from a pause (a worker has connected before), it has history: it waits.
+		expect(await firstFrames({ ...starting, cloud: { ...starting.cloud, workerEpoch: 7 } })).toContain(true);
+		// A worker may start with its task: it waits for its history too.
+		expect(await firstFrames({ ...starting, kind: "worker" })).toContain(true);
+	});
+
 	it("reads the next account's own chat, never the previous account's cached one", async () => {
 		const step = (output: Record<string, unknown>): CloudCpClientEvent => ({
 			sessionId: session.id, sequence: 1, type: "workspace.script.step", createdAt: "2026-11-08T10:00:00Z",
