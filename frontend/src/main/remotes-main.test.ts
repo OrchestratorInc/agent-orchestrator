@@ -788,4 +788,76 @@ describe("registerRemotesIpc", () => {
 			expect(pair).toHaveBeenCalledOnce();
 		});
 	});
+
+	describe("computer use on another computer", () => {
+		const daemonAt = (calls: Array<{ url: string; init: RequestInit }>, status = 200, body: unknown = { allowRemote: false, target: { hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1" } }) =>
+			(async (url: string | URL | Request, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} });
+				return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+			}) as typeof fetch;
+
+		it("gives the local daemon the saved credential and returns only what the daemon says", async () => {
+			const calls: Array<{ url: string; init: RequestInit }> = [];
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				requireAccount: signedIn,
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				identity: async () => "h_workbox",
+				localDaemonBase: () => "http://127.0.0.1:3001",
+				daemonFetch: daemonAt(calls),
+			});
+			const result = await ipc.invoke("remotes:setComputerUseTarget", "h_workbox");
+			expect(calls).toHaveLength(1);
+			expect(calls[0].url).toBe("http://127.0.0.1:3001/api/v1/computer-use/remote/target");
+			expect(calls[0].init.method).toBe("PUT");
+			expect(JSON.parse(String(calls[0].init.body))).toEqual({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", credential: "old" });
+			expect(JSON.stringify(result)).not.toContain("old");
+		});
+
+		it("refuses a host whose address now answers as another machine, before the daemon gets the credential", async () => {
+			const calls: Array<{ url: string; init: RequestInit }> = [];
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				requireAccount: signedIn,
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				identity: async () => "h_other",
+				localDaemonBase: () => "http://127.0.0.1:3001",
+				daemonFetch: daemonAt(calls),
+			});
+			await expect(ipc.invoke("remotes:setComputerUseTarget", "h_workbox")).rejects.toThrow(/Another computer/);
+			expect(calls).toHaveLength(0);
+		});
+
+		it("refuses a computer that is not a saved host, and this computer itself", async () => {
+			const calls: Array<{ url: string; init: RequestInit }> = [];
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				requireAccount: signedIn,
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				identity: async () => "h_workbox",
+				localIdentity: async () => "h_workbox",
+				localDaemonBase: () => "http://127.0.0.1:3001",
+				daemonFetch: daemonAt(calls),
+			});
+			await expect(ipc.invoke("remotes:setComputerUseTarget", "h_unknown")).rejects.toThrow(/not one of your remote hosts/);
+			await expect(ipc.invoke("remotes:setComputerUseTarget", "h_workbox")).rejects.toThrow(/itself/);
+			expect(calls).toHaveLength(0);
+		});
+
+		it("passes on the daemon's refusal", async () => {
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				requireAccount: signedIn,
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				identity: async () => "h_workbox",
+				localDaemonBase: () => "http://127.0.0.1:3001",
+				daemonFetch: daemonAt([], 400, { code: "COMPUTER_USE_REMOTE_INVALID", message: "url must be the remote host's http or https address." }),
+			});
+			await expect(ipc.invoke("remotes:setComputerUseTarget", "h_workbox")).rejects.toThrow(/http or https address/);
+		});
+	});
 });

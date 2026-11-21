@@ -13,6 +13,7 @@ import { useResolvedTheme } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import type { InstallJob } from "./installState";
+import { RemoteComputerUseSection } from "./RemoteComputerUseSection";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
@@ -321,6 +322,8 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 					</Button>
 				</div>
 			) : null}
+
+			<RemoteComputerUseSection installed={installed} titleHidden={titleHidden} />
 
 			{/* Agents' own computer use (Claude Code's, Codex's) runs as Orchestrator,
 			    so macOS checks Orchestrator's grants, not Cua Driver's. */}

@@ -136,10 +136,12 @@ func rendererOnlyArea(path string) string {
 			"/api/v1/agents/provider-keys",
 		}},
 		// Cua Driver operates native apps with the user's OS permissions, and
-		// the settings toggle decides whether agents are told to use it.
+		// the settings toggle decides whether agents are told to use it. The
+		// remote routes drive it for the user's other computers.
 		{"computer use", []string{
 			"/api/v1/computer-use",
 			"/api/v1/settings/computer-use",
+			"/api/v1/remote-computer-use",
 		}},
 	} {
 		for _, prefix := range area.prefixes {

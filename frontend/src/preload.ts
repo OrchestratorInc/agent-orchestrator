@@ -1022,6 +1022,9 @@ const api = {
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
 		// The name this machine is listed under on the account's other devices.
 		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
+		// Runs this computer's agents' computer use on a saved host. Main hands
+		// the daemon the host's credential; the renderer never sees it.
+		setComputerUseTarget: (hostId: string) => ipcRenderer.invoke("remotes:setComputerUseTarget", hostId) as Promise<unknown>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>

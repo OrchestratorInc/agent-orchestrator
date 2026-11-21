@@ -523,6 +523,7 @@ if (typeof window !== "undefined") {
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
 			computerName: async () => "Test computer",
+			setComputerUseTarget: async () => ({}),
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		agentBrowserUrl: async () => "",

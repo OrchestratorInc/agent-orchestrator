@@ -3353,8 +3353,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Run one Cua Driver tool; screenshots are saved to files and returned
-        as paths
+      summary: Run one Cua Driver tool, here or on the computer chosen under Run computer
+        use on; screenshots are saved to files and returned as paths
       tags:
       - computer-use
   /api/v1/computer-use/daemon/start:
@@ -3461,6 +3461,138 @@ paths:
           description: Not Implemented
       summary: Ask macOS for Cua Driver's Accessibility and Screen Recording permissions;
         progress shows in status
+      tags:
+      - computer-use
+  /api/v1/computer-use/remote:
+    get:
+      operationId: getComputerUseRemote
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseRemoteSettings'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read whether other computers may use this one and which computer this
+        one's agents run computer use on
+      tags:
+      - computer-use
+  /api/v1/computer-use/remote/allow:
+    put:
+      operationId: setComputerUseRemoteAllow
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateComputerUseRemoteAllowRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseRemoteSettings'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Let agents on the user's other computers use this computer's Cua Driver,
+        or stop
+      tags:
+      - computer-use
+  /api/v1/computer-use/remote/target:
+    delete:
+      operationId: clearComputerUseRemoteTarget
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseRemoteSettings'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run this computer's agents' computer use on this computer again
+      tags:
+      - computer-use
+    put:
+      operationId: setComputerUseRemoteTarget
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetComputerUseRemoteTargetRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseRemoteSettings'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run this computer's agents' computer use on another computer; the desktop
+        app sends the credential it holds for it
       tags:
       - computer-use
   /api/v1/computer-use/status:
@@ -6471,6 +6603,124 @@ paths:
       summary: Unpair this phone from the daemon, removing it from the roster
       tags:
       - push
+  /api/v1/remote-computer-use/agent-tools:
+    get:
+      operationId: listRemoteComputerUseAgentTools
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseAgentToolsResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the computer-use tools agents on other computers get here
+      tags:
+      - computer-use
+  /api/v1/remote-computer-use/call:
+    post:
+      operationId: callRemoteComputerUseTool
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteComputerUseCallRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteComputerUseCallResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Run one Cua Driver tool for an agent on another computer; screenshots
+        come back inline
+      tags:
+      - computer-use
+  /api/v1/remote-computer-use/status:
+    get:
+      operationId: getRemoteComputerUseOffer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteComputerUseOffer'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report whether agents on other computers can use this computer now
+      tags:
+      - computer-use
   /api/v1/remote-host/account-token:
     post:
       operationId: issueRemoteHostAccountToken
@@ -18569,6 +18819,35 @@ components:
       - screenRecording
       - granting
       type: object
+    ComputerUseRemoteSettings:
+      properties:
+        allowRemote:
+          description: Agents on the user's other computers may use this computer's
+            Cua Driver.
+          type: boolean
+        target:
+          $ref: '#/components/schemas/ComputerUseRemoteTarget'
+          description: The other computer this computer's agents run computer use
+            on; absent runs it here.
+      required:
+      - allowRemote
+      type: object
+    ComputerUseRemoteTarget:
+      properties:
+        hostId:
+          description: The other computer's Orchestrator host ID.
+          type: string
+        label:
+          description: The name this computer lists it under.
+          type: string
+        url:
+          description: The other computer's remote-host address.
+          type: string
+      required:
+      - hostId
+      - label
+      - url
+      type: object
     ComputerUseStatus:
       properties:
         binaryPath:
@@ -23122,6 +23401,68 @@ components:
       required:
       - servers
       type: object
+    RemoteComputerUseCallRequest:
+      properties:
+        arguments:
+          additionalProperties: {}
+          type: object
+        caller:
+          description: A random ID the calling computer keeps, so sessions with the
+            same ID on two computers stay apart.
+          type: string
+        sessionId:
+          description: The calling computer's AO session; with caller it names this
+            computer's screenshot folder and Cua Driver session for the calls.
+          type: string
+        tool:
+          type: string
+      required:
+      - tool
+      type: object
+    RemoteComputerUseCallResult:
+      properties:
+        images:
+          items:
+            $ref: '#/components/schemas/RemoteComputerUseImage'
+          type: array
+        result: {}
+        tool:
+          type: string
+      required:
+      - tool
+      - result
+      - images
+      type: object
+    RemoteComputerUseImage:
+      properties:
+        data:
+          description: The image, base64-encoded.
+          type: string
+        mimeType:
+          type: string
+        path:
+          description: Where this computer saved it; the result's fields name this
+            path.
+          type: string
+      required:
+      - path
+      - mimeType
+      - data
+      type: object
+    RemoteComputerUseOffer:
+      properties:
+        offered:
+          description: 'Agents on other computers can run computer use here now: Cua
+            Driver is installed and both "Let agents use this computer" and "Let agents
+            on your other computers use this computer" are on.'
+          type: boolean
+        platform:
+          description: 'Operating system this computer runs: darwin, linux, or windows.'
+          type: string
+      required:
+      - offered
+      - platform
+      type: object
     RemoveProjectResult:
       properties:
         projectId:
@@ -25055,6 +25396,24 @@ components:
       - viewId
       - active
       type: object
+    SetComputerUseRemoteTargetRequest:
+      properties:
+        credential:
+          description: The bearer credential this computer uses for the remote host.
+            Stored with mode 0600 and never returned.
+          type: string
+        hostId:
+          type: string
+        label:
+          type: string
+        url:
+          type: string
+      required:
+      - hostId
+      - label
+      - url
+      - credential
+      type: object
     SetConversationConfigOptionRequest:
       properties:
         enabled:
@@ -26678,6 +27037,15 @@ components:
       required:
       - enabled
       type: object
+    UpdateComputerUseRemoteAllowRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
     UpdateComputerUseRequest:
       properties:
         enabled:
@@ -27899,7 +28267,8 @@ tags:
     the board
   name: system
 - description: Cua Driver computer-use integration behind Settings and the agents'
-    computer-use tools (loopback only)
+    computer-use tools (loopback only, except /remote-computer-use, which the user's
+    other computers call)
   name: computer-use
 - description: Server-side unfurl of external links for the CSP-locked renderer
   name: link-preview

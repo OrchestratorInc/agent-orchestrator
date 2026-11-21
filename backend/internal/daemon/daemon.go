@@ -924,8 +924,12 @@ func Run(buildVersion string) (retErr error) {
 	settingsSvc.SetCuaDriverInstalled(computerUse.Installed)
 	systemInstall.SetTelemetry(telemetrySink)
 	sessMgr.SetVersionTelemetry(telemetrySink)
-	// "Let agents use this computer" gives new chat sessions the computer-use tools.
-	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
+	// "Let agents use this computer" gives new chat sessions the computer-use
+	// tools, and so does choosing another computer to run computer use on.
+	sessMgr.SetComputerUseEnabled(func(ctx context.Context) bool {
+		return settingsSvc.ComputerUseEnabled(ctx) || computerUse.RemoteTargetLabel(ctx) != ""
+	})
+	sessMgr.SetComputerUseRemote(computerUse.RemoteTargetLabel)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})

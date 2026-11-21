@@ -99,7 +99,7 @@ func Build() ([]byte, error) {
 		*(&openapi31.Tag{Name: "system"}).WithDescription(
 			"Local machine readiness checks the desktop app runs before showing the board"),
 		*(&openapi31.Tag{Name: "computer-use"}).WithDescription(
-			"Cua Driver computer-use integration behind Settings and the agents' computer-use tools (loopback only)"),
+			"Cua Driver computer-use integration behind Settings and the agents' computer-use tools (loopback only, except /remote-computer-use, which the user's other computers call)"),
 		*(&openapi31.Tag{Name: "link-preview"}).WithDescription(
 			"Server-side unfurl of external links for the CSP-locked renderer"),
 		*(&openapi31.Tag{Name: "github"}).WithDescription(
@@ -533,14 +533,22 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"SystemcheckRequirement":        "SystemRequirement",
 	"ControllersInstallTargetParam": "InstallTargetParam",
 	// service/computeruse: the Cua Driver integration behind Settings and the computer-use tools.
-	"ComputeruseStatus":                        "ComputerUseStatus",
-	"ComputerusePermissions":                   "ComputerUsePermissions",
-	"ComputeruseCallRequest":                   "ComputerUseCallRequest",
-	"ComputeruseCallResult":                    "ComputerUseCallResult",
-	"ComputeruseImage":                         "ComputerUseImage",
-	"ControllersComputerUseDoctorResponse":     "ComputerUseDoctorResponse",
-	"ComputeruseAgentTool":                     "ComputerUseAgentTool",
-	"ControllersComputerUseAgentToolsResponse": "ComputerUseAgentToolsResponse",
+	"ComputeruseStatus":                              "ComputerUseStatus",
+	"ComputerusePermissions":                         "ComputerUsePermissions",
+	"ComputeruseCallRequest":                         "ComputerUseCallRequest",
+	"ComputeruseCallResult":                          "ComputerUseCallResult",
+	"ComputeruseImage":                               "ComputerUseImage",
+	"ControllersComputerUseDoctorResponse":           "ComputerUseDoctorResponse",
+	"ComputeruseAgentTool":                           "ComputerUseAgentTool",
+	"ControllersComputerUseAgentToolsResponse":       "ComputerUseAgentToolsResponse",
+	"ComputeruseRemoteSettings":                      "ComputerUseRemoteSettings",
+	"ComputeruseRemoteTarget":                        "ComputerUseRemoteTarget",
+	"ControllersUpdateComputerUseRemoteAllowRequest": "UpdateComputerUseRemoteAllowRequest",
+	"ComputeruseSetRemoteTargetRequest":              "SetComputerUseRemoteTargetRequest",
+	"ComputeruseRemoteOffer":                         "RemoteComputerUseOffer",
+	"ComputeruseRemoteCallRequest":                   "RemoteComputerUseCallRequest",
+	"ComputeruseRemoteCallResult":                    "RemoteComputerUseCallResult",
+	"ComputeruseRemoteImage":                         "RemoteComputerUseImage",
 	// service/systeminstall: Job backs both StartInstallResponse and
 	// InstallStatusResponse (they're the same Go type), so it reflects to one
 	// shared component — name it after the domain concept, not either alias.
@@ -877,6 +885,7 @@ func operations() []operation {
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
 	ops = append(ops, computerUseOperations()...)
+	ops = append(ops, remoteComputerUseOperations()...)
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
@@ -1146,10 +1155,87 @@ func computerUseOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/computer-use/call", id: "callComputerUseTool", tag: "computer-use",
-			summary: "Run one Cua Driver tool; screenshots are saved to files and returned as paths",
+			summary: "Run one Cua Driver tool, here or on the computer chosen under Run computer use on; screenshots are saved to files and returned as paths",
 			reqBody: controllers.ComputerUseCallRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ComputerUseCallResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/computer-use/remote", id: "getComputerUseRemote", tag: "computer-use",
+			summary: "Read whether other computers may use this one and which computer this one's agents run computer use on",
+			resps:   remoteResps(),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/computer-use/remote/allow", id: "setComputerUseRemoteAllow", tag: "computer-use",
+			summary: "Let agents on the user's other computers use this computer's Cua Driver, or stop",
+			reqBody: controllers.UpdateComputerUseRemoteAllowRequest{},
+			resps:   remoteResps(http.StatusBadRequest, http.StatusConflict),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/computer-use/remote/target", id: "setComputerUseRemoteTarget", tag: "computer-use",
+			summary: "Run this computer's agents' computer use on another computer; the desktop app sends the credential it holds for it",
+			reqBody: controllers.SetComputerUseRemoteTargetRequest{},
+			resps:   remoteResps(http.StatusBadRequest),
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/computer-use/remote/target", id: "clearComputerUseRemoteTarget", tag: "computer-use",
+			summary: "Run this computer's agents' computer use on this computer again",
+			resps:   remoteResps(),
+		},
+	}
+}
+
+func remoteResps(extra ...int) []respUnit {
+	resps := []respUnit{{http.StatusOK, controllers.ComputerUseRemoteSettings{}}}
+	for _, status := range extra {
+		resps = append(resps, respUnit{status, envelope.APIError{}})
+	}
+	return append(resps,
+		respUnit{http.StatusInternalServerError, envelope.APIError{}},
+		respUnit{http.StatusNotImplemented, envelope.APIError{}},
+	)
+}
+
+// remoteComputerUseOperations declares the routes agents on the user's other
+// computers call. They are the only computer-use routes the authenticated
+// remote-host listener serves, and they refuse calls until the user lets other
+// computers use this one. Screenshots travel inline, since the caller cannot
+// read this computer's files.
+func remoteComputerUseOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/remote-computer-use/status", id: "getRemoteComputerUseOffer", tag: "computer-use",
+			summary: "Report whether agents on other computers can use this computer now",
+			resps: []respUnit{
+				{http.StatusOK, controllers.RemoteComputerUseOfferResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/remote-computer-use/agent-tools", id: "listRemoteComputerUseAgentTools", tag: "computer-use",
+			summary: "List the computer-use tools agents on other computers get here",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ComputerUseAgentToolsResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/remote-computer-use/call", id: "callRemoteComputerUseTool", tag: "computer-use",
+			summary: "Run one Cua Driver tool for an agent on another computer; screenshots come back inline",
+			reqBody: controllers.RemoteComputerUseCallRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.RemoteComputerUseCallResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},

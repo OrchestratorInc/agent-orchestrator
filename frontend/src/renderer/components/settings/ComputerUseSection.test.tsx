@@ -49,6 +49,7 @@ function daemon({ status, job = { target: "cua-driver", status: "idle", command:
 	apiMocks.get.mockImplementation(async (path: string) => {
 		if (path === "/api/v1/computer-use/status") return { data: status(), error: undefined };
 		if (path === "/api/v1/system/install/{target}") return { data: typeof job === "function" ? job() : job, error: undefined };
+		if (path === "/api/v1/computer-use/remote") return { data: { allowRemote: false }, error: undefined };
 		return { data: undefined, error: { message: `unexpected ${path}` } };
 	});
 }

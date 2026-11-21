@@ -14,6 +14,12 @@ started while it is on get these tools from Orchestrator's `ao` tool server:
 - `run_steps`: several actions in one call. `hotkey`, `scroll`, `set_value`,
   and `drag` are `run_steps` steps; its description lists their arguments.
 
+The user can instead pick another of their computers under **Run computer use
+on** in the same settings. The tools then act on that computer, not the one you
+run on: files and commands here are not on it, and apps you open run there. Your
+system prompt names it. That computer must have **Let agents on your other
+computers use this computer** turned on.
+
 Each tool's description and input schema come from the installed Cua Driver.
 Read them before the first call; do not guess argument names. Window reads and
 actions return text plus the window's screenshot as an image. This example is
@@ -178,6 +184,11 @@ account rather than posting, sending, or buying as the wrong person.
 - Missing macOS permissions: ask the user to click **Grant** next to macOS
   permissions in Settings > Computer use agents and approve CuaDriver in System
   Settings.
+- `COMPUTER_USE_REMOTE_OFF`, `COMPUTER_USE_REMOTE_UNREACHABLE`,
+  `COMPUTER_USE_REMOTE_UNAUTHORIZED`, `COMPUTER_USE_REMOTE_UNSUPPORTED`: computer
+  use runs on another computer that refused or did not answer. Tell the user
+  what the message says; they fix it on that computer or under **Run computer
+  use on**.
 - `COMPUTER_USE_WINDOW_REQUIRED`: pixel coordinates without a window. Add the
   `pid` and `window_id` of the window whose screenshot you measured on.
 - `COMPUTER_USE_TEXT_TARGET_REQUIRED`: `type_text` without a field. Read the
