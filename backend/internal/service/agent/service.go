@@ -928,16 +928,19 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		// key or provider switch could leave invalid IDs in the picker.
 		cacheMatchesInputs := hasCached && cached.BinaryVersion == version
 		if cacheMatchesInputs && len(cached.Catalog.Models) > 0 {
-			cached.Catalog.Stale = true
-			cached.Catalog.Warning = discoverErr.Error()
-			cached.Catalog.WarningCode = warningCode
-			cached.Catalog.RefreshRecommended = true
-			if err := s.saveFailedCatalog(persistCtx, cached, cached.Catalog, generation, settledFailure); err != nil {
-				cached.Catalog.Warning = appendCacheWarning(cached.Catalog.Warning)
+			// Build the stale catalog on a copy: saveFailedCatalog reads the
+			// previous failure (its warning code) from cached.
+			stale := cached.Catalog
+			stale.Stale = true
+			stale.Warning = discoverErr.Error()
+			stale.WarningCode = warningCode
+			stale.RefreshRecommended = true
+			if err := s.saveFailedCatalog(persistCtx, cached, stale, generation, settledFailure); err != nil {
+				stale.Warning = appendCacheWarning(stale.Warning)
 			} else if updated, ok, _ := s.cachedCatalog(persistCtx, agentID, projectID); ok {
 				return updated.Catalog, nil
 			}
-			return cached.Catalog, nil
+			return stale, nil
 		}
 		if len(discovered.Models) > 0 {
 			discovered.Stale = true

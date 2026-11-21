@@ -145,6 +145,49 @@ func TestReadRediscoversASettledFailureAfterARestart(t *testing.T) {
 	}
 }
 
+// A catalog that still shows its models keeps the settled failure's code while
+// the next failure is saved, so a timeout after an expired login (text that no
+// settled phrase matches) gets the timed retries back.
+func TestTimeoutAfterAnExpiredLoginWithModelsRetriesAgain(t *testing.T) {
+	discoverer := successfulModelDiscoverer()
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("auggie", "Auggie", nil)}, &fakeModelCache{}, discoverer)
+	if _, err := svc.Models(context.Background(), "auggie", "", true); err != nil {
+		t.Fatal(err)
+	}
+	discoverer.mu.Lock()
+	discoverer.err = wrapAuthError(ports.ErrAgentModelDiscoveryCredentialExpired, "the saved login token expired; it renews the next time it runs")
+	discoverer.mu.Unlock()
+	if _, err := svc.Models(context.Background(), "auggie", "", true); err != nil {
+		t.Fatal(err)
+	}
+	discoverer.mu.Lock()
+	discoverer.err = errors.New("auggie model discovery: context deadline exceeded")
+	discoverer.mu.Unlock()
+	if _, err := svc.Models(context.Background(), "auggie", "", false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err := svc.Models(context.Background(), "auggie", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.RefreshState == "error" && strings.Contains(got.RefreshError, "deadline exceeded") {
+			if got.RetryAt == nil {
+				t.Fatalf("a timeout after an expired login scheduled no retry: %#v", got)
+			}
+			if len(got.Models) == 0 {
+				t.Fatalf("the saved models were dropped: %#v", got)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the read did not rediscover: calls=%d state=%q err=%q", discoverer.discoverCalls.Load(), got.RefreshState, got.RefreshError)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // An expired login is saved with provider wording that names no sentinel; its
 // sign-in code still marks it settled, so a read after a restart rediscovers.
 func TestReadRediscoversAnExpiredLoginAfterARestart(t *testing.T) {
