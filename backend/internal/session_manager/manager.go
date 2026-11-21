@@ -4004,7 +4004,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		if err != nil {
 			return RestoreResult{}, err
 		}
-		if !m.hasFingerprintImportPreparer(rec) {
+		if rec.Harness != domain.HarnessKilocode && !m.hasFingerprintImportPreparer(rec) {
 			m.refreshImportArchive(ctx, rec)
 		}
 		requireNativeHistory = true
