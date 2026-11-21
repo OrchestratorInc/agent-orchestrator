@@ -659,7 +659,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				modelOptional = option.Optional
 			}
 		}
-		modelOptionFound, modelSkipped, variantSplit := false, false, false
+		modelOptionFound, modelSkipped := false, false
 		for _, option := range configOptions {
 			if option.ID != "model" {
 				continue
@@ -670,7 +670,6 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				if base, variant, split := c.splitModelVariant(model); split {
 					if resolved, ok = resolveModelChoice(c.harness, option.Choices, base); ok {
 						options = append(options, variant)
-						variantSplit = true
 					}
 				}
 			}
@@ -688,13 +687,6 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			c.log.Warn("ACP session does not offer the chosen model; keeping its default", "model", settings.Model)
 		case c.configOptionCurrent("model") == model:
 			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
-		case variantSplit && c.modelConfigOption:
-			// A base model exists only as a config option value: session/set_model
-			// still takes the full ids of the legacy list.
-			if err := c.setSessionOption(ctx, sessionID, SessionOption{ID: "model", Value: model}); err != nil {
-				return err
-			}
-			catalogStale = true
 		default:
 			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
 				if isACPMethodNotFound(err) {
@@ -704,6 +696,27 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 			catalogStale = true
 			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
+		}
+	}
+	if !legacyModel && c.splitModelVariant != nil {
+		// The modern selector may offer only the base model, with the variant as
+		// its own option (Antigravity server 1.4 lists gemini-3.8-flash plus a
+		// thinking level rather than gemini-3.8-flash-high).
+		for i, option := range options {
+			if option.ID != "model" || option.Value == "" {
+				continue
+			}
+			if offered, known := c.configOptionOffers("model", option.Value); !known || offered {
+				break
+			}
+			if base, variant, split := c.splitModelVariant(option.Value); split {
+				if offered, _ := c.configOptionOffers("model", base); offered {
+					options[i].Value = base
+					options[i].Name = ""
+					options = append(options, variant)
+				}
+			}
+			break
 		}
 	}
 	applyOption := func(option SessionOption) error {

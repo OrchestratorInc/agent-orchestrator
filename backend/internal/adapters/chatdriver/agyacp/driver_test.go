@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -576,6 +577,9 @@ func TestAuthBootstrapAcceptsASignedInAgyCLI(t *testing.T) {
 }
 
 func TestCLISignedInFollowsAgyModelsExitStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("runs POSIX shell fixtures that Windows cannot execute")
+	}
 	dir := t.TempDir()
 	script := func(name, body string) string {
 		path := filepath.Join(dir, name)
