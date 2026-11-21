@@ -99,6 +99,7 @@ const sideMocks = vi.hoisted(() => ({
 	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
 	stageAttachments: undefined as unknown,
+	settingsReady: undefined as boolean | undefined,
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<unknown>),
@@ -184,6 +185,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onAddToSideChat,
 			onSend,
 			onStageAttachments,
+			settingsReady,
 			composerNotice,
 			importBlock,
 			findRequest,
@@ -192,6 +194,7 @@ vi.mock("./ChatWorkspace", async () => {
 			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
 			onStageAttachments?: unknown;
+			settingsReady?: boolean;
 			onAddToSideChat?: typeof sideMocks.attach;
 			composerNotice?: ReactNode;
 			findRequest?: { id: string; query: string; messageId?: string };
@@ -215,6 +218,7 @@ vi.mock("./ChatWorkspace", async () => {
 		}) => {
 			sideMocks.workspaceSend = onSend;
 			sideMocks.stageAttachments = onStageAttachments;
+			sideMocks.settingsReady = settingsReady;
 			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
@@ -306,6 +310,7 @@ beforeEach(() => {
 	sideMocks.activeId = "existing-side";
 	sideMocks.attach = undefined;
 	sideMocks.stageAttachments = undefined;
+	sideMocks.settingsReady = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -349,6 +354,16 @@ describe("SessionChatSurface recovery", () => {
 		expect(sideMocks.stageAttachments).toBeUndefined();
 		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
+	});
+
+	it("shows an archived chat's saved settings before a message restores it", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" }, settings: { model: "gpt-5" } };
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		// A live session's stopped agent has no settings to show.
+		expect(sideMocks.settingsReady).toBe(false);
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		expect(sideMocks.settingsReady).toBe(true);
 	});
 
 	it("tells the commands when a turn is active", () => {
