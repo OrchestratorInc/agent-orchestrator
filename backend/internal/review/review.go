@@ -304,6 +304,37 @@ type TriggerOptions struct {
 	// the worker's branch just before this trigger and found none, so a
 	// no-PR error may say so.
 	BranchPRLookupFoundNone bool
+	// NoInject marks every pass this trigger starts as never delivered to the
+	// worker session, whatever its auto-inject setting (#6810). A running pass
+	// it restarts becomes never delivered too; a trigger without it never
+	// lifts that from a pass.
+	NoInject bool
+}
+
+// runNoInjectMarker is the optional part of the store that can make a running
+// pass never delivered (#6810).
+type runNoInjectMarker interface {
+	MarkReviewRunNoInject(ctx stdctx.Context, id string) (bool, error)
+}
+
+// markRunNoInject makes the running pass id never delivered before a
+// --no-inject trigger relaunches its reviewer. A store that cannot record it
+// fails the trigger rather than restart a pass that could still be delivered.
+func (e *Engine) markRunNoInject(ctx stdctx.Context, id string) error {
+	marker, ok := e.store.(runNoInjectMarker)
+	if !ok {
+		return fmt.Errorf("review store cannot record --no-inject on restarted run %q", id)
+	}
+	marked, err := marker.MarkReviewRunNoInject(ctx, id)
+	if err != nil {
+		return fmt.Errorf("mark restarted run %q no-inject: %w", id, err)
+	}
+	if !marked {
+		// It ended since the trigger read it; relaunching it would only redo a
+		// pass whose result is already recorded.
+		return fmt.Errorf("%w: restarted run %q finished before it could be marked no-inject; trigger again", ErrConflict, id)
+	}
+	return nil
 }
 
 // TriggerWithOptions starts reviews for every PR on the worker session that needs review.
@@ -387,6 +418,21 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	prs, err := e.prs.ListPRsBySession(ctx, workerID)
 	if err != nil {
 		return TriggerResult{}, err
+	}
+	if strings.TrimSpace(opts.PRURL) == "" {
+		owned := make([]domain.PullRequest, 0, len(prs))
+		for _, pr := range prs {
+			if !pr.ReviewOnly {
+				owned = append(owned, pr)
+			}
+		}
+		if len(prs) > 0 && len(owned) == 0 {
+			if source != domain.ReviewTriggerAuto {
+				return TriggerResult{}, fmt.Errorf("%w: all tracked pull requests are review-only; use --pr <url> to review one", ErrInvalid)
+			}
+			return TriggerResult{SkipReason: "review_only"}, nil
+		}
+		prs = owned
 	}
 	if len(prs) == 0 {
 		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone))
@@ -569,7 +615,14 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if hasConfigOverride {
 			pendingSupersedes = append(pendingSupersedes, staleSupersede{prURL: reviewState.PRURL, targetSHA: reviewState.TargetSHA})
 			if reviewState.LatestRun != nil && reviewRunInFlight(reviewState.LatestRun.Status) && (reviewState.LatestRun.Harness == harness || reviewState.LatestRun.Harness == "") {
-				restarted = append(restarted, *reviewState.LatestRun)
+				run := *reviewState.LatestRun
+				if opts.NoInject && !run.NoInject {
+					if err := e.markRunNoInject(ctx, run.ID); err != nil {
+						return TriggerResult{}, err
+					}
+					run.NoInject, run.AutoInjectReview = true, false
+				}
+				restarted = append(restarted, run)
 				continue
 			}
 		} else if err := e.supersedeOlderRuns(ctx, workerID, reviewState.PRURL, reviewState.TargetSHA); err != nil {
@@ -593,7 +646,8 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			CreatedAt:          now,
 			// Completion refreshes this snapshot before delivery. Keeping the
 			// trigger-time value also makes a running pass truthful in the API.
-			AutoInjectReview: worker.AutoInjectReview,
+			AutoInjectReview: worker.AutoInjectReview && !opts.NoInject,
+			NoInject:         opts.NoInject,
 			ReviewerModel:    config.Model,
 		}
 		if err := e.store.InsertReviewRun(ctx, run); err != nil {

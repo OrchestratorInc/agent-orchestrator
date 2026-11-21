@@ -50,6 +50,9 @@ type reviewRun struct {
 	WorkerNoticeAttemptedAt *time.Time `json:"workerNoticeAttemptedAt,omitempty"`
 	FailureReason           string     `json:"failureReason,omitempty"`
 	CancelledBy             string     `json:"cancelledBy,omitempty"`
+
+	NoInject         bool `json:"noInject"`
+	AutoInjectReview bool `json:"autoInjectReview"`
 }
 
 type reviewState struct {
@@ -87,6 +90,7 @@ type triggerReviewRequest struct {
 	RejectReviewedHead bool               `json:"rejectReviewedHead,omitempty"`
 	Rerun              bool               `json:"rerun,omitempty"`
 	EnableAutoInject   bool               `json:"enableAutoInject,omitempty"`
+	NoInject           bool               `json:"noInject,omitempty"`
 }
 
 // reviewAgentConfig mirrors the model/effort subset of domain.AgentConfig a
@@ -169,10 +173,41 @@ func newReviewCommand(ctx *commandContext) *cobra.Command {
 		Short: "Manage Orchestrator code reviews of a worker's PR",
 	}
 	cmd.AddCommand(newReviewListCommand(ctx))
+	cmd.AddCommand(newReviewAutoInjectCommand(ctx))
 	cmd.AddCommand(newReviewSubmitCommand(ctx))
 	cmd.AddCommand(newReviewPostGitHubCommand())
 	cmd.AddCommand(newReviewCancelCommand(ctx))
 	cmd.AddCommand(newReviewTriggerCommand(ctx))
+	return cmd
+}
+
+func newReviewAutoInjectCommand(ctx *commandContext) *cobra.Command {
+	var on, off bool
+	cmd := &cobra.Command{
+		Use:   "auto-inject [worker-session-id]",
+		Short: "Turn review feedback delivery on or off for a session",
+		Args:  atMostOneArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if on == off {
+				return usageError{errors.New("usage: choose --on or --off")}
+			}
+			session := reviewTargetSession(args, "")
+			if session == "" {
+				return usageError{errors.New("usage: worker session id is required outside an Orchestrator-managed session")}
+			}
+			if err := ctx.setSessionSwitches(cmd.Context(), session, nil, &on, nil); err != nil {
+				return err
+			}
+			state := "off"
+			if on {
+				state = "on"
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "review auto-inject %s for %s\n", state, session)
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&on, "on", false, "Deliver review feedback to the session")
+	cmd.Flags().BoolVar(&off, "off", false, "Stop delivery of new review feedback to the session")
 	return cmd
 }
 
@@ -421,8 +456,10 @@ again: the command fails and says why. Pass --rerun to review the same commit
 again, or to add a different --agent alongside one that is still running.
 
 The worker session's review auto-inject is turned on so the reviewer's inline
-review comments are delivered to the worker; pass --no-inject to leave that
-setting unchanged. Orchestrator's review is internal: an approval is not a
+review comments are delivered to the worker. Pass --no-inject to leave that
+setting unchanged and never deliver this pass's review to the session; a PR
+that --pr attaches for a --no-inject pass is review-only, so the session gets
+no CI, review, or merge-conflict nudges for it. Orchestrator's review is internal: an approval is not a
 GitHub approval and does not authorize merging.`,
 		Args: atMostOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -442,7 +479,7 @@ GitHub approval and does not authorize merging.`,
 	f.StringVar(&opts.model, "model", "", "Reviewer model for this pass only")
 	f.StringVar(&opts.effort, "effort", "", "Reviewer reasoning effort for this pass only")
 	f.BoolVar(&opts.rerun, "rerun", false, "Review heads that already have a review again, or add another reviewer alongside a running one")
-	f.BoolVar(&opts.noInject, "no-inject", false, "Leave the session's review auto-inject setting unchanged")
+	f.BoolVar(&opts.noInject, "no-inject", false, "Never deliver this pass's review to the session, and leave its review auto-inject setting unchanged; a PR attached by --pr is review-only")
 	return cmd
 }
 
@@ -460,6 +497,7 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 		RejectReviewedHead: !opts.rerun,
 		Rerun:              opts.rerun,
 		EnableAutoInject:   !opts.noInject,
+		NoInject:           opts.noInject,
 	}
 	if model, effort := strings.TrimSpace(opts.model), strings.TrimSpace(opts.effort); model != "" || effort != "" {
 		req.AgentConfig = &reviewAgentConfig{Model: model, Effort: effort}
@@ -495,7 +533,7 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 		_, err := fmt.Fprintf(out, "turned on review auto-inject for %s; the reviewer's comments will be delivered to the session, and `ao review ls` shows the verdict\n", session)
 		return err
 	case opts.noInject:
-		_, err := fmt.Fprintf(out, "left review auto-inject unchanged for %s; check results with `ao review ls %s`\n", session, session)
+		_, err := fmt.Fprintf(out, "left review auto-inject unchanged for %s; this review will not be delivered to the session; check results with `ao review ls %s`\n", session, session)
 		return err
 	}
 	return nil

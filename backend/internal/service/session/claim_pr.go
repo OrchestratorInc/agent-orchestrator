@@ -36,6 +36,32 @@ var (
 // ClaimPROptions controls PR claim conflict behavior.
 type ClaimPROptions struct {
 	AllowTakeover bool
+	// KeepReviewOnly leaves a review-only attachment as it is. A review
+	// trigger refreshing an existing PR sets it. Any other claim makes the
+	// session the PR's owner (#6810).
+	KeepReviewOnly bool
+	// ReviewOnly attaches a new review target without a visible ownership interval.
+	ReviewOnly bool
+}
+
+// reviewOnlyStore is the optional part of the PR claimer that knows about
+// review-only attachments (#6810).
+type reviewOnlyStore interface {
+	SetPRReviewOnly(ctx context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error)
+}
+
+// claimPostingLogin resolves the account the SCM provider is signed in as for
+// repo, which is the one AO's reviewer posts with. If unavailable, no-inject
+// suppression mutes every author within the review window (#6810).
+func (s *Service) claimPostingLogin(repo ports.SCMRepo, prURL string) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		resolver, ok := s.scm.(ports.ScopedIdentityResolver)
+		if !ok {
+			return "", fmt.Errorf("the %s provider does not report the signed-in account, needed to keep a --no-inject review on %s from being delivered", repo.Provider, prURL)
+		}
+		identity, err := resolver.AuthenticatedIdentityForProvider(ctx, repo.Provider, repo.Host)
+		return identity.Login, err
+	}
 }
 
 // ClaimPRResult is the session PR read model returned after a claim.
@@ -130,18 +156,35 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	}
 	now := s.clock().UTC()
 	pr, checks, reviews, threads, comments := claimRowsFromSCM(id, obs, reviewMode, now, rec)
+	pr.ReviewOnly = opts.ReviewOnly
+	if src, ok := s.prClaimer.(domain.NoInjectReviewSource); ok {
+		// Rows snapshot the session's auto-inject setting and keep it once
+		// stored; a --no-inject AO review on this PR must still never be
+		// delivered, so match its rows the same way the SCM observer does.
+		if err := domain.SuppressNoInjectAOReviews(ctx, src, s.claimPostingLogin(repo, prURL), pr, now, reviews, comments); err != nil {
+			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
+			return ClaimPRResult{}, err
+		}
+	}
+	reviewOnly, hasReviewOnly := s.prClaimer.(reviewOnlyStore)
 	outcome, err := s.prClaimer.ClaimPR(ctx, pr, checks, reviews, threads, comments, reviewMode, opts.AllowTakeover)
 	if err != nil {
 		s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
-	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
-	// The PR has changed hands: tell the previous owner now, so a later read
-	// failing doesn't leave it acting on a PR it no longer owns.
+	// The PR has changed hands: tell the previous owner now, before anything
+	// below can fail, so it never keeps acting on a PR it no longer owns.
 	tookOver := outcome.PreviousOwner != "" && outcome.PreviousOwner != id
 	if tookOver && s.prMoved != nil && !outcome.OwnerTerminated {
 		s.prMoved(context.WithoutCancel(ctx), outcome.PreviousOwner, id, pr)
 	}
+	if hasReviewOnly && !opts.KeepReviewOnly && !opts.ReviewOnly {
+		if _, err := reviewOnly.SetPRReviewOnly(ctx, pr.URL, id, false); err != nil {
+			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
+			return ClaimPRResult{}, err
+		}
+	}
+	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
 	// Reconcile immediately rather than waiting for the artifact-output
 	// poller's next tick: a session that already produced artifacts must move
 	// to pr OutputType (and out of the artifact Kanban placement) with the

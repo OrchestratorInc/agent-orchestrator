@@ -152,6 +152,8 @@ func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []dom
 				return err
 			}
 			if owner.SessionID == pr.SessionID {
+				// A review through a renamed URL must not disown an existing PR.
+				pr.ReviewOnly = candidate.ReviewOnly
 				continue
 			}
 			if outcome.PreviousOwner != "" && outcome.PreviousOwner != owner.SessionID {
@@ -375,6 +377,9 @@ func upsertPRWithIdentity(ctx context.Context, q *gen.Queries, pr domain.PullReq
 		return err
 	}
 	for _, existing := range candidates {
+		if existing.SessionID == pr.SessionID && existing.ReviewOnly {
+			pr.ReviewOnly = true
+		}
 		if rejectReassignment && existing.SessionID != pr.SessionID {
 			return fmt.Errorf("pr %s already belongs to session %s", existing.URL, existing.SessionID)
 		}
@@ -696,6 +701,7 @@ func prState(r domain.PullRequest) domain.PRState {
 
 func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 	return gen.UpsertPRParams{
+		ReviewOnly:               r.ReviewOnly,
 		URL:                      r.URL,
 		SessionID:                r.SessionID,
 		Number:                   int64(r.Number),
@@ -847,6 +853,7 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 		ReviewObservedAt:         timeFromNull(p.ReviewObservedAt),
 		ReviewPartial:            p.ReviewPartial,
 		AutoInjectCI:             p.AutoInjectCI,
+		ReviewOnly:               p.ReviewOnly,
 	}
 }
 
@@ -957,4 +964,46 @@ func timeFromNull(t sql.NullTime) time.Time {
 		return time.Time{}
 	}
 	return t.Time
+}
+
+// SetPRReviewOnly marks or clears prURL as a review-only attachment of
+// sessionID. It reports false when the PR does not belong to that session.
+func (s *Store) SetPRReviewOnly(ctx context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.SetPRReviewOnly(ctx, gen.SetPRReviewOnlyParams{ReviewOnly: reviewOnly, URL: prURL, SessionID: sessionID})
+	if err != nil {
+		return false, fmt.Errorf("set review-only for pr %s: %w", prURL, err)
+	}
+	return n > 0, nil
+}
+
+// NoInjectAOReviewPRURLs returns every URL the store knows pr under: its own,
+// the row a weak alias of it points to, and the rows its provider identity
+// matches. A --no-inject lookup made before the write that moves review runs
+// to pr.URL (a repo rename or transfer) still finds them (#6810).
+func (s *Store) NoInjectAOReviewPRURLs(ctx context.Context, pr domain.PullRequest) ([]string, error) {
+	pr = normalizedPRIdentity(pr)
+	urls := []string{}
+	seen := map[string]bool{}
+	add := func(url string) {
+		if url != "" && !seen[url] {
+			seen[url] = true
+			urls = append(urls, url)
+		}
+	}
+	add(pr.URL)
+	resolved, err := resolveWeakPRAlias(ctx, s.qr, pr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pr identity for %s: %w", pr.URL, err)
+	}
+	add(resolved.URL)
+	candidates, err := findPRIdentityCandidates(ctx, s.qr, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pr identity for %s: %w", pr.URL, err)
+	}
+	for url := range candidates {
+		add(url)
+	}
+	return urls, nil
 }

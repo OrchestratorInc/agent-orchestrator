@@ -84,8 +84,8 @@ WHERE id = ?
     OR (? = '' AND reviewer_launch_id = ''));
 
 -- name: InsertReviewRun :exec
-INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review, reviewer_model, requester_session_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review, reviewer_model, requester_session_id, no_inject)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: TransitionReviewRun :execrows
 -- The one guarded write for a run's state. It changes nothing unless the run
@@ -96,7 +96,7 @@ UPDATE review_run SET
     verdict = COALESCE(NULLIF(CAST(sqlc.arg(verdict) AS TEXT), ''), verdict),
     body = COALESCE(CAST(sqlc.narg(body) AS TEXT), body),
     github_review_id = COALESCE(CAST(sqlc.narg(github_review_id) AS TEXT), github_review_id),
-    auto_inject_review = COALESCE(CAST(sqlc.narg(auto_inject_review) AS BOOLEAN), auto_inject_review),
+    auto_inject_review = CASE WHEN no_inject THEN FALSE ELSE COALESCE(CAST(sqlc.narg(auto_inject_review) AS BOOLEAN), auto_inject_review) END,
     reviewer_model = COALESCE(CAST(sqlc.narg(reviewer_model) AS TEXT), reviewer_model),
     failure_reason = COALESCE(NULLIF(CAST(sqlc.arg(failure_reason) AS TEXT), ''), failure_reason),
     cancelled_by = COALESCE(NULLIF(CAST(sqlc.arg(cancelled_by) AS TEXT), ''), cancelled_by),
@@ -116,7 +116,7 @@ UPDATE review_run SET
     verdict = COALESCE(NULLIF(CAST(sqlc.arg(verdict) AS TEXT), ''), verdict),
     body = COALESCE(CAST(sqlc.narg(body) AS TEXT), body),
     github_review_id = COALESCE(CAST(sqlc.narg(github_review_id) AS TEXT), github_review_id),
-    auto_inject_review = COALESCE(CAST(sqlc.narg(auto_inject_review) AS BOOLEAN), auto_inject_review),
+    auto_inject_review = CASE WHEN no_inject THEN FALSE ELSE COALESCE(CAST(sqlc.narg(auto_inject_review) AS BOOLEAN), auto_inject_review) END,
     failure_reason = COALESCE(NULLIF(CAST(sqlc.arg(failure_reason) AS TEXT), ''), failure_reason),
     cancelled_by = COALESCE(NULLIF(CAST(sqlc.arg(cancelled_by) AS TEXT), ''), cancelled_by),
     launch_id = COALESCE(NULLIF(CAST(sqlc.arg(launch_id) AS TEXT), ''), launch_id),
@@ -137,7 +137,7 @@ UPDATE review_run SET
     verdict = COALESCE(NULLIF(CAST(sqlc.arg(verdict) AS TEXT), ''), verdict),
     body = COALESCE(CAST(sqlc.narg(body) AS TEXT), body),
     github_review_id = COALESCE(CAST(sqlc.narg(github_review_id) AS TEXT), github_review_id),
-    auto_inject_review = COALESCE(CAST(sqlc.narg(auto_inject_review) AS BOOLEAN), auto_inject_review),
+    auto_inject_review = CASE WHEN no_inject THEN FALSE ELSE COALESCE(CAST(sqlc.narg(auto_inject_review) AS BOOLEAN), auto_inject_review) END,
     failure_reason = COALESCE(NULLIF(CAST(sqlc.arg(failure_reason) AS TEXT), ''), failure_reason),
     cancelled_by = COALESCE(NULLIF(CAST(sqlc.arg(cancelled_by) AS TEXT), ''), cancelled_by),
     launch_id = COALESCE(NULLIF(CAST(sqlc.arg(launch_id) AS TEXT), ''), launch_id),
@@ -162,39 +162,39 @@ WHERE review_id = sqlc.arg(review_id)
   AND first_activity_at IS NULL;
 
 -- name: GetReviewRun :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE id = ?;
 
 -- name: GetReviewRunBySessionPRAndSHA :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: GetReviewRunBySessionPRSHAAndHarness :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: ListReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? ORDER BY created_at DESC;
 
 -- name: ListActiveReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND status IN ('queued', 'launching', 'running', 'cancelling') ORDER BY created_at DESC;
 
 -- name: ListActiveReviewRuns :many
 -- Every active run across the daemon, for the reaper-driven run lifecycle.
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE status IN ('queued', 'launching', 'running', 'cancelling') ORDER BY created_at ASC, id ASC;
 
 -- name: ListReviewRunsByBatch :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, id ASC;
 
 -- name: ListPendingReviewRunNoticesBySession :many
 -- Final passes that still owe the worker a "review done" message, oldest
 -- first so notices arrive in the order the passes were requested. A notice
 -- whose delivery failed max_attempts times has given up and is not listed.
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE requester_session_id = sqlc.arg(session_id) AND worker_notice = 'pending'
   AND worker_notice_attempts < sqlc.arg(max_attempts)
 ORDER BY created_at ASC, id ASC;
@@ -346,3 +346,26 @@ JOIN conversation_messages ON conversation_messages.conversation_id = conversati
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversations.current_session_id = sqlc.arg(session_id)
 LIMIT 1;
+
+-- name: ListNoInjectReviewRunIDsByPR :many
+-- The provider review ids of completed --no-inject AO review passes on this
+-- PR, so their observed comments and reviews are never sent back to the
+-- session (#6810).
+SELECT github_review_id
+FROM review_run
+WHERE pr_url = ? AND github_review_id != '' AND status = 'completed' AND no_inject;
+
+-- name: ListNoInjectReviewRunWindowsByPR :many
+-- When each --no-inject AO review pass on this PR ran (ended_at is NULL
+-- while it still runs). Whatever its reviewer posted then must not be sent
+-- back to the session (#6810), including before `ao review submit` records
+-- the review id and when the reviewer exits without submitting.
+SELECT created_at, ended_at
+FROM review_run
+WHERE pr_url = ? AND no_inject;
+
+-- name: MarkReviewRunNoInject :execrows
+-- A --no-inject trigger restarting a running pass makes that pass never
+-- delivered too (#6810). A worker that triggered it gets no review-done
+-- notice; another requester, such as an orchestrator, still does.
+UPDATE review_run SET no_inject = TRUE, auto_inject_review = FALSE, requester_session_id = CASE WHEN requester_session_id = session_id THEN '' ELSE requester_session_id END WHERE id = ? AND status IN ('queued', 'launching', 'running', 'cancelling');

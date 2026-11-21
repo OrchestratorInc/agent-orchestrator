@@ -132,6 +132,20 @@ func (q *Queries) MarkPRCommentsResolvedForThread(ctx context.Context, arg MarkP
 	return result.RowsAffected()
 }
 
+const suppressPRCommentInjectByReview = `-- name: SuppressPRCommentInjectByReview :exec
+UPDATE pr_comment SET auto_inject_review = FALSE WHERE pr_url = ? AND review_id = ?
+`
+
+type SuppressPRCommentInjectByReviewParams struct {
+	PRURL    string
+	ReviewID string
+}
+
+func (q *Queries) SuppressPRCommentInjectByReview(ctx context.Context, arg SuppressPRCommentInjectByReviewParams) error {
+	_, err := q.db.ExecContext(ctx, suppressPRCommentInjectByReview, arg.PRURL, arg.ReviewID)
+	return err
+}
+
 const upsertPRComment = `-- name: UpsertPRComment :exec
 INSERT INTO pr_comment (pr_url, comment_id, author, file, line, body, resolved, created_at, thread_id, review_id, url, is_bot, auto_inject_review)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

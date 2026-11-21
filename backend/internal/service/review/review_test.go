@@ -26,6 +26,9 @@ type fakeStore struct {
 	prComments              map[string][]domain.PullRequestComment
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
+	suppressedReviews       []string
+	suppressErr             error
+	reviewOnlySets          map[string]bool
 
 	updateCalls       int
 	activityUpdates   int
@@ -118,7 +121,7 @@ func (f *fakeStore) TransitionReviewRun(_ context.Context, id string, from []dom
 			run.GithubReviewID = *patch.GithubReviewID
 		}
 		if patch.AutoInjectReview != nil {
-			run.AutoInjectReview = *patch.AutoInjectReview
+			run.AutoInjectReview = *patch.AutoInjectReview && !run.NoInject
 		}
 		if patch.StartedAt != nil {
 			run.StartedAt = patch.StartedAt
@@ -178,6 +181,29 @@ func (f *fakeStore) MarkPRReviewThreadResolved(_ context.Context, prURL, threadI
 	}
 	f.prComments[prURL] = comments
 	return nil
+}
+
+func (f *fakeStore) SuppressAOReviewInject(_ context.Context, prURL, githubReviewID string) error {
+	if f.suppressErr != nil {
+		return f.suppressErr
+	}
+	f.suppressedReviews = append(f.suppressedReviews, prURL+"#"+githubReviewID)
+	return nil
+}
+
+func (f *fakeStore) SetPRReviewOnly(_ context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error) {
+	for i := range f.prs {
+		if f.prs[i].URL != prURL || f.prs[i].SessionID != sessionID {
+			continue
+		}
+		f.prs[i].ReviewOnly = reviewOnly
+		if f.reviewOnlySets == nil {
+			f.reviewOnlySets = map[string]bool{}
+		}
+		f.reviewOnlySets[prURL] = reviewOnly
+		return true, nil
+	}
+	return false, nil
 }
 
 type fakeReviewResolver struct {
@@ -1134,7 +1160,7 @@ func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) (Bran
 	return BranchPRs{Own: f.branchPRs, OtherAuthor: f.otherAuthorPRs}, f.findErr
 }
 
-func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
+func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string, _ bool) error {
 	f.calls = append(f.calls, prURL)
 	if f.order != nil {
 		*f.order = append(*f.order, "refresh "+prURL)
@@ -1315,7 +1341,7 @@ func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testin
 // namedPRRefresher refreshes named PRs but cannot look up a branch's PRs.
 type namedPRRefresher struct{}
 
-func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string) error { return nil }
+func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string, bool) error { return nil }
 
 // A session whose tracked PR was closed or merged may have opened a new PR on
 // the same branch. With no open tracked PR, the branch lookup still runs and

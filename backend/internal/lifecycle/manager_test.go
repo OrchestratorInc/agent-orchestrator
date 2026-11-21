@@ -28,6 +28,7 @@ type fakeStore struct {
 	reviews    map[string][]domain.PullRequestReview
 	comments   map[string][]domain.PullRequestComment
 	prPolicies map[string]bool
+	getPRErr   error
 	signatures map[string]string
 
 	listPRsErr        error
@@ -63,6 +64,9 @@ func (f *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]
 }
 
 func (f *fakeStore) GetPR(_ context.Context, prURL string) (domain.PullRequest, bool, error) {
+	if f.getPRErr != nil {
+		return domain.PullRequest{}, false, f.getPRErr
+	}
 	for _, prs := range f.prs {
 		for _, pr := range prs {
 			if pr.URL != prURL {

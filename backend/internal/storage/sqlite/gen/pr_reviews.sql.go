@@ -72,6 +72,24 @@ func (q *Queries) ListPRReviews(ctx context.Context, prUrl string) ([]PRReview, 
 	return items, nil
 }
 
+const suppressPRReviewInjectByReview = `-- name: SuppressPRReviewInjectByReview :exec
+UPDATE pr_reviews SET auto_inject_review = FALSE
+WHERE pr_url = ?1
+  AND (review_id = ?2 OR url LIKE '%#pullrequestreview-' || ?2)
+`
+
+type SuppressPRReviewInjectByReviewParams struct {
+	PRURL    string
+	ReviewID string
+}
+
+// GitHub stores submitted reviews by GraphQL node id; the review URL carries
+// the numeric id AO records for its own reviews.
+func (q *Queries) SuppressPRReviewInjectByReview(ctx context.Context, arg SuppressPRReviewInjectByReviewParams) error {
+	_, err := q.db.ExecContext(ctx, suppressPRReviewInjectByReview, arg.PRURL, arg.ReviewID)
+	return err
+}
+
 const upsertPRReview = `-- name: UpsertPRReview :exec
 INSERT INTO pr_reviews (pr_url, review_id, author, state, url, is_bot, submitted_at, body, target_sha, auto_inject_review)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

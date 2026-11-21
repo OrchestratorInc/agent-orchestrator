@@ -279,7 +279,11 @@ func (p *Provider) AuthenticatedIdentityForHost(ctx context.Context, host string
 		Login: login,
 		Human: !isBotAuthor(login),
 	}
-	p.hostIdentities[key] = ident
+	// A response without a username identifies no one; leave it uncached so
+	// the next caller asks again.
+	if login != "" {
+		p.hostIdentities[key] = ident
+	}
 	return ident, nil
 }
 

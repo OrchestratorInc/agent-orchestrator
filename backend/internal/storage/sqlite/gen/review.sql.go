@@ -270,7 +270,7 @@ func (q *Queries) GetReviewBySessionAndHarness(ctx context.Context, arg GetRevie
 }
 
 const getReviewRun = `-- name: GetReviewRun :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE id = ?
 `
 
@@ -298,6 +298,7 @@ func (q *Queries) GetReviewRun(ctx context.Context, id string) (ReviewRun, error
 		&i.WorkerNoticeAttempts,
 		&i.WorkerNoticeError,
 		&i.WorkerNoticeAttemptedAt,
+		&i.NoInject,
 		&i.FailureReason,
 		&i.CancelledBy,
 		&i.LaunchID,
@@ -312,7 +313,7 @@ func (q *Queries) GetReviewRun(ctx context.Context, id string) (ReviewRun, error
 }
 
 const getReviewRunBySessionPRAndSHA = `-- name: GetReviewRunBySessionPRAndSHA :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at DESC LIMIT 1
 `
 
@@ -346,6 +347,7 @@ func (q *Queries) GetReviewRunBySessionPRAndSHA(ctx context.Context, arg GetRevi
 		&i.WorkerNoticeAttempts,
 		&i.WorkerNoticeError,
 		&i.WorkerNoticeAttemptedAt,
+		&i.NoInject,
 		&i.FailureReason,
 		&i.CancelledBy,
 		&i.LaunchID,
@@ -360,7 +362,7 @@ func (q *Queries) GetReviewRunBySessionPRAndSHA(ctx context.Context, arg GetRevi
 }
 
 const getReviewRunBySessionPRSHAAndHarness = `-- name: GetReviewRunBySessionPRSHAAndHarness :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at DESC LIMIT 1
 `
 
@@ -400,6 +402,7 @@ func (q *Queries) GetReviewRunBySessionPRSHAAndHarness(ctx context.Context, arg 
 		&i.WorkerNoticeAttempts,
 		&i.WorkerNoticeError,
 		&i.WorkerNoticeAttemptedAt,
+		&i.NoInject,
 		&i.FailureReason,
 		&i.CancelledBy,
 		&i.LaunchID,
@@ -414,8 +417,8 @@ func (q *Queries) GetReviewRunBySessionPRSHAAndHarness(ctx context.Context, arg 
 }
 
 const insertReviewRun = `-- name: InsertReviewRun :exec
-INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review, reviewer_model, requester_session_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review, reviewer_model, requester_session_id, no_inject)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertReviewRunParams struct {
@@ -435,6 +438,7 @@ type InsertReviewRunParams struct {
 	AutoInjectReview   bool
 	ReviewerModel      string
 	RequesterSessionID domain.SessionID
+	NoInject           bool
 }
 
 func (q *Queries) InsertReviewRun(ctx context.Context, arg InsertReviewRunParams) error {
@@ -455,12 +459,13 @@ func (q *Queries) InsertReviewRun(ctx context.Context, arg InsertReviewRunParams
 		arg.AutoInjectReview,
 		arg.ReviewerModel,
 		arg.RequesterSessionID,
+		arg.NoInject,
 	)
 	return err
 }
 
 const listActiveReviewRuns = `-- name: ListActiveReviewRuns :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE status IN ('queued', 'launching', 'running', 'cancelling') ORDER BY created_at ASC, id ASC
 `
 
@@ -495,6 +500,7 @@ func (q *Queries) ListActiveReviewRuns(ctx context.Context) ([]ReviewRun, error)
 			&i.WorkerNoticeAttempts,
 			&i.WorkerNoticeError,
 			&i.WorkerNoticeAttemptedAt,
+			&i.NoInject,
 			&i.FailureReason,
 			&i.CancelledBy,
 			&i.LaunchID,
@@ -519,7 +525,7 @@ func (q *Queries) ListActiveReviewRuns(ctx context.Context) ([]ReviewRun, error)
 }
 
 const listActiveReviewRunsBySession = `-- name: ListActiveReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND status IN ('queued', 'launching', 'running', 'cancelling') ORDER BY created_at DESC
 `
 
@@ -553,6 +559,7 @@ func (q *Queries) ListActiveReviewRunsBySession(ctx context.Context, sessionID d
 			&i.WorkerNoticeAttempts,
 			&i.WorkerNoticeError,
 			&i.WorkerNoticeAttemptedAt,
+			&i.NoInject,
 			&i.FailureReason,
 			&i.CancelledBy,
 			&i.LaunchID,
@@ -807,8 +814,78 @@ func (q *Queries) ListLiveReviewerHandles(ctx context.Context) ([]ListLiveReview
 	return items, nil
 }
 
+const listNoInjectReviewRunIDsByPR = `-- name: ListNoInjectReviewRunIDsByPR :many
+SELECT github_review_id
+FROM review_run
+WHERE pr_url = ? AND github_review_id != '' AND status = 'completed' AND no_inject
+`
+
+// The provider review ids of completed --no-inject AO review passes on this
+// PR, so their observed comments and reviews are never sent back to the
+// session (#6810).
+func (q *Queries) ListNoInjectReviewRunIDsByPR(ctx context.Context, prUrl string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listNoInjectReviewRunIDsByPR, prUrl)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var github_review_id string
+		if err := rows.Scan(&github_review_id); err != nil {
+			return nil, err
+		}
+		items = append(items, github_review_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNoInjectReviewRunWindowsByPR = `-- name: ListNoInjectReviewRunWindowsByPR :many
+SELECT created_at, ended_at
+FROM review_run
+WHERE pr_url = ? AND no_inject
+`
+
+type ListNoInjectReviewRunWindowsByPRRow struct {
+	CreatedAt time.Time
+	EndedAt   sql.NullTime
+}
+
+// When each --no-inject AO review pass on this PR ran (ended_at is NULL
+// while it still runs). Whatever its reviewer posted then must not be sent
+// back to the session (#6810), including before `ao review submit` records
+// the review id and when the reviewer exits without submitting.
+func (q *Queries) ListNoInjectReviewRunWindowsByPR(ctx context.Context, prUrl string) ([]ListNoInjectReviewRunWindowsByPRRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNoInjectReviewRunWindowsByPR, prUrl)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNoInjectReviewRunWindowsByPRRow{}
+	for rows.Next() {
+		var i ListNoInjectReviewRunWindowsByPRRow
+		if err := rows.Scan(&i.CreatedAt, &i.EndedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingReviewRunNoticesBySession = `-- name: ListPendingReviewRunNoticesBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE requester_session_id = ?1 AND worker_notice = 'pending'
   AND worker_notice_attempts < ?2
 ORDER BY created_at ASC, id ASC
@@ -852,6 +929,7 @@ func (q *Queries) ListPendingReviewRunNoticesBySession(ctx context.Context, arg 
 			&i.WorkerNoticeAttempts,
 			&i.WorkerNoticeError,
 			&i.WorkerNoticeAttemptedAt,
+			&i.NoInject,
 			&i.FailureReason,
 			&i.CancelledBy,
 			&i.LaunchID,
@@ -940,7 +1018,7 @@ func (q *Queries) ListRecoverableChatReviews(ctx context.Context) ([]ListRecover
 }
 
 const listReviewRunsByBatch = `-- name: ListReviewRunsByBatch :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, id ASC
 `
 
@@ -979,6 +1057,7 @@ func (q *Queries) ListReviewRunsByBatch(ctx context.Context, arg ListReviewRunsB
 			&i.WorkerNoticeAttempts,
 			&i.WorkerNoticeError,
 			&i.WorkerNoticeAttemptedAt,
+			&i.NoInject,
 			&i.FailureReason,
 			&i.CancelledBy,
 			&i.LaunchID,
@@ -1003,7 +1082,7 @@ func (q *Queries) ListReviewRunsByBatch(ctx context.Context, arg ListReviewRunsB
 }
 
 const listReviewRunsBySession = `-- name: ListReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at, no_inject, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at, requester_session_id
 FROM review_run WHERE session_id = ? ORDER BY created_at DESC
 `
 
@@ -1037,6 +1116,7 @@ func (q *Queries) ListReviewRunsBySession(ctx context.Context, sessionID domain.
 			&i.WorkerNoticeAttempts,
 			&i.WorkerNoticeError,
 			&i.WorkerNoticeAttemptedAt,
+			&i.NoInject,
 			&i.FailureReason,
 			&i.CancelledBy,
 			&i.LaunchID,
@@ -1155,6 +1235,21 @@ func (q *Queries) ListSessionsWithPendingReviewRunNotices(ctx context.Context, m
 		return nil, err
 	}
 	return items, nil
+}
+
+const markReviewRunNoInject = `-- name: MarkReviewRunNoInject :execrows
+UPDATE review_run SET no_inject = TRUE, auto_inject_review = FALSE, requester_session_id = CASE WHEN requester_session_id = session_id THEN '' ELSE requester_session_id END WHERE id = ? AND status IN ('queued', 'launching', 'running', 'cancelling')
+`
+
+// A --no-inject trigger restarting a running pass makes that pass never
+// delivered too (#6810). A worker that triggered it gets no review-done
+// notice; another requester, such as an orchestrator, still does.
+func (q *Queries) MarkReviewRunNoInject(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markReviewRunNoInject, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markReviewRunNoticeSent = `-- name: MarkReviewRunNoticeSent :execrows
@@ -1344,7 +1439,7 @@ UPDATE review_run SET
     verdict = COALESCE(NULLIF(CAST(?2 AS TEXT), ''), verdict),
     body = COALESCE(CAST(?3 AS TEXT), body),
     github_review_id = COALESCE(CAST(?4 AS TEXT), github_review_id),
-    auto_inject_review = COALESCE(CAST(?5 AS BOOLEAN), auto_inject_review),
+    auto_inject_review = CASE WHEN no_inject THEN FALSE ELSE COALESCE(CAST(?5 AS BOOLEAN), auto_inject_review) END,
     reviewer_model = COALESCE(CAST(?6 AS TEXT), reviewer_model),
     failure_reason = COALESCE(NULLIF(CAST(?7 AS TEXT), ''), failure_reason),
     cancelled_by = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), cancelled_by),
@@ -1412,7 +1507,7 @@ UPDATE review_run SET
     verdict = COALESCE(NULLIF(CAST(?2 AS TEXT), ''), verdict),
     body = COALESCE(CAST(?3 AS TEXT), body),
     github_review_id = COALESCE(CAST(?4 AS TEXT), github_review_id),
-    auto_inject_review = COALESCE(CAST(?5 AS BOOLEAN), auto_inject_review),
+    auto_inject_review = CASE WHEN no_inject THEN FALSE ELSE COALESCE(CAST(?5 AS BOOLEAN), auto_inject_review) END,
     failure_reason = COALESCE(NULLIF(CAST(?6 AS TEXT), ''), failure_reason),
     cancelled_by = COALESCE(NULLIF(CAST(?7 AS TEXT), ''), cancelled_by),
     launch_id = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), launch_id),
@@ -1498,7 +1593,7 @@ UPDATE review_run SET
     verdict = COALESCE(NULLIF(CAST(?2 AS TEXT), ''), verdict),
     body = COALESCE(CAST(?3 AS TEXT), body),
     github_review_id = COALESCE(CAST(?4 AS TEXT), github_review_id),
-    auto_inject_review = COALESCE(CAST(?5 AS BOOLEAN), auto_inject_review),
+    auto_inject_review = CASE WHEN no_inject THEN FALSE ELSE COALESCE(CAST(?5 AS BOOLEAN), auto_inject_review) END,
     failure_reason = COALESCE(NULLIF(CAST(?6 AS TEXT), ''), failure_reason),
     cancelled_by = COALESCE(NULLIF(CAST(?7 AS TEXT), ''), cancelled_by),
     launch_id = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), launch_id),

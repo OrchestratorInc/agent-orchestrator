@@ -484,6 +484,15 @@ func TestReviewsTriggerForwardsExplicitRerun(t *testing.T) {
 	}
 }
 
+func TestReviewsTriggerForwardsNoInject(t *testing.T) {
+	svc := &fakeReviewService{}
+	srv := newReviewTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"noInject":true}`)
+	if status != http.StatusCreated || !svc.triggerRequest.NoInject || svc.triggerRequest.EnableAutoInject {
+		t.Fatalf("no-inject request = %+v, status=%d body=%s", svc.triggerRequest, status, body)
+	}
+}
+
 func TestReviewsTriggerForwardsAgentPolicyAndReportsAutoInject(t *testing.T) {
 	svc := &fakeReviewService{autoInjectEnabled: true}
 	srv := newReviewTestServer(t, svc)

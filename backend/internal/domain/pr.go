@@ -114,6 +114,11 @@ type PullRequest struct {
 	// provider's thread-window cap, so stored thread rows are a partial view.
 	ReviewPartial bool
 	AutoInjectCI  bool
+	// ReviewOnly marks a PR attached only so a --no-inject review could run on
+	// it. The session that started the review does not own it, so it receives
+	// no CI, review, or merge-conflict nudges and the PR does not count toward
+	// the session's completion (#6810). Only SetPRReviewOnly writes it.
+	ReviewOnly bool
 
 	// Details is the PR's description, labels, requested reviewers and commits
 	// from the latest observation. It is a write carrier: nil means the

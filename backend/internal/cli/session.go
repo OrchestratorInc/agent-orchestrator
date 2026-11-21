@@ -86,6 +86,7 @@ type sessionDTO struct {
 	// WorkspaceCleanup is the recorded teardown outcome of a terminated
 	// session's workspace, empty when none has been recorded.
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
+	AutoInjectReview bool   `json:"autoInjectReview"`
 }
 
 type sessionArtifactDTO struct {
@@ -1355,6 +1356,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"issue", sess.IssueID},
 		{"branch", formatBranchState(sess)},
 		{"terminated", fmt.Sprintf("%t", sess.IsTerminated)},
+		{"review auto-inject", fmt.Sprintf("%t", sess.AutoInjectReview)},
 	}
 	for _, field := range fields {
 		if field[1] == "" {

@@ -1006,8 +1006,8 @@ func (r reviewPRRefresher) FindBranchPRs(ctx context.Context, workerID domain.Se
 	return reviewsvc.BranchPRs{Own: found.Own, OtherAuthor: found.OtherAuthor}, err
 }
 
-func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {
-	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false})
+func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string, reviewOnly bool) error {
+	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false, KeepReviewOnly: true, ReviewOnly: reviewOnly})
 	var owned ports.PRClaimedByActiveSessionError
 	switch {
 	case err == nil:

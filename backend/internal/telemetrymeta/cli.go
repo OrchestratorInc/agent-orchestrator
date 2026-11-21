@@ -185,6 +185,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao remote-host require-device-credentials": {},
 	"ao render":                                 {},
 	"ao review":                                 {},
+	"ao review auto-inject":                     {},
 	"ao review cancel":                          {},
 	"ao review ls":                              {},
 	"ao review post-github":                     {},

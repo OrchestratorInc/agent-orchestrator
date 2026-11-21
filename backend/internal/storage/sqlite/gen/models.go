@@ -575,6 +575,7 @@ type PR struct {
 	ProviderID               string
 	AuthorAvatarURL          string
 	ReviewPartial            bool
+	ReviewOnly               bool
 	HeadFromFork             bool
 	HeadIsDefaultBranch      bool
 }
@@ -740,6 +741,7 @@ type ReviewRun struct {
 	WorkerNoticeAttempts    int64
 	WorkerNoticeError       string
 	WorkerNoticeAttemptedAt sql.NullTime
+	NoInject                bool
 	FailureReason           domain.ReviewFailureReason
 	CancelledBy             domain.ReviewCancelledBy
 	LaunchID                string

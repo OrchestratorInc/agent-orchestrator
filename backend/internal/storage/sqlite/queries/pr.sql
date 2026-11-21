@@ -7,11 +7,12 @@ INSERT INTO pr (
     provider_state, provider_mergeable, provider_merge_state_status, html_url,
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
     metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial,
-    head_from_fork, head_is_default_branch, auto_inject_ci
+    head_from_fork, head_is_default_branch, review_only, auto_inject_ci
 )
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
+    ?, COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
+    review_only = pr.review_only OR excluded.review_only,
     number = excluded.number,
     -- A successful merge is authoritative and irreversible. A poll that
     -- fetched the old open state before that merge must not roll it back.
@@ -577,6 +578,9 @@ ON CONFLICT (url) DO UPDATE SET
     -- The PR follows its new owner's "Automatically fix CI failures" switch,
     -- not the previous owner's.
     auto_inject_ci = excluded.auto_inject_ci,
+    -- A review-only attachment belongs to the session that started the review;
+    -- a takeover by another session makes that session the PR's real owner.
+    review_only = CASE WHEN pr.session_id != excluded.session_id THEN FALSE ELSE pr.review_only END,
     state_changed_at = CASE
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
@@ -631,3 +635,6 @@ AND EXISTS (SELECT 1 FROM pr WHERE pr.url = sqlc.arg(pr_url)
 SELECT session_id, state_changed_at, updated_at
 FROM pr
 WHERE pr_state = ?;
+
+-- name: SetPRReviewOnly :execrows
+UPDATE pr SET review_only = ? WHERE url = ? AND session_id = ?;

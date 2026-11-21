@@ -238,6 +238,12 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 	if r.TriggerSource == "" {
 		r.TriggerSource = domain.ReviewTriggerManual
 	}
+	// Completion notices route through the requester ID. A --no-inject pass
+	// never reaches the worker, so a worker that triggered one gets no notice;
+	// another requester, such as an orchestrator, still does (#6810).
+	if r.NoInject && r.RequesterSessionID == r.SessionID {
+		r.RequesterSessionID = ""
+	}
 	err := s.qw.InsertReviewRun(ctx, gen.InsertReviewRunParams{
 		ID:                 r.ID,
 		ReviewID:           r.ReviewID,
@@ -255,6 +261,7 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 		CreatedAt:          r.CreatedAt,
 		AutoInjectReview:   r.AutoInjectReview,
 		ReviewerModel:      r.ReviewerModel,
+		NoInject:           r.NoInject,
 	})
 	if isSQLiteUnique(err) {
 		return fmt.Errorf("insert review run for session %s pr %s sha %s: %w", r.SessionID, r.PRURL, r.TargetSHA, domain.ErrDuplicateReviewRun)
@@ -740,6 +747,7 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		WorkerNoticeAttempts:    int(r.WorkerNoticeAttempts),
 		WorkerNoticeError:       r.WorkerNoticeError,
 		WorkerNoticeAttemptedAt: nullTimePtr(r.WorkerNoticeAttemptedAt),
+		NoInject:                r.NoInject,
 	}
 }
 
@@ -811,4 +819,74 @@ func (s *Store) ArchiveReviewsBySession(ctx context.Context, workerID domain.Ses
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.qw.ArchiveReviewsBySession(ctx, gen.ArchiveReviewsBySessionParams{SessionID: workerID, UpdatedAt: now})
+}
+
+// NoInjectAOReviewIDs returns the provider review ids of the completed AO
+// review passes on prURL that were started with --no-inject. Their observed
+// reviews and inline comments must never be delivered to the session (#6810).
+func (s *Store) NoInjectAOReviewIDs(ctx context.Context, prURL string) (map[string]bool, error) {
+	ids, err := s.qr.ListNoInjectReviewRunIDsByPR(ctx, prURL)
+	if err != nil {
+		return nil, fmt.Errorf("list no-inject AO reviews for %s: %w", prURL, err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
+
+// SuppressAOReviewInject marks the observed review and its inline comments for
+// githubReviewID on prURL as never deliverable. It covers rows the SCM
+// observer stored before the pass recorded its provider review id.
+func (s *Store) SuppressAOReviewInject(ctx context.Context, prURL, githubReviewID string) error {
+	if prURL == "" || githubReviewID == "" {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "suppress AO review inject", func(q *gen.Queries) error {
+		if err := q.SuppressPRCommentInjectByReview(ctx, gen.SuppressPRCommentInjectByReviewParams{PRURL: prURL, ReviewID: githubReviewID}); err != nil {
+			return err
+		}
+		return q.SuppressPRReviewInjectByReview(ctx, gen.SuppressPRReviewInjectByReviewParams{PRURL: prURL, ReviewID: githubReviewID})
+	})
+}
+
+// NoInjectAOReviewWindows returns when each --no-inject AO review pass on prURL
+// ran; a zero End means it still runs. What its reviewer posted then is never
+// delivered (#6810), whether or not the pass recorded its review id yet.
+func (s *Store) NoInjectAOReviewWindows(ctx context.Context, prURL string) ([]domain.NoInjectReviewWindow, error) {
+	rows, err := s.qr.ListNoInjectReviewRunWindowsByPR(ctx, prURL)
+	if err != nil {
+		return nil, fmt.Errorf("list no-inject AO review windows for %s: %w", prURL, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	out := make([]domain.NoInjectReviewWindow, 0, len(rows))
+	for _, r := range rows {
+		w := domain.NoInjectReviewWindow{Start: r.CreatedAt}
+		if r.EndedAt.Valid {
+			w.End = r.EndedAt.Time
+		}
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+// MarkReviewRunNoInject makes a running review pass never delivered, for a
+// --no-inject trigger that restarts it. It reports whether the run was still
+// running.
+func (s *Store) MarkReviewRunNoInject(ctx context.Context, id string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkReviewRunNoInject(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("mark review run %s no-inject: %w", id, err)
+	}
+	return n > 0, nil
 }

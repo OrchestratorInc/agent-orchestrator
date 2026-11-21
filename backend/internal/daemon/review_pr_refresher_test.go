@@ -45,7 +45,7 @@ func TestReviewPRRefresherClaimsWithoutTakeoverAndTranslatesErrors(t *testing.T)
 	}
 	for _, tc := range cases {
 		claimer := &fakeClaimer{err: tc.err}
-		err := reviewPRRefresher{sessions: claimer}.RefreshPR(context.Background(), "mer-1", "https://github.com/o/r/pull/1")
+		err := reviewPRRefresher{sessions: claimer}.RefreshPR(context.Background(), "mer-1", "https://github.com/o/r/pull/1", false)
 		if claimer.opts.AllowTakeover {
 			t.Fatal("refresh must never take a PR over from an active session")
 		}
@@ -82,5 +82,15 @@ func TestReviewPRRefresherKeepsBranchPRAuthorship(t *testing.T) {
 	found, err := reviewPRRefresher{sessions: &fakeClaimer{}}.FindBranchPRs(context.Background(), "mer-1")
 	if err != nil || strings.Join(found.Own, ",") != "own" || strings.Join(found.OtherAuthor, ",") != "other" {
 		t.Fatalf("found = %+v err = %v, want own and other-author PRs kept apart", found, err)
+	}
+}
+
+func TestReviewPRRefresherMarksNewReviewOnlyTargets(t *testing.T) {
+	claimer := &fakeClaimer{}
+	if err := (reviewPRRefresher{sessions: claimer}).RefreshPR(context.Background(), "mer-1", "https://github.com/o/r/pull/1", true); err != nil {
+		t.Fatal(err)
+	}
+	if !claimer.opts.ReviewOnly || !claimer.opts.KeepReviewOnly || claimer.opts.AllowTakeover {
+		t.Fatalf("claim policy = %+v, want a review-only attachment without takeover", claimer.opts)
 	}
 }
