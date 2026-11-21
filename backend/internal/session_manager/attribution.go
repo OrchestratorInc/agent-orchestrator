@@ -104,24 +104,30 @@ func (m *Manager) recordSpawnAttributionFor(ctx context.Context, project domain.
 	coAuthor := ""
 	if m.commitTrailerWanted(ctx, project) {
 		coAuthor = attribution.Bot.CoAuthor()
+	}
+	// Recorded even without a trailer: the row marks that this spawn decided,
+	// so workspace setup applies the decision even when the footer could not
+	// be settled. It also clears a trailer an earlier attempt recorded.
+	if m.store != nil && sessionID != "" {
 		if err := m.store.SetSessionCommitAttribution(ctx, sessionID, coAuthor); err != nil {
 			m.logger.Warn("attribution: record session choice", "sessionID", sessionID, "error", err)
 		}
-	} else {
-		m.forgetSessionCommitAttribution(ctx, sessionID)
 	}
 	m.recordPRFooterChoice(ctx, project, sessionID)
 	return coAuthor
 }
 
 // spawnAttributionDecided reports whether this spawn already recorded its
-// choice: a footer choice is written only by a spawn-time decision.
+// trailer choice, independently of whether its footer could be settled.
 func (m *Manager) spawnAttributionDecided(ctx context.Context, sessionID domain.SessionID) bool {
 	if m.store == nil || sessionID == "" {
 		return false
 	}
-	_, recorded, err := m.store.SessionPRFooter(ctx, sessionID)
-	return err == nil && recorded
+	decided, err := m.store.SessionAttributionDecided(ctx, sessionID)
+	if err != nil {
+		m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
+	}
+	return err == nil && decided
 }
 
 // recordPRFooterChoice keeps whether a starting session's agents sign PRs, so
@@ -210,28 +216,6 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 		if err := attribution.ConfigureWorktree(ctx, worktree, base, coAuthor); err != nil {
 			m.logger.Warn("attribution: configure worktree", "path", worktree, "error", err)
 		}
-	}
-}
-
-// forgetSessionCommitAttribution clears a trailer an earlier attempt of this
-// session recorded. A retry made after the beta or the project's switch was
-// turned off must not leave it behind, or a recreated worktree would add the
-// trailer back. That holds even when the earlier attempt failed before it
-// configured any worktree.
-func (m *Manager) forgetSessionCommitAttribution(ctx context.Context, sessionID domain.SessionID) {
-	if m.store == nil || sessionID == "" {
-		return
-	}
-	recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
-	if err != nil {
-		m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
-		return
-	}
-	if recorded == "" {
-		return
-	}
-	if err := m.store.SetSessionCommitAttribution(ctx, sessionID, ""); err != nil {
-		m.logger.Warn("attribution: clear session choice", "sessionID", sessionID, "error", err)
 	}
 }
 

@@ -375,6 +375,7 @@ type Store interface {
 	SessionCommitAttribution(ctx context.Context, id domain.SessionID) (string, error)
 	SetSessionPRFooter(ctx context.Context, id domain.SessionID, footer bool) error
 	SessionPRFooter(ctx context.Context, id domain.SessionID) (footer, recorded bool, err error)
+	SessionAttributionDecided(ctx context.Context, id domain.SessionID) (bool, error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
 	CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
 	CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)

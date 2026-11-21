@@ -287,7 +287,9 @@ func TestRetryWithAttributionOffForgetsATrailerRecordedBeforeAFailure(t *testing
 		t.Fatal(err)
 	}
 	// No hooks directory and no configured worktree: the first attempt
-	// stopped right after recording its choice.
+	// stopped right after recording its choice. The retry decides again
+	// before its prompt, as retryFailedChatSpawn does.
+	m.recordSpawnAttributionFor(ctx, domain.ProjectRecord{ID: "p"}, "s-1")
 	m.applyCommitAttribution(ctx, domain.ProjectRecord{ID: "p"}, "s-1", filepath.Join(root, "missing"), attributionFromSettings)
 	if got, _ := st.SessionCommitAttribution(ctx, "s-1"); got != "" {
 		t.Fatalf("recorded choice after the retry = %q, want none", got)
@@ -423,6 +425,43 @@ func TestSpawnAttributionIsDecidedOnceBeforeThePrompt(t *testing.T) {
 				t.Fatalf("commit trailer = %v, want %v", got, start)
 			}
 		})
+	}
+}
+
+// When the footer cannot be settled at spawn (a workspace whose repositories
+// cannot be listed), the spawn's trailer decision still holds through a
+// settings change, and the footer follows the settings later.
+func TestSpawnTrailerDecisionHoldsWhenTheFooterIsUnsettled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix git hook scripts")
+	}
+	ctx := context.Background()
+	root := t.TempDir()
+	wt := filepath.Join(root, "session", "mer-1")
+	attributionRepo(t, filepath.Join(root, "repo"), wt, "orchestrator/mer-1/root")
+	beta := true
+	m, st := attributionManager(t, root, &beta)
+	project := st.projects["mer"]
+	project.Kind = domain.ProjectKindWorkspace
+	project.RepoOriginURL = ""
+	st.projects["mer"] = project
+	// Only the spawn's footer lookup fails; the prompt's own lookup works.
+	st.workspaceRepoErr = errors.New("database is locked")
+	st.workspaceRepoErrOnce = true
+
+	if _, _, err := m.buildSpawnTexts(ctx, ports.SpawnConfig{Kind: domain.KindWorker, ProjectID: "mer", RequestedMode: domain.SessionModeChat}, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, recorded, _ := st.SessionPRFooter(ctx, "mer-1"); recorded {
+		t.Fatal("recorded a footer choice from a failed repository lookup")
+	}
+	beta = false
+	m.applyCommitAttribution(ctx, project, "mer-1", wt, attributionFromSettings)
+	if got, _ := st.SessionCommitAttribution(ctx, "mer-1"); got != attribution.Bot.CoAuthor() {
+		t.Fatalf("recorded trailer after the settings change = %q, want the spawn's", got)
+	}
+	if !strings.Contains(commitMessage(t, wt), "Co-authored-by: "+attribution.Bot.CoAuthor()) {
+		t.Fatal("worktree lost the spawn's trailer")
 	}
 }
 

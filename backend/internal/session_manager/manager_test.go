@@ -56,6 +56,7 @@ type fakeStore struct {
 	conversations                      map[domain.SessionID]domain.ConversationRecord
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
 	workspaceRepoErr                   error
+	workspaceRepoErrOnce               bool // fail only the next lookup
 	commitAttributionMu                sync.Mutex
 	commitAttribution                  map[domain.SessionID]string
 	prFooter                           map[domain.SessionID]bool
@@ -103,8 +104,11 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	return r, ok, nil
 }
 func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
-	if f.workspaceRepoErr != nil {
-		return nil, f.workspaceRepoErr
+	if err := f.workspaceRepoErr; err != nil {
+		if f.workspaceRepoErrOnce {
+			f.workspaceRepoErr = nil
+		}
+		return nil, err
 	}
 	return f.workspaceRepo[projectID], nil
 }
@@ -136,6 +140,16 @@ func (f *fakeStore) SessionPRFooter(_ context.Context, id domain.SessionID) (foo
 	defer f.commitAttributionMu.Unlock()
 	footer, recorded = f.prFooter[id]
 	return footer, recorded, nil
+}
+
+// SessionAttributionDecided is true once either choice is written, as in the
+// store, where writing either one creates the session's row.
+func (f *fakeStore) SessionAttributionDecided(_ context.Context, id domain.SessionID) (bool, error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	_, trailer := f.commitAttribution[id]
+	_, footer := f.prFooter[id]
+	return trailer || footer, nil
 }
 func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	f.num++
