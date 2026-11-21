@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 )
 
 type browserStatusDTO struct {
@@ -693,18 +695,57 @@ func (c *commandContext) browserAction(ctx context.Context, action string, args 
 		return browserCommandResponseDTO{}, err
 	}
 	var out browserCommandResponseDTO
-	err = c.doJSONPathWithHeaders(
+	err = c.doJSONPathWithHeadersAndTimeout(
 		ctx,
 		http.MethodPost,
 		"/api/v1/browser/commands",
 		browserCommandRequestDTO{SessionID: sessionID, Action: action, Args: args},
 		&out,
 		map[string]string{browserCapabilityHeader: capability},
+		browserCommandTimeout,
 	)
 	return out, err
 }
 
+// browserCommandTimeout outlasts the daemon's budget for a browser command,
+// which includes waiting for the user to approve a risky action, so a slow
+// decision reaches the agent as a clean deny, never as a CLI timeout.
+const browserCommandTimeout = approval.BrowserCommandBudget + 10*time.Second
+
+// approvalHintDelay is how long a possibly-gated command runs before the CLI
+// says it may be waiting for the user.
+var approvalHintDelay = 3 * time.Second
+
+// mayWaitForApproval reports actions the daemon can hold for the user's
+// approval (clicks, act clicks, Enter).
+func mayWaitForApproval(action string, args map[string]any) bool {
+	switch action {
+	case "click", "dblclick":
+		return true
+	case "press":
+		key, _ := args["key"].(string)
+		return strings.EqualFold(strings.TrimSpace(key), "enter")
+	case "act":
+		verb, _ := args["action"].(string)
+		return verb == "" || verb == "click" || verb == "dblclick"
+	}
+	return false
+}
+
 func (c *commandContext) runBrowserAction(cmd *cobra.Command, action string, args map[string]any, jsonOutput bool) error {
+	if mayWaitForApproval(action, args) {
+		done, finished := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(finished)
+			select {
+			case <-time.After(approvalHintDelay):
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "ao browser: still waiting. If this action pays, sends, posts, or deletes, it is waiting for the user's approval in Orchestrator (up to "+approval.BrowserWaitTimeout.String()+"; no answer means deny).")
+			case <-done:
+			}
+		}()
+		// Join the hint so it never writes after the command's own output.
+		defer func() { close(done); <-finished }()
+	}
 	resp, err := c.browserAction(cmd.Context(), action, args)
 	if err != nil {
 		return err

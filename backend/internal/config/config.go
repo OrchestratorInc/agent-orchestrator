@@ -535,7 +535,12 @@ func Load() (Config, error) {
 		cfg.CloudControlPlaneURL = u
 	}
 
-	if raw := strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_URL")); raw != "" {
+	// An AO session process carries the service URL (so `ao browser` knows a
+	// remote browser exists) but not its token: its daemon holds the token and
+	// gates every command. Such a process never serves the agent browser.
+	sessionProcess := strings.TrimSpace(os.Getenv("AO_BROWSER_CAPABILITY")) != "" &&
+		strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_TOKEN")) == ""
+	if raw := strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_URL")); raw != "" && !sessionProcess {
 		u, err := parseAgentBrowserURL(raw)
 		if err != nil {
 			return Config{}, err

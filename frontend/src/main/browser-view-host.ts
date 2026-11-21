@@ -1,3 +1,5 @@
+import { describePanelApprovalTarget } from "./browser-approval-panel";
+import { APPROVAL_FOCUS_SCRIPT } from "../shared/browser-approval-describe";
 import {
   sanitizeBrowserTitle,
   sanitizeBrowserURL,
@@ -338,6 +340,36 @@ export function shouldHandleAppShortcutInBrowserContext(
   );
 }
 
+// Isolated world for the approval gate's element read; page scripts cannot
+// patch the DOM APIs it uses.
+const APPROVAL_DESCRIBE_WORLD_ID = 1013;
+
+// Input actions the approval binding (tab, document, element) is checked for.
+// type is bound because a typed line break presses Enter in the field.
+const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press", "type"]);
+
+type ApprovalBinding = { tabId: string; document: number; ref?: string; focus?: string };
+
+// The optional element crop in an approval prompt never holds up a command.
+const APPROVAL_CAPTURE_TIMEOUT_MS = 2_000;
+
+/** The daemon's record of what the user approved, if this action was gated. */
+function parseApprovalBinding(value: unknown): ApprovalBinding | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { tabId, document, ref } = value as Record<string, unknown>;
+  if (typeof tabId !== "string" || typeof document !== "number") {
+    // A binding the runtime cannot read must not be ignored.
+    return { tabId: "", document: -1 };
+  }
+  const focus = (value as Record<string, unknown>).focus;
+  return {
+    tabId,
+    document,
+    ...(typeof ref === "string" && ref ? { ref: ref.replace(/^@/, "") } : {}),
+    ...(typeof focus === "string" && focus ? { focus } : {}),
+  };
+}
+
 type BrowserWebContents = Pick<
   WebContents,
   | "id"
@@ -347,6 +379,7 @@ type BrowserWebContents = Pick<
   | "clearHistory"
   | "debugger"
   | "executeJavaScript"
+  | "executeJavaScriptInIsolatedWorld"
   | "focus"
   | "findInPage"
   | "mainFrame"
@@ -4462,6 +4495,7 @@ export function createBrowserViewHost(
           await openTab(session, undefined, true);
         }
         const entry = activeEntry(session);
+        const approvalBinding = parseApprovalBinding(args.approvalBinding);
         const runNative = async (
           nativeAction: string,
           nativeArgs: Record<string, unknown> = {},
@@ -4484,6 +4518,35 @@ export function createBrowserViewHost(
               const targetEntry = activeEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
+              // An approved action may only land on the tab, document, and (for
+              // act) element the user approved; checked in the same queued
+              // operation that dispatches it.
+              if (approvalBinding && APPROVAL_BOUND_ACTIONS.has(nativeAction)) {
+                const ref = typeof nativeArgs.ref === "string" ? nativeArgs.ref.replace(/^@/, "") : undefined;
+                if (
+                  approvalBinding.tabId !== targetEntry.tabId ||
+                  approvalBinding.document !== targetEntry.documentGeneration ||
+                  (approvalBinding.ref !== undefined && ref !== undefined && approvalBinding.ref !== ref)
+                ) {
+                  throw browserError(
+                    "BROWSER_TARGET_CHANGED",
+                    "The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.",
+                  );
+                }
+                // Enter lands on whatever has focus: it must still be the
+                // element the user approved.
+                if (nativeAction === "press" && approvalBinding.focus) {
+                  const focused = await targetEntry.view.webContents
+                    .executeJavaScriptInIsolatedWorld(APPROVAL_DESCRIBE_WORLD_ID, [{ code: APPROVAL_FOCUS_SCRIPT }])
+                    .catch(() => "");
+                  if (focused !== approvalBinding.focus) {
+                    throw browserError(
+                      "BROWSER_TARGET_CHANGED",
+                      "Focus moved while the action waited for approval, so Enter would not reach what the user approved. Focus the field again and retry.",
+                    );
+                  }
+                }
+              }
               const targetBeforeAction = agentActionTarget(targetEntry);
               const activationRevision = session.activationRevision;
               let result: Record<string, unknown>;
@@ -5073,6 +5136,67 @@ export function createBrowserViewHost(
             return {
               ...native,
               messages: [...native.messages, ...browserSignalMessages(session)],
+            };
+          }
+          case "describe": {
+            // Internal: the daemon's approval gate asks what a click, act,
+            // or Enter would act on before it lets the action run.
+            const describeEntry = activeEntry(session);
+            await describeEntry.ready;
+            const contents = describeEntry.view.webContents;
+            const describeDocument = describeEntry.documentGeneration;
+            const described = await describePanelApprovalTarget({
+              action: typeof args.action === "string" ? args.action : "",
+              ref: typeof args.ref === "string" ? args.ref : undefined,
+              instruction:
+                typeof args.instruction === "string" ? args.instruction : undefined,
+              nth:
+                typeof args.nth === "number" && Number.isFinite(args.nth)
+                  ? Math.trunc(args.nth)
+                  : undefined,
+              snapshot: async () => {
+                const result = await runNative("snapshot", { interactive: true });
+                // The facts below come from describeEntry; a snapshot of
+                // another tab must not be merged with them.
+                if (result.target.tabId !== describeEntry.tabId) {
+                  throw browserError(
+                    "BROWSER_TARGET_MISMATCH",
+                    "The active tab changed while describing the action",
+                  );
+                }
+                return { refs: result.refs };
+              },
+              page: {
+                url: contents.getURL(),
+                title: contents.getTitle(),
+                evaluate: (code) =>
+                  contents.executeJavaScriptInIsolatedWorld(APPROVAL_DESCRIBE_WORLD_ID, [{ code }]),
+                capture: async (rect) => {
+                  let timer: ReturnType<typeof setTimeout> | undefined;
+                  const bounded = new Promise<undefined>((resolve) => {
+                    timer = setTimeout(() => resolve(undefined), APPROVAL_CAPTURE_TIMEOUT_MS);
+                    signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+                  });
+                  try {
+                    const image = await Promise.race([contents.capturePage(rect), bounded]);
+                    return !image || image.isEmpty() ? undefined : image.toPNG().toString("base64");
+                  } finally {
+                    if (timer) clearTimeout(timer);
+                  }
+                },
+              },
+            });
+            const boundRef =
+              described.resolvedRef ??
+              (typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined);
+            return {
+              ...described,
+              binding: {
+                tabId: describeEntry.tabId,
+                document: describeDocument,
+                ...(boundRef ? { ref: boundRef } : {}),
+                ...(described.focus ? { focus: described.focus } : {}),
+              },
             };
           }
           default:

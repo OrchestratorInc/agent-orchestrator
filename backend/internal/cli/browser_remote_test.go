@@ -203,3 +203,66 @@ func TestBrowserRemoteAcceptsBase64PayloadsPast64MiB(t *testing.T) {
 		t.Fatalf("saved file size=%d err=%v, want %d", info.Size(), statErr, len(content))
 	}
 }
+
+// TestBrowserRemoteGoesThroughTheDaemonGate covers the session environment a
+// self-hosted host now gives agents: the service URL without its token. Every
+// command goes to the agent's own daemon, which runs the approval gate.
+func TestBrowserRemoteGoesThroughTheDaemonGate(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	dir := t.TempDir()
+	saved := filepath.Join(dir, "page.png")
+	var got struct {
+		path, capability string
+		body             map[string]any
+	}
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.path = r.URL.Path
+		got.capability = r.Header.Get(browserCapabilityHeader)
+		got.body = map[string]any{}
+		_ = json.NewDecoder(r.Body).Decode(&got.body)
+		w.Header().Set("Content-Type", "application/json")
+		args, _ := got.body["args"].([]any)
+		if len(args) > 0 && args[0] == "click" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden","code":"BROWSER_ACTION_DENIED","message":"The user denied this action: Click \"Pay\". It was not performed.","requestId":"r1"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"output": "saved", "files": map[string]string{saved: "aGVsbG8="}})
+	}))
+	t.Cleanup(daemon.Close)
+	writeRunFileFor(t, cfg, daemon)
+	t.Setenv(envAgentBrowserURL, "http://127.0.0.1:9") // the service itself is never contacted
+	t.Setenv(envAgentBrowserToken, "")
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, _, err := executeCLIRoot(t, deps, "browser", "screenshot", saved)
+	if err != nil || !strings.Contains(out, "saved") {
+		t.Fatalf("screenshot out=%q err=%v", out, err)
+	}
+	if got.path != "/api/v1/browser/remote-commands" || got.capability != "capability-1" || got.body["sessionId"] != "ao-1" {
+		t.Fatalf("daemon request = %+v", got)
+	}
+	if data, _ := os.ReadFile(saved); string(data) != "hello" {
+		t.Fatalf("returned file = %q", data)
+	}
+
+	_, _, err = executeCLIRoot(t, deps, "browser", "click", "@e2")
+	if err == nil || !strings.Contains(err.Error(), "BROWSER_ACTION_DENIED") {
+		t.Fatalf("click err = %v", err)
+	}
+}
+
+func TestBrowserRemoteDaemonModeFailsClosed(t *testing.T) {
+	setBrowserIdentity(t)
+	setConfigEnv(t) // no run file: the daemon is not running
+	service := remoteBrowserServer(t, &remoteBrowserCapture{}, func(w http.ResponseWriter) {
+		t.Error("the CLI reached the browser service directly")
+	})
+	t.Setenv(envAgentBrowserURL, service.URL)
+	t.Setenv(envAgentBrowserToken, "")
+	_, _, err := executeCLIRoot(t, Deps{ProcessAlive: func(int) bool { return true }}, "browser", "click", "@e2")
+	if err == nil || !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("err = %v", err)
+	}
+}

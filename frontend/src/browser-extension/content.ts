@@ -23,17 +23,52 @@ import {
 	waitFor,
 	type WaitKind,
 } from "./dom-actions";
+import { describeApprovalTarget } from "../shared/browser-approval-describe";
 import { BridgeError, isRecord } from "./protocol";
 import { buildSnapshot, RefRegistry } from "./snapshot";
 
 export type ContentRequest = { aoBridge: 1; op: string; [key: string]: unknown };
 export type ContentResponse = { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } };
 
+// One id per document: a navigation (or a replaced document) gets a new one,
+// so an approval bound to the old document cannot act on the new one.
+const documentIds = new WeakMap<Document, string>();
+function documentId(document: Document): string {
+	let id = documentIds.get(document);
+	if (!id) {
+		id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+		documentIds.set(document, id);
+	}
+	return id;
+}
+
+// Focus ids the approval gate checks: Enter goes wherever focus is, so an
+// approved Enter must still find the element that was focused when described.
+const focusIds = new WeakMap<Element, string>();
+function focusIdOf(document: Document, mark: boolean): string {
+	const el = document.activeElement;
+	if (!el || el === document.body) return "";
+	let id = focusIds.get(el);
+	if (!id && mark) {
+		id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+		focusIds.set(el, id);
+	}
+	return id ?? "";
+}
+
 export function handleContentRequest(document: Document, registry: RefRegistry, request: ContentRequest): unknown | Promise<unknown> {
 	const element = () => registry.resolve(String(request.ref ?? ""));
 	switch (request.op) {
 		case "ping":
-			return { url: document.location?.href ?? "", title: document.title, visibility: document.visibilityState };
+			return {
+				url: document.location?.href ?? "",
+				title: document.title,
+				visibility: document.visibilityState,
+				documentId: documentId(document),
+				focusId: focusIdOf(document, false),
+				viewport: { width: document.defaultView?.innerWidth ?? 0, height: document.defaultView?.innerHeight ?? 0 },
+				dpr: document.defaultView?.devicePixelRatio ?? 1,
+			};
 		case "snapshot": {
 			const result = buildSnapshot(document, registry, { interactive: request.interactive === true });
 			return { snapshot: result.snapshot, refs: result.refs, truncated: result.truncated };
@@ -91,6 +126,21 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 			return { annotations: annotations(document, registry), dpr: document.defaultView?.devicePixelRatio ?? 1 };
 		case "frameOffset":
 			return frameOffset(element());
+		case "describe":
+			// The approval gate's read of what an action would act on.
+			return {
+				facts: request.ref
+					? describeApprovalTarget(document, { mode: "element" }, element())
+					: describeApprovalTarget(document, { mode: "focused" }),
+				viewport: { width: document.defaultView?.innerWidth ?? 0, height: document.defaultView?.innerHeight ?? 0 },
+				dpr: document.defaultView?.devicePixelRatio ?? 1,
+				documentId: documentId(document),
+				// The described document's own address: in a selected frame this is
+				// the frame's site, which the approval is scoped to.
+				url: document.location?.href ?? "",
+				title: document.title,
+				...(request.ref ? {} : { focusId: focusIdOf(document, true) }),
+			};
 		default:
 			throw new BridgeError("INVALID_ARGUMENT", `Unknown content operation: ${request.op}`);
 	}

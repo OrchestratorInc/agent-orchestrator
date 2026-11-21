@@ -6647,6 +6647,62 @@ describe("browser human pointer and annotated screenshots", () => {
 		return { ...setupHost(runtime), runtime };
 	}
 
+	it("dispatches an approved action only on the tab, document, and element approved", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, {
+			viewId: ensure.viewId,
+			revision: 1,
+			rect: { x: 0, y: 0, width: 10, height: 10 },
+			visible: true,
+		});
+		const clicks = () =>
+			(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "click").length;
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const tabId = tabs.activeTabId;
+
+		for (const binding of [
+			{ tabId, document: 99, ref: "e1" },
+			{ tabId: "t-other", document: 0, ref: "e1" },
+			{ tabId, document: 0, ref: "e7" },
+			{ nonsense: true },
+		]) {
+			await expect(host.execute("sess-1", "click", { ref: "e1", approvalBinding: binding })).rejects.toMatchObject({
+				code: "BROWSER_TARGET_CHANGED",
+			});
+		}
+		expect(clicks()).toBe(0);
+		await host.execute("sess-1", "click", { ref: "e1", approvalBinding: { tabId, document: 0, ref: "e1" } });
+		expect(clicks()).toBe(1);
+	});
+
+	it("dispatches an approved line-break type only on the tab, document, and element approved", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, {
+			viewId: ensure.viewId,
+			revision: 1,
+			rect: { x: 0, y: 0, width: 10, height: 10 },
+			visible: true,
+		});
+		const typed = () =>
+			(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "type").length;
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const tabId = tabs.activeTabId;
+		for (const binding of [
+			{ tabId, document: 99, ref: "e1" },
+			{ tabId: "t-other", document: 0, ref: "e1" },
+			{ tabId, document: 0, ref: "e7" },
+		]) {
+			await expect(host.execute("sess-1", "type", { ref: "e1", text: "4111\n", approvalBinding: binding })).rejects.toMatchObject({
+				code: "BROWSER_TARGET_CHANGED",
+			});
+		}
+		expect(typed()).toBe(0);
+		await host.execute("sess-1", "type", { ref: "e1", text: "4111\n", approvalBinding: { tabId, document: 0, ref: "e1" } });
+		expect(typed()).toBe(1);
+	});
+
 	it("forwards the human pointer option for clicks and drags only when asked", async () => {
 		const { host, runtime, invoke, emit } = setupPointerHost();
 		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };

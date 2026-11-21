@@ -10,8 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 )
 
 type browserRequestCapture struct {
@@ -820,5 +823,76 @@ func TestBrowserPreservesDaemonErrorEnvelopeAndRequestID(t *testing.T) {
 	if !strings.Contains(err.Error(), "Session is terminated (SESSION_TERMINATED)") ||
 		!strings.Contains(err.Error(), "[request req-browser-1]") {
 		t.Fatalf("error did not preserve daemon envelope: %v", err)
+	}
+}
+
+func TestBrowserClickSaysWhenItMayBeWaitingForApproval(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	previous := approvalHintDelay
+	approvalHintDelay = 20 * time.Millisecond
+	t.Cleanup(func() { approvalHintDelay = previous })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body browserCommandRequestDTO
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Action == "click" {
+			time.Sleep(150 * time.Millisecond)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if body.Action == "click" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"error":"forbidden","code":"BROWSER_ACTION_DENIED","message":"The user denied this action: Click \"Place order\" on shop.example. It was not performed.","requestId":"req-1"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"requestId":"r1","sessionId":"ao-1","action":"`+body.Action+`","result":{"text":"ok"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	_, stderr, err := executeCLI(t, deps, "browser", "click", "e4")
+	if err == nil || !strings.Contains(err.Error(), "BROWSER_ACTION_DENIED") || !strings.Contains(err.Error(), "Place order") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(stderr, "waiting for the user's approval in Orchestrator") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	_, stderr, err = executeCLI(t, deps, "browser", "snapshot")
+	if err != nil || strings.Contains(stderr, "approval") {
+		t.Fatalf("snapshot err=%v stderr=%q", err, stderr)
+	}
+}
+
+func TestMayWaitForApproval(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		args   map[string]any
+		want   bool
+	}{
+		{"click", nil, true},
+		{"press", map[string]any{"key": "Enter"}, true},
+		{"press", map[string]any{"key": "Tab"}, false},
+		{"act", map[string]any{"instruction": "x"}, true},
+		{"act", map[string]any{"instruction": "x", "action": "fill"}, false},
+		{"snapshot", nil, false},
+	} {
+		if got := mayWaitForApproval(tc.action, tc.args); got != tc.want {
+			t.Errorf("%s %v = %v", tc.action, tc.args, got)
+		}
+	}
+}
+
+// TestBrowserTimeoutsNest keeps a slow approval decision a clean deny: the
+// approval wait ends before the daemon's command budget, which ends before
+// the CLI gives up. The approval wait also stays under the CLI's generic
+// two-minute command timeout and the remote-browser timeout, which other
+// browser callers (batch steps, self-hosted browsers) use.
+func TestBrowserTimeoutsNest(t *testing.T) {
+	wait := approval.BrowserWaitTimeout
+	if wait >= approval.BrowserCommandBudget || approval.BrowserCommandBudget >= browserCommandTimeout {
+		t.Fatalf("approval wait %s, daemon budget %s, CLI browser timeout %s must increase", wait, approval.BrowserCommandBudget, browserCommandTimeout)
+	}
+	if wait >= commandTimeout || wait >= remoteBrowserTimeout {
+		t.Fatalf("approval wait %s must stay below the CLI command timeout %s and remote browser timeout %s", wait, commandTimeout, remoteBrowserTimeout)
 	}
 }

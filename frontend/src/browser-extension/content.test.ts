@@ -134,4 +134,12 @@ describe("content operations", () => {
 		);
 		expect(() => handleContentRequest(document, registry, request("eval"))).toThrow(expect.objectContaining({ code: "INVALID_ARGUMENT" }));
 	});
+
+	it("describes with the document's own address, so a frame is scoped to its site", () => {
+		document.body.innerHTML = `<button id="b">Pay</button>`;
+		const registry = new RefRegistry();
+		const value = handleContentRequest(document, registry, { aoBridge: 1, op: "describe" }) as { url: string; documentId: string };
+		expect(value.url).toBe(document.location.href);
+		expect(value.documentId).toEqual(expect.any(String));
+	});
 });

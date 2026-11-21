@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -964,6 +965,23 @@ func Run(buildVersion string) (retErr error) {
 	// delay the daemon's first response.
 	sessionSearchSvc := startSessionSearch(ctx, store, cfg.StateDir, log)
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	// Consequential agent browser actions wait for the user; the policy and
+	// audit log live under the data dir.
+	var approvals controllers.ApprovalService
+	// A self-hosted host's agent browser is reached only through the gate:
+	// agents send their commands to this daemon, which holds the token.
+	if cfg.AgentBrowserURL != "" {
+		browserService.UseRemoteBrowser(browsersvc.NewHTTPRemoteBrowser(cfg.AgentBrowserURL, cfg.AgentBrowserToken))
+	}
+	if gate, err := approval.Open(filepath.Join(cfg.DataDir, "approvals")); err != nil {
+		// Fail closed: without the gate, actions that may need approval are
+		// refused, never run unasked.
+		log.Error("browser approvals unavailable; consequential browser actions are refused until it loads", "err", err)
+		browserService.ApprovalsUnavailable(err)
+	} else {
+		browserService.UseApprovals(gate, 0)
+		approvals = gate
+	}
 	var browserChrome controllers.BrowserChromeService
 	if chrome != nil {
 		browserService.UseChrome(chrome.broker, chrome.targets, log)
@@ -1364,6 +1382,7 @@ func Run(buildVersion string) (retErr error) {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Approvals:                approvals,
 		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		SessionSearch:            sessionSearchSvc,

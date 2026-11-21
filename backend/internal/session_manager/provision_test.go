@@ -1331,17 +1331,22 @@ func TestNativeHarnessSpawnPermissionDefault(t *testing.T) {
 
 func TestRuntimeEnvInjectsAgentBrowserConfigOnRemoteHosts(t *testing.T) {
 	manager := &Manager{
-		dataDir:           "/data",
-		agentBrowserURL:   "http://127.0.0.1:8080",
-		agentBrowserToken: "shared-secret",
-		executable:        func() (string, error) { return filepath.Join("/opt", "aod", "ao"), nil },
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		dataDir:         "/data",
+		agentBrowserURL: "http://127.0.0.1:8080",
+		executable:      func() (string, error) { return filepath.Join("/opt", "aod", "ao"), nil },
+		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	env := manager.runtimeEnv("mer-1", "mer", "", map[string]string{
-		EnvAgentBrowserURL: "http://hacked:1",
+		EnvAgentBrowserURL:   "http://hacked:1",
+		EnvAgentBrowserToken: "project-secret",
 	})
-	if env[EnvAgentBrowserURL] != "http://127.0.0.1:8080" || env[EnvAgentBrowserToken] != "shared-secret" {
-		t.Fatalf("agent browser env = %q / %q, want daemon-configured service", env[EnvAgentBrowserURL], env[EnvAgentBrowserToken])
+	if env[EnvAgentBrowserURL] != "http://127.0.0.1:8080" {
+		t.Fatalf("agent browser url = %q, want daemon-configured service", env[EnvAgentBrowserURL])
+	}
+	// The token stays with the daemon: agents reach the browser only through
+	// its approval gate.
+	if value, ok := env[EnvAgentBrowserToken]; ok && value != "" {
+		t.Fatalf("%s = %q reached the agent", EnvAgentBrowserToken, value)
 	}
 }
 
