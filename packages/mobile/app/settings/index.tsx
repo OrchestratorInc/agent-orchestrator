@@ -16,7 +16,8 @@ import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../../lib/config";
 import { classifyConnectionFailure } from "../../lib/connectionError";
-import { addDemoMachine, chooseDemoNetwork, DEMO_HOST_ID, DEMO_NETWORKS, removeDemoMachine, useDemoNetwork, type DemoNetwork } from "../../lib/demoMachine";
+import type { DemoNetwork } from "../../lib/demoMachine";
+import { demoMachine } from "../../lib/demoMachine/entry";
 import { describeDesktopStatus } from "../../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../../lib/discord";
 import { isEmulatedHost, setEmulatedMachines, useEmulatedMachines } from "../../lib/emulatedMachines";
@@ -306,14 +307,15 @@ export default function SettingsScreen() {
 	);
 }
 
-const DEMO_NETWORK_OPTIONS: readonly SettingsOption<DemoNetwork>[] = (Object.keys(DEMO_NETWORKS) as DemoNetwork[]).map((value) => ({ value, label: DEMO_NETWORKS[value].label }));
-
 /**
  * Development builds only. A paired machine answered from inside the app, with
  * generated projects, workers and chats, and a network delay to choose, for
- * checking the app on a slow link without a daemon.
+ * checking the app on a slow link without a daemon. Rendered only behind
+ * __DEV__, where demoMachine() always loads.
  */
 function DemoMachineSection({ onMachinesChanged }: { onMachinesChanged(): Promise<void> }) {
+	const { addDemoMachine, chooseDemoNetwork, DEMO_HOST_ID, DEMO_NETWORKS, removeDemoMachine, useDemoNetwork } = demoMachine()!;
+	const networkOptions: readonly SettingsOption<DemoNetwork>[] = (Object.keys(DEMO_NETWORKS) as DemoNetwork[]).map((value) => ({ value, label: DEMO_NETWORKS[value].label }));
 	const { hostStates, reloadConfig, reloadHostMetadata, switchHost } = useApp();
 	const network = useDemoNetwork();
 	const paired = hostStates.some((host) => host.hostId === DEMO_HOST_ID);
@@ -350,7 +352,7 @@ function DemoMachineSection({ onMachinesChanged }: { onMachinesChanged(): Promis
 			<SettingsPickerRow
 				icon="status"
 				label="Network"
-				options={DEMO_NETWORK_OPTIONS}
+				options={networkOptions}
 				selectedValue={network}
 				onValueChange={(next) => {
 					haptics.select();

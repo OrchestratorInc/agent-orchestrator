@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import { DEMO_HOST_ID } from "./demoMachine/id";
 import type { Endpoint } from "./endpoints";
 import type { MachineAppearance } from "./machineAppearance";
 import { clearConfig, loadConfig, saveConfig, type ServerConfig } from "./config";
@@ -94,9 +95,20 @@ function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<St
 	return write;
 }
 
+/**
+ * What the app may list and select. A release build hides the development
+ * demo machine: a Debug build of the same app id shares this storage, and the
+ * demo machine can never connect in a release build, which has no switch to
+ * turn it off. It stays stored, so the Debug build still has it.
+ */
+function visibleHosts(hosts: StoredHost[]): StoredHost[] {
+	if (typeof __DEV__ !== "undefined" && __DEV__ === true) return hosts;
+	return hosts.filter((h) => h.id !== DEMO_HOST_ID);
+}
+
 /** Every paired machine, most recently connected first. */
 export async function loadHosts(): Promise<Host[]> {
-	const stored = sortHosts(await readStored());
+	const stored = sortHosts(visibleHosts(await readStored()));
 	return Promise.all(
 		stored.map(async (h) => {
 			const fallbackToken = await SecureStore.getItemAsync(fallbackTokenKey(h.id));
@@ -183,7 +195,7 @@ export async function activeHost(): Promise<Host | null> {
 /** The selected machine without opening the token store. Cleanup uses this so
  * a keychain read failure cannot prevent the user from forgetting a server. */
 export async function activeHostMetadata(): Promise<HostMetadata | null> {
-	const hosts = sortHosts(await readStored());
+	const hosts = sortHosts(visibleHosts(await readStored()));
 	if (hosts.length === 0) return null;
 	const selected = await AsyncStorage.getItem(ACTIVE_HOST_KEY);
 	return hosts.find((h) => h.id === selected) ?? hosts[0];

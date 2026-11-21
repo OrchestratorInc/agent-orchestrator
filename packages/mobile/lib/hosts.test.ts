@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Endpoint } from "./endpoints";
 
 const plain = new Map<string, string>();
@@ -443,5 +443,34 @@ describe("fallback token", () => {
 
 		await removeHost("a");
 		expect(secure.get("ao.hostFallbackToken.a")).toBeUndefined();
+	});
+});
+
+// #8356 review: a Debug build of the same app id shares this storage. A release
+// build must not list or select the demo machine it saved, which can never
+// connect there, but must leave it stored for the Debug build.
+describe("the development demo machine in a release build", () => {
+	beforeEach(() => {
+		plain.clear();
+		secure.clear();
+		vi.resetModules();
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("is hidden from the list and the selection, and kept in storage", async () => {
+		const { DEMO_HOST_ID } = await import("./demoMachine/id");
+		const { activeHost, loadHosts, saveHost, setActiveHost } = await mod();
+		await saveHost({ id: "h_real", name: "Real", platform: "darwin", endpoints: [lan("192.168.1.42")], token: "pw", lastConnected: 1 });
+		await saveHost({ id: DEMO_HOST_ID, name: "Demo machine", platform: "darwin", endpoints: [], token: "demo-token", lastConnected: 2 });
+		await setActiveHost(DEMO_HOST_ID);
+
+		vi.stubGlobal("__DEV__", false);
+		expect((await loadHosts()).map((host) => host.id)).toEqual(["h_real"]);
+		expect((await activeHost())?.id).toBe("h_real");
+		expect(plain.get("ao.hosts")).toContain(DEMO_HOST_ID);
+
+		vi.stubGlobal("__DEV__", true);
+		expect((await loadHosts()).map((host) => host.id)).toEqual([DEMO_HOST_ID, "h_real"]);
+		expect((await activeHost())?.id).toBe(DEMO_HOST_ID);
 	});
 });

@@ -26,6 +26,11 @@ export function isDevBuild(): boolean {
 }
 
 let network: DemoNetwork = "fast";
+// The phone's own network, as the OS reports it (see DemoMachineManager). With
+// no network at all a real request fails, so the demo machine fails too:
+// otherwise its answers would count as proof the phone is online
+// (answeredRequests.ts) and hide "Phone offline" while it is paired.
+let phoneHasNoNetwork = false;
 const networkListeners = new Set<() => void>();
 let server: DemoServer | null = null;
 let ticker: ReturnType<typeof setInterval> | null = null;
@@ -42,6 +47,22 @@ export function demoNetwork(): DemoNetwork {
 export function setDemoNetwork(next: DemoNetwork): void {
 	network = next;
 	for (const listener of networkListeners) listener();
+}
+
+/**
+ * Whether the OS says the phone has no network at all (type NONE, as in
+ * airplane mode). A network the OS merely calls offline, like a Wi-Fi it never
+ * validated, still reaches a machine on the LAN, so it does not count.
+ */
+export function setDemoPhoneHasNoNetwork(next: boolean): void {
+	if (next === phoneHasNoNetwork) return;
+	phoneHasNoNetwork = next;
+	for (const listener of networkListeners) listener();
+}
+
+/** Whether a request to the demo machine fails right now: the machine is off, or the phone has no network. */
+function unreachable(): boolean {
+	return network === "offline" || phoneHasNoNetwork;
 }
 
 export function subscribeDemoNetwork(listener: () => void): () => void {
@@ -75,6 +96,7 @@ export function resetDemoServer(): void {
 	stopDemoServer();
 	chatPagesInFlight = 0;
 	network = "fast";
+	phoneHasNoNetwork = false;
 }
 
 function urlOf(input: unknown): string {
@@ -106,10 +128,10 @@ function jittered(ms: number): number {
 function travel(signal: AbortSignal | null | undefined, ms = jittered(DEMO_NETWORKS[network].latencyMs)): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) return reject(abortError());
-		const offline = network === "offline";
+		const offline = unreachable();
 		const timer = setTimeout(() => {
 			signal?.removeEventListener("abort", onAbort);
-			if (offline || network === "offline") reject(new TypeError("Network request failed"));
+			if (offline || unreachable()) reject(new TypeError("Network request failed"));
 			else resolve();
 		}, offline ? 200 : ms);
 		function onAbort() {
@@ -219,8 +241,9 @@ export async function demoEventStream(_input: unknown, init?: { signal?: AbortSi
 		// Frames arrive late on a slow link, but in order and at the same cadence.
 		delivery.send(() => push(encoder.encode(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`)));
 	});
-	// Switching to "Machine off" drops the stream, so the app's reconnect runs.
-	const stopNetwork = subscribeDemoNetwork(() => { if (network === "offline") close(); });
+	// Switching to "Machine off", or the phone losing its network, drops the
+	// stream, so the app's reconnect runs.
+	const stopNetwork = subscribeDemoNetwork(() => { if (unreachable()) close(); });
 	init?.signal?.addEventListener("abort", close, { once: true });
 
 	return {
@@ -267,7 +290,7 @@ export class DemoSocket {
 	private readonly delivery = orderedDelivery();
 
 	constructor(readonly url: string) {
-		this.stopNetwork = subscribeDemoNetwork(() => { if (network === "offline") this.close(); });
+		this.stopNetwork = subscribeDemoNetwork(() => { if (unreachable()) this.close(); });
 		travel(null).then(
 			() => {
 				if (this.readyState !== DemoSocket.CONNECTING) return;

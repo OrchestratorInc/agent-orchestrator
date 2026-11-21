@@ -1,10 +1,16 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
 const secureStore = vi.hoisted(() => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 vi.mock("expo-secure-store", () => secureStore);
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
+// Metro loads the demo machine through entry.ts's require; vitest cannot
+// require TypeScript, so hand it the same modules behind the same check.
+vi.mock("./entry", async () => {
+	const transport = await import("./transport");
+	return { demoMachine: () => null, demoTransport: () => (transport.isDevBuild() ? transport : null) };
+});
 
 import { getSessions } from "../api";
 import { getConversationPage, sendConversationMessage, streamGlobalConversationEvents } from "../chat/api";
@@ -13,7 +19,8 @@ import { UnreachableError } from "../connectionError";
 import { probeIdentity } from "../connectRuntime";
 import { addDemoMachine, removeDemoMachine } from "./machine";
 import { DEMO_HOST_ID, DEMO_HOSTNAME, DEMO_PORT, DemoServer } from "./server";
-import { DemoSocket, demoEventStream, demoFetch, demoNetwork, demoServer, installDemoTransport, isDemoUrl, orderedDelivery, resetDemoServer, setDemoNetwork } from "./transport";
+import { lastAnsweredRequestAt, resetAnsweredRequestsForTests } from "../answeredRequests";
+import { DemoSocket, demoEventStream, demoFetch, demoNetwork, demoServer, installDemoTransport, isDemoUrl, orderedDelivery, resetDemoServer, setDemoNetwork, setDemoPhoneHasNoNetwork } from "./transport";
 import { demoWorkspace } from "./workspace";
 
 const cfg: ServerConfig = { host: DEMO_HOSTNAME, httpPort: String(DEMO_PORT), muxPort: String(DEMO_PORT), secure: false, password: "demo-token", hostId: DEMO_HOST_ID };
@@ -177,6 +184,32 @@ describe("demo machine", () => {
 		await expect(getSessions(cfg, "all")).rejects.toBeInstanceOf(UnreachableError);
 	});
 
+	// #8356 review: its answers count as proof the phone is online, so in
+	// airplane mode they kept "Phone offline" from ever showing.
+	it("fails like any real machine while the phone has no network, without counting as an answer", async () => {
+		resetAnsweredRequestsForTests();
+		setDemoPhoneHasNoNetwork(true);
+		await expect(getSessions(cfg, "all")).rejects.toBeInstanceOf(UnreachableError);
+		expect(lastAnsweredRequestAt()).toBe(0);
+		setDemoPhoneHasNoNetwork(false);
+		await expect(getSessions(cfg, "all")).resolves.toMatchObject({ sessions: expect.any(Array) });
+		expect(lastAnsweredRequestAt()).toBeGreaterThan(0);
+	});
+
+	it("drops its live stream when the phone loses its network", async () => {
+		const stream = await demoEventStream(`http://${DEMO_HOSTNAME}:${DEMO_PORT}/api/v1/events?after=0`);
+		const reader = stream.body.getReader();
+		const next = reader.read();
+		setDemoPhoneHasNoNetwork(true);
+		await expect(next).resolves.toEqual({ done: true });
+	});
+
+	// #8356 review: account sync tries to claim a locally paired machine into
+	// Cloud. The demo machine must refuse, so it is never uploaded.
+	it("refuses the account-token claim, so account sync never uploads it", () => {
+		expect(demoServer().handle("POST", "/api/v1/remote-host/account-token", "{}").status).toBe(404);
+	});
+
 	it("holds every answer for the chosen network delay", async () => {
 		vi.useFakeTimers();
 		setDemoNetwork("bad");
@@ -314,6 +347,25 @@ describe("demo machine in a release build", () => {
 	it("does not pair the demo machine", async () => {
 		await addDemoMachine();
 		expect(secureStore.setItemAsync).not.toHaveBeenCalled();
+	});
+
+	// #8356 review: Metro does not tree-shake, so a static import from shipped
+	// code would put the fake daemon in the release bundle. Only entry.ts (whose
+	// require Metro drops when __DEV__ is false), the id, and types may be named.
+	it("is reached from shipped code only through entry.ts, the id, or a type import", () => {
+		const root = new URL("../../", import.meta.url);
+		const offenders: string[] = [];
+		for (const dir of ["app", "lib"]) {
+			for (const file of readdirSync(new URL(dir, root), { recursive: true }) as string[]) {
+				if (!/\.tsx?$/.test(file) || /\.test\.tsx?$/.test(file) || `${dir}/${file}`.startsWith("lib/demoMachine/")) continue;
+				const source = readFileSync(new URL(`${dir}/${file}`, root), "utf8");
+				for (const [statement] of source.matchAll(/^import [^;]*?from "[^"]*demoMachine[^"]*";/gms)) {
+					if (statement.startsWith("import type ") || /demoMachine\/(entry|id)"/.test(statement)) continue;
+					offenders.push(`${dir}/${file}: ${statement}`);
+				}
+			}
+		}
+		expect(offenders).toEqual([]);
 	});
 
 	it("shows its Settings section only behind __DEV__, and its manager returns early otherwise", () => {
