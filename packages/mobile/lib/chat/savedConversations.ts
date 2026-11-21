@@ -112,14 +112,27 @@ let creatingKey: Promise<AESEncryptionKey> | undefined;
 /** Moves on when the key is deleted, so a read under way then keeps no old key. */
 let keyGeneration = 0;
 
-/** The key pages are encrypted with; with `create`, made the first time a page is saved. */
+/**
+ * The key pages are encrypted with; with `create`, made the first time a page
+ * is saved, and made again when the stored one cannot be read.
+ */
 async function savedPagesKey(create: boolean): Promise<AESEncryptionKey | null> {
 	if (pageKey) return pageKey;
 	const generation = keyGeneration;
-	const stored = await SecureStore.getItemAsync(KEY_STORE_KEY, keyStoreOptions());
 	let key: AESEncryptionKey | null = null;
-	if (stored) key = await AESEncryptionKey.import(stored, "base64");
-	else if (create) {
+	try {
+		const stored = await SecureStore.getItemAsync(KEY_STORE_KEY, keyStoreOptions());
+		if (stored) key = await AESEncryptionKey.import(stored, "base64");
+	} catch (error) {
+		// A stored key that does not read back, as after a backup restored onto
+		// another phone (the value came along, the Keystore key that opens it did
+		// not), protects nothing: the pages under it cannot be opened either. A
+		// load treats it as nothing saved; a save drops it and makes a new one,
+		// so saving does not stop for good.
+		if (!create) throw error;
+		await SecureStore.deleteItemAsync(KEY_STORE_KEY, keyStoreOptions()).catch(() => {});
+	}
+	if (!key && create) {
 		creatingKey ??= (async () => {
 			const made = await AESEncryptionKey.generate();
 			await SecureStore.setItemAsync(KEY_STORE_KEY, await made.encoded("base64"), keyStoreOptions());
@@ -211,7 +224,8 @@ export function savedPageView(page: ConversationPage): ConversationPage {
 /**
  * The files to delete once `keep` is written: anything that is not a saved
  * page, a `.tmp` beside its chat's page (a replacement cut short, or one the
- * page has since replaced), pages older than SAVED_PAGE_KEEP_MS, and the pages
+ * page has since replaced; a readable one beside a page that does not open has
+ * taken its place by then, see keepReadableReplacements), pages older than SAVED_PAGE_KEEP_MS, and the pages
  * past `limit` chats or `budget` bytes in all, the least recently saved (by
  * modification time) going first. A `.tmp` alone stands in for its page.
  * `keep` always stays.
@@ -261,7 +275,37 @@ async function writeSaved(key: string, page: ConversationPage, now: number): Pro
 	const replacement = new File(directory, replacementOf(name));
 	replacement.write(await sealed.combined());
 	replacement.moveSync(new File(directory, name), { overwrite: true });
+	await keepReadableReplacements(directory, name, encryptionKey, now);
 	pruneSaved(directory, name, now);
+}
+
+/**
+ * Puts a `.tmp` in its page's place when the page beside it does not open and
+ * the `.tmp` does: a load already falls back to that `.tmp`, and pruning drops
+ * every `.tmp` beside its page as a replacement cut short, which would leave
+ * only the unreadable page. Only chats with a `.tmp` beside their page are
+ * read, which is rare. Never fails the write it follows.
+ */
+async function keepReadableReplacements(directory: Directory, keep: string, encryptionKey: AESEncryptionKey, now: number): Promise<void> {
+	try {
+		const files = directory.list().filter((item): item is File => item instanceof File);
+		const names = new Set(files.map((file) => file.name));
+		for (const replacement of files) {
+			const key = savedFileKey(replacement.name);
+			if (key === null || !replacement.name.endsWith(TMP_SUFFIX)) continue;
+			const pageName = replacement.name.slice(0, FILE_SUFFIX.length - TMP_SUFFIX.length);
+			if (pageName === keep || !names.has(pageName)) continue;
+			const page = new File(directory, pageName);
+			try {
+				if (await readSavedFile(page, key, encryptionKey, now)) continue;
+				if (await readSavedFile(replacement, key, encryptionKey, now)) replacement.moveSync(page, { overwrite: true });
+			} catch {
+				// Pruning drops the `.tmp`; the page loads as nothing saved.
+			}
+		}
+	} catch {
+		// Looked at again after the next write.
+	}
 }
 
 /** Applies savedPageEvictions to the directory. Never fails the write it follows. */
