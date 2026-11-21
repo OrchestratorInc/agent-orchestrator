@@ -676,25 +676,34 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 // so turns added in another app since the import stay in the visible history.
 // Once native preparation is checkpointed, retain the matching archive on
 // retries: later source turns need not exist in the pinned native copy. Kilo
-// refreshes its verified reserved copy until adoption, never the original.
+// and CodeWhale refresh their verified prepared copies until adoption.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
 	if source == nil || source.Adopted {
 		return nil
 	}
 	preparedKilo := rec.Harness == domain.HarnessKilocode && source.ResumeNativeID != ""
-	if !preparedKilo && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
+	preparedCodewhale := rec.Harness == domain.HarnessCodewhale && source.ResumeNativeID != ""
+	preparedNative := preparedKilo || preparedCodewhale
+	if !preparedNative && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
 		return nil
 	}
 	root, nativeID, cwd := source.ConfigDir, source.NativeID, source.CWD
 	paths := []string{rec.Metadata.NativeTranscriptPath}
-	if preparedKilo {
+	if preparedNative {
 		if source.ResumeConfigDir == "" || source.ResumeCwd == "" {
-			return errors.New("prepared Kilo history has an incomplete binding")
+			return errors.New("prepared native history has an incomplete binding")
 		}
 		root, nativeID, cwd = source.ResumeConfigDir, source.ResumeNativeID, source.ResumeCwd
-		// Kilo's reader takes the native row ID, not its db/id locator path.
-		paths = []string{nativeID}
+		if preparedKilo {
+			// Kilo's reader takes the row ID, not its db/id locator path.
+			paths = []string{nativeID}
+		} else {
+			if source.ResumeTranscriptPath == "" {
+				return errors.New("prepared CodeWhale history has no snapshot path")
+			}
+			paths = []string{source.ResumeTranscriptPath}
+		}
 	}
 	dests, err := s.destinations(ctx)
 	if err != nil {
@@ -718,11 +727,11 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if fresh.nativeID != nativeID {
 		return errors.New("the source no longer holds this conversation")
 	}
-	if preparedKilo && canonical(fresh.cwd) != canonical(cwd) {
-		return errors.New("prepared Kilo history no longer matches its workspace")
+	if preparedNative && canonical(fresh.cwd) != canonical(cwd) {
+		return errors.New("prepared native history no longer matches its workspace")
 	}
 	if len(fresh.messages) == 0 {
-		if !preparedKilo && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == cwd {
+		if !preparedNative && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == cwd {
 			return nil // A native server-side conversation need not expose a transcript.
 		}
 		return errors.New("the source no longer holds readable conversation history")

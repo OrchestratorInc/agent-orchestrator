@@ -78,13 +78,13 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 	if ref.TranscriptPath != "" {
 		rec.Metadata.NativeTranscriptPath = ref.TranscriptPath
 	}
-	// Kilo publishes a reserved graph before AO checkpoints its identity. The
-	// original can advance during publication or a failed checkpoint; display
-	// only the verified prepared conversation, and fail before runtime launch if
-	// its archive cannot be refreshed. Other preparers retain their own policy.
-	if rec.Harness == domain.HarnessKilocode && !rec.Metadata.ImportSource.Adopted && m.importArchive != nil {
+	// Kilo and CodeWhale publish stable copies before AO checkpoints identity.
+	// A retry may recover an older copy after the original advances. Refresh
+	// from that verified prepared identity, never from the newer original, and
+	// refuse launch if the matching displayed archive cannot be committed.
+	if (rec.Harness == domain.HarnessKilocode || rec.Harness == domain.HarnessCodewhale) && !rec.Metadata.ImportSource.Adopted && m.importArchive != nil {
 		if err := m.importArchive.RefreshArchive(ctx, rec); err != nil {
-			return rec, fmt.Errorf("refresh prepared Kilo history: %w", err)
+			return rec, fmt.Errorf("refresh prepared native history: %w", err)
 		}
 	}
 	return rec, nil

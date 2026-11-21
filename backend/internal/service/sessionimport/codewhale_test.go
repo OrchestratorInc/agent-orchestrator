@@ -87,3 +87,50 @@ func TestCodewhaleScanRefusesNativeHistoryAndApprovalSidecars(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedCodewhaleArchiveUsesExactCopiedBinding(t *testing.T) {
+	root, cwd, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+	workspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := writeCodewhaleImport(t, root, cwd)
+	const sourceID = "55555555-5555-4555-8555-555555555555"
+	ref, err := codewhale.New().PrepareImportedSession(t.Context(), ports.ImportedSessionRelocation{NativeSessionID: sourceID, ConfigDir: root, TranscriptPath: sourcePath, LaunchCWD: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "codewhale-archive", Path: cwd}}}
+	svc := New(st, "", nil)
+	binding := domain.SessionImportSource{NativeID: sourceID, ConfigDir: root, CWD: cwd, ResumeNativeID: ref.NativeSessionID, ResumeConfigDir: ref.ConfigDir, ResumeCwd: workspace, ResumeTranscriptPath: ref.TranscriptPath, Prepared: true}
+	rec := domain.SessionRecord{ID: "copied-chat", Harness: domain.HarnessCodewhale, Mode: domain.SessionModeTUI, Metadata: domain.SessionMetadata{NativeTranscriptPath: sourcePath, ImportSource: &binding}}
+	// A stale original locator must not choose the archive once the prepared
+	// identity has been checkpointed; the copied path is authoritative.
+	if err := svc.RefreshArchive(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, st.messages, "user: explain the synthetic whale", "assistant: synthetic answer")
+	for _, kind := range []string{"identity", "workspace", "profile", "missing path", "original path"} {
+		t.Run(kind, func(t *testing.T) {
+			invalid := binding
+			switch kind {
+			case "identity":
+				invalid.ResumeNativeID = sourceID
+			case "workspace":
+				invalid.ResumeCwd = t.TempDir()
+			case "profile":
+				invalid.ResumeConfigDir = ""
+			case "missing path":
+				invalid.ResumeTranscriptPath = ""
+			case "original path":
+				invalid.ResumeTranscriptPath = sourcePath
+			}
+			bad := rec
+			bad.Metadata.ImportSource = &invalid
+			if err := svc.RefreshArchive(t.Context(), bad); err == nil {
+				t.Fatal("invalid prepared archive binding accepted")
+			}
+			wantTexts(t, st.messages, "user: explain the synthetic whale", "assistant: synthetic answer")
+		})
+	}
+}
