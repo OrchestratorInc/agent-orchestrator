@@ -61,6 +61,8 @@ export function toPendingApproval(request: CloudCpBrowserApproval, target: Omit<
 		createdAt: request.createdAt,
 		expiresAt: request.expiresAt,
 		cloud: { baseUrl: target.baseUrl.replace(/\/+$/, ""), orgId: target.orgId },
+		// Absent from an older control plane, where anyone could decide.
+		...(request.canDecide === false ? { waitingFor: { name: request.decider?.name || undefined } } : {}),
 	};
 }
 

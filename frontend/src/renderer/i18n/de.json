@@ -5484,6 +5484,8 @@
 	"approvals.preview": "Vorschau",
 	"approvals.allowSite": "Auf {{site}} immer erlauben",
 	"approvals.moreOptions": "Weitere Freigabeoptionen",
+	"approvals.waitingFor": "Wartet auf Freigabe durch {{name}}",
+	"approvals.waitingForOwner": "Wartet auf Freigabe durch den Sitzungsinhaber",
 	"approvals.openSession": "Sitzung öffnen",
 	"approvals.elementAlt": "Das Element, das der Agent verwenden möchte",
 	"approvals.region": "Agentenaktion wartet auf Freigabe",

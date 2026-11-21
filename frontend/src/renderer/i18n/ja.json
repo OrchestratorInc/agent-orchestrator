@@ -5484,6 +5484,8 @@
 	"approvals.preview": "プレビュー",
 	"approvals.allowSite": "{{site}} で常に許可",
 	"approvals.moreOptions": "その他の承認オプション",
+	"approvals.waitingFor": "{{name}} の承認を待っています",
+	"approvals.waitingForOwner": "セッションの所有者の承認を待っています",
 	"approvals.openSession": "セッションを開く",
 	"approvals.elementAlt": "エージェントが使おうとしている要素",
 	"approvals.region": "承認待ちのエージェント操作",

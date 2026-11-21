@@ -5464,6 +5464,8 @@
 	"approvals.preview": "Preview",
 	"approvals.allowSite": "Always allow on {{site}}",
 	"approvals.moreOptions": "More approval options",
+	"approvals.waitingFor": "Waiting for {{name}} to approve",
+	"approvals.waitingForOwner": "Waiting for the session owner to approve",
 	"approvals.openSession": "Open session",
 	"approvals.elementAlt": "The element the agent wants to use",
 	"approvals.region": "Agent action waiting for approval",

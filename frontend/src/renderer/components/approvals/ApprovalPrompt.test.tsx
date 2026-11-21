@@ -43,6 +43,25 @@ describe("ApprovalPrompt", () => {
 		expect(onDecide.mock.calls.map(([decision]) => decision)).toEqual(["allow-once", "allow-site", "deny"]);
 	});
 
+	it("only says who it waits for when someone else decides it", () => {
+		const onDecide = vi.fn();
+		render(<ApprovalPrompt request={{ ...request, waitingFor: { name: "Priya Shah" } }} onDecide={onDecide} />);
+		expect(screen.getByRole("status", { name: "Agent action waiting for approval" })).toBeInTheDocument();
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(screen.getByTestId("approval-waiting")).toHaveTextContent("Waiting for Priya Shah to approve");
+		expect(screen.queryByRole("button", { name: /Allow once|Always allow|Deny/ })).toBeNull();
+		expect(screen.getByTestId("approval-action")).toHaveTextContent('Click "Place order" on shop.example');
+		const prompt = screen.getByTestId("approval-prompt");
+		expect(prompt).not.toHaveFocus();
+		fireEvent.keyDown(prompt, { key: "Escape" });
+		expect(onDecide).not.toHaveBeenCalled();
+	});
+
+	it("names the session owner when the decider has no name", () => {
+		render(<ApprovalPrompt request={{ ...request, waitingFor: {} }} onDecide={vi.fn()} />);
+		expect(screen.getByTestId("approval-waiting")).toHaveTextContent("Waiting for the session owner to approve");
+	});
+
 	it("denies on Escape and never approves on Enter", () => {
 		const onDecide = vi.fn();
 		render(<ApprovalPrompt request={request} onDecide={onDecide} />);

@@ -55,6 +55,13 @@ describe("cloud approvals", () => {
 		});
 	});
 
+	it("waits for the decider when the caller may not decide, and stays decidable when the server does not say", () => {
+		expect(toPendingApproval(cloudRequest({ canDecide: false, decider: { userId: "u-1", name: "Priya Shah" } }), TARGET).waitingFor).toEqual({ name: "Priya Shah" });
+		expect(toPendingApproval(cloudRequest({ canDecide: false }), TARGET).waitingFor).toEqual({ name: undefined });
+		expect(toPendingApproval(cloudRequest({ canDecide: true, decider: { name: "Me" } }), TARGET).waitingFor).toBeUndefined();
+		expect(toPendingApproval(cloudRequest(), TARGET).waitingFor).toBeUndefined();
+	});
+
 	it("names every cloud category with the local prompt's words", () => {
 		const names = ["pay", "send", "post", "delete", "account", "script", "unknown"].map(
 			(category) => toPendingApproval(cloudRequest({ category: category as CloudCpBrowserApproval["category"] }), TARGET).category,

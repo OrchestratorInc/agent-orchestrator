@@ -5466,6 +5466,8 @@
 	"approvals.preview": "预览",
 	"approvals.allowSite": "始终允许 {{site}}",
 	"approvals.moreOptions": "更多批准选项",
+	"approvals.waitingFor": "等待 {{name}} 批准",
+	"approvals.waitingForOwner": "等待会话所有者批准",
 	"approvals.openSession": "打开会话",
 	"approvals.elementAlt": "代理想要使用的元素",
 	"approvals.region": "等待批准的代理操作",

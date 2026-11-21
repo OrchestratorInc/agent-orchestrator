@@ -5504,6 +5504,8 @@
 	"approvals.preview": "Önizleme",
 	"approvals.allowSite": "{{site}} üzerinde her zaman izin ver",
 	"approvals.moreOptions": "Diğer onay seçenekleri",
+	"approvals.waitingFor": "{{name}} onayı bekleniyor",
+	"approvals.waitingForOwner": "Oturum sahibinin onayı bekleniyor",
 	"approvals.openSession": "Oturumu aç",
 	"approvals.elementAlt": "Ajanın kullanmak istediği öğe",
 	"approvals.region": "Onay bekleyen ajan eylemi",

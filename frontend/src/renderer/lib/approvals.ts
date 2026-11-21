@@ -21,6 +21,11 @@ export type PendingApproval = components["schemas"]["ApprovalPendingResponse"] &
 	hostId?: string;
 	/** Set when AO Cloud holds the request (a cloud session's agent browser). */
 	cloud?: { baseUrl: string; orgId: string };
+	/**
+	 * Set when someone else decides this request (a cloud session only its
+	 * creator may approve): the card shows who it waits for, with no buttons.
+	 */
+	waitingFor?: { name?: string };
 };
 export type ApprovalAuditEntry = components["schemas"]["ApprovalAuditEntryResponse"];
 export type ApprovalPolicy = components["schemas"]["ApprovalPolicyResponse"];

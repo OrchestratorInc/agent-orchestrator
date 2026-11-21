@@ -5767,6 +5767,8 @@
 	"approvals.preview": "Предпросмотр",
 	"approvals.allowSite": "Всегда разрешать на {{site}}",
 	"approvals.moreOptions": "Другие варианты одобрения",
+	"approvals.waitingFor": "Ожидает одобрения от {{name}}",
+	"approvals.waitingForOwner": "Ожидает одобрения владельца сеанса",
 	"approvals.openSession": "Открыть сессию",
 	"approvals.elementAlt": "Элемент, который агент хочет использовать",
 	"approvals.region": "Действие агента ждёт подтверждения",
