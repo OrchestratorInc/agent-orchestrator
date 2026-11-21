@@ -907,6 +907,10 @@ type legacyKimiAgent struct {
 	mode               string
 	modeCalls          int
 	configCalls        int
+	// acceptConfig makes session/set_config_option succeed and record the
+	// applied value in configs instead of answering method-not-found.
+	acceptConfig bool
+	configs      map[string]string
 }
 
 func fakeLegacyKimiSpawn(agent *legacyKimiAgent) spawnFunc {
@@ -1006,10 +1010,23 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 			agent.modeCalls++
 			agent.mu.Unlock()
 		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    any    `json:"value"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
 			agent.mu.Lock()
 			agent.configCalls++
+			if agent.acceptConfig {
+				if agent.configs == nil {
+					agent.configs = make(map[string]string)
+				}
+				agent.configs[params.ConfigID] = fmt.Sprint(params.Value)
+				result = map[string]any{"configOptions": []any{}}
+			} else {
+				responseError = map[string]any{"code": -32601, "message": "Method not found"}
+			}
 			agent.mu.Unlock()
-			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		default:
 			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		}
@@ -4183,6 +4200,136 @@ func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testi
 	agent.mu.Unlock()
 	if model != "composer-2.5[fast=false]" || calls != 1 {
 		t.Fatalf("legacy model setter = %q across %d calls, want advertised non-fast value", model, calls)
+	}
+}
+
+func TestACPDriverKeepsItsDefaultForAnOptionalModelItDoesNotOffer(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash-high",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash-high", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "claude-opus-4-6-thinking",
+	})
+	if err != nil {
+		t.Fatalf("Start with a model the session lacks: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 {
+		t.Fatalf("session/set_model called %d times, want the default kept", agent.modelCalls)
+	}
+}
+
+func startLegacyVariant(t *testing.T, agent *legacyKimiAgent) {
+	t.Helper()
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			return strings.TrimSuffix(model, "-medium"), SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, true
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	conv.Close()
+
+}
+
+func TestACPDriverSplitsAModelTheSessionOffersOnlyAsAVariant(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+		acceptConfig:       true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want the variant set as its own option", agent.modelCalls, agent.configCalls)
+	}
+	if got := agent.configs["thinking_level"]; got != "medium" {
+		t.Fatalf("thinking_level applied = %q, want medium (configs %v)", got, agent.configs)
+	}
+}
+
+func TestACPDriverToleratesAVariantSetterTheSessionLacks(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want one tolerated config attempt", agent.modelCalls, agent.configCalls)
+	}
+	if len(agent.configs) != 0 {
+		t.Fatalf("configs = %v, want nothing applied", agent.configs)
+	}
+}
+
+func TestACPDriverSplitsAVariantOnTheModernModelSelector(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-3.8-flash", "gemini-3.8-flash"),
+		selectConfigOption("thinking_level", "Thinking", "thought_level", "low", "low", "medium", "high"),
+	}}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			base, ok := strings.CutSuffix(model, "-medium")
+			return base, SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, ok
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["thinking_level"] != "medium" || agent.options["model"] != "" {
+		t.Fatalf("options set = %#v, want only thinking_level=medium on the offered base model", agent.options)
 	}
 }
 
