@@ -4161,7 +4161,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if requireNativeHistory && !forceFresh {
 		if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
-			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}
+			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, DataDir: m.dataDir, Metadata: nativeRestoreMetadata(rec)}
 			exists, probeErr := probe.NativeConversationExists(ctx, ref, rec.Metadata.AgentSessionID, env)
 			if probeErr != nil || !exists {
 				return RestoreResult{}, fmt.Errorf("%s %s: native history could not be verified: %w", operation, rec.ID,
@@ -8066,6 +8066,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
+		DataDir:       dataDir,
 		Metadata:      metadata,
 	}
 	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions, Env: env}
