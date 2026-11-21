@@ -506,6 +506,12 @@ describe("ChatMarkdown", () => {
 		expect(open).toHaveBeenCalledWith("ao://sessions/project/worker-94");
 	});
 
+	it("names an inline session ID while streaming, as once settled", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}><ChatMarkdown streaming text="Ask `worker-94` now." /></ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "Trace session sharing" })).toHaveAttribute("href", "ao://sessions/project/worker-94");
+	});
+
 	it("updates a late or renamed session title and skips rendering the link on unrelated refreshes", () => {
 		const message = <ChatMarkdown text="Ask `worker-94`." />;
 		const open = vi.fn();
