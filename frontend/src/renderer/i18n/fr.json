@@ -314,7 +314,6 @@
 	"session.importedNotOpened": "Importé, pas encore ouvert",
 	"artifactLink.unavailable": "Artefact indisponible",
 	"artifactLink.noPreview": "Aucun aperçu disponible",
-	"session.agentTerminated": "Agent terminé",
 	"activity.active": "En cours",
 	"activity.blocked": "En attente de décision",
 	"activity.exited": "Terminé",

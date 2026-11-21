@@ -313,7 +313,6 @@
 	"session.importedNotOpened": "インポート済み・まだ開いていません",
 	"artifactLink.unavailable": "アーティファクトを利用できません",
 	"artifactLink.noPreview": "プレビューはありません",
-	"session.agentTerminated": "エージェントは終了しました",
 	"activity.active": "作業中",
 	"activity.blocked": "判断待ち",
 	"activity.exited": "終了済み",
