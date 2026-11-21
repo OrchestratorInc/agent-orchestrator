@@ -258,12 +258,13 @@ func (c *conversation) requestInput(
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 	accepted, hasAccepted := c.accepted[requestID]
+	turnID := c.activeTurn
+	parked.turnID = turnID
 	if hasAccepted && accepted.Kind == persistentInteractionInput {
 		delete(c.accepted, requestID)
 	} else {
 		c.pendingInputs[requestID] = parked
 	}
-	turnID := c.activeTurn
 	c.mu.Unlock()
 
 	c.emit(ports.ChatEvent{

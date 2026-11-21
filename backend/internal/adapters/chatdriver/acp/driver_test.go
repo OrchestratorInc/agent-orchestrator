@@ -2820,6 +2820,72 @@ func TestACPDriverParksAndResolvesStructuredElicitation(t *testing.T) {
 	}
 }
 
+// Stop closes an open question even when the provider ignores session/cancel
+// (ACP leaves answering it to the client), so the turn can end.
+func TestACPInterruptCancelsQuestionTheProviderKeepsOpen(t *testing.T) {
+	request := acpsdk.NewUnstableCreateElicitationRequestForm(acpsdk.UnstableElicitationSchema{
+		Type:       acpsdk.UnstableElicitationSchemaTypeObject,
+		Properties: map[string]any{"choice": map[string]any{"type": "string"}},
+	})
+	request.Form.Message = "Which approach?"
+	agent := &fakeAgent{elicitation: &request}
+	driver := New(Config{
+		Harness: domain.HarnessQwen,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityInterrupt: true,
+		},
+		Probe:  func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+	_ = nextEvent(t, conv.Events())
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "ask me"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	var requestID string
+	for requestID == "" {
+		if event := nextEvent(t, conv.Events()); event.Kind == ports.ChatEventInputRequested {
+			requestID = event.RequestID
+		}
+	}
+	if err := conv.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	resolved := false
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventInputResolved && event.RequestID == requestID {
+			resolved = true
+		}
+		if event.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	if !resolved {
+		t.Fatal("question was not marked resolved after Stop")
+	}
+	agent.mu.Lock()
+	response := agent.elicitationResponse
+	agent.mu.Unlock()
+	if response.Accept != nil || response.Decline != nil {
+		t.Fatalf("elicitation response = %#v, want cancel", response)
+	}
+	if err := conv.(ports.ChatInputResponder).ResolveInput(context.Background(), requestID,
+		ports.ChatInputResponse{Action: "accept", Content: map[string]any{"choice": "late"}}); err != ports.ErrChatRequestNotPending {
+		t.Fatalf("late answer error = %v, want ErrChatRequestNotPending", err)
+	}
+}
+
 // A question has no deadline: answers given after the approval deadline still
 // reach the agent, instead of an empty form that reads as "no answers".
 func TestACPQuestionWaitsPastTheApprovalDeadline(t *testing.T) {
