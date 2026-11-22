@@ -1310,9 +1310,24 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 		c.mu.Unlock()
 		return ports.ErrChatNoActiveTurn
 	}
-	if c.interrupt != nil {
+	if prior := c.interrupt; prior != nil {
 		c.mu.Unlock()
-		return fmt.Errorf("ACP session/cancel is already in progress")
+		// A repeated Stop for the turn already being cancelled is the same request,
+		// not a new one: ACP's session/cancel is a notification with no turn id, so
+		// sending it again cannot be scoped and adds nothing. Answer with the first
+		// attempt's outcome. The turn stays busy until its Prompt returns either way.
+		select {
+		case <-prior.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		c.mu.Lock()
+		err := prior.err
+		c.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("ACP session/cancel: %w", err)
+		}
+		return nil
 	}
 	attempt := &interruptAttempt{turnID: active, done: make(chan struct{})}
 	c.interrupt = attempt

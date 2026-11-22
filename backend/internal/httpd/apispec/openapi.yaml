@@ -9060,6 +9060,11 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersInterruptConversationRequest'
       responses:
         "204":
           description: No Content
@@ -18842,6 +18847,11 @@ components:
       required:
       - sessionId
       - displayName
+      type: object
+    ControllersInterruptConversationRequest:
+      properties:
+        turnId:
+          type: string
       type: object
     ControllersKeepAwakeStatus:
       properties:

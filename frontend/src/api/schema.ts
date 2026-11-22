@@ -6403,6 +6403,9 @@ export interface components {
             displayName: string;
             sessionId: string;
         };
+        ControllersInterruptConversationRequest: {
+            turnId?: string;
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -21419,7 +21422,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersInterruptConversationRequest"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {
