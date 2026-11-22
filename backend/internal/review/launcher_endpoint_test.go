@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 )
 
@@ -33,6 +34,58 @@ func TestLauncherSpawnClearsCompetingClaudeCredentialsForCustomEndpoint(t *testi
 		if value, ok := env[key]; !ok || value != "" {
 			t.Fatalf("%s = %q (set=%v), want blanked beside the custom endpoint", key, value, ok)
 		}
+	}
+}
+
+// A reviewer's endpoint flags and process env come from one resolved
+// endpoint: the stored one, with the project's values for any variable it sets.
+func TestLauncherEndpointEnvAppliesProjectValues(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dataDir).Save("codex", harnessendpoint.Input{BaseURL: "https://stored.example.com", APIKey: "sk-stored", Model: "stored-model"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	l := &agentLauncher{dataDir: dataDir}
+	spec := launchSpec()
+	spec.Harness = domain.ReviewerCodex
+	spec.ProjectEnv = map[string]string{
+		harnessendpoint.CodexBaseURLEnv: "https://project.example.com",
+		harnessendpoint.CodexAPIKeyEnv:  "sk-project",
+		"UNRELATED":                     "x",
+	}
+	env := l.endpointEnv(spec)
+	if env[harnessendpoint.CodexBaseURLEnv] != "https://project.example.com" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-project" {
+		t.Fatalf("project endpoint values not applied: %v", env)
+	}
+	// A project on another origin gets none of the saved endpoint, not even
+	// its model, which that gateway may not serve.
+	if _, ok := env[harnessendpoint.CodexModelEnv]; ok {
+		t.Fatalf("saved model followed the project's gateway: %v", env)
+	}
+	if _, ok := env["UNRELATED"]; ok {
+		t.Fatalf("only endpoint variables belong in the endpoint env: %v", env)
+	}
+
+	inv := l.invocation(spec)
+	if inv.EndpointEnv[harnessendpoint.CodexBaseURLEnv] != "https://project.example.com" {
+		t.Fatalf("invocation EndpointEnv = %v", inv.EndpointEnv)
+	}
+
+	// A project URL on the saved origin keeps the saved key and model.
+	spec.ProjectEnv = map[string]string{harnessendpoint.CodexBaseURLEnv: "https://stored.example.com/v2"}
+	env = l.endpointEnv(spec)
+	if env[harnessendpoint.CodexBaseURLEnv] != "https://stored.example.com/v2" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-stored" || env[harnessendpoint.CodexModelEnv] != "stored-model" {
+		t.Fatalf("same-origin project URL must keep the saved key and model: %v", env)
+	}
+
+	// A project URL on another origin with no key gets no saved key.
+	spec.ProjectEnv = map[string]string{harnessendpoint.CodexBaseURLEnv: "https://project.example.com"}
+	if env := l.endpointEnv(spec); env[harnessendpoint.CodexAPIKeyEnv] == "sk-stored" {
+		t.Fatalf("saved key followed a URL-only project override: %v", env)
+	}
+
+	empty := &agentLauncher{dataDir: t.TempDir()}
+	if env := empty.endpointEnv(launchSpec()); env != nil {
+		t.Fatalf("no stored or project endpoint: env = %v, want nil", env)
 	}
 }
 

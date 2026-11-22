@@ -113,6 +113,18 @@ var specs = map[string]Spec{
 	},
 }
 
+// EnvNames lists every variable the spec's endpoint sets or blanks.
+func (s Spec) EnvNames() []string {
+	names := []string{s.BaseURLEnv}
+	for _, style := range s.AuthStyles() {
+		names = append(names, s.KeyEnv[style])
+	}
+	if s.ModelEnv != "" {
+		names = append(names, s.ModelEnv)
+	}
+	return append(names, s.ClearEnv...)
+}
+
 // Lookup returns the spec for agentID.
 func Lookup(agentID string) (Spec, bool) {
 	spec, ok := specs[agentID]

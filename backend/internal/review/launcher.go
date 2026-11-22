@@ -334,10 +334,40 @@ func (l *agentLauncher) invocation(spec LaunchSpec) ports.ReviewInvocation {
 		Config:          spec.AgentConfig,
 		WorkspacePath:   spec.WorkspacePath,
 		DataDir:         l.dataDir,
+		EndpointEnv:     l.endpointEnv(spec),
 		RunFilePath:     l.runFile,
 		Prompt:          prompt,
 		SystemPrompt:    systemPrompt,
 	}
+}
+
+// endpointEnv resolves the custom endpoint a reviewer of spec's harness runs
+// on: AO's stored endpoint, with any of its variables the project sets taking
+// the project's value. Nil when neither supplies one.
+func (l *agentLauncher) endpointEnv(spec LaunchSpec) map[string]string {
+	harnessSpec, ok := harnessendpoint.Lookup(string(spec.Harness))
+	if !ok {
+		return nil
+	}
+	// A project pointing the harness at another origin gets none of the saved
+	// endpoint, so its key never travels to a gateway it was not saved for.
+	stored, err := harnessendpoint.ForDataDir(l.dataDir).ProjectEnv(string(spec.Harness), spec.ProjectEnv, false)
+	if err != nil {
+		stored = nil
+	}
+	env := make(map[string]string, len(stored))
+	for key, value := range stored {
+		env[key] = value
+	}
+	for _, name := range harnessSpec.EnvNames() {
+		if value, set := spec.ProjectEnv[name]; set {
+			env[name] = value
+		}
+	}
+	if len(env) == 0 {
+		return nil
+	}
+	return env
 }
 
 // prepareInvocation stores the full reviewer instructions outside the
@@ -409,6 +439,7 @@ func (l *agentLauncher) prepareIdleInvocation(spec LaunchSpec) (ports.ReviewInvo
 		Config:           spec.AgentConfig,
 		WorkspacePath:    spec.WorkspacePath,
 		DataDir:          l.dataDir,
+		EndpointEnv:      l.endpointEnv(spec),
 		RunFilePath:      l.runFile,
 		Prompt:           prompt,
 		SystemPrompt:     "",
@@ -687,12 +718,10 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 		// A reviewer of a harness the user pointed at a custom endpoint uses
 		// that endpoint too, as the harness's sessions do, and likewise gets
 		// none of it when the project points the harness at another origin.
-		if endpointEnv, err := harnessendpoint.ForDataDir(l.dataDir).ProjectEnv(string(spec.Harness), spec.ProjectEnv, false); err == nil {
-			for key, value := range endpointEnv {
-				if _, set := spec.ProjectEnv[key]; !set {
-					env[key] = value
-				}
-			}
+		// The invocation carries the same resolved values for flag-based
+		// harnesses.
+		for key, value := range l.endpointEnv(spec) {
+			env[key] = value
 		}
 	}
 	if strings.TrimSpace(l.runFile) != "" {

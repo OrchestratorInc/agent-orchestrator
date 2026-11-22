@@ -51,6 +51,7 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config:           inv.Config,
 		DataDir:          inv.DataDir,
+		Env:              inv.EndpointEnv,
 		SessionID:        inv.ReviewerID,
 		WorkspacePath:    inv.WorkspacePath,
 		Prompt:           inv.Prompt,
@@ -71,7 +72,7 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 // ReviewRestoreCommand resumes the reviewer Codex conversation captured from
 // Codex hooks when AO recreates the reviewer pane after worker restore.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
-	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{Permissions: ports.PermissionModeAuto})
+	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{Permissions: ports.PermissionModeAuto, Env: inv.EndpointEnv})
 	if err != nil || !ok {
 		return cmd, ok, err
 	}

@@ -16,6 +16,8 @@ type Options struct {
 	Permissions     ports.PermissionMode
 	AllowedTools    []string
 	DisallowedTools []string
+	// Env, when set, is passed to the restore as the launch environment.
+	Env map[string]string
 }
 
 // Command asks the wrapped agent adapter to resume the reviewer's native
@@ -43,6 +45,7 @@ func Command(ctx context.Context, agent ports.Agent, inv ports.ReviewInvocation,
 		},
 		Kind:             domain.KindWorker,
 		DataDir:          inv.DataDir,
+		Env:              opts.Env,
 		Permissions:      opts.Permissions,
 		AllowedTools:     opts.AllowedTools,
 		DisallowedTools:  opts.DisallowedTools,
