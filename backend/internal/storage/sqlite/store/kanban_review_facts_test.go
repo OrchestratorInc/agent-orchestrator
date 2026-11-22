@@ -124,11 +124,15 @@ func TestCurrentHeadReviewRunsKeepPostedVerdictDuringNoVerdictRerun(t *testing.T
 		}
 	}
 	got, err := s.ListCurrentHeadReviewRunsForSession(ctx, rec.ID)
-	if err != nil || len(got) != 1 || got[0].ID != "rerun" || got[0].Verdict != domain.VerdictNone || !got[0].LastVerdictChangesRequested {
+	byID := map[string]domain.ReviewVerdict{}
+	for _, run := range got {
+		byID[run.ID] = run.Verdict
+	}
+	if err != nil || len(got) != 2 || byID["posted"] != domain.VerdictChangesRequested || byID["rerun"] != domain.VerdictNone {
 		t.Fatalf("single current-head runs = %+v, err %v", got, err)
 	}
 	batch, err := s.ListCurrentHeadReviewRunsForSessions(ctx, []domain.SessionID{rec.ID})
-	if err != nil || len(batch[rec.ID]) != 1 || !batch[rec.ID][0].LastVerdictChangesRequested {
+	if err != nil || len(batch[rec.ID]) != 2 {
 		t.Fatalf("batch current-head runs = %+v, err %v", batch, err)
 	}
 }
@@ -392,6 +396,60 @@ func TestListPRFactsForSessionIgnoresHumanVerdictsFromAnOlderHead(t *testing.T) 
 	if got := byURL["pr/legacy"]; !got.ExternalApproved {
 		t.Fatalf("legacy approval with empty target_sha should remain compatible: %+v", got)
 	}
+}
+
+func TestPRFactsRequireProofBeforeClearingChangesRequested(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	cases := []struct {
+		url, provider string
+		reviews       []domain.PullRequestReview
+		wantStale     bool
+	}{
+		{"pr/old-head", "github", []domain.PullRequestReview{{ID: "old-1", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now}}, true},
+		{"pr/current-bot", "github", []domain.PullRequestReview{
+			{ID: "old-2", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
+			{ID: "bot-2", Author: "bot", IsBot: true, State: domain.ReviewChangesRequest, TargetSHA: "head2", SubmittedAt: now.Add(time.Second)},
+		}, false},
+		{"pr/gitlab", "gitlab", []domain.PullRequestReview{{ID: "old-3", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now}}, false},
+		{"pr/unknown-head", "github", []domain.PullRequestReview{
+			{ID: "old-4", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
+			{ID: "unknown-4", Author: "bot", IsBot: true, State: domain.ReviewChangesRequest, SubmittedAt: now.Add(time.Second)},
+		}, false},
+	}
+	for _, tc := range cases {
+		if err := s.WriteSCMObservation(ctx, domain.PullRequest{
+			URL: tc.url, SessionID: rec.ID, Number: 1, Provider: tc.provider,
+			Review: domain.ReviewChangesRequest, HeadSHA: "head2", UpdatedAt: now, ObservedAt: now,
+		}, nil, tc.reviews, nil, nil, ports.ReviewWriteReplace); err != nil {
+			t.Fatalf("write %s: %v", tc.url, err)
+		}
+	}
+	check := func(facts []domain.PRFacts) {
+		t.Helper()
+		byURL := map[string]domain.PRFacts{}
+		for _, fact := range facts {
+			byURL[fact.URL] = fact
+		}
+		for _, tc := range cases {
+			if got, ok := byURL[tc.url]; !ok || got.StaleChangesRequested != tc.wantStale {
+				t.Fatalf("%s stale proof = %+v, want %v", tc.url, got, tc.wantStale)
+			}
+		}
+	}
+	facts, err := s.ListPRFactsForSession(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(facts)
+	batch, err := s.ListPRFactsForSessions(ctx, []domain.SessionID{rec.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(batch[rec.ID])
 }
 
 func TestListCurrentHeadReviewRunsForSessionsKeepsLatestRunPerHarness(t *testing.T) {

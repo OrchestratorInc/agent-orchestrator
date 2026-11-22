@@ -221,25 +221,15 @@ WHERE id = ? AND worker_notice = 'pending';
 -- name: ListCurrentHeadReviewRunsBySession :many
 -- AO review passes recorded against each PR's CURRENT head commit. Passes for
 -- an earlier head are excluded here so a stale run can never decide the
--- session's Kanban column. The latest same-head pass per (pr, harness) wins,
--- so a superseded retry cannot outvote the rerun that replaced it.
+-- session's Kanban column. Keep the latest pass and latest settled verdict per
+-- (pr, harness), at most two rows. A verdict-free rerun must not hide a posted
+-- request, and the service orders verdicts across PR aliases.
 -- failed_auto_runs counts every failed auto pass on that head, the number auto
 -- review compares against its retry limit. auto_retry_blocked mirrors the other
 -- reasons auto review will not run this head again for this harness: any
 -- cancelled pass, any pass with a verdict, even if a later pass superseded it,
 -- or a failure auto review must not retry (preflight_failed, cancel_unconfirmed).
 SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
-       CAST(COALESCE((
-           SELECT CASE WHEN settled.verdict = 'changes_requested' THEN 1 ELSE 0 END
-           FROM review_run settled
-           WHERE settled.session_id = review_run.session_id
-             AND settled.pr_url = review_run.pr_url
-             AND settled.target_sha = review_run.target_sha
-             AND settled.harness = review_run.harness
-             AND settled.verdict IN ('approved', 'changes_requested')
-           ORDER BY settled.created_at DESC, settled.id DESC
-           LIMIT 1
-       ), 0) AS INTEGER) AS last_verdict_changes_requested,
        (
            SELECT COUNT(*)
            FROM review_run failed
@@ -265,7 +255,7 @@ JOIN pr ON pr.url = review_run.pr_url
 WHERE review_run.session_id = ?
   AND pr.head_sha != ''
   AND review_run.target_sha = pr.head_sha
-  AND NOT EXISTS (
+  AND (NOT EXISTS (
       SELECT 1
       FROM review_run newer
       WHERE newer.session_id = review_run.session_id
@@ -276,28 +266,29 @@ WHERE review_run.session_id = ?
             newer.created_at > review_run.created_at
             OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
         )
-  );
+  ) OR (review_run.verdict IN ('approved', 'changes_requested') AND NOT EXISTS (
+      SELECT 1
+      FROM review_run newer
+      WHERE newer.session_id = review_run.session_id
+        AND newer.pr_url = review_run.pr_url
+        AND newer.target_sha = review_run.target_sha
+        AND newer.harness = review_run.harness
+        AND newer.verdict IN ('approved', 'changes_requested')
+        AND (
+            newer.created_at > review_run.created_at
+            OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
+        )
+  )));
 
 -- name: ListCurrentHeadReviewRunsBySessions :many
 -- Batch form of ListCurrentHeadReviewRunsBySession for session-list reads.
--- The latest same-head pass per (session, pr, harness) wins, so the board does
--- not read a superseded retry beside the run that replaced it.
+-- The latest pass and latest settled verdict per (session, pr, harness) are
+-- both returned so the service can preserve a verdict across a pending rerun.
 WITH wanted_session AS (
     SELECT CAST(j.value AS TEXT) AS session_id
     FROM json_each(?) AS j
 )
 SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
-       CAST(COALESCE((
-           SELECT CASE WHEN settled.verdict = 'changes_requested' THEN 1 ELSE 0 END
-           FROM review_run settled
-           WHERE settled.session_id = review_run.session_id
-             AND settled.pr_url = review_run.pr_url
-             AND settled.target_sha = review_run.target_sha
-             AND settled.harness = review_run.harness
-             AND settled.verdict IN ('approved', 'changes_requested')
-           ORDER BY settled.created_at DESC, settled.id DESC
-           LIMIT 1
-       ), 0) AS INTEGER) AS last_verdict_changes_requested,
        (
            SELECT COUNT(*)
            FROM review_run failed
@@ -323,7 +314,7 @@ JOIN pr ON pr.url = review_run.pr_url
 JOIN wanted_session ON wanted_session.session_id = review_run.session_id
 WHERE pr.head_sha != ''
   AND review_run.target_sha = pr.head_sha
-  AND NOT EXISTS (
+  AND (NOT EXISTS (
       SELECT 1
       FROM review_run newer
       WHERE newer.session_id = review_run.session_id
@@ -334,7 +325,19 @@ WHERE pr.head_sha != ''
             newer.created_at > review_run.created_at
             OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
         )
-  );
+  ) OR (review_run.verdict IN ('approved', 'changes_requested') AND NOT EXISTS (
+      SELECT 1
+      FROM review_run newer
+      WHERE newer.session_id = review_run.session_id
+        AND newer.pr_url = review_run.pr_url
+        AND newer.target_sha = review_run.target_sha
+        AND newer.harness = review_run.harness
+        AND newer.verdict IN ('approved', 'changes_requested')
+        AND (
+            newer.created_at > review_run.created_at
+            OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
+        )
+  )));
 
 -- name: FailUnsubmittedReviewBatchForChatTurn :exec
 UPDATE review_run SET status = 'failed', failure_reason = 'turn_ended_without_submit', ended_at = sqlc.arg(ended_at)

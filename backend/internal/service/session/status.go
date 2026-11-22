@@ -67,7 +67,7 @@ func clearStaleChangesRequested(prs []domain.PRFacts, runs []domain.CurrentHeadR
 	out := append([]domain.PRFacts(nil), prs...)
 	for i := range out {
 		pr := &out[i]
-		if pr.Review != domain.ReviewChangesRequest || pr.HeadSHA == "" || pr.ExternalChangesRequested {
+		if pr.Review != domain.ReviewChangesRequest || pr.HeadSHA == "" || !pr.StaleChangesRequested || pr.ExternalChangesRequested {
 			continue
 		}
 		currentRequest := false

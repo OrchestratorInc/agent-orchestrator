@@ -51,7 +51,7 @@ func TestChangesRequestedPushReviewAndRestart(t *testing.T) {
 	}
 	st.sessions[id] = rec
 	// GitHub retains its aggregate verdict, while the review row targeted the old head.
-	pr.HeadSHA, pr.ExternalChangesRequested = "new-head", false
+	pr.HeadSHA, pr.ExternalChangesRequested, pr.StaleChangesRequested = "new-head", false, true
 	st.prFacts[id] = []domain.PRFacts{pr}
 	read(domain.ReviewRequired, domain.StatusReviewPending, "needs_review", "Awaiting review")
 	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url, Verdict: domain.VerdictChangesRequested}}
@@ -87,7 +87,7 @@ func TestTerminatedSessionGetKeepsCurrentHeadReviewDecision(t *testing.T) {
 	rec := statusRec(domain.ActivityExited, true)
 	rec.ID, rec.ProjectID = id, "mer"
 	st.sessions[id] = rec
-	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest}}
+	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest, StaleChangesRequested: true}}
 	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url, Verdict: domain.VerdictChangesRequested}}
 	svc := &Service{store: st, clock: func() time.Time { return statusNow }}
 	got, err := svc.Get(context.Background(), id)
@@ -109,7 +109,7 @@ func TestLaterSameHeadRunWithoutVerdictKeepsPostedChangesRequest(t *testing.T) {
 	rec := statusRec(domain.ActivityIdle, false)
 	rec.ID, rec.ProjectID = id, "mer"
 	st.sessions[id] = rec
-	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest}}
+	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest, StaleChangesRequested: true}}
 	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{
 		{ID: "posted", PRURL: url, Harness: "codex", Verdict: domain.VerdictChangesRequested, CreatedAt: statusNow},
 		{ID: "rerun", PRURL: url, Harness: "codex", Status: domain.ReviewRunRunning, CreatedAt: statusNow.Add(time.Minute)},
@@ -125,6 +125,47 @@ func TestLaterSameHeadRunWithoutVerdictKeepsPostedChangesRequest(t *testing.T) {
 	}
 	if got.PRs[0].Review != domain.ReviewChangesRequest || listed[0].PRs[0].Review != domain.ReviewChangesRequest {
 		t.Fatalf("Get review = %q, List review = %q; want posted current-head changes request", got.PRs[0].Review, listed[0].PRs[0].Review)
+	}
+}
+
+func TestChangesRequestedWithoutProofOfOlderHeadStaysRequested(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host string
+	}{
+		{"GitLab requested_changes", "gitlab.com"},
+		{"GitHub bot current-head request", "github.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr := domain.PRFacts{URL: "pr/1", Host: tc.host, HeadSHA: "head", Review: domain.ReviewChangesRequest}
+			got := clearStaleChangesRequested([]domain.PRFacts{pr}, nil)
+			if got[0].Review != domain.ReviewChangesRequest {
+				t.Fatalf("review = %q, want provider changes_requested without proof of an older-head request", got[0].Review)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeAliasRunsKeepsLatestSettledVerdict(t *testing.T) {
+	oldURL := "https://github.com/AgentWrapper/agent-orchestrator/pull/9"
+	newURL := "https://github.com/Untrivial-ai/agent-orchestrator/pull/9"
+	prs := []domain.PRFacts{
+		{URL: oldURL, Number: 9, SourceBranch: "fix", TargetBranch: "main", HeadSHA: "head", UpdatedAt: statusNow},
+		{URL: newURL, Number: 9, SourceBranch: "fix", TargetBranch: "main", HeadSHA: "head", UpdatedAt: statusNow.Add(time.Minute)},
+	}
+	runs := []domain.CurrentHeadReviewRun{
+		{ID: "old-pending", PRURL: oldURL, Harness: "codex", CreatedAt: statusNow, LastVerdictChangesRequested: true},
+		{ID: "new-pending", PRURL: newURL, Harness: "codex", CreatedAt: statusNow.Add(time.Minute)},
+	}
+	got := canonicalizeCurrentHeadReviewRuns(prs, runs)
+	if len(got) != 1 || got[0].PRURL != newURL || !got[0].LastVerdictChangesRequested {
+		t.Fatalf("pending alias runs = %+v, want inherited current-head changes request", got)
+	}
+	runs = append(runs, domain.CurrentHeadReviewRun{ID: "approved", PRURL: oldURL, Harness: "codex", CreatedAt: statusNow.Add(2 * time.Minute), Verdict: domain.VerdictApproved})
+	runs = append(runs, domain.CurrentHeadReviewRun{ID: "after-approval", PRURL: newURL, Harness: "codex", CreatedAt: statusNow.Add(3 * time.Minute)})
+	got = canonicalizeCurrentHeadReviewRuns(prs, runs)
+	if len(got) != 1 || got[0].LastVerdictChangesRequested {
+		t.Fatalf("alias runs after approval = %+v, want request cleared by later verdict", got)
 	}
 }
 

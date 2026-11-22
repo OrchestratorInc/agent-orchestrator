@@ -377,6 +377,29 @@ SELECT
         WHERE external_review.pr_url = pr.url
           AND external_review.state = 'changes_requested'
     ) AS external_changes_requested,
+    -- Clear an aggregate GitHub request only with proof on an older head.
+    -- Bot and unknown-SHA current requests make that proof inconclusive.
+    CAST((pr.provider = 'github' AND pr.head_sha != ''
+      AND (EXISTS (
+          SELECT 1 FROM pr_reviews old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.state = 'changes_requested'
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+      ) OR EXISTS (
+          SELECT 1 FROM review_run old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.verdict = 'changes_requested'
+            AND old_request.github_review_id != ''
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+      ))
+      AND NOT EXISTS (
+          SELECT 1 FROM pr_reviews current_request
+          WHERE current_request.pr_url = pr.url
+            AND current_request.state = 'changes_requested'
+            AND (current_request.target_sha = '' OR current_request.target_sha = pr.head_sha)
+      )) AS INTEGER) AS stale_changes_requested,
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
@@ -526,6 +549,28 @@ SELECT
           AND external_review.session_id = pr.session_id
           AND external_review.state = 'changes_requested'
     ) AS external_changes_requested,
+    -- The batch read uses the same positive stale-head proof as the detail read.
+    CAST((pr.provider = 'github' AND pr.head_sha != ''
+      AND (EXISTS (
+          SELECT 1 FROM pr_reviews old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.state = 'changes_requested'
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+      ) OR EXISTS (
+          SELECT 1 FROM review_run old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.verdict = 'changes_requested'
+            AND old_request.github_review_id != ''
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+      ))
+      AND NOT EXISTS (
+          SELECT 1 FROM pr_reviews current_request
+          WHERE current_request.pr_url = pr.url
+            AND current_request.state = 'changes_requested'
+            AND (current_request.target_sha = '' OR current_request.target_sha = pr.head_sha)
+      )) AS INTEGER) AS stale_changes_requested,
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
