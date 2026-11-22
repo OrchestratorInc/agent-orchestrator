@@ -230,3 +230,33 @@ func TestRuntimeEnvKeepsEndpointKeyPairedWithItsURL(t *testing.T) {
 		t.Fatalf("same-origin override must keep the saved key: %v %v", sameOrigin["ANTHROPIC_BASE_URL"], sameOrigin["ANTHROPIC_AUTH_TOKEN"] == "sk-endpoint")
 	}
 }
+
+// A Codex session gets the endpoint in AO-owned variables, which the Codex
+// adapter turns into launch overrides, and loses AO's saved OpenAI key.
+func TestRuntimeEnvAppliesCodexEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	if err := providerkeys.Save(t.Context(), dir, "OPENAI_API_KEY", "ao-saved"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harnessendpoint.ForDataDir(dir).Save("codex", harnessendpoint.Input{BaseURL: "https://gateway.example.com/v1", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	env, err := manager.runtimeEnvChecked("session", "project", "", nil, "", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env[harnessendpoint.CodexBaseURLEnv] != "https://gateway.example.com/v1" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-endpoint" {
+		t.Fatalf("codex endpoint not applied: %v", env)
+	}
+	if value, ok := env["OPENAI_API_KEY"]; !ok || value != "" {
+		t.Fatalf("OPENAI_API_KEY = %q (set=%v), want blanked beside the endpoint", value, ok)
+	}
+	if _, ok := env["ANTHROPIC_BASE_URL"]; ok {
+		t.Fatalf("claude endpoint variables leaked into codex: %v", env)
+	}
+}

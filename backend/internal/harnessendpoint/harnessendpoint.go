@@ -1,7 +1,9 @@
 // Package harnessendpoint stores a user-chosen API endpoint (base URL and API
-// key) per harness and maps it onto the environment variables each harness
-// reads natively. The registry is generic: a harness gains support by adding
-// one Spec naming its own variables. Nothing here special-cases a provider.
+// key) per harness and maps it onto environment variables. Most harnesses read
+// those variables natively; a harness that takes its endpoint from launch
+// flags instead names AO-owned variables, and its adapter turns them into
+// flags. The registry is generic: a harness gains support by adding one Spec.
+// Nothing here special-cases a provider.
 //
 // Configs live under AO's data dir beside its provider keys (never an
 // OS-default app-data location), one owner-only JSON file per harness. The API key is never returned to
@@ -61,6 +63,17 @@ func (s Spec) AuthStyles() []AuthStyle {
 	return out
 }
 
+// Codex reads a custom endpoint from a model provider in its config, not from
+// environment variables. Its spec carries the endpoint in these AO-owned
+// variables, and the Codex adapter turns them into `-c model_providers...`
+// launch overrides whose env_key names CodexAPIKeyEnv, so the key itself
+// never appears on a command line.
+const (
+	CodexBaseURLEnv = "AO_CODEX_ENDPOINT_BASE_URL"
+	CodexAPIKeyEnv  = "AO_CODEX_ENDPOINT_API_KEY" //nolint:gosec // G101: an environment variable name, not a credential.
+	CodexModelEnv   = "AO_CODEX_ENDPOINT_MODEL"
+)
+
 // specs is the reviewed registry. Variable names come from each harness's own
 // documentation; clients can never supply variable names.
 var specs = map[string]Spec{
@@ -79,6 +92,24 @@ var specs = map[string]Spec{
 		},
 		DefaultAuthStyle: AuthBearer,
 		ModelEnv:         "ANTHROPIC_MODEL",
+	},
+	"codex": {
+		AgentID:    "codex",
+		BaseURLEnv: CodexBaseURLEnv,
+		// A Codex model provider sends its env_key as a bearer token.
+		KeyEnv: map[AuthStyle]string{
+			AuthBearer: CodexAPIKeyEnv,
+		},
+		// Credentials Codex would otherwise sign in with. A custom provider
+		// ignores them, but blanking keeps a saved account's key out of the
+		// session either way.
+		ClearEnv: []string{ //nolint:gosec // G101: environment variable names, not credentials.
+			"OPENAI_API_KEY",
+			"CODEX_API_KEY",
+			"CODEX_ACCESS_TOKEN",
+		},
+		DefaultAuthStyle: AuthBearer,
+		ModelEnv:         CodexModelEnv,
 	},
 }
 

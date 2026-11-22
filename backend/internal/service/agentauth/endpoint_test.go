@@ -91,7 +91,7 @@ func TestEndpointErrors(t *testing.T) {
 		code    string
 	}{
 		{name: "unknown target", svc: svc, agentID: "not-a-harness", in: harnessendpoint.Input{BaseURL: "https://a.example.com", APIKey: "k"}, kind: apierr.KindInvalid, code: "AGENT_AUTH_TARGET_UNKNOWN"},
-		{name: "unsupported harness", svc: svc, agentID: "codex", in: harnessendpoint.Input{BaseURL: "https://a.example.com", APIKey: "k"}, kind: apierr.KindInvalid, code: "AGENT_ENDPOINT_UNSUPPORTED"},
+		{name: "unsupported harness", svc: svc, agentID: "aider", in: harnessendpoint.Input{BaseURL: "https://a.example.com", APIKey: "k"}, kind: apierr.KindInvalid, code: "AGENT_ENDPOINT_UNSUPPORTED"},
 		{name: "invalid url", svc: svc, agentID: "claude-code", in: harnessendpoint.Input{BaseURL: "not a url", APIKey: "k"}, kind: apierr.KindInvalid, code: "AGENT_ENDPOINT_INVALID"},
 		{name: "missing key", svc: svc, agentID: "claude-code", in: harnessendpoint.Input{BaseURL: "https://a.example.com"}, kind: apierr.KindInvalid, code: "AGENT_ENDPOINT_INVALID"},
 		{name: "no store", svc: withoutStore, agentID: "claude-code", in: harnessendpoint.Input{BaseURL: "https://a.example.com", APIKey: "k"}, kind: apierr.KindInternal, code: "AGENT_ENDPOINT_UNAVAILABLE"},
