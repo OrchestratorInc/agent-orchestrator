@@ -259,3 +259,77 @@ func TestExportRefusesASnapshotHoldingAnotherRepository(t *testing.T) {
 		t.Fatalf("a refused export left %s behind: %v", dst, err)
 	}
 }
+
+// A folder's own .gitignore outranks the store's excludes, so a rule that
+// re-includes a dependency folder must not put it in the snapshots: they
+// would hold it, a restore would rewrite it, and its size would count against
+// the snapshot limits.
+func TestDetachedSnapshotsLeaveDependenciesOutWhateverTheGitignoreSays(t *testing.T) {
+	folder, _ := plainFolder(t)
+	write(t, folder, ".gitignore", "!node_modules/\n!.venv/\n*.log\n")
+	write(t, folder, "notes.md", "notes\n")
+	write(t, folder, "debug.log", "noise\n")
+	write(t, folder, "node_modules/dep/index.js", "dep\n")
+	write(t, folder, "pkg/app/node_modules/react/index.js", "react\n")
+	write(t, folder, ".venv/bin/python", "py\n")
+	sparse(t, folder, "node_modules/big.bin", maxUntrackedFileBytes+1)
+	ref := Ref("s1", "turn-2")
+	if err := Capture(context.Background(), folder, ref); err != nil {
+		t.Fatalf("Capture = %v; dependency folders counted against the limits", err)
+	}
+	dst := filepath.Join(t.TempDir(), "seed")
+	if err := Export(context.Background(), folder, ref, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, dst, "notes.md"); got != "notes\n" {
+		t.Fatalf("notes.md = %q", got)
+	}
+	for _, rel := range []string{"node_modules", "pkg/app/node_modules", ".venv", "debug.log"} {
+		if _, err := os.Lstat(filepath.Join(dst, rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("snapshot holds %s: %v", rel, err)
+		}
+	}
+	// A restore leaves them alone too.
+	write(t, folder, "node_modules/dep/index.js", "upgraded\n")
+	plan, err := Plan(context.Background(), folder, ref)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Changes) != 0 {
+		t.Fatalf("a restore would change %+v", plan.Changes)
+	}
+}
+
+// A folder that grows past the snapshot limits gets no snapshot for the turns
+// that start while it is over them, but keeps the ones it already has: they
+// still export for a fork. Restoring reads the folder as it is now, so a
+// rollback waits until the folder is back under the limits.
+func TestDetachedSnapshotsFromBeforeTheLimitStayUsable(t *testing.T) {
+	folder, _ := plainFolder(t)
+	write(t, folder, "notes.md", "small\n")
+	earlier := Ref("s1", "turn-2")
+	if err := Capture(context.Background(), folder, earlier); err != nil {
+		t.Fatal(err)
+	}
+	sparse(t, folder, "huge.bin", maxUntrackedFileBytes+1)
+	if err := Capture(context.Background(), folder, Ref("s1", "turn-3")); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("Capture over the limit = %v, want ErrTooLarge", err)
+	}
+	if _, err := Plan(context.Background(), folder, Ref("s1", "turn-3")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a refused capture recorded a snapshot: %v", err)
+	}
+	dst := filepath.Join(t.TempDir(), "seed")
+	if err := Export(context.Background(), folder, earlier, dst); err != nil {
+		t.Fatalf("Export of the earlier snapshot = %v", err)
+	}
+	if got := read(t, dst, "notes.md"); got != "small\n" {
+		t.Fatalf("exported notes.md = %q", got)
+	}
+	if _, err := Plan(context.Background(), folder, earlier); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("Plan while over the limit = %v, want ErrTooLarge", err)
+	}
+	remove(t, folder, "huge.bin")
+	if _, err := Plan(context.Background(), folder, earlier); err != nil {
+		t.Fatalf("Plan back under the limit = %v", err)
+	}
+}

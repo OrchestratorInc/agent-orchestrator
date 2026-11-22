@@ -33,6 +33,18 @@ func SetDetachedStores(f DetachedStores) {
 // project ignores them: dependency folders, large and reinstallable.
 const detachedExcludes = "node_modules/\n.venv/\n"
 
+// detachedPathspec, for a plain folder, keeps its dependency folders out of
+// the files a snapshot lists and stages, at any depth. The store's excludes
+// alone don't: a .gitignore in the folder outranks them, so a rule such as
+// `!node_modules/` would put them back. Other files keep ordinary ignore
+// rules. Nil for any other folder.
+func detachedPathspec(dir string) []string {
+	if _, ok := detachedStore(dir); !ok {
+		return nil
+	}
+	return []string{"--", ".", ":(exclude,glob)**/node_modules/**", ":(exclude,glob)**/.venv/**"}
+}
+
 // detachedStore is the store keeping workspace's snapshots, if it has one.
 func detachedStore(workspace string) (string, bool) {
 	f := detachedStores.Load()

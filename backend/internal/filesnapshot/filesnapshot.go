@@ -426,7 +426,7 @@ func capture(ctx context.Context, top string, ignored []string) (state, error) {
 	if err := clearAssumeUnchanged(ctx, top, env); err != nil {
 		return state{}, err
 	}
-	if _, err := git(ctx, top, env, nil, "add", "--all"); err != nil {
+	if _, err := git(ctx, top, env, nil, append([]string{"add", "--all"}, detachedPathspec(top)...)...); err != nil {
 		return state{}, err
 	}
 	if len(ignored) > 0 {
@@ -559,7 +559,7 @@ func gitlink(ctx context.Context, top, tree string) (string, error) {
 // checkUntracked refuses a worktree whose untracked files are too many or too
 // large to copy into the object store before every turn.
 func checkUntracked(ctx context.Context, top string) error {
-	out, err := git(ctx, top, nil, nil, "ls-files", "-z", "--others", "--exclude-standard")
+	out, err := git(ctx, top, nil, nil, append([]string{"ls-files", "-z", "--others", "--exclude-standard"}, detachedPathspec(top)...)...)
 	if err != nil {
 		return err
 	}
