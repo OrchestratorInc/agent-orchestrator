@@ -4536,6 +4536,7 @@
 	"chat.fileAnnotationAmbiguous": "Seçili kod birden fazla konumda bulunuyor.",
 	"chat.fileAnnotationTruncated": "Kısaltılmış bir seçim için kaynağa gidilemiyor.",
 	"chat.fileAnnotationRetry": "Kaynak kontrolünü yeniden dene",
+	"chat.shared.archived": "Bu arşivlenmiş oturumu yalnızca sahibi geri yükleyebilir",
 	"chat.shared.viewOnly": "Bu oturumu görüntüleyebilirsiniz, ancak aracıya yazamazsınız",
 	"chat.shared.lockedBy": "{{name}} aracıya yazıyor",
 	"chat.shared.someone": "Birisi",

@@ -4553,6 +4553,7 @@
 	"chat.fileAnnotationAmbiguous": "Selected code appears in more than one location.",
 	"chat.fileAnnotationTruncated": "Source navigation is unavailable for a truncated selection.",
 	"chat.fileAnnotationRetry": "Retry source check",
+	"chat.shared.archived": "このアーカイブ済みセッションを復元できるのはオーナーのみです",
 	"chat.shared.viewOnly": "このセッションは閲覧のみで、エージェントに書き込めません",
 	"chat.shared.lockedBy": "{{name}} がエージェントに書き込み中です",
 	"chat.shared.someone": "誰か",

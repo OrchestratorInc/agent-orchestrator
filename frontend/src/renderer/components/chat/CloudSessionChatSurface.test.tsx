@@ -2297,6 +2297,8 @@ describe("CloudSessionChatSurface", () => {
 			</QueryClientProvider>,
 		);
 		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// A message to it would wait unanswered, so the composer says who can restore it.
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].composerLockedPlaceholder).toBe("Only the owner can restore this archived session");
 		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "message-1").catch(() => undefined);
 		expect(restoreSession).not.toHaveBeenCalled();
 	});

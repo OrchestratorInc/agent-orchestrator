@@ -4535,6 +4535,7 @@
 	"chat.fileAnnotationAmbiguous": "Selected code appears in more than one location.",
 	"chat.fileAnnotationTruncated": "Source navigation is unavailable for a truncated selection.",
 	"chat.fileAnnotationRetry": "Retry source check",
+	"chat.shared.archived": "只有所有者可以恢复此已归档会话",
 	"chat.shared.viewOnly": "你可以查看此会话，但不能向智能体发送内容",
 	"chat.shared.lockedBy": "{{name}} 正在向智能体输入",
 	"chat.shared.someone": "有人",

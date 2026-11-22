@@ -4668,6 +4668,7 @@
 	"chat.fileAnnotationAmbiguous": "Selected code appears in more than one location.",
 	"chat.fileAnnotationTruncated": "Source navigation is unavailable for a truncated selection.",
 	"chat.fileAnnotationRetry": "Retry source check",
+	"chat.shared.archived": "Seul le propriétaire peut restaurer cette session archivée",
 	"chat.shared.viewOnly": "Vous pouvez voir cette session, mais pas écrire à l'agent",
 	"chat.shared.lockedBy": "{{name}} écrit à l'agent",
 	"chat.shared.someone": "Quelqu'un",
