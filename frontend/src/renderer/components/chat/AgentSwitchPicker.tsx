@@ -39,15 +39,13 @@ import {
 	OptionMenuContent,
 	OptionMenuItem,
 	OptionMenuLabel,
-	OptionMenuSub,
-	OptionMenuSubContent,
-	OptionMenuSubTrigger,
 	OptionMenuTrigger,
 } from "../ui/option-menu";
 import { Switch } from "../ui/switch";
 import { CloseButton } from "../ui/close-button";
 import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
+import { EffortSlider } from "./EffortSlider";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
@@ -218,6 +216,7 @@ export function AgentModelPicker({
 	title,
 	mark,
 	extras,
+	autoCompact,
 	terminal = false,
 	pendingFooter,
 	onCloseAutoFocus,
@@ -242,6 +241,8 @@ export function AgentModelPicker({
 	mark?: ReactNode;
 	/** The current agent's other settings, as menu rows under its effort. Given the picker's pick, called when one is changed. */
 	extras?: (markPick: () => void) => ReactNode;
+	/** The running agent's auto-compact setting, shown beside Fast mode when it has both. */
+	autoCompact?: AutoCompactControl & { title: string };
 	onCloseAutoFocus?: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
@@ -419,6 +420,12 @@ export function AgentModelPicker({
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	// The list shows the chosen agent's favourites and models only; agents are picked on the rail.
 	const setups = settable ? favorites.filter((entry) => entry.harness === shownHarness) : [];
+	// The favourite a model row was starred as, under its id or one it was folded from.
+	const starredFor = (model: PickerModel) => model.id
+		? favorites.find((entry) => entry.harness === shownHarness && (entry.row === model.id || model.aliases?.includes(entry.row)))
+		: undefined;
+	// A starred model is listed once, first, as its favourite; the rows below are the rest.
+	const unstarred = <T extends { model: PickerModel }>(rows: T[]) => setups.length > 0 ? rows.filter((row) => !starredFor(row.model)) : rows;
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	// Search reaches every agent on the rail, the chosen one first.
 	const searchRows = (open ? [...agents].sort((a, b) => Number(b.id === shownHarness) - Number(a.id === shownHarness)) : []).flatMap((agent) => {
@@ -453,17 +460,12 @@ export function AgentModelPicker({
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
-	const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
 	// A setting changed in the menu is a choice too, so closing after it is not an abandon.
 	// It is not a model change.
 	const withPick = (toggle: ((next: boolean) => void) | undefined) => toggle && ((next: boolean) => {
 		markModelPick();
 		toggle(next);
 	});
-	const pickAccount = (id: string) => {
-		markModelPick();
-		agentSwitch.account?.onPick(id);
-	};
 
 	// The chosen agent's settings, under its models and kept in view while they scroll.
 	const settingsRows = [
@@ -474,56 +476,66 @@ export function AgentModelPicker({
 			</OptionMenuItem>
 		) : null,
 		settable && !waiting && source.efforts.length > 0 ? (
-			<OptionMenuSub key="effort" closeOnSelect>
-				<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
-				<OptionMenuSubContent align="start" alignOffset={0} className={SUB_CLASS}>
-					{source.efforts.map((choice) => (
-						<OptionMenuItem
-							key={choice.value}
-							active={choice.value === source.effort}
-							radio
-							disabled={!source.onPickEffort}
-							onSelect={() => {
-								markModelPick();
-								if (choice.value !== source.effort) source.onPickEffort?.(choice.value);
-							}}
-							className="text-xs text-foreground"
-						>
-							{/* On its own span: the row's highlight would otherwise be clipped to the text. */}
-							<span className={isUltraEffort(choice.value) ? "ultra-text" : undefined}>{choice.label}</span>
-						</OptionMenuItem>
-					))}
-				</OptionMenuSubContent>
-			</OptionMenuSub>
+			<EffortSlider
+				key="effort"
+				label={t("agentSwitch.effort")}
+				valueLabel={(choice) => choice?.label ?? t("agentSwitch.defaultModel")}
+				choices={source.efforts}
+				value={source.effort}
+				disabled={!source.onPickEffort || source.efforts.length < 2}
+				ultraValue={isUltraEffort}
+				onCommit={(effort) => {
+					markModelPick();
+					source.onPickEffort?.(effort);
+				}}
+			/>
 		) : settable && !waiting && !modelsProblem ? (
-			// The same row, disabled, so the menu does not change shape between models.
-			<OptionMenuSub key="effort" closeOnSelect>
-				<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
-			</OptionMenuSub>
+			// The same slider, disabled, so the menu does not change shape between models. An agent
+			// that names its levels only once it runs (OpenCode) shows this until then.
+			<EffortSlider
+				key="effort"
+				label={t("agentSwitch.effort")}
+				valueLabel={() => t("agentSwitch.defaultModel")}
+				choices={[]}
+				disabled
+				onCommit={() => {}}
+			/>
 		) : null,
-		// One account has nothing to switch to, so the row is only for two or more.
-		showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
 	].filter(Boolean);
+	// The pending agent's auto-compact, else the running one's; a pending switch hides the running agent's extras.
+	const shownCompact = pending
+		? offersAutoCompact
+			? { value: pending.autoCompactWindow, onChange: (value: TurnSettings["autoCompactWindow"]) => onPendingChange({ ...pending, autoCompactWindow: value }), title: t("agentSwitch.autoCompactHint") }
+			: undefined
+		: autoCompact;
+	// Changing it is a choice too, so closing after it is not an abandon.
+	const compact = shownCompact && {
+		...shownCompact,
+		onChange: (value: TurnSettings["autoCompactWindow"]) => {
+			markModelPick();
+			shownCompact.onChange(value);
+		},
+	};
+	const showToggles = settable && !waiting && (source.fast !== undefined || source.thinking !== undefined);
+	// Fast mode and auto-compact share a row when the agent has both.
+	const compactBesideFast = Boolean(compact && showToggles && source.fast !== undefined);
 	const settingsGroups = [
 		settingsRows.length > 0 ? settingsRows : null,
-		settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
+		showToggles ? (
 			<>
-				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={withPick(source.onToggleFast)} />
+				{compact && compactBesideFast ? (
+					<div className="flex items-center gap-2">
+						<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={withPick(source.onToggleFast)} className="shrink-0 gap-2" />
+						<AutoCompactChoices {...compact} className="ml-auto mr-2" />
+					</div>
+				) : (
+					<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={withPick(source.onToggleFast)} />
+				)}
 				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
 		) : null,
 		extras && !pending ? extras(markModelPick) : null,
-		offersAutoCompact ? (
-			<AutoCompactRow
-				value={pending?.autoCompactWindow}
-				onChange={(value) => {
-					if (!pending) return;
-					markModelPick();
-					onPendingChange({ ...pending, autoCompactWindow: value });
-				}}
-				title={t("agentSwitch.autoCompactHint")}
-			/>
-		) : null,
+		compact && !compactBesideFast ? <AutoCompactRow {...compact} /> : null,
 	].filter(Boolean);
 	const settingsFooter = settingsGroups.length > 0
 		? settingsGroups.map((group, index) => <div key={index} className={DIVIDER}>{group}</div>)
@@ -584,9 +596,8 @@ export function AgentModelPicker({
 					selectedId={source.modelId === undefined ? undefined : `${shownHarness} ${source.modelId}`}
 					searchable
 					searchPlaceholder={t("agentSwitch.search")}
-					rows={VISIBLE_MODEL_ROWS + setups.length}
-					// A search lists matches only; the favourites above the list are hidden.
-					searchHidesRows={setups.length}
+					// Starred models lead the list in the same rows, so starring never makes the menu taller.
+					rows={VISIBLE_MODEL_ROWS}
 					className="max-h-none"
 					header={(
 						<AgentRail
@@ -638,15 +649,15 @@ export function AgentModelPicker({
 									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} />
 								</OptionMenuItem>
 							))}
-							{matches.length > 0 ? (
-								<div className={setups.length > 0 ? DIVIDER : undefined}>
-									{matches.map((row, index) => {
+							{unstarred(matches).length > 0 ? (
+								<div>
+									{unstarred(matches).map((row, index, listed) => {
 										const model = row.model;
 										const active = model.id === source.modelId;
-										const starredAs = model.id ? favorites.find((entry) => entry.harness === shownHarness && (entry.row === model.id || model.aliases?.includes(entry.row))) : undefined;
+										const starredAs = starredFor(model);
 										return (
 											<Fragment key={row.id}>
-												{model.group && model.group !== matches[index - 1]?.model.group ? (
+												{model.group && model.group !== listed[index - 1]?.model.group ? (
 													<OptionMenuLabel>{model.group}</OptionMenuLabel>
 												) : null}
 												<OptionMenuItem
@@ -819,32 +830,6 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 				</Tooltip>
 			</div>
 		</TooltipProvider>
-	);
-}
-
-function AccountRows({ account }: { account: AccountChoice }) {
-	const { t } = useTranslation();
-	const chosen = account.options.find((option) => option.id === account.value);
-	return (
-		<OptionMenuSub closeOnSelect>
-			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
-			<OptionMenuSubContent scrollable className={SUB_CLASS}>
-				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
-					{account.options.map((option) => (
-						<OptionMenuItem
-							key={option.id}
-							active={option.id === account.value}
-							radio
-							disabled={option.disabled}
-							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
-							className="text-xs text-foreground"
-						>
-							<span className="min-w-0 truncate">{option.label}</span>
-						</OptionMenuItem>
-					))}
-				</div>
-			</OptionMenuSubContent>
-		</OptionMenuSub>
 	);
 }
 
@@ -1077,28 +1062,36 @@ export interface AutoCompactControl {
 const AUTO_COMPACT_CHOICES = [{ value: undefined, label: "Auto" }, { value: "200k", label: "200k" }, { value: "1m", label: "1M" }] as const;
 
 /** A menu row: where Claude Code compacts on its own. */
-export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompactControl & { title: string }) {
+export function AutoCompactRow({ title, ...control }: AutoCompactControl & { title: string }) {
 	const { t } = useTranslation();
 	return (
 		<div className="flex h-9 items-center gap-2 px-3 text-xs" title={title}>
 			<span className="text-muted-foreground">{t("agentSwitch.autoCompact")}</span>
-			<span role="radiogroup" aria-label={t("agentSwitch.autoCompact")} className="ml-auto flex rounded-md bg-interactive-active p-0.5">
-				{AUTO_COMPACT_CHOICES.map((choice) => (
-					<Pressable
-						key={choice.label}
-						role="radio"
-						aria-checked={value === choice.value}
-						disabled={disabled || value === choice.value}
-						onClick={() => onChange(choice.value)}
-						className={cn(
-							"rounded px-2 py-0.5 disabled:cursor-default",
-							value === choice.value ? "bg-settings-menu text-foreground" : "text-muted-foreground hover:text-foreground",
-						)}
-					>
-						{choice.value ? choice.label : t("agentSwitch.autoCompactAuto")}
-					</Pressable>
-				))}
-			</span>
+			<AutoCompactChoices {...control} className="ml-auto" />
 		</div>
+	);
+}
+
+/** Auto, 200k and 1M as one segmented control, named for screen readers even without its row label. */
+function AutoCompactChoices({ value, disabled, onChange, title, className }: AutoCompactControl & { title?: string; className?: string }) {
+	const { t } = useTranslation();
+	return (
+		<span role="radiogroup" aria-label={t("agentSwitch.autoCompact")} title={title} className={cn("flex rounded-md bg-interactive-active p-0.5 text-xs", className)}>
+			{AUTO_COMPACT_CHOICES.map((choice) => (
+				<Pressable
+					key={choice.label}
+					role="radio"
+					aria-checked={value === choice.value}
+					disabled={disabled || value === choice.value}
+					onClick={() => onChange(choice.value)}
+					className={cn(
+						"rounded px-2 py-0.5 disabled:cursor-default",
+						value === choice.value ? "bg-settings-menu text-foreground" : "text-muted-foreground hover:text-foreground",
+					)}
+				>
+					{choice.value ? choice.label : t("agentSwitch.autoCompactAuto")}
+				</Pressable>
+			))}
+		</span>
 	);
 }

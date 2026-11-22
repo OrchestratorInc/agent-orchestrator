@@ -39,7 +39,7 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
-import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
@@ -468,8 +468,12 @@ export function TurnSettingsBar({
 				: {}),
 		};
 	// Plan and on/off settings live in the add menu; here is anything past the first model and effort.
-	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (offersAutoCompact || grouped.extra.length > 0 ||
+	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (grouped.extra.length > 0 ||
 		(!nativeModelMenu && (grouped.model.length > 1 || grouped.effort.length > 1)));
+	// Handed to the picker on its own, so it can sit beside Fast mode.
+	const pickerAutoCompact = unified && onChangeConfigOption && offersAutoCompact && autoCompact
+		? { ...autoCompact, title: "When Claude Code compacts the conversation on its own. Changing it restarts the agent; the conversation is kept." }
+		: undefined;
 	// Given the picker's pick, so a setting changed here is a choice, not an abandoned menu.
 	const pickerExtras = hasPickerExtras ? (markPick: () => void) => {
 		const apply = (optionId: string, value: ChatConfigOptionValue) => {
@@ -478,16 +482,6 @@ export function TurnSettingsBar({
 		};
 		return (
 			<>
-				{offersAutoCompact && autoCompact ? (
-					<AutoCompactRow
-						{...autoCompact}
-						onChange={(value) => {
-							markPick();
-							autoCompact.onChange(value);
-						}}
-						title="When Claude Code compacts the conversation on its own. Changing it restarts the agent; the conversation is kept."
-					/>
-				) : null}
 				{nativeModelMenu ? null : grouped.model.slice(1).map((option) => (
 					<OptionSubmenu key={option.id} option={option} onChange={apply} scrollable />
 				))}
@@ -518,6 +512,7 @@ export function TurnSettingsBar({
 								savedModel={settings.model || lastModel}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								extras={pickerExtras}
+							autoCompact={pickerAutoCompact}
 								onCloseAutoFocus={restoreComposerFocus}
 							/>
 						</>

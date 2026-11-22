@@ -88,9 +88,14 @@ describe("AgentModelPicker", () => {
 		// The agent is the rail's; there is no Agent or Model row to open.
 		expect(screen.queryByRole("menuitem", { name: /^Agent/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /^Model/ })).not.toBeInTheDocument();
-		await user.click(screen.getByRole("menuitem", { name: /Effort.*High/ }));
-		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
-		expect(current.onPickEffort).toHaveBeenCalledWith("max");
+		// The effort is a slider row: Left and Right step through the levels, the menu stays open.
+		const effort = screen.getByRole("menuitem", { name: /Effort.*High/ });
+		act(() => effort.focus());
+		await user.keyboard("{ArrowLeft}");
+		expect(current.onPickEffort).not.toHaveBeenCalled();
+		await user.keyboard("{ArrowRight}");
+		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
+		await user.keyboard("{Enter}");
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
 	});
@@ -253,21 +258,35 @@ describe("AgentModelPicker", () => {
 		expect(current.onPickModel).not.toHaveBeenCalled();
 	});
 
-	it("stars a row when its model was starred under another id", async () => {
+	it("lists a model starred under another id once, as its favourite", async () => {
 		const user = userEvent.setup();
 		const saved = { harness: "claude-code", row: "opus", model: "opus", label: "Opus" };
 		toggleModelFavorite(saved);
 		try {
 			open(undefined, false, "claude-code", { models: [{ id: "claude-opus-5-5", label: "Opus", aliases: ["opus"] }], modelId: "claude-opus-5-5" });
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			// One star for the favourite row at the top, one on the model row it folded into.
-			expect(await screen.findAllByRole("button", { name: "Remove from favourites" })).toHaveLength(2);
+			// The model row it folded into is the favourite, not a second row with a second star.
+			expect(await screen.findAllByRole("button", { name: "Remove from favourites" })).toHaveLength(1);
+			expect(screen.getAllByRole("menuitemradio", { name: /^Opus/ })).toHaveLength(1);
 		} finally {
 			toggleModelFavorite(saved);
 		}
 	});
 
-	it("lists only the chosen agent's favourites, without agent logos", async () => {
+	it("moves a starred model to the top of the list instead of adding a row", async () => {
+		const user = userEvent.setup();
+		const saved = { harness: "claude-code", row: "sonnet", model: "sonnet", label: "Sonnet" };
+		toggleModelFavorite(saved);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			expect(screen.getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual([expect.stringContaining("Sonnet"), expect.stringContaining("Opus")]);
+		} finally {
+			act(() => toggleModelFavorite(saved));
+		}
+	});
+
+	it("lists only the chosen agent's favourites, first in the list, without agent logos", async () => {
 		const user = userEvent.setup();
 		const favorites = [
 			{ harness: "claude-code", row: "opus", model: "opus", label: "Opus" },
@@ -277,9 +296,9 @@ describe("AgentModelPicker", () => {
 		try {
 			open();
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			// The favourite at the top and its model row below it.
-			const rows = screen.getAllByRole("menuitemradio", { name: /^Opus/ });
-			expect(rows).toHaveLength(2);
+			// The starred model leads the list, listed once, and the box keeps its height.
+			const rows = screen.getAllByRole("menuitemradio");
+			expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("Opus"), expect.stringContaining("Sonnet")]);
 			expect(rows[0].querySelector("img")).not.toBeInTheDocument();
 			expect(screen.queryByRole("menuitemradio", { name: /^Opus 4\.8/ })).not.toBeInTheDocument();
 		} finally {
@@ -530,7 +549,7 @@ describe("AgentModelPicker", () => {
 		const row = await screen.findByRole("menuitemradio", { name: /GPT Cloud/ });
 		expect(screen.queryByRole("menuitemradio", { name: /GPT X/ })).not.toBeInTheDocument();
 		expect(cloudModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
-		await user.click(row);
+		fireEvent.click(row);
 		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-cloud" }));
 	});
 
@@ -539,9 +558,9 @@ describe("AgentModelPicker", () => {
 		open({ harness: "codex" });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
+		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
 		expect(await screen.findByRole("menuitemradio", { name: /^GPT X/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: /^Opus/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
 	});
 
 	it("says why the pending agent has no models", async () => {
@@ -632,22 +651,35 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
 		expect(screen.getByRole("radio", { name: "Codex" })).toBeInTheDocument();
-		expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toBeInTheDocument();
+		expect(await screen.findByRole("menuitemradio", { name: /^Opus/ })).toBeInTheDocument();
 	});
 
-	it("offers the account switch only with two or more accounts", async () => {
+	it("puts Fast mode and auto-compact in one row", async () => {
 		const user = userEvent.setup();
-		const one = { options: [{ id: "a", label: "me@work" }], value: "a", onPick: vi.fn() };
-		open(undefined, false, "claude-code", {}, false, false, undefined, one);
+		const onChange = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<AgentModelPicker
+					currentHarness="claude-code"
+					current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], fast: false, onToggleFast: vi.fn() }}
+					agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+					autoCompact={{ onChange, title: "When it compacts" }}
+				/>
+			</QueryClientProvider>,
+		);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.queryByRole("menuitem", { name: /^Account/ })).not.toBeInTheDocument();
+		const compact = screen.getByRole("radiogroup", { name: "Auto-compact" });
+		expect(compact.parentElement).toContainElement(screen.getByRole("switch", { name: "Fast mode" }));
+		await user.click(within(compact).getByRole("radio", { name: "1M" }));
+		expect(onChange).toHaveBeenCalledWith("1m");
 	});
 
-	it("shows the account switch with two accounts", async () => {
+	it("has no account switch, even with two accounts", async () => {
 		const user = userEvent.setup();
 		const two = { options: [{ id: "a", label: "me@work" }, { id: "b", label: "me@home" }], value: "a", onPick: vi.fn() };
 		open(undefined, false, "claude-code", {}, false, false, undefined, two);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.getByRole("menuitem", { name: /^Account.*me@work/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Account/ })).not.toBeInTheDocument();
+		expect(screen.queryByText("me@work")).not.toBeInTheDocument();
 	});
 });
