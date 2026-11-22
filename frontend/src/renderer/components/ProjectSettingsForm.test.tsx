@@ -909,16 +909,17 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "general");
 
-		const toggle = await screen.findByRole("switch", { name: "Always use a temporary browser" });
-		expect(toggle).not.toBeChecked();
-		await userEvent.click(toggle);
+		const startIn = await screen.findByRole("button", { name: "Sessions start in" });
+		expect(startIn).toHaveTextContent("Default profile");
+		await chooseOption(startIn, "Temporary browser");
+		expect(startIn).toHaveTextContent("Temporary browser");
 		submitSettings();
 
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock.mock.calls[0]?.[1]?.body.config.browserTemporary).toBe(true);
 	});
 
-	it("autosaves the temporary-browser switch through PUT /api/v1/projects/{id} without a submit, even while the window is hidden", async () => {
+	it("autosaves the sessions-start-in choice through PUT /api/v1/projects/{id} without a submit, even while the window is hidden", async () => {
 		mockProject({
 			id: "proj-1",
 			name: "Project One",
@@ -935,7 +936,7 @@ describe("ProjectSettingsForm", () => {
 		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
 		try {
 			renderSettings("proj-1", undefined, "general");
-			await userEvent.click(await screen.findByRole("switch", { name: "Always use a temporary browser" }));
+			await chooseOption(await screen.findByRole("button", { name: "Sessions start in" }), "Temporary browser");
 
 			await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1), { timeout: 3_000 });
 			expect(putMock.mock.calls[0]?.[0]).toBe("/api/v1/projects/{id}");

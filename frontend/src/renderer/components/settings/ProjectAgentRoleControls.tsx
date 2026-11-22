@@ -267,9 +267,23 @@ export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: 
 	return <ProjectToggleRow id="project-workers-request-review" label={t("settings.project.workersRequestReviewToggle")} description={t("settings.project.workersRequestReviewDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
 }
 
-export function ProjectBrowserTemporaryToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+/** Where this project's sessions start: the default browser profile or a temporary browser. */
+export function ProjectBrowserStartSelect({ temporary, onChange }: { temporary: boolean; onChange: (temporary: boolean) => void }) {
 	const { t } = useTranslation();
-	return <ProjectToggleRow id="project-browser-temporary" label={t("settings.project.browserTemporaryToggle")} description={t("settings.project.browserTemporaryDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
+	const label = t("settings.project.browserStartLabel");
+	return (
+		<SettingsRow label={label}>
+			<SettingsOptionMenu
+				aria-label={label}
+				value={temporary ? "temporary" : "default"}
+				options={[
+					{ value: "default", label: t("settings.project.browserStartDefault") },
+					{ value: "temporary", label: t("settings.project.browserStartTemporary") },
+				]}
+				onChange={(value) => onChange(value === "temporary")}
+			/>
+		</SettingsRow>
+	);
 }
 
 export function ProjectCoAuthorCommitsToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {

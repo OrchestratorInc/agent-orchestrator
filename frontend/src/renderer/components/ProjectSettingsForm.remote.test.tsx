@@ -183,5 +183,5 @@ it("hides the temporary-browser setting for a project on another host", async ()
 	connect("box-a");
 	renderForm("box-a");
 	expect(await screen.findByText("Alpha")).toBeVisible();
-	expect(screen.queryByRole("switch", { name: "Always use a temporary browser" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "Sessions start in" })).toBeNull();
 });

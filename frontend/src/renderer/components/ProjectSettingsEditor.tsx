@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAutoReviewToggle, ProjectBrowserTemporaryToggle, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAutoReviewToggle, ProjectBrowserStartSelect, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -197,7 +197,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					</ProjectSettingsSection>
 				</>}
 				{capabilities.browserTemporary && <ProjectSettingsSection title={t("settings.project.browser")} grouped>
-					<ProjectBrowserTemporaryToggle checked={draft.browserTemporary ?? false} onCheckedChange={(browserTemporary) => patch({ browserTemporary })} />
+					<ProjectBrowserStartSelect temporary={draft.browserTemporary ?? false} onChange={(browserTemporary) => patch({ browserTemporary })} />
 				</ProjectSettingsSection>}
 				{generalExtra}
 			</> : <>
