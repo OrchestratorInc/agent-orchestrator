@@ -2129,6 +2129,14 @@ describe("slash commands", () => {
 		expect(screen.queryByText("Loading skills…")).toBeNull();
 	});
 
+	it("says the files are loading on the first @, and closes with Escape", async () => {
+		const { field } = renderComposer({ filePaths: [], filePathsLoading: true });
+		await typeInComposer(field, "@src");
+		expect(screen.getByText("Loading files…")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByText("Loading files…")).toBeNull();
+	});
+
 	it("opens on a slash after existing text", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "look here /rev");

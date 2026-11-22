@@ -310,6 +310,7 @@ export const ChatComposer = memo(function ChatComposer({
 	elicitation,
 	skills = [],
 	skillsLoading = false,
+	filePathsLoading = false,
 	filePaths = [],
 	filePathsTruncated,
 	onFileQuery,
@@ -430,6 +431,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * belong to the editor.
 	 */
 	skillsLoading?: boolean;
+	filePathsLoading?: boolean;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/**
@@ -870,7 +872,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// Drawn even with nothing to pick while the skills are on their way, so `/` is
 	// never answered with silence. Keyboard handling still follows `menuOpen`.
 	const skillsNote = skillsLoading && trigger?.kind === "skill" && trigger.key !== dismissedKey;
-	const menuShown = menuOpen || skillsNote;
+	const filesNote = filePathsLoading && trigger?.kind === "file" && trigger.key !== dismissedKey;
+	const menuShown = menuOpen || skillsNote || filesNote;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -2263,7 +2266,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		// The "Loading skills…" note closes the same way a menu does.
-		if (event.key === "Escape" && skillsLoading && liveTrigger?.kind === "skill" && liveTrigger.key !== dismissedKeyRef.current) {
+		if (event.key === "Escape" && liveTrigger && ((skillsLoading && liveTrigger.kind === "skill") || (filePathsLoading && liveTrigger.kind === "file")) && liveTrigger.key !== dismissedKeyRef.current) {
 			event.preventDefault();
 			event.stopPropagation();
 			dismissedKeyRef.current = liveTrigger.key;
@@ -2496,7 +2499,7 @@ export const ChatComposer = memo(function ChatComposer({
 						highlighted={activeIndex}
 						onPick={pick}
 						truncated={trigger?.kind === "file" && filePathsTruncated}
-						loadingNote={skillsNote ? "Loading skills…" : undefined}
+						loadingNote={skillsNote ? "Loading skills…" : filesNote ? "Loading files…" : undefined}
 					/>
 				) : null}
 

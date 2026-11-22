@@ -656,6 +656,7 @@ export interface ChatWorkspaceProps {
 	composerStarting?: boolean;
 	/** The path list was capped by the daemon rather than being all of them. */
 	filePathsTruncated?: boolean;
+	filePathsLoading?: boolean;
 	/** Renderer-only human messages awaiting their exact durable counterpart. */
 	localEchos?: ConversationLocalEcho[];
 	/**
@@ -946,6 +947,7 @@ function ChatWorkspaceContent({
 	skillsLoading,
 	filePaths,
 	filePathsTruncated,
+	filePathsLoading,
 	onFileQuery,
 	composerStarting = false,
 	localEchos,
@@ -2539,6 +2541,7 @@ function ChatWorkspaceContent({
 										skillsLoading={skillsLoading}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
+										filePathsLoading={filePathsLoading}
 										onFileQuery={onFileQuery}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 										cloudAttachments={cloudAttachments}

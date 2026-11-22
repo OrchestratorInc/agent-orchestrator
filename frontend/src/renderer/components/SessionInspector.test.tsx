@@ -552,6 +552,7 @@ describe("SessionInspector tabs", () => {
         "/api/v1/sessions/{sessionId}/workspace/manifest",
         {
           params: { path: { sessionId: "sess-1" } },
+          signal: expect.any(AbortSignal),
         },
       ),
     );
