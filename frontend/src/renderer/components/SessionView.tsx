@@ -2445,10 +2445,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const fetchWorkspaceFiles = useCallback(async () => {
 		const options = sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId);
-		return queryClient.fetchQuery(options).catch((error: unknown) => {
-			if (isCancelledError(error)) return queryClient.fetchQuery(options);
-			throw error;
-		});
+		for (;;) {
+			try {
+				return await queryClient.fetchQuery(options);
+			} catch (error) {
+				if (!isCancelledError(error)) throw error;
+			}
+		}
 	}, [hostId, queryClient, sessionId, t]);
 
 	const handleOpenArtifact = useCallback(

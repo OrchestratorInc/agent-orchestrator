@@ -172,7 +172,7 @@ func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID,
 func workspacePathSourceFor(sources []workspacePathSource, path string) (workspacePathSource, string, bool) {
 	best := -1
 	for i, source := range sources {
-		if source.prefix != "" && !strings.HasPrefix(path, source.prefix+"/") {
+		if source.prefix != "" && (!strings.HasPrefix(path, source.prefix+"/") || len(path) == len(source.prefix)+1) {
 			continue
 		}
 		if best < 0 || len(source.prefix) > len(sources[best].prefix) {

@@ -166,6 +166,16 @@ func TestListWorkspaceFilePathsPrefixesWorkspaceChildRepos(t *testing.T) {
 	}
 }
 
+func TestWorkspacePathSourceForSkipsAnEmptyRelativePath(t *testing.T) {
+	sources := []workspacePathSource{{prefix: ""}, {prefix: "a"}, {prefix: "a/b"}}
+	if source, rel, ok := workspacePathSourceFor(sources, "a/b/"); !ok || source.prefix != "a" || rel != "b/" {
+		t.Fatalf("nested repo entry = %q %q %v, want source a and b/", source.prefix, rel, ok)
+	}
+	if source, rel, ok := workspacePathSourceFor(sources, "a/b/x.go"); !ok || source.prefix != "a/b" || rel != "x.go" {
+		t.Fatalf("nested repo file = %q %q %v, want source a/b and x.go", source.prefix, rel, ok)
+	}
+}
+
 func TestSearchWorkspaceFilesMatchesFullListDetails(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	writeWorkspaceFile(t, repo, "src/app.go", "package main\n\nfunc main() {}\n")
