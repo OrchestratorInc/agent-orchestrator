@@ -511,7 +511,9 @@ paths:
         artifact_share_type_unsupported for a video the control plane does
         not serve, and 413 artifact_share_video_too_large for one over its
         size limit, as for a link's own file: a client leaves that file out
-        and publishes the page with the rest.
+        and publishes the page with the rest, naming them in
+        finalizeArtifactShare's files (an empty list when none uploaded),
+        since an update without files keeps the files the link served.
       requestBody:
         required: true
         content:
