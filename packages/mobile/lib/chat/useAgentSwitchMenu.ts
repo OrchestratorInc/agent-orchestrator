@@ -68,5 +68,8 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 		return () => { cancelled = true; abort.abort(); };
 	}, [catalogProject, cfg, targets]);
 
-	return useMemo(() => (agents?.length ? { agents, models } : undefined), [agents, models]);
+	// Never the running agent, even one listed before the chat moved to it while
+	// the connection was away (and the list could not be read again).
+	const offered = useMemo(() => agents?.filter((agent) => agent.id !== current), [agents, current]);
+	return useMemo(() => (offered?.length ? { agents: offered, models } : undefined), [offered, models]);
 }

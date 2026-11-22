@@ -91,6 +91,14 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	frameWidth.current = frameSize.width;
 	const blank = page !== null && !page.url;
 
+	// The last frame is kept only for the session that drew it.
+	const frameSession = useRef(sessionID);
+	useEffect(() => {
+		if (frameSession.current === sessionID) return;
+		frameSession.current = sessionID;
+		setFrameURI(undefined);
+	}, [sessionID]);
+
 	useEffect(() => {
 		setPage(null);
 		setFrameIsLive(false);
@@ -230,8 +238,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const interactive = status === "open" && Boolean(frameURI) && frameIsLive && !blank;
 	// Reconnecting with the last stream's frame on screen: it stays visible under
 	// a loading bar instead of being covered until the new stream draws (it takes
-	// no gestures meanwhile, see frameIsLive).
-	const holdingFrame = status === "connecting" && Boolean(frameURI) && !frameIsLive && !blank;
+	// no gestures meanwhile, see frameIsLive). The socket opens before that first
+	// frame, so the bar stays through "open" too.
+	const holdingFrame = (status === "connecting" || status === "open") && Boolean(frameURI) && !frameIsLive && !blank;
 	// Another session's page starts at its fitted size.
 	useEffect(() => {
 		zoomScale.value = 1;

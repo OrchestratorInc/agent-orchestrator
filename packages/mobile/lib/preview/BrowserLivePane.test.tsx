@@ -361,9 +361,20 @@ describe("live browser without a verified connection", () => {
 		await rerender();
 		// The new stream is connecting: still the old frame, still no cover.
 		expect(nodes("EmptyState").map((node) => node.props.title)).not.toContain("Connecting to browser…");
+		// Its socket opens before it draws: the bar stays until the first frame.
 		await open();
+		expect(nodes("LoadingBar")[0].props).toMatchObject({ loading: true, accessibilityLabel: "Reconnecting to the browser" });
 		await showFrame();
 		expect(nodes("LoadingBar")[0].props).toMatchObject({ loading: false, accessibilityLabel: "Loading page" });
+	});
+
+	it("does not show another session's last frame while the next session connects", async () => {
+		await render();
+		await open();
+		await showFrame();
+		await act(async () => { screen.update(<BrowserLivePane sessionID="session-2" onTitle={onTitle} headerItem={headerItem} />); });
+		expect(nodes("Image")).toHaveLength(0);
+		expect(nodes("EmptyState").map((node) => node.props.title)).toContain("Connecting to browser…");
 	});
 
 	it("says the machine is offline once it really is", async () => {

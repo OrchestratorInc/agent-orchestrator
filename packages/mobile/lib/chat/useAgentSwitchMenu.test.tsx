@@ -74,3 +74,17 @@ it("keeps the agents and their models while the connection is away, and lists th
 	expect(menu?.agents.map((agent) => agent.id)).toEqual(["codex", "cursor"]);
 	expect(menu?.models.codex?.models.map((model) => model.label)).toEqual(["GPT-6-Sol"]);
 });
+
+// The chat moved to another agent while the connection was away: the list kept
+// from before must not offer the agent the chat now runs.
+it("never offers the running agent from a list kept while the connection is away", async () => {
+	let cfg: ServerConfig | null = config;
+	let current = "claude-code";
+	function Switching() { menu = useAgentSwitchMenu({ cfg, current, enabled: true }); return null; }
+	await act(async () => { renderer = create(<Switching />); });
+	expect(menu?.agents.map((agent) => agent.id)).toEqual(["codex", "cursor"]);
+	cfg = null;
+	current = "codex";
+	await act(async () => { renderer!.update(<Switching />); });
+	expect(menu?.agents.map((agent) => agent.id)).toEqual(["cursor"]);
+});
