@@ -163,6 +163,7 @@ import {
 } from "./main/chat-draft-unload";
 import {
 	type DaemonProbe,
+	type DaemonProber,
 	expectedDaemonPort,
 	parseDaemonProbe,
 	resolveDaemonFromPort,
@@ -1936,9 +1937,12 @@ function processAlive(pid: number): boolean {
 	}
 }
 
-async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz"): Promise<DaemonProbe | null> {
+async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz", onTimeout?: () => void): Promise<DaemonProbe | null> {
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
+	const timer = setTimeout(() => {
+		onTimeout?.();
+		controller.abort();
+	}, DAEMON_PROBE_TIMEOUT_MS);
 	try {
 		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
 		const response = await fetch(`http://127.0.0.1:${port}/${endpoint}`, { signal: controller.signal });
@@ -2196,6 +2200,7 @@ function establishSupervisorLink(): void {
 
 async function inspectExistingDaemon(
 	launch: DaemonLaunchSpec,
+	probe: DaemonProber = readDaemonProbe,
 ): Promise<{ status: DaemonStatus; owner: string | undefined; appRunId: string | undefined } | null> {
 	const handshakePath = runFilePath();
 	let runFileContents: string | null = null;
@@ -2209,7 +2214,7 @@ async function inspectExistingDaemon(
 	const status = await resolveDaemonFromRunFile({
 		runFileContents,
 		isProcessAlive: processAlive,
-		probe: readDaemonProbe,
+		probe,
 		identityError: (probe) => daemonIdentityError(launch, probe),
 	});
 	if (!status) return null;
@@ -2402,12 +2407,40 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	}
 
 	let replacementKeepAlive: boolean | undefined;
-	const existing = await inspectExistingDaemon(launch);
+	// On Windows a listener that accepts but never answers must not cost three
+	// serial 2s timeouts and then be mistaken for an absent daemon. Keep the
+	// timeout fact separate from a refused connection or invalid response.
+	let timedOutProbe: { port: number; endpoint: "healthz" | "readyz" } | null = null;
+	const timedOutEndpoints = new Set<string>();
+	const startupProbe: DaemonProber = process.platform === "win32"
+		? (port, endpoint) => {
+			const key = `${port}/${endpoint}`;
+			if (timedOutEndpoints.has(key)) return Promise.resolve(null);
+			return readDaemonProbe(port, endpoint, () => {
+				timedOutProbe ??= { port, endpoint };
+				timedOutEndpoints.add(key);
+			});
+		}
+		: readDaemonProbe;
+	const reportTimedOutProbe = (): boolean => {
+		if (!timedOutProbe) return false;
+		setDaemonStatus({
+			state: "error",
+			code: "not_ready",
+			message: `A process on port ${timedOutProbe.port} did not answer /${timedOutProbe.endpoint} within ${DAEMON_PROBE_TIMEOUT_MS / 1_000} seconds. Orchestrator cannot safely start another daemon until that port responds or is freed.`,
+		});
+		return true;
+	};
+	const existing = await inspectExistingDaemon(launch, startupProbe);
 	if (startCancelled()) {
 		return daemonStatus;
 	}
 	if (existing) {
 		if (autoRestartIntent) return daemonStatus;
+		if (timedOutProbe && existing.status.state === "error") {
+			setDaemonStatus(existing.status);
+			return daemonStatus;
+		}
 		const ownership = browserDaemonOwnershipDecision(appRunId, existing);
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			lifecycleLog("daemon_replace", {
@@ -2454,7 +2487,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// miss an AO_PORT override.
 	const directDaemon = await resolveDaemonFromPort({
 		expectedPort: resolvedDaemonPort(),
-		probe: readDaemonProbe,
+		probe: startupProbe,
 		identityError: (probe) => daemonIdentityError(launch, probe),
 	});
 	if (startCancelled()) {
@@ -2462,6 +2495,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	}
 	if (directDaemon) {
 		if (autoRestartIntent) return daemonStatus;
+		if (timedOutProbe && directDaemon.state === "error") {
+			setDaemonStatus(directDaemon);
+			return daemonStatus;
+		}
 		let portAttachOwner: string | undefined;
 		let portAttachAppRunId: string | undefined;
 		// Re-link iff the daemon is app-owned. Read the run-file for the owner tag;
@@ -2514,6 +2551,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			return daemonStatus;
 		}
 	}
+	if (reportTimedOutProbe()) return daemonStatus;
 
 	// Every path from here spawns a daemon, which needs the login-shell env.
 	await shellEnvReady;
@@ -2537,7 +2575,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// the port is not replaced (out of scope). When no holder is identified, skip
 	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
 	// process that is left alone is logged below.
-	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
+	const orphanProbe = await startupProbe(resolvedDaemonPort(), "healthz");
+	if (startCancelled()) return daemonStatus;
+	if (!orphanProbe && reportTimedOutProbe()) return daemonStatus;
 	const runFilePath_ = runFilePath();
 	let runFile: ReturnType<typeof parseRunFile> = null;
 	if (runFilePath_) {
