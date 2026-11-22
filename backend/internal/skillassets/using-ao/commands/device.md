@@ -23,7 +23,8 @@ run setup yourself unless the user asked for device support.
    are never handed out.
 
 2. Build with the project's own tools and fix build errors yourself, aimed at
-   this session's device (the id `ao device open` printed): for example
+   this session's device (the `Device id:` line `ao device open` printed, or
+   `lease.device.id` with `--json`): for example
    `npx expo run:ios --device <udid>`, `xcodebuild -destination id=<udid>`, or
    `npx react-native run-android --deviceId <serial>`. Other sessions' devices
    may be running too, and Android tools without a device install on every one
