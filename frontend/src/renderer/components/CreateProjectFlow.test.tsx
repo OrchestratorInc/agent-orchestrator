@@ -3398,7 +3398,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(cloudMocks.startGitHubInstallation).not.toHaveBeenCalled();
 	});
 
-	it("points to Harness settings when no cloud harness is logged in", async () => {
+	it("points to Agents settings when no cloud harness is logged in", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [] });
@@ -3428,7 +3428,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		expect(await screen.findByText(/No harness is logged in for cloud yet/)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
-		await user.click(screen.getByRole("button", { name: "Go to Harness settings" }));
+		await user.click(screen.getByRole("button", { name: "Go to Agents settings" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", { harnessView: "cloud", preserveProject: true });
 	});
 

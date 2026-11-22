@@ -73,6 +73,31 @@ describe("app i18next instance", () => {
 		}
 	});
 
+	it("names Settings agent setup and account management by user task in every locale", () => {
+		const agentLabels = {
+			en: "Agents",
+			"zh-CN": "智能体",
+			ja: "エージェント",
+			ko: "에이전트",
+			es: "Agentes",
+			fr: "Agents",
+			de: "Agenten",
+			"pt-BR": "Agentes",
+			ru: "Агенты",
+			tr: "Ajanlar",
+		} as const;
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			expect(catalog["settings.harness"], locale).toBe(agentLabels[locale]);
+			expect(catalog["settings.agents"], locale).toBe(catalog["settings.codexAccounts.title"]);
+			expect(catalog["settings.cloudAgents.connect"], locale).not.toContain("Harness");
+			expect(catalog["settings.cloudAgents.description"], locale).not.toContain("Harness");
+		}
+		expect(enMessages["settings.agents"]).toBe("Accounts");
+		expect(enMessages["newTask.openHarnessSettings"]).toBe("Open Agents settings");
+		expect(enMessages["createProject.openHarnessSettings"]).toBe("Go to Agents settings");
+	});
+
 	it("uses English by default and Chinese when selected", () => {
 		expect(createAppI18n().t("settings.general")).toBe("General");
 		expect(createAppI18n("zh-CN").t("settings.general")).toBe("通用");

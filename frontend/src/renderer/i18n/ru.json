@@ -1782,7 +1782,7 @@
 	"report.titleLabel": "Заголовок",
 	"report.titlePlaceholder": "Краткий заголовок",
 	"report.whatHappened": "Что произошло?",
-	"settings.agents": "Подписки",
+	"settings.agents": "Аккаунты",
 	"settings.codexAccounts.add": "Добавить аккаунт",
 	"settings.codexAccounts.capacityResets": "Сбросы: {{value}}",
 	"settings.codexAccounts.planLabel": "Тариф {{name}}",

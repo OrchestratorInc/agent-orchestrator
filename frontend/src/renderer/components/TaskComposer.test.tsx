@@ -347,7 +347,7 @@ describe("TaskComposer", () => {
 		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.post).not.toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
-		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "local" }));
 	});
 
@@ -355,7 +355,7 @@ describe("TaskComposer", () => {
 		const queryClient = cloudFixture("", {}, []);
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "cloud" }));
 	});
 
@@ -1157,14 +1157,14 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
 		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch", undefined);
 		const expectedError = errorCode === "AGENT_BINARY_NOT_FOUND"
-			? "This agent is not installed. Open Agent Harnesses settings to install it, then try again."
+			? "This agent is not installed. Open Agents settings to install it, then try again."
 			: "Codex is not ready";
 		expect(screen.queryByText(expectedError)).not.toBeInTheDocument();
 
 		await act(async () => finishReadiness({ agents: [completed] }));
 		expect(await screen.findByText(expectedError)).toBeInTheDocument();
 		if (errorCode === "AGENT_BINARY_NOT_FOUND") {
-			fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+			fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", focusAgentId: "codex" }));
 		}
 		expect(queryClient.getQueryData(agentReadinessQueryKey)).toEqual({ agents: [completed] });
