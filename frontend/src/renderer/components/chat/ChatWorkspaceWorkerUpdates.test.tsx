@@ -530,6 +530,24 @@ describe("background turns in the orchestrator chat", () => {
 		expect(lineKey()).toBe(key);
 	});
 
+	it("leaves a background turn in view when a worker's steer carried in a report that still needs the user", () => {
+		const steer: ConversationActivity = {
+			kind: "activity", id: "steer-1", turnId: "run", sequence: 12, revision: 0, activityKind: "system", status: "completed",
+			summary: "Steer", createdAt: at(1), detail: { event: "steer", senderSessionId: "proj-7", senderDisplayName: "Menus", text: "Rebased." },
+		};
+		const carried = report("t-report", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?");
+		const items: ConversationItem[] = [
+			report("run", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			{ ...command("run", 1, "ao status"), sequence: 11 }, steer, { ...carried, sequence: 13 }, reply("run", 2, "Noted."),
+		];
+		renderSnapshot({
+			...chatFixtureEmpty, latestSequence: 22, items,
+			turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(1), completedAt: at(2) }],
+			batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+		});
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
 	it("keeps failures apart when the field after a timestamp differs", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider error: {"time":"2026-11-22T10:0${index}:00Z","status":${index ? 500 : 429}}` })) });

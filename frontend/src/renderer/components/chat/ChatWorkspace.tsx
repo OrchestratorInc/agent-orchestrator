@@ -4544,7 +4544,7 @@ export function Timeline({
 		const cleaned = spawnedIds.size === 0 ? placed : placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current);
+		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
 	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
@@ -7010,7 +7010,7 @@ function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boo
 	return [group.folded!.kind === "replaced" ? `${group.key}:open` : `${member.key}:line`, `${member.key}:open`, `${member.key}:worked`];
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
 	let run: { kind: "background" | "failed"; key: string; members: TimelineGroup[] } | undefined;
@@ -7033,7 +7033,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
 			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
 			: undefined;
-		const standing = outcome ? turnStanding(group.items, outcome.state, index) : "yours";
+		const standing = outcome ? turnStanding(group.items, outcome.state, index, carried) : "yours";
 		if (standing !== "background" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"

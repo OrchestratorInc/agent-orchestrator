@@ -214,6 +214,23 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(early.result.current).toBe("unread"));
 	});
 
+	it("lights up when a worker's steer carried in a report that still needs the user", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({
+			...quiet,
+			items: [
+				quiet.items[0]!,
+				{ kind: "activity", id: "steer-1", turnId: "t1", sequence: 2, revision: 0, activityKind: "system", status: "completed", summary: "Steer", createdAt: "2026-11-08T10:05:10Z", detail: { event: "steer", senderSessionId: "proj-7", text: "Rebased." } },
+				{ ...quiet.items[0]!, id: "carried", turnId: "t-report", sequence: 3, text: "Reports since your previous turn:\n\n[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?" },
+				{ ...quiet.items[1]!, sequence: 4 },
+			],
+			batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "t1", steerActivityId: "steer-1" }],
+		});
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+	});
+
 	it("lights up when the settled turns cannot be read", async () => {
 		fetchRecentConversation.mockRejectedValue(new Error("offline"));
 		const hook = afterYourReply();

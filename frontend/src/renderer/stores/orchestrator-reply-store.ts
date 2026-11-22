@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { turnStanding } from "../components/chat/background-turns";
-import { indexWorkerUpdates } from "../components/chat/WorkerUpdates";
+import { indexWorkerUpdates, placeBatchedReports } from "../components/chat/WorkerUpdates";
 import { fetchRecentConversation } from "../hooks/useConversation";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -61,10 +61,11 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 		check = fetchRecentConversation(sessionId, hostId).then((snapshot) => {
 			if (snapshot.hasMoreBefore && !(Date.parse(snapshot.items[0]?.createdAt ?? "") <= since)) return true;
 			const index = indexWorkerUpdates(snapshot.items);
+			const { under } = placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items);
 			const settled = snapshot.turns.filter((turn) => Date.parse(turn.completedAt ?? "") >= since);
 			const standsOut = settled.some((turn) => {
 				if (turn.hasHumanPrompt) return true;
-				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index);
+				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index, under);
 				return standing !== "background" && standing !== "replaced";
 			});
 			const started = snapshot.turns.some((turn) => {
