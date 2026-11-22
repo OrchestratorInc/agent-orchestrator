@@ -1359,7 +1359,9 @@ export function useConversationCommands(
 	 * because the advice differs: one means "send this as a new message instead", one
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
+	const steerMutationKey = ["steer", hostId ?? "local", sessionId];
 	const steer = useMutation({
+		mutationKey: steerMutationKey,
 		onMutate: () => {
 			setSteerRefusedOn(undefined);
 			return { sentOn: currentTurnIdRef.current };
@@ -1392,7 +1394,10 @@ export function useConversationCommands(
 			invalidate();
 		},
 	});
-	const steerInFlight = steer.isPending && !steer.variables?.recoverOnly;
+	const steerInFlight = useIsMutating({
+		mutationKey: steerMutationKey,
+		predicate: (mutation) => !(mutation.state.variables as { recoverOnly?: boolean } | undefined)?.recoverOnly,
+	}) > 0;
 
 	const promoteQueuedTurn = useMutation({
 		mutationFn: async (turnId: string) => {

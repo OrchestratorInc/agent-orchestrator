@@ -1414,6 +1414,30 @@ describe("steering refusals", () => {
 		await waitFor(() => expect(result.current.activateBranchDisabled).toBe(false));
 	});
 
+	it("keeps branch switching disabled for a steer still uploading after the chat is reopened", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		const Shared = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const upload = deferred<{ data: unknown; error: undefined }>();
+		postMock.mockImplementationOnce(() => upload.promise);
+		const first = renderHook(() => useConversationCommands("ao-1"), { wrapper: Shared });
+		act(() => {
+			void first.result.current.steer("slow image", [{ mimeType: "image/png", data: "aW1hZ2U=" }]).catch(() => {});
+		});
+		await waitFor(() => expect(first.result.current.activateBranchDisabled).toBe(true));
+		first.unmount();
+
+		const reopened = renderHook(() => useConversationCommands("ao-1"), { wrapper: Shared });
+		expect(reopened.result.current.activateBranchDisabled).toBe(true);
+		await act(async () => {
+			upload.resolve({ data: { outcome: "steered", duplicate: false }, error: undefined });
+		});
+		await waitFor(() => expect(reopened.result.current.activateBranchDisabled).toBe(false));
+	});
+
 	it("clears steer pending before a slow conversation refresh finishes", async () => {
 		const refresh = deferred<void>();
 		const steerResponse = deferred<{
