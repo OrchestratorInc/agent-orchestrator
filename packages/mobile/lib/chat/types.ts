@@ -111,6 +111,8 @@ export type ConversationMessage = {
 	senderDisplayName?: string;
 	/** The daemon can branch before this human prompt and resend it edited. */
 	editAvailable?: boolean;
+	/** The idempotency key the sender gave a human message. */
+	clientMessageId?: string;
 	createdAt: string;
 };
 

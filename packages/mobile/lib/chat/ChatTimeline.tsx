@@ -67,7 +67,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, followsAfterRest, isSentItem, newestSequence, openingRow, optimisticSentItem, RESUME_SLOP, SENT_ROOM_SHARE, sentTurnRoom, type Release, type SendAnchor } from "./timelineScroll";
+import { atTail, followsAfterRest, matchesSend, newestSequence, sentItemId, openingRow, optimisticSentItem, RESUME_SLOP, SENT_ROOM_SHARE, sentTurnRoom, type Release, type SendAnchor } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 import { ReplyPacingContext, usePacedReply, type ReplyPacing } from "./usePacedReply";
 import { FollowScrollView, glideStyles, useFollowGlide } from "./followGlide";
@@ -350,7 +350,7 @@ function Timeline({
 	// A message just sent shows at once, drawn from the send until the conversation has it.
 	const items = useMemo(() => {
 		const readable = readableConversationItems(snapshot, openingTurnId);
-		if (!anchor?.text || readable.some((item) => isSentItem(item, anchor.after))) return readable;
+		if (!anchor?.text || readable.some((item) => matchesSend(item, anchor))) return readable;
 		const optimistic = optimisticSentItem(anchor, newestSequence(snapshot.items));
 		return optimistic ? [...readable, optimistic] : readable;
 	}, [anchor, openingTurnId, snapshot]);
@@ -383,27 +383,34 @@ function Timeline({
 	// running turn, so the room starts at the message, not the turn's top.
 	const sent = useMemo(() => {
 		if (!anchor) return undefined;
+		let fallback: { index: number; item: ConversationItem } | undefined;
 		for (let index = groups.length - 1; index >= 0; index--) {
-			const item = groups[index].items.find((candidate) => isSentItem(candidate, anchor.after));
-			if (item) return { index, item };
+			for (const item of groups[index].items) {
+				if (!matchesSend(item, anchor)) continue;
+				// The send's own key first; another match only stands in for it.
+				if (anchor.clientMessageId && sentItemId(item) === anchor.clientMessageId) return { index, item };
+				fallback ??= { index, item };
+			}
 		}
-		return undefined;
+		return fallback;
 	}, [anchor, groups]);
 	const anchorFound = sent ? anchor : undefined;
 	// The keyboard the message is laid out above, taken once per send in an
 	// effect (a shared value is not read while rendering): none while it is
 	// closing, as it does when the send button is tapped.
-	const [roomKeyboard, setRoomKeyboard] = useState<{ anchor: SendAnchor; keyboard: number } | undefined>(undefined);
+	// Sends are told apart by `at`: the screen updates an anchor when its send returns.
+	const sentAt = anchorFound?.at;
+	const [roomKeyboard, setRoomKeyboard] = useState<{ at: number; keyboard: number } | undefined>(undefined);
 	useEffect(() => {
-		if (!anchorFound || roomKeyboard?.anchor === anchorFound) return;
-		setRoomKeyboard({ anchor: anchorFound, keyboard: keyboardMoving.value && !keyboardOpening.value ? 0 : keyboardInset.current });
-	}, [anchorFound, keyboardMoving, keyboardOpening, roomKeyboard]);
+		if (sentAt === undefined || roomKeyboard?.at === sentAt) return;
+		setRoomKeyboard({ at: sentAt, keyboard: keyboardMoving.value && !keyboardOpening.value ? 0 : keyboardInset.current });
+	}, [sentAt, keyboardMoving, keyboardOpening, roomKeyboard]);
 	// Only while the turn is the newest row: room above a later row would be a gap.
 	// The message's row is measured from its first frame (so it is not redrawn
 	// once the room comes); the room follows once the keyboard is known.
 	const roomKey = sent && sent.index === groups.length - 1 ? groups[sent.index].key : undefined;
 	const roomItem = roomKey ? sent?.item.id : undefined;
-	const room = roomKey && listHeight && roomKeyboard?.anchor === anchorFound
+	const room = roomKey && listHeight && roomKeyboard?.at === sentAt
 		? sentTurnRoom({ listHeight, keyboard: roomKeyboard?.keyboard ?? 0, topClear: underHeader + topInset + space.md, endPad, share: SENT_ROOM_SHARE })
 		: 0;
 	// Recomputed per snapshot but kept by identity while its contents are the
@@ -466,7 +473,9 @@ function Timeline({
 	// the scroll events for that, so a glide could start from where the list was
 	// and jump; the native scroll starts from where it is. Follows asked for
 	// while it runs wait for it to end (`settle`, or the cap on Android).
-	const sendScroll = useRef<{ awaiting?: SendAnchor; pending: boolean; until: number; owed: boolean }>({ pending: false, until: 0, owed: false });
+	// `awaiting` and `pending` hold the send's `at`: waiting for its room, then
+	// for the keyboard; `scroll` numbers each move so a late cap ends only its own.
+	const sendScroll = useRef<{ awaiting?: number; pending?: number; until: number; owed: boolean; scroll: number }>({ until: 0, owed: false, scroll: 0 });
 	const latestFollowTail = useRef<() => void>(() => {});
 	const endSendScroll = () => {
 		const send = sendScroll.current;
@@ -481,14 +490,15 @@ function Timeline({
 	const followToLatest = () => {
 		const send = sendScroll.current;
 		// The message is in but its room is not laid out yet; the move waits for it (`roomPlaced`).
-		if (send.awaiting) return;
-		if (send.pending) {
-			send.pending = false;
+		if (send.awaiting !== undefined) return;
+		if (send.pending !== undefined) {
+			send.pending = undefined;
 			if (glides()) {
+				const scroll = ++send.scroll;
 				send.until = Date.now() + SEND_SCROLL_MS;
 				send.owed = false;
 				scrollToLatest(true, true);
-				setTimeout(() => { if (endSendScroll()) latestFollowTail.current(); }, SEND_SCROLL_MS);
+				setTimeout(() => { if (send.scroll === scroll && endSendScroll()) latestFollowTail.current(); }, SEND_SCROLL_MS);
 				return;
 			}
 		}
@@ -516,8 +526,10 @@ function Timeline({
 		if (!followAfterKeyboard.current) return;
 		followAfterKeyboard.current = false;
 		if (!followsTail.current) return;
+		// A send whose room is not laid out yet moves once it is (`roomPlaced`), not with a snap now.
+		if (sendScroll.current.awaiting !== undefined) return;
 		// A send that waited for the keyboard to close makes its move now.
-		if (sendScroll.current.pending) followToLatest();
+		if (sendScroll.current.pending !== undefined) followToLatest();
 		else scrollToLatest(false);
 	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
@@ -526,29 +538,34 @@ function Timeline({
 	// their finger on the list. The move waits for the room below the message
 	// (its turn reports it laid out, `roomPlaced`), so the list's end already
 	// holds the message near the top; the move itself is `sendScroll`'s.
-	const broughtUp = useRef<SendAnchor | undefined>(undefined);
+	const broughtUp = useRef<number | undefined>(undefined);
 	useEffect(() => {
-		if (!anchorFound || broughtUp.current === anchorFound) return;
-		broughtUp.current = anchorFound;
-		if (dragging.current || (!followsTail.current && Date.now() - anchorFound.at > SEND_INTENT_MS)) return;
+		if (sentAt === undefined || broughtUp.current === sentAt) return;
+		broughtUp.current = sentAt;
+		if (dragging.current || (!followsTail.current && Date.now() - sentAt > SEND_INTENT_MS)) return;
 		followsTail.current = true;
 		setShowJump(false);
-		sendScroll.current.awaiting = anchorFound;
+		sendScroll.current.awaiting = sentAt;
 		// A message whose row cannot report (drawn inside a folded run) moves without waiting long.
 		const cap = setTimeout(() => latestRoomPlaced.current(), ROOM_PLACE_CAP_MS);
 		return () => {
 			clearTimeout(cap);
-			// The send failed or the session changed before the move: following carries on.
-			if (sendScroll.current.awaiting === anchorFound) sendScroll.current.awaiting = undefined;
+			// The send failed or the session changed before the move: no move is
+			// made for it, and a follow it held back goes now.
+			const send = sendScroll.current;
+			const held = send.awaiting === sentAt;
+			if (held) send.awaiting = undefined;
+			if (send.pending === sentAt) send.pending = undefined;
+			if (held) requestAnimationFrame(() => latestFollowTail.current());
 		};
-	}, [anchorFound]);
+	}, [sentAt]);
 	const roomPlaced = useCallback(() => latestRoomPlaced.current(), []);
 	const latestRoomPlaced = useRef(() => {});
 	latestRoomPlaced.current = () => {
 		const send = sendScroll.current;
-		if (!send.awaiting) return;
+		if (send.awaiting === undefined) return;
+		send.pending = send.awaiting;
 		send.awaiting = undefined;
-		send.pending = true;
 		requestAnimationFrame(() => latestFollowTail.current());
 	};
 
@@ -689,9 +706,13 @@ function Timeline({
 		// follow) as momentum ending too. Only a drag decides whether to follow;
 		// one of ours that landed short of an end still moving goes again.
 		if (!dragging.current) {
-			// Our send scroll ended here; output it held back is below, so not at the end.
-			endSendScroll();
-			if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);
+			// Each step of a glide is a scroll of ours that iOS reports as ended
+			// too; the glide is still following, so there is nothing to settle.
+			if (glide.active()) return;
+			// Our send scroll ended here. Output it held back goes now, even if
+			// the list is within a thumb of the end.
+			const owed = endSendScroll();
+			if (followsTail.current && (owed || !atTail(event.nativeEvent, keyboardInset.current))) requestAnimationFrame(followTail);
 			return;
 		}
 		dragging.current = false;
@@ -756,7 +777,7 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; sendScroll.current.awaiting = undefined; endSendScroll(); }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = undefined; sendScroll.current.awaiting = undefined; endSendScroll(); }}
 							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}

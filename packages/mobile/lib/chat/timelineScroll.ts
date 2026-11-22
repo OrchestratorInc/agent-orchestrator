@@ -103,13 +103,44 @@ export const SENT_ROOM_SHARE = 0.75;
  * shows the message the moment it is sent (`optimisticSentItem`) until the
  * conversation has it; a steer joins the running turn `turnId`.
  */
-export type SendAnchor = { conversationId: string; after: number; at: number; kind?: "send" | "steer"; text?: string; turnId?: string };
+export type SendAnchor = {
+	conversationId: string;
+	after: number;
+	/** When it was sent; also the send's identity, kept when the screen updates the anchor. */
+	at: number;
+	kind?: "send" | "steer";
+	text?: string;
+	turnId?: string;
+	/** The send's idempotency key, which the conversation keeps on the message or steer. */
+	clientMessageId?: string;
+	/** The send has returned; the conversation has whatever it took. */
+	settled?: boolean;
+};
 
 /** Whether `item` is what a send after `after` put in the conversation: the person's message, or their steer. */
 export function isSentItem(item: ConversationItem, after: number): boolean {
 	if (item.sequence <= after) return false;
 	if (item.kind === "message") return item.role === "user" && item.origin === "human";
 	return item.activityKind === "system" && item.detail?.event === "steer" && !item.detail.senderSessionId;
+}
+
+/** The idempotency key the conversation kept on a message or steer, when it has one. */
+export function sentItemId(item: ConversationItem): string | undefined {
+	if (item.kind === "message") return item.clientMessageId;
+	return typeof item.detail?.clientMessageId === "string" ? item.detail.clientMessageId : undefined;
+}
+
+/**
+ * Whether `item` can be the send's own message or steer. While the send is in
+ * flight, one carrying another key is someone else's (another device, another
+ * agent's steer) and is passed over. One without a key (an older daemon) is
+ * taken by its place after the send began, and so is any once the send has
+ * returned and nothing carries its key (a resend of an earlier send).
+ */
+export function matchesSend(item: ConversationItem, anchor: SendAnchor): boolean {
+	if (!isSentItem(item, anchor.after)) return false;
+	const id = sentItemId(item);
+	return !anchor.clientMessageId || anchor.settled || id === undefined || id === anchor.clientMessageId;
 }
 
 /**
@@ -121,7 +152,7 @@ export function optimisticSentItem(anchor: SendAnchor, newest: number): Conversa
 	if (!anchor.text) return undefined;
 	const base = { id: `optimistic:${anchor.at}`, sequence: Math.max(newest, anchor.after) + 0.5, revision: 0, createdAt: new Date(anchor.at).toISOString() };
 	if (anchor.kind === "steer") {
-		return { ...base, kind: "activity", turnId: anchor.turnId, activityKind: "system", status: "completed", summary: anchor.text, detail: { event: "steer", text: anchor.text } };
+		return { ...base, kind: "activity", turnId: anchor.turnId, activityKind: "system", status: "completed", summary: anchor.text, detail: { event: "steer", text: anchor.text, clientMessageId: anchor.clientMessageId } };
 	}
-	return { ...base, kind: "message", role: "user", origin: "human", text: anchor.text, streaming: false };
+	return { ...base, kind: "message", role: "user", origin: "human", text: anchor.text, streaming: false, clientMessageId: anchor.clientMessageId };
 }

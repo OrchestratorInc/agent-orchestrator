@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createReplyPacer, receiveReplyText, stepReplyPacer } from "./replyPacer";
-import { glideStep, isSentItem, newestSequence, optimisticSentItem, SENT_ROOM_SHARE, sentTurnRoom } from "./timelineScroll";
+import { glideStep, isSentItem, matchesSend, newestSequence, optimisticSentItem, SENT_ROOM_SHARE, sentTurnRoom } from "./timelineScroll";
 
 const FRAME_MS = 1000 / 60;
 
@@ -69,6 +69,19 @@ describe("the sent message", () => {
 		expect(isSentItem({ ...steer, detail: { event: "steer", text: "x", senderSessionId: "other" } }, 9)).toBe(false);
 	});
 
+	it("is told from another device's message by the send's key while the send is in flight", () => {
+		const message = { kind: "message", id: "m", sequence: 10, revision: 1, role: "user", origin: "human", text: "hi", streaming: false, createdAt: "" } as const;
+		const sending = { ...anchor, clientMessageId: "mine" };
+		expect(matchesSend({ ...message, clientMessageId: "mine" }, sending)).toBe(true);
+		expect(matchesSend({ ...message, clientMessageId: "theirs" }, sending)).toBe(false);
+		// An older daemon keeps no key: the place after the send decides.
+		expect(matchesSend(message, sending)).toBe(true);
+		// Once the send has returned, a resend under an earlier key still counts.
+		expect(matchesSend({ ...message, clientMessageId: "earlier" }, { ...sending, settled: true })).toBe(true);
+		const steer = { kind: "activity", id: "s", sequence: 11, revision: 1, activityKind: "system", status: "completed", summary: "x", detail: { event: "steer", text: "x", clientMessageId: "theirs" }, createdAt: "" } as const;
+		expect(matchesSend(steer, sending)).toBe(false);
+	});
+
 	it("is drawn before the conversation has it, after everything loaded, as the real one will be", () => {
 		const message = optimisticSentItem({ ...anchor, kind: "send", text: "Fix the build" }, 12);
 		expect(message).toMatchObject({ kind: "message", role: "user", origin: "human", text: "Fix the build", sequence: 12.5 });
@@ -95,8 +108,9 @@ describe("newestSequence", () => {
  *
  * - main: the newest turn is its content's height, and every content change
  *   while following snaps the list to its end;
- * - now: the sent turn holds `sentTurnRoom` open below the message, and a
- *   follow glides (glideStep) to the end.
+ * - now: the sent turn holds `sentTurnRoom` (three quarters, as the timeline
+ *   asks) open below the message; the move to it is one native animated
+ *   scroll (UIKit's ease, about 300 ms), and later follows glide (glideStep).
  *
  * Events: the message lands with a delivery note that clears on the ack, a
  * Working row, two tool rows, then a streamed reply paced by replyPacer (the
@@ -120,7 +134,10 @@ function simulate(version: Version, replyLength: number, drag?: Drag) {
 		snapshots.push({ at, length, streaming: length < replyLength });
 	}
 	const pacer = createReplyPacer("", 0, true);
-	const room = sentTurnRoom({ listHeight: LIST, keyboard: 0, topClear: TOP_CLEAR, endPad: END_PAD });
+	const room = sentTurnRoom({ listHeight: LIST, keyboard: 0, topClear: TOP_CLEAR, endPad: END_PAD, share: SENT_ROOM_SHARE });
+	// The send's move: one native animated scroll request once the room is laid out.
+	let nativeScrolls = 0;
+	let native: { from: number; to: number; start: number } | undefined;
 	const turnTop = HISTORY; // where the sent turn starts in the content
 	let offset = HISTORY + END_PAD - LIST; // resting at the end before the send
 	let following = true;
@@ -148,8 +165,18 @@ function simulate(version: Version, replyLength: number, drag?: Drag) {
 			offset -= drag.by;
 			following = false;
 			dragged = true;
+		} else if (following && version === "main") {
+			offset = end;
 		} else if (following) {
-			offset = version === "now" ? glideStep(offset, end, FRAME_MS, LIST) : end;
+			if (!nativeScrolls && at >= 100) {
+				nativeScrolls++;
+				native = { from: offset, to: end, start: at };
+			}
+			if (native) {
+				const progress = Math.min(1, (at - native.start) / 300);
+				offset = native.from + (native.to - native.from) * (1 - Math.cos(Math.PI * progress)) / 2;
+				if (progress >= 1) native = undefined;
+			} else offset = glideStep(offset, end, FRAME_MS, LIST);
 		}
 		frames.push({ at, offset, messageY: turnTop - offset, moved: offset - before });
 	}
@@ -160,6 +187,8 @@ function simulate(version: Version, replyLength: number, drag?: Drag) {
 		messageYBeforeReply: Math.round(frames.find((frame) => frame.at >= 1500)!.messageY),
 		/** Frames the move to the sent message took (1 is a snap). */
 		sendScrollFrames: sendScroll.length,
+		/** Native animated scroll requests the send made. */
+		nativeScrolls,
 		/** Times the list lurched from still by 10 pt or more in one frame while the reply streamed. */
 		streamingSteps: streaming.filter((frame, index) => Math.abs(frame.moved) >= 10 && Math.abs(streaming[index - 1]?.moved ?? 0) < 1).length,
 		maxStreamingMove: Math.round(Math.max(0, ...streaming.map((frame) => Math.abs(frame.moved)))),
@@ -179,8 +208,11 @@ describe("following a send, main against now", () => {
 	const dragged = { main: simulate("main", 2600, { at: 2600, by: 400 }), now: simulate("now", 2600, { at: 2600, by: 400 }) };
 	if (process.env.PACE_REPORT) console.table({ "short main": short.main, "short now": short.now, "long main": long.main, "long now": long.now, "drag main": dragged.main, "drag now": dragged.now });
 
-	it("brings the sent message to the top of the visible list and keeps it there while the turn fills in", () => {
-		expect(short.now.messageYBeforeReply).toBe(TOP_CLEAR);
+	it("brings the sent message three quarters of the way up and keeps it there while the turn fills in", () => {
+		// About a quarter of the visible height below the header (110 + 570 / 4): the room ends the list.
+		const room = sentTurnRoom({ listHeight: LIST, keyboard: 0, topClear: TOP_CLEAR, endPad: END_PAD, share: SENT_ROOM_SHARE });
+		expect(short.now.messageYBeforeReply).toBe(LIST - END_PAD - room);
+		expect(short.now.messageYBeforeReply).toBe(252);
 		expect(short.now.contentChangesBeforeReply).toBe(0);
 		// On main it sits at the bottom, under what came before it, and every row moves it.
 		expect(short.main.messageYBeforeReply).toBeGreaterThan(LIST / 2);
@@ -192,7 +224,10 @@ describe("following a send, main against now", () => {
 		expect(short.main.movingWhileStreaming).toBeGreaterThan(0);
 	});
 
-	it("moves to the sent message in one glide rather than a snap", () => {
+	it("moves to the sent message in one native animated scroll rather than a snap", () => {
+		expect(short.now.nativeScrolls).toBe(1);
+		expect(long.now.nativeScrolls).toBe(1);
+		expect(short.main.nativeScrolls).toBe(0);
 		expect(short.main.sendScrollFrames).toBeLessThanOrEqual(3);
 		expect(short.now.sendScrollFrames).toBeGreaterThan(10);
 	});

@@ -249,26 +249,36 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// that fails clears it.
 	const [sendAnchor, setSendAnchor] = useState<SendAnchor | undefined>(undefined);
 	useEffect(() => { setSendAnchor(undefined); }, [session.id]);
+	// The send's own key goes with it, so the timeline knows its message from
+	// one another device or agent sends meanwhile.
 	const anchorSend = (kind: "send" | "steer", text?: string): SendAnchor | undefined => {
 		const current = latestSnapshot.current;
 		if (!current) return undefined;
 		const turnId = kind === "steer" ? activeTurn(current)?.id : undefined;
-		const anchor = { conversationId: current.conversationId, after: newestSequence(current.items), at: Date.now(), kind, text, turnId };
+		const anchor = { conversationId: current.conversationId, after: newestSequence(current.items), at: Date.now(), kind, text, turnId, clientMessageId: clientMessageId() };
 		setSendAnchor(anchor);
 		return anchor;
 	};
+	// The send returned with the key it delivered under (a resend of an earlier
+	// send keeps that one's), and the conversation has what it took.
+	const settleAnchor = (anchor: SendAnchor | undefined, id: string) => {
+		if (anchor) setSendAnchor((shown) => shown?.at === anchor.at ? { ...shown, clientMessageId: id, settled: true } : shown);
+	};
 	const dropAnchor = (anchor: SendAnchor | undefined) => {
-		if (anchor) setSendAnchor((shown) => shown === anchor ? undefined : shown);
+		if (anchor) setSendAnchor((shown) => shown?.at === anchor.at ? undefined : shown);
 	};
 	const send = useCallback(
 		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => {
 			const plain = !attachments?.length && !resources?.length && !excerpts?.length;
 			const anchor = anchorSend("send", plain && !agentBusy ? text : undefined);
 			try {
-				return await sendConversation(
+				const id = await sendConversation(
 					text, attachments, resources, excerpts,
 					pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
+					anchor?.clientMessageId,
 				);
+				settleAnchor(anchor, id);
+				return id;
 			} catch (cause) {
 				dropAnchor(anchor);
 				throw cause;
@@ -281,7 +291,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const steer = useCallback(async (text: string) => {
 		const anchor = anchorSend("steer", text);
 		try {
-			return await steerConversation(text);
+			const id = await steerConversation(text, anchor?.clientMessageId);
+			settleAnchor(anchor, id);
+			return id;
 		} catch (cause) {
 			dropAnchor(anchor);
 			throw cause;

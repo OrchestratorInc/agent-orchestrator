@@ -45,6 +45,8 @@ export type FollowGlide = {
 	/** The list was put at `offset` by something else (an instant scroll of ours, a drag that came to rest). */
 	place(offset: number): void;
 	stop(): void;
+	/** Whether a glide is moving the list. */
+	active(): boolean;
 	/** Forces a commit each frame the glide moves (see `commit`). */
 	commitStyle: ReturnType<typeof useAnimatedStyle>;
 };
@@ -136,6 +138,9 @@ export function useFollowGlide(keyboardMoving: SharedValue<boolean>, onKeyboardT
 		},
 		stop() {
 			gliding.value = false;
+		},
+		active() {
+			return gliding.value;
 		},
 	}), [commitStyle, frames, gliding, parked, position, reach, scrollRef, target, ticket]);
 }

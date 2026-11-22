@@ -101,8 +101,8 @@ describe("a sent message", () => {
 	});
 
 	it("is brought to the top once, never out from under the person's finger", () => {
-		expect(source).toContain("if (!anchorFound || broughtUp.current === anchorFound) return;");
-		expect(source).toContain("if (dragging.current || (!followsTail.current && Date.now() - anchorFound.at > SEND_INTENT_MS)) return;");
+		expect(source).toContain("if (sentAt === undefined || broughtUp.current === sentAt) return;");
+		expect(source).toContain("if (dragging.current || (!followsTail.current && Date.now() - sentAt > SEND_INTENT_MS)) return;");
 	});
 
 	// Sending closes the keyboard, which moves the list itself, and iOS drops
@@ -114,7 +114,7 @@ describe("a sent message", () => {
 	// has it; a steer joins the running turn and its room starts at the steer.
 	it("shows at once, and a steer gets room below it inside the running turn", () => {
 		expect(source).toContain("const optimistic = optimisticSentItem(anchor, newestSequence(snapshot.items));");
-		expect(source).toContain("if (!anchor?.text || readable.some((item) => isSentItem(item, anchor.after))) return readable;");
+		expect(source).toContain("if (!anchor?.text || readable.some((item) => matchesSend(item, anchor))) return readable;");
 		expect(source).toContain("? <View key={row.key} onLayout={placeRoom(row.items[0].id)}>{renderItem(row.items[0])}</View>");
 		expect(source).toContain("if (room && roomItem && placedItem === roomItem) onRoomPlaced?.();");
 	});
@@ -124,14 +124,29 @@ describe("a sent message", () => {
 		expect(source).toContain("keyboard: keyboardMoving.value && !keyboardOpening.value ? 0 : keyboardInset.current");
 	});
 
+	// Its own key tells it from a message another device or agent sends meanwhile.
+	it("is found by the send's own key first", () => {
+		expect(source).toContain("if (anchor.clientMessageId && sentItemId(item) === anchor.clientMessageId) return { index, item };");
+	});
+
+	// A cap left by an earlier send must not end a newer send's scroll.
+	it("ends only its own send scroll when the cap runs out", () => {
+		expect(source).toContain("setTimeout(() => { if (send.scroll === scroll && endSendScroll()) latestFollowTail.current(); }, SEND_SCROLL_MS);");
+	});
+
+	// iOS reports each glide step as a finished scroll; settling them restarted the follow.
+	it("does not settle a glide's own steps", () => {
+		expect(source).toContain("if (glide.active()) return;");
+	});
+
 	it("moves to it in one native animated scroll after the keyboard closes", () => {
-		expect(source).toContain("sendScroll.current.awaiting = anchorFound;");
+		expect(source).toContain("sendScroll.current.awaiting = sentAt;");
 		// A failed send must not leave the follow waiting for a move that never comes.
-		expect(source).toContain("if (sendScroll.current.awaiting === anchorFound) sendScroll.current.awaiting = undefined;");
-		expect(source).toContain("send.awaiting = undefined;\n\t\tsend.pending = true;");
+		expect(source).toContain("if (held) send.awaiting = undefined;\n\t\t\tif (send.pending === sentAt) send.pending = undefined;\n\t\t\tif (held) requestAnimationFrame(() => latestFollowTail.current());");
+		expect(source).toContain("send.pending = send.awaiting;\n\t\tsend.awaiting = undefined;");
 		expect(source).toContain("scrollToLatest(true, true);");
 		expect(source).toContain("if (viewportHeight.current && !native) glide.place(endOffset());");
-		expect(source).toContain("if (sendScroll.current.pending) followToLatest();\n\t\telse scrollToLatest(false);");
+		expect(source).toContain("if (sendScroll.current.awaiting !== undefined) return;\n\t\t// A send that waited for the keyboard to close makes its move now.\n\t\tif (sendScroll.current.pending !== undefined) followToLatest();\n\t\telse scrollToLatest(false);");
 		expect(source).toContain("if (Date.now() < send.until) {\n\t\t\tsend.owed = true;");
 	});
 });
@@ -237,7 +252,7 @@ describe("jump to latest", () => {
 	});
 	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
 	it("lets only a drag stop following the newest message", () => {
-		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);");
+		expect(source).toContain("if (followsTail.current && (owed || !atTail(event.nativeEvent, keyboardInset.current))) requestAnimationFrame(followTail);");
 	});
 	// A follow is queued a frame ahead. Output that arrived just before a drag
 	// queued one that then ran mid-fling, carried the list back to its end, and
@@ -254,7 +269,7 @@ describe("jump to latest", () => {
 	// followed. It must not count against coming to rest at the end, and a
 	// follow that resumes catches up on it.
 	it("keeps the release's verdict through Android's still momentum and catches up when the follow resumes", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; sendScroll.current.awaiting = undefined; endSendScroll(); }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = undefined; sendScroll.current.awaiting = undefined; endSendScroll(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);");
 		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
@@ -493,7 +508,7 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; sendScroll.current.awaiting = undefined; endSendScroll(); }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = undefined; sendScroll.current.awaiting = undefined; endSendScroll(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
 		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");
