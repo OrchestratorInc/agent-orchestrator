@@ -221,6 +221,7 @@ type conversation struct {
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	backgroundTasks              func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
 	stopBackgroundTask           func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
+	backgroundTaskOutput         func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	historyNotice                func(string) bool
 	hideCommand                  func(acpsdk.AvailableCommand) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.

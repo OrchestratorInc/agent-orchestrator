@@ -59,3 +59,23 @@ func TestSanitizeTaskDescriptionCustomCredentialFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeTaskCommand(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"npm run dev", "npm run dev"},
+		{"cat <<EOF\n\tline\nEOF", "cat <<EOF\n\tline\nEOF"},
+		{"AO_TEST_TOKEN=sk-test-123 curl -H 'Authorization: Bearer abc.def-123' x", "AO_TEST_TOKEN=[redacted] curl -H 'Authorization: Bearer [redacted]' x"},
+		{"echo \u202eevil\u200b\x1b[31m\r", "echo evil[31m"},
+		{"echo \U0001F468\u200d\U0001F469", "echo \U0001F468\u200d\U0001F469"},
+		{strings.Repeat("x", 300), strings.Repeat("x", 300)},
+		// A match never spans a line break.
+		{"TOKEN=\nnpm run dev", "TOKEN=\nnpm run dev"},
+		{"deploy --api-token\nnpm run dev", "deploy --api-token\nnpm run dev"},
+		{"api_key=abc APIKEY=def", "api_key=[redacted] APIKEY=[redacted]"},
+		{"curl https://user:pw@example.com\n--github-token secret", "curl https://[redacted]@example.com\n--github-token [redacted]"},
+	} {
+		if got := SanitizeTaskCommand(tc.input); got != tc.want {
+			t.Errorf("got %q, want %q", got, tc.want)
+		}
+	}
+}

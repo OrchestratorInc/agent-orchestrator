@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -120,9 +121,11 @@ describe("patchClaudeRetryDetails", () => {
 describe("patchClaudeBackgroundTasks", () => {
 	function harness() {
 		const path = join(temporaryDirectory(), "tasks.js");
-		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype) {
+		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype ?? message.type) {
 			case "task_started": break; case "task_updated": break;
 			case "task_notification": break; case "background_tasks_changed": break;
+			case "user":
+			case "assistant": { break; }
 		} }
 		connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));`);
 		expect(patchClaudeBackgroundTasks(path)).toBe(true);
@@ -322,6 +325,118 @@ describe("patchClaudeBackgroundTasks", () => {
 			await expect(stop("server", "__proto__")).rejects.toThrow("invalid session");
 			expect(stopped).toEqual(["server"]);
 		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("patchClaudeBackgroundTasks output", () => {
+	function harness() {
+		const path = join(temporaryDirectory(), "tasks.js");
+		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype ?? message.type) {
+			case "task_started": break; case "task_updated": break;
+			case "task_notification": break; case "background_tasks_changed": break;
+			case "user":
+			case "assistant": { break; }
+		} }
+		connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));`);
+		patchClaudeBackgroundTasks(path);
+		const handlers = new Map();
+		const connection = { onRequest(method, _parser, handler) { handlers.set(method, handler); return connection; } };
+		const session = { toolUseCache: {} };
+		const dispatch = new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", `${readFileSync(path, "utf8")}\nreturn dispatch;`)(
+			connection, { sessions: { native: session } }, "goal", p => p,
+			{ invalidParams: (_data, message) => new Error(message ?? "invalid session"), methodNotFound: () => new Error("unavailable") },
+		);
+		const emit = message => dispatch(session, message);
+		const output = (taskId, params = {}) => handlers.get("_ao/session/background_task_output")({ params: { sessionId: "native", taskId, ...params } });
+		const read = () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } });
+		return { emit, output, read, session };
+	}
+
+	/** What Claude Code sends when a Bash call goes to the background (2.1.323). */
+	function launch(h, { taskId, toolUseId, command, file, text }) {
+		h.session.toolUseCache[toolUseId] = { name: "Bash", input: { command, run_in_background: true } };
+		h.emit({
+			type: "user",
+			tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: taskId },
+			message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: text ?? `Command running in background with ID: ${taskId}. Output is being written to: ${file}.` }] },
+		});
+		delete h.session.toolUseCache[toolUseId];
+	}
+
+	it("reports a background shell's command and reads the tail of its output file", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "session", "tasks");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "server.output");
+		writeFileSync(file, "> vite\n  Local: http://localhost:3000/\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash", description: "Start the dev server" }] });
+		launch(h, { taskId: "server", toolUseId: "toolu_1", command: "npm run dev", file });
+		expect(h.read().tasks).toMatchObject([{ id: "server", description: "Start the dev server", command: "npm run dev" }]);
+		await expect(h.output("server")).resolves.toEqual({ output: "> vite\n  Local: http://localhost:3000/\n", truncated: false });
+
+		// Past the byte cap, the read starts on the next whole line.
+		writeFileSync(file, `${"x".repeat(1500)}\nlast line\n`);
+		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: "last line\n", truncated: true });
+	});
+
+	it("reads only the file Claude Code named for that task", async () => {
+		const h = harness();
+		const file = join(temporaryDirectory(), "watch.output");
+		writeFileSync(file, "tick\n");
+		launch(h, { taskId: "watch", toolUseId: "toolu_2", command: "npm test -- --watch", file });
+		await expect(h.output("watch", { path: "/etc/hosts" })).resolves.toEqual({ output: "tick\n", truncated: false });
+		// Unknown tasks and a result that named a different file have no output.
+		launch(h, { taskId: "other", toolUseId: "toolu_3", command: "make", file: join(temporaryDirectory(), "unrelated.txt") });
+		for (const id of ["missing", "other", 7]) await expect(h.output(id)).rejects.toThrow("no output file");
+		rmSync(file);
+		await expect(h.output("watch")).rejects.toThrow("is gone");
+		h.session.queryClosed = true;
+		await expect(h.output("watch")).rejects.toThrow("Live Claude session unavailable");
+	});
+
+	it("keeps an output path that contains spaces", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "Jane Doe", "tasks");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "spaced.output");
+		writeFileSync(file, "tick\n");
+		launch(h, { taskId: "spaced", toolUseId: "toolu_4", command: "npm run dev", file });
+		await expect(h.output("spaced")).resolves.toEqual({ output: "tick\n", truncated: false });
+		for (const [taskId, path] of [
+			["win", "C:\\Users\\Jane Doe\\AppData\\Local\\Temp\\claude\\tasks\\win.output"],
+			["unc", "\\\\server\\share\\Jane Doe\\unc.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", file: path });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+		// A network share is never read.
+		await expect(h.output("unc")).rejects.toThrow("is gone");
+	});
+
+	it("takes the path nearest the file name, ending at its first mention", () => {
+		const h = harness();
+		for (const [taskId, text, path] of [
+			["near", "Output (see /docs) at /tmp/t/near.output", "/tmp/t/near.output"],
+			["first", "Output is being written to: /tmp/x/first.output. Use /tmp/y/first.output", "/tmp/x/first.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", text });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("refuses a symlink or a FIFO in place of the output file", async () => {
+		const h = harness();
+		const dir = temporaryDirectory();
+		const target = join(dir, "secret.txt");
+		writeFileSync(target, "not task output\n");
+		const link = join(dir, "link.output");
+		symlinkSync(target, link);
+		launch(h, { taskId: "link", toolUseId: "toolu_5", command: "make", file: link });
+		await expect(h.output("link")).rejects.toThrow("is gone");
+		const fifo = join(dir, "fifo.output");
+		execFileSync("mkfifo", [fifo]);
+		launch(h, { taskId: "fifo", toolUseId: "toolu_6", command: "make", file: fifo });
+		await expect(h.output("fifo")).rejects.toThrow("is gone");
 	});
 });
 
