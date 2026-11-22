@@ -26,7 +26,6 @@ import { reviewRouteForSession } from "./reviewView";
 import { isCloudHost } from "./cloud/mapping";
 import { MachineIdentity } from "./MachineIdentity";
 import type { MachineAppearance } from "./machineAppearance";
-import type { MachineFreshness } from "./machineFreshness";
 
 export const WorkerListRow = memo(
 	function WorkerListRow({
@@ -54,7 +53,7 @@ export const WorkerListRow = memo(
 	hostId?: string;
 	rowKey?: string;
 	projectName?: string;
-	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
+	machine?: { name: string; appearance: MachineAppearance };
 	/**
 	 * The row's machine can't be reached, so what it shows is the last thing
 	 * heard. Dimmed rather than hidden: the rows are still worth reading.
@@ -274,7 +273,6 @@ export const WorkerListRow = memo(
 		prev.hostId === next.hostId &&
 		prev.machine?.name === next.machine?.name &&
 		prev.machine?.appearance.symbol === next.machine?.appearance.symbol &&
-		prev.machine?.freshness === next.machine?.freshness &&
 		prev.unreachable === next.unreachable &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
@@ -309,7 +307,7 @@ function WorkerRowContents({
 	details: string;
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
-	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
+	machine?: { name: string; appearance: MachineAppearance };
 	unreachable?: boolean;
 	isRenaming?: boolean;
 	renameTitle?: string;
@@ -381,7 +379,7 @@ function WorkerRowContents({
 							{details}
 						</Text>
 					) : <View style={styles.metadataSpacer} />}
-					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} freshness={machine.freshness} style={styles.machineIdentity} /> : null}
+					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} style={styles.machineIdentity} /> : null}
 				</View>
 			) : null}
 		</>

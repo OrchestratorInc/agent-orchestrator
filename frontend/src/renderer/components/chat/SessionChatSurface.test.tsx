@@ -334,16 +334,16 @@ describe("SessionChatSurface recovery", () => {
 		["a session read as terminated", { ...session, status: "terminated" }, true],
 	])("tells the commands whether %s can only be restored", (_name, target, terminated) => {
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={target} /></Wrapper>);
-		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false]);
+		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false, undefined]);
 	});
 
-	it("tells the commands when a turn is active", () => {
+	it("tells the commands which turn is active", () => {
 		conversationState.snapshot = {
 			capabilities: [],
 			turns: [{ id: "turn-1", state: "running", requestedAt: "2026-11-16T00:00:00Z" }],
 		};
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
-		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true]);
+		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true, "turn-1"]);
 	});
 });
 

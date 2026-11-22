@@ -1970,6 +1970,11 @@ func TestPoll_ReviewOnlyRefreshPreservesLocalCIAndMetadata(t *testing.T) {
 	if len(write.checks) != 1 || write.checks[0].Name != "build" {
 		t.Fatalf("review-only local reconstruction should include current-head checks only: %#v", write.checks)
 	}
+	// No PR metadata was fetched, so the metadata max-age clock must not move:
+	// a queued PR relies on it to have its queue entry read again.
+	if got, ok := obs.Cache.LastPRFetchAt[prKey(testRepo, 1)]; ok {
+		t.Fatalf("LastPRFetchAt advanced to %s on a review-only refresh", got)
+	}
 }
 
 func TestPoll_ReviewFetchFailureDoesNotUpdateReviewDecision(t *testing.T) {
@@ -4066,5 +4071,87 @@ func TestPoll_RequestedReviewRefreshRespectsRateLimitCooldown(t *testing.T) {
 	}
 	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
 		t.Fatalf("forced refresh called a cooled-down provider: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
+	}
+}
+
+// A queued PR's place moves as other entries land or leave, which changes
+// neither the PR listing nor its head checks. Once its snapshot is older than
+// DefaultPRMaxAge it is read again with both guards unchanged, and a read that
+// only moves or ends its queue entry is stored.
+func TestPoll_QueuedPRRefreshesPastGuardsAndStoresQueueOnlyChange(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		entry *domain.MergeQueueEntry
+	}{
+		{name: "moved up", entry: &domain.MergeQueueEntry{State: domain.MergeQueueQueued, Position: 1}},
+		{name: "ejected", entry: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := testStoreWithSession()
+			local := knownPR(1)
+			local.MergeQueueRequired = true
+			local.MergeQueue = &domain.MergeQueueEntry{State: domain.MergeQueueQueued, Position: 2}
+			store.prs["p-1"] = []domain.PullRequest{local}
+
+			fresh := testObs(1)
+			fresh.PR.MergeQueueRequired = true
+			fresh.PR.MergeQueue = tc.entry
+			repoKey := prKey(testRepo, 0)
+			commitCacheKey := commitKey(testRepo, "sha1")
+			provider := &fakeProvider{
+				repoGuards:   map[string]ports.SCMGuardResult{repoKey: {ETag: "v1", NotModified: true}},
+				checkGuards:  map[string]ports.SCMGuardResult{commitCacheKey: {ETag: "ci1", NotModified: true}},
+				observations: map[string]ports.SCMObservation{prKey(testRepo, 1): fresh},
+			}
+			now := time.Unix(10_000, 0).UTC()
+			obs := newTestObserver(store, provider, &fakeLifecycle{}, now)
+			obs.Cache.RepoPRListETag[repoKey] = "v1"
+			obs.Cache.CommitChecksETag[commitCacheKey] = "ci1"
+			obs.Cache.LastSyncCursor[repoKey] = now.Add(-time.Hour)
+			obs.Cache.LastPRFetchAt[prKey(testRepo, 1)] = now.Add(-(DefaultPRMaxAge + time.Minute))
+
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(provider.fetchBatches) != 1 {
+				t.Fatalf("expected the queued PR to be read past unchanged guards, got %d batches", len(provider.fetchBatches))
+			}
+			var wrote *domain.PullRequest
+			for i := range store.writes {
+				if store.writes[i].pr.Number == 1 {
+					wrote = &store.writes[i].pr
+				}
+			}
+			if wrote == nil {
+				t.Fatalf("expected the queue-only change to be stored, got writes: %#v", store.writes)
+			}
+			if (wrote.MergeQueue == nil) != (tc.entry == nil) || (tc.entry != nil && wrote.MergeQueue.Position != tc.entry.Position) {
+				t.Fatalf("stored queue entry = %#v, want %#v", wrote.MergeQueue, tc.entry)
+			}
+		})
+	}
+}
+
+// Local queue actions write the queue entry without touching the metadata
+// hash, so a fresh read whose only difference is the queue must still count as
+// a change, or the observer skips the write and keeps the stale entry.
+func TestPrepareForPersistenceCountsQueueOnlyChange(t *testing.T) {
+	o := newTestObserver(testStoreWithSession(), &fakeProvider{}, &fakeLifecycle{}, time.Unix(10, 0).UTC())
+	ejected := testObs(1)
+	ejected.PR.MergeQueueRequired = true
+	// Stored from a read on a queue-enabled branch, then enqueued locally:
+	// the entry is written and the hash is the read's.
+	local, _, _, _, _ := domainFromObservation("p-1", domain.SessionRecord{}, ejected, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+	if got := o.prepareForPersistence(ejected, local, persistenceOptions{}, time.Unix(10, 0).UTC()).Changed; got.Metadata {
+		t.Fatalf("an identical read changed metadata: %#v", got)
+	}
+	local.MergeQueue = &domain.MergeQueueEntry{State: domain.MergeQueueQueued, Position: 2}
+	if !o.prepareForPersistence(ejected, local, persistenceOptions{}, time.Unix(10, 0).UTC()).Changed.Metadata {
+		t.Fatal("an ejected PR's read was not counted as a change")
+	}
+	moved := ejected
+	moved.PR.MergeQueue = &domain.MergeQueueEntry{State: domain.MergeQueueQueued, Position: 1}
+	if !o.prepareForPersistence(moved, local, persistenceOptions{}, time.Unix(10, 0).UTC()).Changed.Metadata {
+		t.Fatal("a moved queue position was not counted as a change")
 	}
 }

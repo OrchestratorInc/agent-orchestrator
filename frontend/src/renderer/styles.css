@@ -5682,15 +5682,11 @@ html[data-shell-linux] body > .files-popout-overlay {
 }
 
 .browser-panel__annotation-actions {
-	z-index: 1;
 	display: flex;
+	flex-shrink: 0;
 	min-width: 0;
 	align-items: center;
 	gap: var(--space-1);
-}
-
-.browser-panel__annotation-actions--leading {
-	margin-right: auto;
 }
 
 .browser-panel__annotation-actions--trailing {
@@ -5698,15 +5694,13 @@ html[data-shell-linux] body > .files-popout-overlay {
 }
 
 .browser-panel__annotation-context {
-	position: absolute;
-	top: 50%;
-	left: 50%;
 	display: flex;
-	max-width: min(38%, 320px);
+	flex: 1 1 auto;
 	min-width: 0;
-	translate: -50% -50%;
 	align-items: center;
+	justify-content: center;
 	gap: var(--space-1_5);
+	padding-inline: var(--space-1);
 	pointer-events: none;
 	font-size: var(--font-size-sm);
 	line-height: 1;
@@ -5728,10 +5722,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 	font-variant-numeric: tabular-nums;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-
-.browser-panel__annotation-context:has(.browser-panel__annotation-hint) {
-	max-width: min(70%, 420px);
 }
 
 .browser-panel__annotation-hint {
@@ -5817,12 +5807,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-panel__annotation-send-count {
 	color: inherit;
 	font-variant-numeric: tabular-nums;
-}
-
-@container browser-annotation (max-width: 30rem) {
-	.browser-panel__annotation-context {
-		max-width: 26%;
-	}
 }
 
 @container browser-annotation (max-width: 23rem) {

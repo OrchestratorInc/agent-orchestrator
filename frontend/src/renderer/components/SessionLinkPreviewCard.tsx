@@ -6,8 +6,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { FileText, LoaderCircle, Play, Sheet } from "@/components/app-icons";
-import { useRestoreSession } from "../hooks/useRestoreSession";
+import { FileText, Sheet } from "@/components/app-icons";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
 import { formatTimeCompact } from "../lib/format-time";
@@ -23,7 +22,6 @@ import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { LOCAL_HOST } from "../lib/hosts";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
-import { Button } from "./ui/button";
 import { HoverCardContent, useHoverCardDismiss } from "./ui/hover-card";
 import { Skeleton } from "./ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
@@ -150,48 +148,6 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 	);
 }
 
-function TerminatedCard({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
-	const { t } = useTranslation();
-	const restoreSession = useRestoreSession();
-	const [restoring, setRestoring] = useState(false);
-	const [error, setError] = useState<string>();
-	const resumeAgent = async () => {
-		if (restoring) return;
-		setRestoring(true);
-		setError(undefined);
-		try {
-			const result = await restoreSession(session.id, hostId);
-			if (result.status !== "success") setError(result.message);
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : t("terminal.unableRestore"));
-		} finally {
-			setRestoring(false);
-		}
-	};
-	return (
-		<div className="space-y-2" role="status" aria-label={t("session.agentTerminated")}>
-			<p className="text-xs font-semibold text-popover-foreground">{t("session.agentTerminated")}</p>
-			<Button
-				className="w-full"
-				disabled={restoring}
-				onClick={(event) => {
-					event.preventDefault();
-					event.stopPropagation();
-					void resumeAgent();
-				}}
-				size="sm"
-				type="button"
-			>
-				{restoring
-					? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
-					: <Play aria-hidden="true" className="size-icon-sm" />}
-				{t(restoring ? "inspector.resumingAgent" : "inspector.resumeAgent")}
-			</Button>
-			{error ? <p className="text-xs leading-4 text-destructive" role="alert">{error}</p> : null}
-		</div>
-	);
-}
-
 export function SessionLinkPreviewCard({
 	href,
 	sourceHostId,
@@ -208,24 +164,20 @@ export function SessionLinkPreviewCard({
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
-	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
 	const dismiss = useHoverCardDismiss();
 	if (session) {
-		const terminated = session.isTerminated === true || session.status === "terminated";
-		// A terminated card already holds its own Resume button, so only a live one opens on click.
 		// Pointer only: the card is portaled and closes when the link blurs, so the link is the keyboard path.
-		const openable = onOpen && !terminated;
 		return (
 			<HoverCardContent
 				collisionPadding={8}
 				sideOffset={6}
-				className={cn(SESSION_CARD_CLASS, openable && "cursor-pointer transition-colors hover:bg-accent")}
-				onClick={openable ? () => {
+				className={cn(SESSION_CARD_CLASS, onOpen && "cursor-pointer transition-colors hover:bg-accent")}
+				onClick={onOpen ? () => {
 					dismiss();
 					onOpen();
 				} : undefined}
 			>
-				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
+				<SessionCardBody session={session} />
 			</HoverCardContent>
 		);
 	}
