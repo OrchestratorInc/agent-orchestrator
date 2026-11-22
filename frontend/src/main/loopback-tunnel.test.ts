@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import * as net from "node:net";
-import { connectionOwner, createLoopbackTunnels, isLoopbackName, type RoutedSession } from "./loopback-tunnel";
+import { Duplex } from "node:stream";
+import { connectionOwner, createLoopbackTunnels, isLoopbackName, join, type RoutedSession } from "./loopback-tunnel";
 import { LoopbackTunnelError } from "./remote-proxy";
 
 const cleanup: Array<() => void> = [];
@@ -174,6 +175,32 @@ describe("loopback tunnels", () => {
 		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: { [port]: await echoServer() } } }));
 		expect((await tunnels.forward("h_box", port)).localPort).not.toBe(port);
 		tunnels.stopHost("h_box");
+	});
+});
+
+describe("join", () => {
+	it("lets a slow client finish the reply when the host's server closes the connection", async () => {
+		const delivered: Buffer[] = [];
+		const client = new Duplex({ read() {}, write(chunk: Buffer, _encoding, done) { setTimeout(() => { delivered.push(chunk); done(); }, 1); } });
+		const tunnel = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
+		tunnel.once("end", () => tunnel.destroy());
+		const closed = new Promise((resolve) => client.once("close", resolve));
+		join(client, tunnel);
+		for (let i = 0; i < 8; i++) tunnel.push(Buffer.alloc(1024, i));
+		tunnel.push(null);
+		await closed;
+		expect(Buffer.concat(delivered).length).toBe(8 * 1024);
+	});
+
+	it("still drops the other side at once when one side fails", async () => {
+		const client = new Duplex({ read() {}, write(_chunk, _encoding, done) { setTimeout(done, 1_000); } });
+		const tunnel = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
+		join(client, tunnel);
+		tunnel.push(Buffer.alloc(1024));
+		const closed = new Promise((resolve) => client.once("close", resolve));
+		tunnel.destroy(new Error("tunnel lost"));
+		await closed;
+		expect(client.destroyed).toBe(true);
 	});
 });
 

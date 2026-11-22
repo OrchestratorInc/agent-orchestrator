@@ -81,11 +81,15 @@ async function ownedByThisUser(socket: Socket): Promise<boolean> {
 	return connectionOwner(table, { address: socket.remoteAddress, port: socket.remotePort }, { address: socket.localAddress, port: socket.localPort }) === process.getuid?.();
 }
 
-function join(a: Duplex, b: Duplex): void {
+export function join(a: Duplex, b: Duplex): void {
 	a.on("error", () => b.destroy());
 	b.on("error", () => a.destroy());
-	a.once("close", () => b.destroy());
-	b.once("close", () => a.destroy());
+	const closeAfter = (from: Duplex, to: Duplex) => from.once("close", () => {
+		if (from.readableEnded && !to.writableFinished) to.once("finish", () => to.destroy());
+		else to.destroy();
+	});
+	closeAfter(a, b);
+	closeAfter(b, a);
 	a.pipe(b);
 	b.pipe(a);
 }

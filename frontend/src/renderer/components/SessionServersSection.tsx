@@ -32,10 +32,12 @@ export function SessionServersSection({ session, hostId, visible }: { session: W
 	const reach = useLoopbackReach(hostId);
 	const { forwards, forward, stop } = usePortForwards();
 	const openInBrowser = useSessionBrowserLink(session);
-	const tunnelHost = hostId && reach === "tunnel" ? hostId : undefined;
-	const hostForwards = tunnelHost ? forwards.filter((item) => item.hostId === tunnelHost) : [];
-	const rows = [...servers, ...hostForwards.filter((item) => !servers.some((server) => server.port === item.remotePort)).map((item) => ({ port: item.remotePort, command: "" }))];
-	if (rows.length === 0 || !sessionIsActive(session)) return null;
+	const active = sessionIsActive(session);
+	const tunnelHost = hostId && active && reach === "tunnel" ? hostId : undefined;
+	const hostForwards = hostId ? forwards.filter((item) => item.hostId === hostId) : [];
+	const discovered = active ? servers : [];
+	const rows = [...discovered, ...hostForwards.filter((item) => !discovered.some((server) => server.port === item.remotePort)).map((item) => ({ port: item.remotePort, command: "" }))];
+	if (rows.length === 0) return null;
 	const forwardFailed = (error: unknown) =>
 		showGlobalToast(t("sessionServers.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
 

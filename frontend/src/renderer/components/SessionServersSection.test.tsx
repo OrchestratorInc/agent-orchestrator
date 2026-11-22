@@ -75,6 +75,24 @@ describe("SessionServersSection", () => {
 		expect(screen.queryByTestId("session-servers")).toBeNull();
 	});
 
+	it("keeps an existing forward stoppable after the session stops or sharing turns off", async () => {
+		getMock.mockResolvedValue({ data: { servers: [{ port: 5173, pid: 41, command: "node" }] } });
+		vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("off");
+		vi.spyOn(aoBridge.remotes, "portForwards").mockResolvedValue([{ hostId: "box-a", remotePort: 3000, localPort: 3000 }]);
+		const stop = vi.spyOn(aoBridge.remotes, "stopPortForward").mockResolvedValue(undefined);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<SessionServersSection hostId="box-a" session={{ ...session, status: "terminated", isTerminated: true } as WorkspaceSession} visible />
+			</QueryClientProvider>,
+		);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Stop forwarding port 3000" }));
+		expect(stop).toHaveBeenCalledWith("box-a", 3000);
+		expect(screen.queryByText("node")).toBeNull();
+		expect(screen.queryByRole("button", { name: /Forward port/ })).toBeNull();
+	});
+
 	it("offers no forward for a host on this computer", async () => {
 		getMock.mockResolvedValue({ data: { servers: [{ port: 5173, pid: 41, command: "node" }] } });
 		const reach = vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("same");
