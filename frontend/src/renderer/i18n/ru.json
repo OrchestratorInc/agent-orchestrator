@@ -5571,6 +5571,6 @@
 	"settings.approvals.log": "Последние решения",
 	"settings.approvals.logEmpty": "Проверенных действий пока нет",
 	"settings.approvals.loadFailed": "Не удалось загрузить подтверждения: {{message}}",
-	"browser.approvals.label": "Спрашивать перед действием",
+	"browser.approvals.label": "Подтверждения",
 	"approvals.category.script": "Скрипт страницы"
 }

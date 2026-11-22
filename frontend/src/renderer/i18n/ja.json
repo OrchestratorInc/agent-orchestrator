@@ -5283,6 +5283,6 @@
 	"settings.approvals.log": "最近の判断",
 	"settings.approvals.logEmpty": "確認対象の操作はまだありません",
 	"settings.approvals.loadFailed": "承認を読み込めませんでした: {{message}}",
-	"browser.approvals.label": "操作前に確認",
+	"browser.approvals.label": "承認",
 	"approvals.category.script": "ページスクリプト"
 }

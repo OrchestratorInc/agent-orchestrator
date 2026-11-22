@@ -5265,6 +5265,6 @@
 	"settings.approvals.log": "最近的决定",
 	"settings.approvals.logEmpty": "还没有受控操作",
 	"settings.approvals.loadFailed": "无法加载批准：{{message}}",
-	"browser.approvals.label": "操作前询问",
+	"browser.approvals.label": "批准",
 	"approvals.category.script": "页面脚本"
 }

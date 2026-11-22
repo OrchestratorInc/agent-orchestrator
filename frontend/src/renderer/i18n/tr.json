@@ -5268,5 +5268,5 @@
 	"settings.approvals.log": "Son kararlar",
 	"settings.approvals.logEmpty": "Henüz onay gerektiren eylem yok",
 	"settings.approvals.loadFailed": "Onaylar yüklenemedi: {{message}}",
-	"browser.approvals.label": "Eylemden önce sor"
+	"browser.approvals.label": "Onaylar"
 }

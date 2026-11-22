@@ -5431,6 +5431,6 @@
 	"settings.approvals.log": "Decisões recentes",
 	"settings.approvals.logEmpty": "Nenhuma ação controlada ainda",
 	"settings.approvals.loadFailed": "Não foi possível carregar as aprovações: {{message}}",
-	"browser.approvals.label": "Perguntar antes de agir",
+	"browser.approvals.label": "Aprovações",
 	"approvals.category.script": "Script da página"
 }

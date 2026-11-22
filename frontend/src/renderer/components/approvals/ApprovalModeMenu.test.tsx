@@ -73,7 +73,7 @@ describe("ApprovalModeMenu", () => {
 			</DropdownMenu>,
 		);
 		const value = await screen.findByText("Every form submission");
-		const label = screen.getByText("Ask before acting");
+		const label = screen.getByText("Approvals");
 		// Label and mode share one box that takes the space between the icon
 		// and the chevron and clips anything past it, so nothing overflows the menu.
 		const box = label.parentElement!;
@@ -82,7 +82,7 @@ describe("ApprovalModeMenu", () => {
 		// The label keeps its full width when it fits and never grows past the
 		// box; a longer translation ellipsizes and stays readable on hover.
 		expect(label).toHaveClass("shrink-0", "max-w-full", "truncate");
-		expect(label).toHaveAttribute("title", "Ask before acting");
+		expect(label).toHaveAttribute("title", "Approvals");
 		// The mode takes what is left.
 		expect(value).toHaveClass("min-w-0", "max-w-20", "truncate");
 		expect(value).toHaveAttribute("title", "Every form submission");
