@@ -411,7 +411,6 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 					<OrchestratorRow
 						action={row.action}
 						busy={busyProjects.has(hostedRowKey(node.project.hostId ?? "", node.project.id))}
-						workers={node.sessions.length}
 						active={Boolean(row.link?.id) && activeKey === sidebarSessionKey({ id: row.link!.id, hostId: node.project.hostId })}
 						colors={colors}
 						styles={styles}
@@ -526,18 +525,17 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
  * The project's orchestrator, leading its dropdown above the workers it
  * coordinates: open when it runs, start or resume when it does not.
  */
-function OrchestratorRow({ action, busy, workers, active, colors, styles, onPress, testID }: {
+function OrchestratorRow({ action, busy, active, colors, styles, onPress, testID }: {
 	action: "open" | "start" | "resume";
 	busy: boolean;
-	workers: number;
 	active: boolean;
 	colors: Palette;
 	styles: Styles;
 	onPress(): void;
 	testID?: string;
 }) {
-	const state = action === "open" ? "Running" : action === "resume" ? "Stopped" : "Not started";
-	const detail = `${state} · ${workers} worker${workers === 1 ? "" : "s"}`;
+	// Its state only: the workers are listed right under it.
+	const detail = action === "open" ? "Running" : action === "resume" ? "Stopped" : "Not started";
 	return (
 		<Pressable
 			accessibilityRole="button"
