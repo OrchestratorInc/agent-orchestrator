@@ -107,18 +107,20 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 	const working = activityState === "active";
 	const previous = useRef<{ id?: string; working: boolean; since: number } | null>(null);
 	const viewedAt = useRef(0);
+	const handledAt = useRef(0);
 	useEffect(() => {
 		if (viewing) viewedAt.current = Date.now();
 	}, [viewing]);
 	useEffect(() => {
 		const prev = previous.current;
+		if (prev?.id !== orchestrator?.id && !working) handledAt.current = lastUserAt;
 		const parsed = Date.parse(lastActivityAt ?? "");
 		const at = Number.isFinite(parsed) ? parsed : Date.now();
 		previous.current = { id: orchestrator?.id, working, since: prev?.working && prev.id === orchestrator?.id ? prev.since : at };
 		if (!key || !orchestrator || prev?.id !== orchestrator.id || !prev.working) return;
 		if (activityState !== "idle" && activityState !== "waiting_input") return;
 		const store = useOrchestratorReplyStore.getState();
-		const answered = lastUserAt > (store.replyAt[key] ?? 0) && lastUserAt <= prev.since;
+		const answered = lastUserAt > Math.max(store.replyAt[key] ?? 0, handledAt.current) && lastUserAt <= prev.since;
 		if (!quiet || viewing || activityState === "waiting_input" || answered) {
 			store.recordReply(key, at);
 			return;
@@ -140,6 +142,6 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 		if (viewing && key && replyAt > seenAt) useOrchestratorReplyStore.getState().markSeen(key, replyAt);
 	}, [key, replyAt, seenAt, viewing]);
 	if (!orchestrator || viewing) return null;
-	if (working && (!quiet || lastUserAt > replyAt)) return "working";
+	if (working && (!quiet || lastUserAt > Math.max(replyAt, handledAt.current))) return "working";
 	return replyAt > seenAt ? "unread" : null;
 }

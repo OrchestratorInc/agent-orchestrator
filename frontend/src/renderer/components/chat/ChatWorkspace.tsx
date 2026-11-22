@@ -6997,7 +6997,7 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		a.items.every((item, index) => item === b.items[index]) &&
 		a.folded?.kind === b.folded?.kind &&
 		a.folded?.members.length === b.folded?.members.length &&
-		(a.folded?.members.every((member, index) => sameGroup(member, b.folded!.members[index]!)) ?? true)
+		(a.folded?.members.every((member, index) => member.key === b.folded!.members[index]!.key && sameGroup(member, b.folded!.members[index]!)) ?? true)
 	);
 }
 
