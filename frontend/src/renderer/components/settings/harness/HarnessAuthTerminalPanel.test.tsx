@@ -1,15 +1,17 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppBrowserLinkContext } from "../../AppLink";
 import { SettingsBrowserLinkContext } from "../SettingsBrowserOverlay";
 import { HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 
 const loginUrl = "https://app.cline.bot/auth/device";
+const terminalProps = vi.hoisted(() => ({ suppressDimInLightTheme: undefined as boolean | undefined }));
 
 vi.mock("../../TerminalPane", () => ({
-	TerminalPane: ({ onLinkOpen }: { onLinkOpen?: (url: string) => void }) => (
-		<button onClick={() => onLinkOpen?.(loginUrl)} type="button">Cline device link</button>
-	),
+	TerminalPane: ({ onLinkOpen, suppressDimInLightTheme }: { onLinkOpen?: (url: string) => void; suppressDimInLightTheme?: boolean }) => {
+		terminalProps.suppressDimInLightTheme = suppressDimInLightTheme;
+		return <button onClick={() => onLinkOpen?.(loginUrl)} type="button">Cline device link</button>;
+	},
 }));
 
 const workflow: AuthTerminalWorkflow = {
@@ -36,4 +38,15 @@ it.each([false, true])("opens a Cline login link in the Settings Browser with ac
 	expect(openSettingsBrowser).toHaveBeenCalledExactlyOnceWith(loginUrl);
 	expect(openSessionBrowser).not.toHaveBeenCalled();
 	expect(onClose).not.toHaveBeenCalled();
+});
+
+describe("HarnessAuthTerminalPanel", () => {
+	it.each([
+		["cline", "login", true],
+		["cline", "logout", false],
+		["codex", "login", false],
+	] as const)("scopes dim suppression for %s %s", (agentId, action, expected) => {
+		render(<HarnessAuthTerminalPanel workflow={{ ...workflow, agentId, action }} onClose={vi.fn()} onRetry={vi.fn()} onTerminalState={vi.fn()} />);
+		expect(terminalProps.suppressDimInLightTheme).toBe(expected);
+	});
 });
