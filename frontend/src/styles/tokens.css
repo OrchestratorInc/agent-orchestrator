@@ -822,7 +822,9 @@
 	--color-border-import-modal: var(--border);
 	--color-text-import-title: var(--foreground);
 	--color-text-import-muted: var(--muted-foreground);
-	--color-bg-import-card: var(--card);
+	/* An input well on the white dialog, as dark lifts it: a plain --card
+	 * field is the same white as the dialog and loses its edge. */
+	--color-bg-import-card: var(--input);
 	--color-bg-import-card-hover: var(--accent);
 	--color-bg-import-illustration: var(--color-bg-import-chip);
 	--color-bg-import-chip: var(--secondary);
