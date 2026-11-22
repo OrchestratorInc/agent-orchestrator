@@ -81,7 +81,8 @@ func ensureStore(ctx context.Context, store string) error {
 	if err := os.WriteFile(filepath.Join(tmp, "info", "exclude"), []byte(detachedExcludes), 0o600); err != nil {
 		return fmt.Errorf("write snapshot store excludes: %w", err)
 	}
-	env := []string{"GIT_DIR=" + tmp, "GIT_INDEX_FILE=" + filepath.Join(tmp, "index")}
+	gitDir, index := "GIT_DIR="+tmp, "GIT_INDEX_FILE="+filepath.Join(tmp, "index")
+	env := []string{gitDir, index}
 	if _, err := git(ctx, parent, env, nil, "read-tree", "--empty"); err != nil {
 		return err
 	}
@@ -89,10 +90,11 @@ func ensureStore(ctx context.Context, store string) error {
 	if err != nil {
 		return err
 	}
-	identity := append(env,
+	identity := []string{
+		gitDir, index,
 		"GIT_AUTHOR_NAME=Agent Orchestrator", "GIT_AUTHOR_EMAIL=agent-orchestrator@localhost",
 		"GIT_COMMITTER_NAME=Agent Orchestrator", "GIT_COMMITTER_EMAIL=agent-orchestrator@localhost",
-	)
+	}
 	base, err := git(ctx, parent, identity, nil, "commit-tree", empty, "-m", "ao folder snapshots")
 	if err != nil {
 		return err
