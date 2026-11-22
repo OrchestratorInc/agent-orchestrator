@@ -58,6 +58,12 @@ describe("Sentry exception fields", () => {
 		expect(scrubSentryMessage("token=private")).toBe("");
 	});
 
+	it("keeps chunk failures through repeated scrubbing", () => {
+		const message = scrubSentryMessage("Loading chunk 123 failed: http://localhost:8080/private");
+		expect(message).toBe("Loading chunk failed");
+		expect(scrubSentryMessage(message)).toBe(message);
+	});
+
 	it("caps the complete exception value including its location", () => {
 		expect(sentryExceptionValue("Invalid array length", "Fallback", "x".repeat(180), "render_crash").length).toBe(200);
 		expect(sentryExceptionValue("", "Fallback", "unknown", "other")).toBe("Fallback");

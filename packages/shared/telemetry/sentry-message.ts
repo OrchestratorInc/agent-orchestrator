@@ -14,7 +14,7 @@ export function scrubSentryMessage(value: unknown): string {
 	if (network) return network[1];
 	const http = /^(?:HTTP (?:error )?|Request failed with status code )([45]\d\d)(?:\b.*)?$/.exec(message);
 	if (http) return `HTTP error ${http[1]}`;
-	const chunk = /^(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk [\w-]+ failed)(?:[: .].*)?$/.exec(message);
+	const chunk = /^(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk(?: [\w-]+)? failed)(?:[: .].*)?$/.exec(message);
 	if (chunk) return chunk[1].startsWith("Loading chunk ") ? "Loading chunk failed" : chunk[1];
 	if (/^.{1,256} is not a (?:function|constructor)$/.test(message)) {
 		return message.endsWith("function") ? "Value is not a function" : "Value is not a constructor";
