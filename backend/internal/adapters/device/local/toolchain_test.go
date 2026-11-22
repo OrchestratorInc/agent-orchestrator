@@ -456,3 +456,20 @@ func TestListMarksTablets(t *testing.T) {
 		t.Fatalf("simctl's iPad not marked: %v", tablet)
 	}
 }
+
+// A hub that takes the connection but never answers must not hold the
+// readiness wait (and the provider's lock) past its deadline.
+func TestReadyProbeGivesUpOnAHubThatNeverAnswers(t *testing.T) {
+	release := make(chan struct{})
+	hub := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(func() { close(release); hub.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if ready(ctx, hub.URL+"/readyz") {
+		t.Fatal("a hub that never answered counted as ready")
+	}
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Fatalf("probe waited %v, want it to stop at its 200ms deadline", waited)
+	}
+}
