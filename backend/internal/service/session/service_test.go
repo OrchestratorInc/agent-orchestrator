@@ -5649,14 +5649,14 @@ func TestListPRSummariesSuppressesFailingChecksUnlessCIFailing(t *testing.T) {
 	}
 }
 
-func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
+func TestListPRSummariesListsCurrentCancelledChecksWhenCIFailing(t *testing.T) {
 	cases := []struct {
 		name string
 		ci   domain.CIState
 		want []string
 	}{
-		{name: "failing lists only real failures", ci: domain.CIFailing, want: []string{"build"}},
-		{name: "unknown lists cancelled checks", ci: domain.CIUnknown, want: []string{"lint"}},
+		{name: "failing lists failures and cancellations", ci: domain.CIFailing, want: []string{"build", "lint"}},
+		{name: "unknown lists nothing", ci: domain.CIUnknown},
 		{name: "pending lists nothing", ci: domain.CIPending},
 	}
 	for _, tc := range cases {
@@ -5674,7 +5674,7 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}}}
 			stList.checks[prURL] = []domain.PullRequestCheck{
 				{Name: "build", CommitHash: "new-sha", Status: domain.PRCheckFailed, Conclusion: "failure"},
-				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled"},
+				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled", URL: "https://github.com/acme/repo/actions/runs/2"},
 			}
 
 			got, err := (&Service{store: stList}).ListPRSummaries(context.Background(), "mer-1")
@@ -5683,6 +5683,9 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}
 			if names := failingCheckNames(got[0].CI.FailingChecks); !sameStrings(names, tc.want) {
 				t.Fatalf("listed checks = %v, want %v", names, tc.want)
+			}
+			if tc.ci == domain.CIFailing && got[0].CI.FailingChecks[1].URL != "https://github.com/acme/repo/actions/runs/2" {
+				t.Fatalf("cancelled check link = %q", got[0].CI.FailingChecks[1].URL)
 			}
 		})
 	}

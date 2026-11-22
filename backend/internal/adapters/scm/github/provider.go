@@ -241,9 +241,9 @@ func (p *Provider) fetchRESTPull(ctx context.Context, owner, repo string, number
 const graphQLCheckContextLimit = 100
 
 // checkRunFields is the CheckRun selection every rollup query uses. The
-// workflow name and event identify which runs are reruns of the same check
+// workflow database ID and run number/attempt identify reruns of the same job
 // (see latestCheckRuns). Suite IDs keep cancellation evidence within one run.
-const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ conclusion id workflowRun{ event workflow{ name } } }`
+const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ conclusion id workflowRun{ runNumber runAttempt workflow{ databaseId } } }`
 
 // prObservationQuery is the GraphQL query (derived from PR #28, credited
 // to @whoisasx) that pulls everything we need in one round trip:
@@ -393,11 +393,9 @@ func cancellationGateLog(log string) bool {
 
 // ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
 // If ANY visible context concluded failure-class we return CIFailing.
-// Otherwise any pending context wins over passing. A cancelled check is
-// not a failure: it usually means a replacement run is on its way, which
-// the pending case reports. With nothing running, a cancelled check (say,
-// one stopped by hand) settles as CIUnknown even beside passing checks:
-// it proved nothing, so AO must not report the PR as passing. An empty
+// A current cancelled check is failing, including when unrelated checks are
+// pending or passed. A newer pending occurrence of the same job supersedes the
+// cancelled one before this function sees it. An empty
 // rollup is CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
 // the verdict is conservative: a known failure is still safe — failures
 // don't get un-failed by more pages — but passing/pending/unknown
@@ -416,14 +414,12 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 		// rather than returning CIUnknown for an otherwise-decided PR.
 		return mapRollupState(str(roll["state"]))
 	}
-	pending, passing, cancelled := false, false, false
+	pending, passing := false, false
 	for _, n := range rawNodes {
 		st := checkStatusFromGraphQL(n)
 		switch st {
-		case domain.PRCheckFailed:
+		case domain.PRCheckFailed, domain.PRCheckCancelled:
 			return domain.CIFailing
-		case domain.PRCheckCancelled:
-			cancelled = true
 		case domain.PRCheckQueued, domain.PRCheckInProgress:
 			pending = true
 		case domain.PRCheckPassed:
@@ -436,8 +432,6 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	switch {
 	case pending:
 		return domain.CIPending
-	case cancelled:
-		return domain.CIUnknown
 	case passing:
 		return domain.CIPassing
 	default:
@@ -657,38 +651,46 @@ func jobIDForCheck(pr map[string]any, name string) int64 {
 // superseded on this commit. statusCheckRollup keeps every workflow run on the
 // SHA (one cancelled when the workflow re-ran, a failed attempt before a green
 // rerun) and GitHub's rollup state counts them, while GitHub's checks list and
-// `gh pr checks` show only the newest run per workflow, event and job. Check
-// run IDs grow, so the highest databaseId is the newest. A run without a
-// readable workflowRun (another app, or a token without Actions access) is
-// always kept: it can't be matched to its reruns.
+// `gh pr checks` show only the newest run per workflow and job. The workflow
+// run number and attempt select the newest occurrence. A run without complete
+// workflow metadata (another app, or a token without Actions access) is always
+// kept: it can't be safely matched to its reruns.
 func latestCheckRuns(in []map[string]any) []map[string]any {
-	newest := map[string]float64{}
+	type runVersion struct{ number, attempt float64 }
+	newest := map[string]runVersion{}
 	for _, n := range in {
-		if key := checkRunKey(n); key != "" {
-			newest[key] = max(newest[key], num(n["databaseId"]))
+		if key, number, attempt := checkRunKey(n); key != "" {
+			current := newest[key]
+			if number > current.number || (number == current.number && attempt > current.attempt) {
+				newest[key] = runVersion{number, attempt}
+			}
 		}
 	}
 	out := make([]map[string]any, 0, len(in))
 	for _, n := range in {
-		if key := checkRunKey(n); key != "" && num(n["databaseId"]) < newest[key] {
-			continue
+		if key, number, attempt := checkRunKey(n); key != "" {
+			current := newest[key]
+			if number < current.number || (number == current.number && attempt < current.attempt) {
+				continue
+			}
 		}
 		out = append(out, n)
 	}
 	return out
 }
 
-func checkRunKey(n map[string]any) string {
+func checkRunKey(n map[string]any) (string, float64, float64) {
 	if str(n["__typename"]) != "CheckRun" {
-		return ""
+		return "", 0, 0
 	}
 	suite, _ := n["checkSuite"].(map[string]any)
 	run, _ := suite["workflowRun"].(map[string]any)
 	workflow, _ := run["workflow"].(map[string]any)
-	if workflow == nil {
-		return ""
+	workflowID, number, attempt := num(workflow["databaseId"]), num(run["runNumber"]), num(run["runAttempt"])
+	if workflowID <= 0 || number <= 0 || attempt <= 0 || str(n["name"]) == "" {
+		return "", 0, 0
 	}
-	return strings.Join([]string{str(workflow["name"]), str(run["event"]), str(n["name"])}, "\x00")
+	return strconv.FormatInt(int64(workflowID), 10) + "\x00" + str(n["name"]), number, attempt
 }
 
 // statusRollup extracts the commits[0].commit.statusCheckRollup blob
