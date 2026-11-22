@@ -5584,6 +5584,7 @@
 	"backgroundTasks.kind.shell": "Оболочка",
 	"backgroundTasks.kind.other": "Фоновая задача",
 	"backgroundTasks.state.running": "Выполняется",
+	"backgroundTasks.state.paused": "На паузе",
 	"backgroundTasks.state.failed": "Ошибка",
 	"backgroundTasks.shells_many": "Продолжают работать {{count}} оболочек",
 	"backgroundTasks.agents_many": "Работают {{count}} фоновых агентов",

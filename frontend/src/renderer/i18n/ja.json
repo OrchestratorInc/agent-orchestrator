@@ -5294,5 +5294,6 @@
 	"backgroundTasks.kind.shell": "シェル",
 	"backgroundTasks.kind.other": "バックグラウンドタスク",
 	"backgroundTasks.state.running": "実行中",
+	"backgroundTasks.state.paused": "一時停止中",
 	"backgroundTasks.state.failed": "失敗"
 }

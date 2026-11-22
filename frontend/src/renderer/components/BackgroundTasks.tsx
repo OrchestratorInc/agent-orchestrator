@@ -63,19 +63,31 @@ function taskName(task: BackgroundTask, t: TFunction): TaskName {
 	}
 }
 
+/** How a row was told apart from a like one: by its folder, or by its command. */
+export type TaskNameSuffixes = Map<string, "dir" | "command">;
+
+const rowKey = (task: BackgroundTask) => `${task.id}:${task.runId ?? ""}`;
+
 /**
  * Each task's name, told apart from the others: two "Dev server" rows become
  * "Dev server · frontend" and "Dev server · backend", or their commands when
- * no folder separates them.
+ * no folder separates them. A row keeps the name it was given in `suffixes`
+ * for as long as it shows, so stopping one server doesn't rename the other.
  */
-export function backgroundTaskNames(tasks: BackgroundTask[], t: TFunction): Map<BackgroundTask, string> {
+export function backgroundTaskNames(tasks: BackgroundTask[], t: TFunction, suffixes: TaskNameSuffixes = new Map()): Map<BackgroundTask, string> {
 	const named = tasks.map((task) => ({ task, ...taskName(task, t) }));
 	const count = (key: string, keys: string[]) => keys.filter((other) => other === key).length;
 	const names = named.map(({ name }) => name);
 	const withDirs = named.map(({ name, dir }) => (dir ? `${name} · ${dir}` : name));
+	const shown = new Set(tasks.map(rowKey));
+	for (const key of [...suffixes.keys()]) if (!shown.has(key)) suffixes.delete(key);
 	return new Map(named.map(({ task, name, dir }, i) => {
-		if (count(name, names) < 2) return [task, name];
-		if (dir && count(withDirs[i], withDirs) < 2) return [task, withDirs[i]];
+		const key = rowKey(task);
+		let suffix = suffixes.get(key);
+		if (!suffix && count(name, names) > 1) suffix = dir && count(withDirs[i], withDirs) < 2 ? "dir" : "command";
+		if (!suffix) return [task, name];
+		suffixes.set(key, suffix);
+		if (suffix === "dir" && dir) return [task, withDirs[i]];
 		return [task, task.description?.trim() || name];
 	}));
 }
@@ -181,7 +193,8 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	const listId = useId();
 	const tasks = useMemo(() => composerBackgroundTasks(reading), [reading]);
 	// Parsed once per reading, not on every elapsed-time tick.
-	const names = useMemo(() => backgroundTaskNames(tasks, t), [tasks, t]);
+	const suffixes = useRef<TaskNameSuffixes>(new Map());
+	const names = useMemo(() => backgroundTaskNames(tasks, t, suffixes.current), [tasks, t]);
 	const live = tasks.filter(isLive);
 	const failedCount = tasks.length - live.length;
 	const now = useNow(tasks);
@@ -313,7 +326,9 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 									{name(task)}
 								</span>
 								{/* A live task shows no mark; say its state to screen readers, as failures say theirs. */}
-								{task.state === "running" ? <span className="sr-only">{t("backgroundTasks.state.running")}</span> : null}
+								{task.state === "running" || task.state === "paused" ? (
+									<span className="sr-only">{t(task.state === "paused" ? "backgroundTasks.state.paused" : "backgroundTasks.state.running")}</span>
+								) : null}
 								{time(task)}
 								{trailing(task)}
 							</li>

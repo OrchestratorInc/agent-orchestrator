@@ -45,6 +45,25 @@ describe("shellTaskLabel", () => {
 		["pwsh -NoProfile -Command npm run lint", { kind: "lint" }],
 		// Of a lone "&", the step it backgrounds is the task, not the one-shot after it.
 		["npm run dev > /tmp/dev.log 2>&1 & echo $!", { kind: "devServer" }],
+		// Of steps that run side by side, the one with a known kind is the task.
+		["sleep 1 & npm run dev", { kind: "devServer" }],
+		["tail -f /tmp/dev.log & npm run dev", { kind: "devServer" }],
+		["npm ci && npm run dev &", { kind: "devServer" }],
+		// Only the interpreter's own options count; options that take a value skip it.
+		["powershell -NoProfile -ExecutionPolicy Bypass -Command npm run dev", { kind: "devServer" }],
+		["bash -o pipefail -c 'npm run build'", { kind: "build" }],
+		// cmd users may capitalise builtins.
+		["Set PORT=3000&& npm run dev", { kind: "devServer", port: "3000" }],
+		["Cd web && npm run dev", { kind: "devServer", dir: "web" }],
+		// popd only returns; the folder is where the task ran.
+		["pushd web && npm run dev && popd", { kind: "devServer", dir: "web" }],
+		["chdir api && npm start", { kind: "devServer", dir: "api" }],
+		// "..", "~", "-" and variables name no folder.
+		["cd frontend && cd .. && npm run dev", { kind: "devServer" }],
+		["cd ~ && npm run dev", { kind: "devServer" }],
+		["cd - && npm run dev", { kind: "devServer" }],
+		["cd $APP_DIR && npm run dev", { kind: "devServer" }],
+		["cd ../web && npm run dev", { kind: "devServer", dir: "web" }],
 	])("reads %s", (command, label) => {
 		expect(shellTaskLabel(command)).toEqual(label);
 	});
@@ -55,6 +74,9 @@ describe("shellTaskLabel", () => {
 		["FOO='a b' node x.js", "node x.js"],
 		['PORT=1 node -e "a; b"', 'node -e "a; b"'],
 		["npm run start:prod > /tmp/prod.log", "npm run start:prod"],
+		// A "-c" after the script is the script's own option.
+		["bash ./watch.sh -c config.yml > /tmp/watch.log", "bash ./watch.sh -c config.yml"],
+		["pwsh ./build.ps1 -c Release > build.log", "pwsh ./build.ps1 -c Release"],
 	])("keeps the words of %s that name the program", (command, text) => {
 		expect(shellTaskLabel(command)).toEqual({ kind: "command", text });
 	});
@@ -65,6 +87,9 @@ describe("shellTaskLabel", () => {
 		"Serve the docs site",
 		"Vite dev server for the renderer",
 		"Jest watch for composer",
+		"serve the docs site",
+		"jest watch for composer",
+		"sh deploy.sh -c prod",
 		"sleep 300",
 		"Build and test; then report",
 		'curl "http://x/a?b=1 & c=2" -o out',

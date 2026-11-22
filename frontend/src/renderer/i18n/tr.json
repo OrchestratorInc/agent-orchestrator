@@ -5164,6 +5164,7 @@
 	"backgroundTasks.kind.shell": "Kabuk",
 	"backgroundTasks.kind.other": "Arka plan görevi",
 	"backgroundTasks.state.running": "Çalışıyor",
+	"backgroundTasks.state.paused": "Duraklatıldı",
 	"backgroundTasks.state.failed": "Başarısız",
 	"sessionFork.fork": "Çatallayın",
 	"sessionFork.tooltip": "Bu oturumu yeni bir oturuma çatallayın",

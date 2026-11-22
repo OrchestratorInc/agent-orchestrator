@@ -21,7 +21,11 @@ const WRAPPER_VALUE_FLAGS: Record<string, string[]> = {
 	npx: ["-p", "--package"],
 	env: ["-u", "--unset"],
 };
-const SETUP = new Set(["cd", "export", "source", ".", "set", "pushd"]);
+const SETUP = new Set(["cd", "chdir", "export", "source", ".", "set", "pushd", "popd"]);
+// Shell builtins a cmd user may capitalise ("Set PORT=3000"); never prose.
+const SHELL_BUILTINS = new Set(["cd", "chdir", "set", "pushd", "popd", "export"]);
+// Words that turn up in a sentence but not in a command line: "serve the docs site".
+const PROSE_WORDS = new Set(["the", "an", "for", "with", "of", "and", "from"]);
 const FRAMEWORK_CLIS = new Set(["next", "nuxt", "astro", "remix"]);
 const SERVER_TOOLS = new Set(["webpack-dev-server", "serve", "http-server", "uvicorn", "gunicorn"]);
 const TEST_TOOLS = new Set(["vitest", "jest", "pytest", "playwright", "mocha"]);
@@ -120,29 +124,68 @@ function programName(word: string): string {
 	return (word.split(/[\\/]+/).pop() ?? word).toLowerCase().replace(/\.exe$/, "");
 }
 
-/** The command a shell interpreter was handed: `cmd /c "…"`, `bash -lc '…'`, `pwsh -Command …`. */
+type Interpreter = { option: RegExp; command: RegExp; takesValue?: RegExp };
+const INTERPRETERS: Record<string, Interpreter> = {
+	cmd: { option: /^\//, command: /^\/[ck]$/i },
+	sh: { option: /^[-+]/, command: /^-[a-z]*c[a-z]*$/, takesValue: /^([-+]o|--rcfile|--init-file)$/ },
+	powershell: {
+		option: /^-/,
+		command: /^-(c|command)$/i,
+		takesValue: /^-(executionpolicy|ep|ex|windowstyle|w|win|outputformat|of|inputformat|if|configurationname|workingdirectory|wd|version|v|psconsolefile)$/i,
+	},
+};
+const INTERPRETER_OF: Record<string, Interpreter> = {
+	cmd: INTERPRETERS.cmd,
+	sh: INTERPRETERS.sh,
+	bash: INTERPRETERS.sh,
+	zsh: INTERPRETERS.sh,
+	dash: INTERPRETERS.sh,
+	powershell: INTERPRETERS.powershell,
+	pwsh: INTERPRETERS.powershell,
+};
+
+/**
+ * The command a shell interpreter was handed: `cmd /c "…"`, `bash -lc '…'`, `pwsh -Command …`.
+ * Only the interpreter's own options count: in `bash ./watch.sh -c config.yml` the "-c" belongs to the script.
+ */
 function unwrapInterpreter(words: Word[]): string | null {
-	const program = programName(words[0]?.text ?? "");
+	const interpreter = INTERPRETER_OF[programName(words[0]?.text ?? "")];
+	if (!interpreter) return null;
 	const rest = words.slice(1);
-	let at = -1;
-	if (program === "cmd") at = rest.findIndex((word) => /^\/[ck]$/i.test(word.text));
-	else if (["bash", "sh", "zsh", "dash"].includes(program)) at = rest.findIndex((word) => /^-[a-z]*c[a-z]*$/.test(word.text));
-	else if (program === "powershell" || program === "pwsh") at = rest.findIndex((word) => /^-(c|command)$/i.test(word.text));
-	if (at < 0 || at + 1 >= rest.length) return null;
-	const payload = rest.slice(at + 1);
-	return payload.length === 1 ? payload[0].text : payload.map((word) => word.raw).join(" ");
+	for (let i = 0; i < rest.length; i++) {
+		const word = rest[i].text;
+		if (!interpreter.option.test(word)) return null;
+		if (interpreter.command.test(word)) {
+			const payload = rest.slice(i + 1);
+			if (!payload.length) return null;
+			return payload.length === 1 ? payload[0].text : payload.map((next) => next.raw).join(" ");
+		}
+		if (interpreter.takesValue?.test(word)) i++;
+	}
+	return null;
 }
 
-/** Commands start with a lowercase program; "Serve the docs site" is prose that happens to start with a tool's name. */
-function looksLikeProse(word: Word): boolean {
-	return !word.quoted && /^[A-Z][a-z]+$/.test(word.text);
+/**
+ * A step that reads as a sentence: "Serve the docs site" (commands start lowercase),
+ * or "serve the docs site" (plain words, one of them a word commands don't use).
+ */
+function looksLikeProse(words: Word[]): boolean {
+	const [first] = words;
+	if (!first || first.quoted || SHELL_BUILTINS.has(first.text.toLowerCase())) return false;
+	if (/^[A-Z][a-z]+$/.test(first.text)) return true;
+	return words.every((word) => !word.quoted && /^[a-z]+$/i.test(word.text)) && words.slice(1).some((word) => PROSE_WORDS.has(word.text.toLowerCase()));
 }
 
 function readPort(value: string, current: string | undefined): string | undefined {
 	return DIGITS.test(value) ? value : current;
 }
 
-const folderName = (target: string) => target.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || undefined;
+/** The folder a `cd` names; unknown for "..", "~", "-" or a variable, which name no folder on their own. */
+function folderName(target: string): string | undefined {
+	const name = target.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+	if (!name || [".", "..", "~", "-"].includes(name) || /[$%]/.test(name)) return undefined;
+	return name;
+}
 
 type Candidate = { tokens: Word[]; background: boolean; dir?: string };
 
@@ -200,9 +243,9 @@ function candidatesOf(steps: Step[]): { candidates: Candidate[]; port?: string; 
 		const program = kept[0].text.toLowerCase();
 		if (SETUP.has(program)) {
 			rewritten = true;
-			if (program === "cd" || program === "pushd") {
+			if (program === "cd" || program === "chdir" || program === "pushd") {
 				const target = kept.slice(1).find((word) => !/^\/d$/i.test(word.text));
-				if (target) dir = folderName(target.text);
+				dir = target ? folderName(target.text) : undefined;
 			}
 			// cmd's "set PORT=3000", "export PORT=3000".
 			for (const word of kept.slice(1)) {
@@ -274,21 +317,26 @@ function label(description: string, depth: number): ShellTaskLabel {
 	const asWritten: ShellTaskLabel = { kind: "command", text: description };
 	const steps = scan(description);
 	if (!steps?.length) return asWritten;
-	if (steps.some((step) => looksLikeProse(step.words[0]))) return asWritten;
+	if (steps.some((step) => looksLikeProse(step.words))) return asWritten;
 	if (steps.length === 1 && depth < MAX_UNWRAP) {
 		const payload = unwrapInterpreter(steps[0].words);
 		if (payload?.trim()) return label(payload.trim(), depth + 1);
 	}
 	const { candidates, port, rewritten } = candidatesOf(steps);
-	// A backgrounded step ("npm run dev > log & echo $!") is the task, not the one-shot after it.
+	const textOf = (candidate: Candidate) => candidate.tokens.map((word) => word.text);
+	// From a lone "&" on, steps run side by side. Of those, the one with a known
+	// kind is the task ("sleep 1 & npm run dev"); with none, the backgrounded step
+	// is ("ping … & echo started"), not the one-shot after it.
 	const background = candidates.findIndex((candidate) => candidate.background);
-	const chosen = background >= 0 ? candidates[background] : candidates[candidates.length - 1];
-	if (!chosen) return asWritten;
-	// Two long-running steps ("npm run dev & npm run test:watch"): no one name fits both.
-	if (background >= 0 && candidates.slice(background + 1).some((candidate) => classify(candidate.tokens.map((word) => word.text)))) {
-		return asWritten;
+	let chosen = candidates[candidates.length - 1];
+	if (background >= 0) {
+		const known = candidates.slice(background).filter((candidate) => classify(textOf(candidate)));
+		// Two long-running steps ("npm run dev & npm run test:watch"): no one name fits both.
+		if (known.length > 1) return asWritten;
+		chosen = known[0] ?? candidates[background];
 	}
-	const tokens = chosen.tokens.map((word) => word.text);
+	if (!chosen) return asWritten;
+	const tokens = textOf(chosen);
 	const where = chosen.dir ? { dir: chosen.dir } : {};
 	const kind = classify(tokens);
 	if (kind === "devServer") {

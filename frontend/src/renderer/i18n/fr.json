@@ -5443,6 +5443,7 @@
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Tâche en arrière-plan",
 	"backgroundTasks.state.running": "En cours",
+	"backgroundTasks.state.paused": "En pause",
 	"backgroundTasks.state.failed": "Échec",
 	"backgroundTasks.shells_many": "{{count}} shells sont toujours en cours",
 	"backgroundTasks.agents_many": "{{count}} agents en arrière-plan en cours",

@@ -5294,5 +5294,6 @@
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Hintergrundaufgabe",
 	"backgroundTasks.state.running": "Läuft",
+	"backgroundTasks.state.paused": "Pausiert",
 	"backgroundTasks.state.failed": "Fehlgeschlagen"
 }

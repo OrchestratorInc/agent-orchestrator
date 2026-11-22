@@ -5443,6 +5443,7 @@
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Tarefa em segundo plano",
 	"backgroundTasks.state.running": "Em execução",
+	"backgroundTasks.state.paused": "Em pausa",
 	"backgroundTasks.state.failed": "Falhou",
 	"backgroundTasks.shells_many": "{{count}} shells ainda em execução",
 	"backgroundTasks.agents_many": "{{count}} agentes em segundo plano em execução",

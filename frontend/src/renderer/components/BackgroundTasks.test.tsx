@@ -91,6 +91,28 @@ describe("composer tab", () => {
 		expect(screen.getByRole("button", { name: "Stop npm run test -- a" })).toBeVisible();
 	});
 
+	it("keeps a row's folder once it has shown, after its twin stops", async () => {
+		const web = shell("web", "cd frontend && npm run dev");
+		const api = shell("api", "cd backend && npm run dev");
+		const tests = shell("t", "npm run test");
+		const view = render(<ComposerBackgroundTasks sessionId="s" reading={readingOf([web, api, tests])} />);
+		await userEvent.click(screen.getByRole("button", { name: /3 running/ }));
+		expect(screen.getByText("Dev server · frontend")).toBeVisible();
+		view.rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf([web, tests])} />);
+		expect(screen.getByText("Dev server · frontend")).toBeVisible();
+		// A new run of the same task starts plain.
+		view.rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf([{ ...web, runId: "2" }, tests])} />);
+		expect(screen.getByText("Dev server")).toBeVisible();
+	});
+
+	it("tells screen readers a live row is paused", () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("p", "npm run dev", { state: "paused" })]) });
+		render(<SessionBackgroundTasks session={session} />);
+		const row = screen.getByText("Dev server").closest("li")!;
+		expect(row).toHaveTextContent("Paused");
+		expect(row).not.toHaveTextContent("Running");
+	});
+
 	it("shows nothing but the kind for a blank description", () => {
 		queryMock.mockReturnValue({ data: readingOf([shell("blank", "   ")]) });
 		render(<SessionBackgroundTasks session={session} />);
