@@ -261,7 +261,13 @@ function QueuedMessageRowContent({
 					className="queue-dock-row-text min-w-0 truncate text-xs leading-relaxed text-foreground"
 					title={tooltip}
 				>
-					{annotations || showReferences ? text : <QueuedMessageText text={typedText} uploadingImages={uploadingImages} label={imageLabel} />}
+					{annotations ? text : (
+						// A reference-only message still shows the files that went with it.
+						<>
+							{showReferences ? text : null}
+							<QueuedMessageText text={typedText} uploadingImages={uploadingImages} label={imageLabel} />
+						</>
+					)}
 				</p>
 				{referenceCount ? (
 					<span className="shrink-0 text-xs leading-relaxed text-muted-foreground">{referenceCount}</span>

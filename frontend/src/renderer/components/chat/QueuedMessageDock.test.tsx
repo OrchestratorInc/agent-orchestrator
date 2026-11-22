@@ -450,6 +450,15 @@ describe("QueuedMessageDock attachments", () => {
 		expect(row).not.toHaveTextContent("attachment-0a1b2c3d");
 	});
 
+	it("keeps a screenshot's chip beside the excerpt it was sent with", () => {
+		const [queued] = queuedMessages([block(shot).trimStart()]);
+		const message = { ...queued!, message: { ...queued!.message, content: [{ type: "excerpt", text: "prune build cache", annotationId: "ex-1", annotationOrder: 1, sourceMessageId: "m-1" }] } };
+		render(<QueuedMessageDock messages={[message]} />);
+		const row = screen.getByTestId("queued-message-queued-1");
+		expect(row).toHaveTextContent("“prune build cache”Image 1");
+		expect(row).not.toHaveTextContent("Attached files");
+	});
+
 	it("says a message is still uploading and shows its picture meanwhile", () => {
 		const [message] = queuedMessages(["then i got this"]);
 		render(<QueuedMessageDock messages={[{ ...message!, pending: true, uploadingImages: ["blob:local-shot"] }]} />);

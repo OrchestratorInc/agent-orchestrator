@@ -1227,11 +1227,13 @@ export const ChatComposer = memo(function ChatComposer({
 				clearEditorView();
 			}
 			// Only the files that went drop. A file pasted while the send was on its way
-			// may still be uploading for the next message: clearing would cancel it.
+			// belongs to the next message, even if it landed after this result was saved;
+			// clearing would also cancel one still uploading.
 			for (const attachment of fileAttachments.getAttachments()) {
-				if (!result.draft.composer.attachments.some((kept) => kept.id === attachment.id)) {
-					fileAttachments.remove(attachment.id);
-				}
+				const went = result.delivered
+					? result.delivered.includes(attachment.id)
+					: !result.draft.composer.attachments.some((kept) => kept.id === attachment.id);
+				if (went) fileAttachments.remove(attachment.id);
 			}
 			return result.cleared && !unsavedText.current;
 		},
@@ -2494,10 +2496,12 @@ export const ChatComposer = memo(function ChatComposer({
 	 * Attaching waits only while a send is still gathering its files, which a new
 	 * one would join. Another file still uploading does not stop it (batches are
 	 * added one after another), and neither does a send already on its way: it
-	 * keeps the files it took, and a new one belongs to the next message.
+	 * keeps the files it took, and a new one belongs to the next message. Where
+	 * another flow owns the send (a new chat's launch), only the typed text is
+	 * handed on afterwards, so files wait for the send to finish there.
 	 */
 	function attachBlocked() {
-		return !canAttach || ((draftMutationPending || submitInFlight.current !== null) && !optimisticSend);
+		return !canAttach || ((draftMutationPending || submitInFlight.current !== null) && (!optimisticSend || !parkUnsentSends));
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {

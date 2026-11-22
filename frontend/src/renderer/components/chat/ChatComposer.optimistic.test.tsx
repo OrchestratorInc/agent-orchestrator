@@ -125,6 +125,24 @@ describe("optimistic message delivery", () => {
 		expect(pending.onSend.mock.calls[0][1]).toBeUndefined();
 	});
 
+	it("keeps attaching closed during a send another flow owns, which hands on only the text", async () => {
+		const sessionId = "optimistic-handoff-no-attach";
+		const pending = pendingSend();
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/original.png"]);
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} parkUnsentSends={false} />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
+		fireEvent.paste(field, {
+			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], "next.png", { type: "image/png" })], items: [], getData: () => "", setData: () => undefined },
+		});
+		expect(stage).not.toHaveBeenCalled();
+		await act(async () => pending.resolve());
+	});
+
 	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {
 		const sessionId = "optimistic-repeat-enter";
 		const pending = pendingSend();
