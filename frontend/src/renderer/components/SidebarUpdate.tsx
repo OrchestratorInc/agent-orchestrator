@@ -257,15 +257,16 @@ export function SidebarUpdateRow({
 	} else {
 		title = t("shell.updateFailed");
 		detail = action.phase === "install" ? t("shell.updateInstallFailed") : t("shell.updateDownloadFailed");
+		const retryLabel = t("shell.updateRetry");
 		glyph = (
 			<UpdateActionLabel
 				icon={<RotateCcw aria-hidden="true" className="text-destructive" />}
-				label={t("shell.updateRetry")}
+				label={retryLabel}
 				variant="secondary"
 			/>
 		);
 		const { recovery } = action;
-		press = { label: t("shell.retryUpdate"), onClick: () => recover(recovery, onRequestInstall) };
+		press = { label: retryLabel, onClick: () => recover(recovery, onRequestInstall) };
 	}
 
 	const testId = {
@@ -277,7 +278,7 @@ export function SidebarUpdateRow({
 
 	const content = (
 		<>
-			<span className="relative z-[1] min-w-0 flex-1 truncate text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground">
+			<span className="relative z-[1] min-w-0 flex-1 wrap-anywhere text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground">
 				{title}
 				{versionNote ? (
 					<span className="ml-1.5 text-xs font-normal tabular-nums text-passive">{versionNote}</span>

@@ -108,7 +108,7 @@ describe("SidebarUpdateRow retry", () => {
 		// unlabelled error with neither `version` nor `staged`.
 		view.rerender({ state: "error", message: "Couldn't prepare the update." });
 
-		await userEvent.click(screen.getByRole("button", { name: "Retry update" }));
+		await userEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
 		expect(checkMock).toHaveBeenCalledTimes(1);
 		expect(onRequestInstall).not.toHaveBeenCalled();
 	});
@@ -120,7 +120,7 @@ describe("SidebarUpdateRow retry", () => {
 		const view = renderRow({ state: "preparing", version: "9.9.9", staged }, onRequestInstall);
 		view.rerender({ state: "error", message: "Install failed.", staged });
 
-		await userEvent.click(screen.getByRole("button", { name: "Retry update" }));
+		await userEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
 		expect(onRequestInstall).toHaveBeenCalledTimes(1);
 		expect(checkMock).not.toHaveBeenCalled();
 	});

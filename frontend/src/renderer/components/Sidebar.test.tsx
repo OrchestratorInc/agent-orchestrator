@@ -4379,8 +4379,9 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const failedRow = await screen.findByTestId("sidebar-update-failed");
-		// One row: the reason is in the row's tooltip and screen-reader text.
-		expect(failedRow).toHaveTextContent("Update failed · Couldn't download");
+		expect(within(failedRow).getByText("Retry")).toBeVisible();
+		expect(failedRow).toHaveAccessibleName("Retry");
+		expect(failedRow).toHaveAccessibleDescription("Update failed · Couldn't download");
 		await userEvent.click(failedRow);
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});

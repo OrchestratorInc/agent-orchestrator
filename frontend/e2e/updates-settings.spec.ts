@@ -1,6 +1,32 @@
 import { expect, test } from "@playwright/test";
 import { installFakeBridge } from "./support/fake-bridge";
 
+for (const [locale, status, action] of [
+	["de", "Update fehlgeschlagen", "Wiederholen"],
+	["pt-BR", "Falha na atualização", "Tentar de novo"],
+] as const) {
+	test(`@P0 localized update failure stays readable and voice-accessible in ${locale}`, async ({ page }) => {
+		await page.setViewportSize({ width: 1010, height: 700 });
+		await installFakeBridge(page, {
+			locale,
+			updateStatus: { state: "error", errorInfo: { kind: "generic", phase: "download" } },
+		});
+		await page.goto("/");
+
+		const row = page.getByTestId("sidebar-update-failed");
+		await expect(row.getByText(action, { exact: true })).toBeVisible();
+		await expect(row).toHaveAccessibleName(action);
+		await expect(row).toHaveAccessibleDescription(new RegExp(status));
+
+		const titleFits = await row.getByText(status).evaluate(async (title) => {
+			await document.fonts.ready;
+			const { textOverflow } = getComputedStyle(title);
+			return textOverflow !== "ellipsis" && title.scrollWidth === title.clientWidth;
+		});
+		expect(titleFits).toBe(true);
+	});
+}
+
 test("downloaded update keeps the full version readable and actions aligned", async ({ page }) => {
 	await page.setViewportSize({ width: 1010, height: 700 });
 	await page.emulateMedia({ colorScheme: "dark" });
