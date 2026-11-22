@@ -5,7 +5,6 @@ package hostupdate
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
@@ -286,11 +285,7 @@ func (u *Updater) startLaunchd(ctx context.Context) error {
 
 func (u *Updater) launchdPlist() []byte {
 	var b bytes.Buffer
-	text := func(s string) string {
-		var escaped bytes.Buffer
-		_ = xml.EscapeText(&escaped, []byte(s))
-		return escaped.String()
-	}
+	text := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>

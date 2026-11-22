@@ -108,6 +108,9 @@ func TestLaunchdStart(t *testing.T) {
 			} `xml:"dict"`
 		} `xml:"dict"`
 	}
+	if !strings.Contains(string(data), "&amp;\nset -euo pipefail\n") {
+		t.Errorf("script newlines are not literal; launchd keeps only the first line of an escaped one:\n%s", data)
+	}
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		t.Fatal(err)
 	}
