@@ -22,6 +22,9 @@ const h = vi.hoisted(() => ({
 	error: undefined as string | undefined,
 	status: undefined as string | undefined,
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
+	remoteLoadError: undefined as string | undefined,
+	remoteLoadErrorAction: undefined as { label: string; onClick: () => void } | undefined,
+	canSubmit: true,
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 	harness: "codex",
@@ -64,13 +67,16 @@ vi.mock("./TaskComposer", () => ({
 		error: h.error,
 		status: h.status,
 		errorAction: h.errorAction,
+		remoteLoadError: h.remoteLoadError,
+		remoteLoadErrorAction: h.remoteLoadErrorAction,
 		submitMode: undefined,
 		isCloudProject: h.isCloudProject,
-		canSubmit: true,
+		canSubmit: h.canSubmit,
 		catalogProjectId: "proj-1",
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
+		notePreparationUsed: () => undefined,
 		modelWarning: h.modelWarning,
 		modelWarningRetries: h.modelWarningRetries,
 		chatModels: h.chatModels,
@@ -112,6 +118,9 @@ beforeEach(() => {
 	h.error = undefined;
 	h.status = undefined;
 	h.errorAction = undefined;
+	h.remoteLoadError = undefined;
+	h.remoteLoadErrorAction = undefined;
+	h.canSubmit = true;
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	h.harness = "codex";
@@ -399,6 +408,33 @@ describe("NewChatPage", () => {
 		h.errorAction = { label: "Open Agent Harnesses", onClick: openSettings };
 		act(() => page.refresh());
 		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
+	});
+
+	it("offers Harness settings beside the no-agent message", () => {
+		const openSettings = vi.fn();
+		h.remoteLoadError = "No agent is ready. Set one up in Settings.";
+		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		renderPage();
+		expect(screen.getByRole("alert")).toHaveTextContent(h.remoteLoadError);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the Harness settings action after a send is refused for having no agent", async () => {
+		const openSettings = vi.fn();
+		h.canSubmit = false;
+		h.remoteLoadError = "No agent is ready. Set one up in Settings.";
+		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		renderPage();
+		let refusal: unknown;
+		await act(async () => {
+			refusal = await Promise.resolve(h.workspace?.onSend?.("Set up my project", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(refusal).toMatchObject({ message: h.remoteLoadError });
+		// The composer shows the refused send's reason, so the notice keeps only the action.
+		expect(screen.queryByText(h.remoteLoadError)).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
 		expect(openSettings).toHaveBeenCalledOnce();
 	});

@@ -4,13 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pickerMounts = vi.hoisted(() => ({ count: 0 }));
 
+const theme = vi.hoisted(() => ({ bgElevated: "#elevated", bgSurface: "#surface", textPrimary: "#primary", textSecondary: "#secondary", textTertiary: "#tertiary" }));
 vi.mock("./ThemeProvider", () => ({
-	useTheme: () => ({ bgElevated: "#elevated", bgSurface: "#surface", textPrimary: "#primary", textSecondary: "#secondary", textTertiary: "#tertiary" }),
+	useTheme: () => theme,
+	useThemeState: () => ({ theme, scheme: "light" }),
 }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness: string) => (harness === "codex" ? "logo:codex" : harness === "opencode" ? "logo:opencode" : null) }));
-vi.mock("./harnessLogo", () => ({ chipColorFor: (harness: string) => (harness === "opencode" ? "#chip" : undefined) }));
-vi.mock("./spawn-composer-controls.ios", () => ({ HarnessImage: "HarnessImage", useHarnessLogoUris: () => ({ codex: "file://codex.png" }) }));
+vi.mock("./spawn-composer-controls.ios", () => ({ HarnessImage: "HarnessImage" }));
 vi.mock("@expo/ui/jetpack-compose", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);

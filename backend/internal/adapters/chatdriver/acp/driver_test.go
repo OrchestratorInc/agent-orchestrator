@@ -907,6 +907,10 @@ type legacyKimiAgent struct {
 	mode               string
 	modeCalls          int
 	configCalls        int
+	// acceptConfig makes session/set_config_option succeed and record the
+	// applied value in configs instead of answering method-not-found.
+	acceptConfig bool
+	configs      map[string]string
 }
 
 func fakeLegacyKimiSpawn(agent *legacyKimiAgent) spawnFunc {
@@ -1006,10 +1010,23 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 			agent.modeCalls++
 			agent.mu.Unlock()
 		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    any    `json:"value"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
 			agent.mu.Lock()
 			agent.configCalls++
+			if agent.acceptConfig {
+				if agent.configs == nil {
+					agent.configs = make(map[string]string)
+				}
+				agent.configs[params.ConfigID] = fmt.Sprint(params.Value)
+				result = map[string]any{"configOptions": []any{}}
+			} else {
+				responseError = map[string]any{"code": -32601, "message": "Method not found"}
+			}
 			agent.mu.Unlock()
-			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		default:
 			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		}
@@ -2517,6 +2534,64 @@ func TestHistoricalUserContentDropsStandingInstructionsJoinedToTheFirstMessage(t
 	}
 	if got := historicalUserContent(acpsdk.TextBlock("Fix the failing test")); got != "Fix the failing test" {
 		t.Fatalf("ordinary message = %q", got)
+	}
+}
+
+func TestHistoricalUserContentDropsPlainStandingInstructionsJoinedToTheFirstMessage(t *testing.T) {
+	standing := PlainStandingInstructionsBlock("AO standing instructions")
+	// Antigravity replays the preamble and the first prompt as one message.
+	joined := acpsdk.TextBlock(standing.Text.Text + "\n\nFix the failing test")
+	if got := historicalUserContent(joined); got != "Fix the failing test" {
+		t.Fatalf("replayed first message = %q, want only what the user typed", got)
+	}
+	if got := historicalUserContent(standing); got != "" {
+		t.Fatalf("replayed preamble alone = %q, want empty", got)
+	}
+	quoted := acpsdk.TextBlock("Explain </ao_standing_instructions> in the docs")
+	if got := historicalUserContent(quoted); got != quoted.Text.Text {
+		t.Fatalf("message quoting the tag = %q, want it unchanged", got)
+	}
+}
+
+// Antigravity 1.5.14 replays the first prompt as two id-less user chunks: the
+// standing-instructions preamble, then what the user typed. The merged first
+// message must be only the user's text, or the ao_high_water checkpoint
+// never matches.
+func TestACPHistoryReplayDropsPlainStandingInstructionsChunkBeforeTheFirstPrompt(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
+		loadUpdates: []acpsdk.SessionUpdate{
+			acpsdk.UpdateUserMessage(PlainStandingInstructionsBlock("AO standing instructions")),
+			acpsdk.UpdateUserMessageText("Fix the failing test"),
+			acpsdk.UpdateAgentMessageText("Fixed."),
+		},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "sess1", WorkspacePath: t.TempDir(), ProviderConversationID: "provider-session-1",
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conv.Close()
+	events, err := conv.(ports.ChatHistoryReader).ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	var users []string
+	for _, event := range events {
+		if event.Kind == ports.ChatEventUserMessageCompleted {
+			users = append(users, event.Text)
+		}
+	}
+	if want := []string{"Fix the failing test"}; !reflect.DeepEqual(users, want) {
+		t.Fatalf("replayed user messages = %q, want %q", users, want)
 	}
 }
 
@@ -4125,6 +4200,136 @@ func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testi
 	agent.mu.Unlock()
 	if model != "composer-2.5[fast=false]" || calls != 1 {
 		t.Fatalf("legacy model setter = %q across %d calls, want advertised non-fast value", model, calls)
+	}
+}
+
+func TestACPDriverKeepsItsDefaultForAnOptionalModelItDoesNotOffer(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash-high",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash-high", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "claude-opus-4-6-thinking",
+	})
+	if err != nil {
+		t.Fatalf("Start with a model the session lacks: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 {
+		t.Fatalf("session/set_model called %d times, want the default kept", agent.modelCalls)
+	}
+}
+
+func startLegacyVariant(t *testing.T, agent *legacyKimiAgent) {
+	t.Helper()
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			return strings.TrimSuffix(model, "-medium"), SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, true
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	conv.Close()
+
+}
+
+func TestACPDriverSplitsAModelTheSessionOffersOnlyAsAVariant(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+		acceptConfig:       true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want the variant set as its own option", agent.modelCalls, agent.configCalls)
+	}
+	if got := agent.configs["thinking_level"]; got != "medium" {
+		t.Fatalf("thinking_level applied = %q, want medium (configs %v)", got, agent.configs)
+	}
+}
+
+func TestACPDriverToleratesAVariantSetterTheSessionLacks(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want one tolerated config attempt", agent.modelCalls, agent.configCalls)
+	}
+	if len(agent.configs) != 0 {
+		t.Fatalf("configs = %v, want nothing applied", agent.configs)
+	}
+}
+
+func TestACPDriverSplitsAVariantOnTheModernModelSelector(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-3.8-flash", "gemini-3.8-flash"),
+		selectConfigOption("thinking_level", "Thinking", "thought_level", "low", "low", "medium", "high"),
+	}}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			base, ok := strings.CutSuffix(model, "-medium")
+			return base, SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, ok
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["thinking_level"] != "medium" || agent.options["model"] != "" {
+		t.Fatalf("options set = %#v, want only thinking_level=medium on the offered base model", agent.options)
 	}
 }
 

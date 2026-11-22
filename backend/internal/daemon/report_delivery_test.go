@@ -125,3 +125,12 @@ func TestReportSemanticDeliveryMarksAComposerDraftAsBusy(t *testing.T) {
 		t.Fatalf("Submit error = %v, want other failures left as they are", err)
 	}
 }
+
+func TestReportSemanticDeliveryMarksPromptSubmissionUnobservedAsUnacknowledged(t *testing.T) {
+	sessions := &reportDeliverySession{sendErr: fmt.Errorf("send ao-1: %w", sessionmanager.ErrPromptSubmissionUnobserved)}
+	delivery := reportSemanticDelivery{sessions: sessions}
+	err := delivery.Submit(context.Background(), "ao-1", "report context", "report-batch:abc123")
+	if !errors.Is(err, reportsvc.ErrUnacknowledgedDelivery) || !errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) {
+		t.Fatalf("Submit error = %v, want ErrUnacknowledgedDelivery wrapping ErrPromptSubmissionUnobserved", err)
+	}
+}

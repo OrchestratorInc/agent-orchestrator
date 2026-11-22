@@ -177,7 +177,10 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				ProviderTurnID: "provider-turn-3", TurnState: domain.TurnStateCompleted})
 			snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				states := turnStateByText(t, s)
-				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning
+				// The turn is marked running before its provider send returns, so
+				// wait for the send too rather than racing it.
+				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning &&
+					len(h.conv.sentTexts()) == 4
 			})
 			if turnStateByText(t, snapshot)["stale excerpt"] != domain.TurnStateFailed {
 				t.Fatal("later drains retried the stale turn")

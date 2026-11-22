@@ -13,10 +13,14 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
+import { RouteRestorer } from "../lib/RouteRestorer";
+import { startReviewPersistence } from "../lib/files/reviewPersistence";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
+import { UpdateScreen } from "../lib/UpdateScreen";
+import { UpdateRouteKeeper } from "../lib/UpdateRouteKeeper";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
@@ -149,6 +153,8 @@ export default function RootLayout() {
 }
 
 function Shell() {
+	// Unsent review comments survive the phone closing the app (see reviewPersistence).
+	useEffect(() => { void startReviewPersistence(); }, []);
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const navigationTheme = useMemo(
@@ -176,8 +182,12 @@ function Shell() {
 			<TelemetryManager />
 			<PushManager />
 			<UpdatesManager />
+			<UpdateScreen />
+			<UpdateRouteKeeper />
 			<StoreUpdateManager />
 			<OnboardingGate />
+			{/* Reopens the last screen after the phone closed the app in the background. */}
+			<RouteRestorer />
 			{/* The navigator paints surfaces of its own, and it reads them from *its*
 			    theme, not from the palette above. Two of those surfaces are visible
 			    only while a page moves: the stack's own container, which shows
@@ -216,6 +226,7 @@ function Shell() {
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="shared-artifact" options={{ title: "Shared artifact", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version", ...GLASS_HEADER_OPTIONS }} />
 				{/* The conversation's "⋯", a bottom sheet over the chat. iOS opens it
 				    at full height, where every action fits: at three quarters

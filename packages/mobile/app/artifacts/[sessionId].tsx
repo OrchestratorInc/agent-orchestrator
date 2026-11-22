@@ -6,7 +6,8 @@ import { useArtifactActions } from "../../lib/artifact-menu";
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
-import { hostRouteMatches } from "../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../lib/hostRoute";
+import { MachineRejectedState } from "../../lib/MachineRejectedState";
 import { relativeTime } from "../../lib/notificationView";
 import type { ArtifactsBackend } from "../../lib/artifactsBackend";
 import { useArtifactsBackend } from "../../lib/useArtifactsBackend";
@@ -31,7 +32,8 @@ function SessionArtifactsContent() {
 	const sessionId = String(rawId ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { currentHostId, connection } = useApp();
+	const app = useApp();
+	const { currentHostId } = app;
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
 	const { backend, cloud, unavailable } = useArtifactsBackend(hostMatches ? sessionId : "");
@@ -88,7 +90,11 @@ function SessionArtifactsContent() {
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="These artifacts belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (unavailable) return <View style={styles.center}><EmptyState icon="cloud" title="Artifacts unavailable" message={unavailable} /></View>;
-	if (!backend && !cloud && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Artifacts load once the app reconnects." /></View>;
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const machine = !backend && !cloud ? machineState(app) : "ok";
+	if (machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
+	if (machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Artifacts load once the app reconnects." /></View>;
 	if (!artifacts && (loading || !backend)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifacts) return <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't load artifacts" message={error} action={<Button title="Try again" icon="refresh-cw" onPress={() => void onRefresh()} />} /></View>;
 

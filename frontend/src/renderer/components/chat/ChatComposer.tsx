@@ -310,6 +310,7 @@ export const ChatComposer = memo(function ChatComposer({
 	elicitation,
 	skills = [],
 	skillsLoading = false,
+	filePathsLoading = false,
 	filePaths = [],
 	filePathsTruncated,
 	onFileQuery,
@@ -430,6 +431,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * belong to the editor.
 	 */
 	skillsLoading?: boolean;
+	filePathsLoading?: boolean;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/**
@@ -870,7 +872,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// Drawn even with nothing to pick while the skills are on their way, so `/` is
 	// never answered with silence. Keyboard handling still follows `menuOpen`.
 	const skillsNote = skillsLoading && trigger?.kind === "skill" && trigger.key !== dismissedKey;
-	const menuShown = menuOpen || skillsNote;
+	const filesNote = filePathsLoading && trigger?.kind === "file" && trigger.key !== dismissedKey;
+	const menuShown = menuOpen || skillsNote || filesNote;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -967,6 +970,13 @@ export const ChatComposer = memo(function ChatComposer({
 	// A plain send while a turn runs is queued, so the button says so instead of
 	// looking identical to an immediate send.
 	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
+	// A send of this box is still on its way. The box clears before the surface
+	// hears of the send (its echo and pending state arrive a task later), and the
+	// turn it starts reaches the snapshot later still, so this is what says a next
+	// message would wait, from the frame the draft clears until the surface's own
+	// willQueue takes over. A failed send ends it with `submitting`.
+	const ownSendInFlight = optimisticSend || (submitting && !savingQueuedEdit);
+	const nextMessageQueues = Boolean(willQueue) || ownSendInFlight;
 	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
 	// turn; the send button only shows it while the modifier is held. When Enter
 	// inserts newlines, Cmd/Ctrl+Enter is the send key, so the modifier delivers
@@ -2256,7 +2266,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		// The "Loading skills…" note closes the same way a menu does.
-		if (event.key === "Escape" && skillsLoading && liveTrigger?.kind === "skill" && liveTrigger.key !== dismissedKeyRef.current) {
+		if (event.key === "Escape" && liveTrigger && ((skillsLoading && liveTrigger.kind === "skill") || (filePathsLoading && liveTrigger.kind === "file")) && liveTrigger.key !== dismissedKeyRef.current) {
 			event.preventDefault();
 			event.stopPropagation();
 			dismissedKeyRef.current = liveTrigger.key;
@@ -2489,7 +2499,7 @@ export const ChatComposer = memo(function ChatComposer({
 						highlighted={activeIndex}
 						onPick={pick}
 						truncated={trigger?.kind === "file" && filePathsTruncated}
-						loadingNote={skillsNote ? "Loading skills…" : undefined}
+						loadingNote={skillsNote ? "Loading skills…" : filesNote ? "Loading files…" : undefined}
 					/>
 				) : null}
 
@@ -2629,7 +2639,7 @@ export const ChatComposer = memo(function ChatComposer({
 					ref={editor}
 					dictating={dictating}
 					images={composerImages}
-					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
+					promptSuggestion={nextMessageQueues || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					readOnly={typingLocked}
 					enterSends={enterSends}
@@ -2638,7 +2648,7 @@ export const ChatComposer = memo(function ChatComposer({
 					placeholder={
 						disabledPlaceholder ?? (disabled
 							? "The controller is not connected"
-							: willQueue
+							: nextMessageQueues
 								? (queuePlaceholder ?? "Next message you send will be queued")
 								: emptyPlaceholder ?? "Message the agent")
 					}

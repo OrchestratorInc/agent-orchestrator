@@ -603,6 +603,71 @@ describe("Cloud project Coder template", () => {
 	});
 });
 
+describe("Cloud project orchestrator placement", () => {
+	// A B2B org that may run Coder as its own, on a control plane offering both.
+	const withOrchestratorChoice = () => mocks.me.mockResolvedValue({ organizations: [], offering: {
+		providers: ["coder", "freestyle"], defaultProvider: "coder", billingMode: "contract", kind: "both", features: ["orchestrator-on-coder"],
+	} });
+
+	it("is offered only when the org's offering lists orchestrator-on-coder", async () => {
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByRole("button", { name: "Orchestrator runs on" })).not.toBeInTheDocument();
+	});
+
+	it("defaults to the instant VM and keeps the orchestrator on Coder through the settings patch", async () => {
+		withOrchestratorChoice();
+		const view = mount("general");
+		const placement = await screen.findByRole("button", { name: "Orchestrator runs on" });
+		expect(placement).toHaveTextContent("Instant VM (default)");
+		expect(screen.getByText("Workers run on Coder either way. Applies to the next orchestrator you start.")).toBeInTheDocument();
+		await choose("Orchestrator runs on", "Coder");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { orchestratorSandboxProvider: "coder" } }));
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Coder"));
+		expect(project.config.orchestratorSandboxProvider).toBe("coder");
+		// The project's other settings are left alone.
+		expect(project.config.coder).toEqual({ templateId: "preserve" });
+		view.unmount();
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Coder");
+	});
+
+	it("moves a saved Coder orchestrator back to the instant VM, and sends nothing for the current choice", async () => {
+		withOrchestratorChoice();
+		project.config.orchestratorSandboxProvider = "coder";
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Coder");
+		await choose("Orchestrator runs on", "Coder");
+		expect(mocks.patch).not.toHaveBeenCalled();
+		await choose("Orchestrator runs on", "Instant VM (default)");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { orchestratorSandboxProvider: "freestyle" } }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Instant VM (default)"));
+	});
+
+	it("keeps the saved choice and says why when the control plane refuses it", async () => {
+		withOrchestratorChoice();
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("Your organization is not enabled to run orchestrators on Coder.", { status: 422, code: "provider_unavailable" }));
+		mount("general");
+		await screen.findByRole("button", { name: "Orchestrator runs on" });
+		await choose("Orchestrator runs on", "Coder");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Your organization is not enabled to run orchestrators on Coder.");
+		expect(screen.getByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Instant VM (default)");
+		expect(project.config.orchestratorSandboxProvider).toBeUndefined();
+	});
+
+	it("is not offered for a project whose sessions run on the instant VM", async () => {
+		withOrchestratorChoice();
+		project.config.sandboxProvider = "freestyle";
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByText("Coder template")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Orchestrator runs on" })).not.toBeInTheDocument();
+	});
+});
+
 describe("Cloud project Coder template options", () => {
 	const templateParameters = [
 		{ name: "region", displayName: "Region", type: "string", mutable: true, required: false, defaultValue: "eu" },

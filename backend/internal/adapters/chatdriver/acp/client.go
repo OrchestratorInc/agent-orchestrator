@@ -809,11 +809,19 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
-			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
+			if title, ok := providerTitle(*update.SessionInfoUpdate.Title); ok {
+				emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: title})
+			}
 		}
 		if turnID != "" {
-			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
-				emit(event)
+			// A retry or limit notice is live status. The live run already stored
+			// and settled it; replayed into a reconstructed turn it would come back
+			// as a new running row (direct connections give it a fresh id) on a turn
+			// that has long ended, spinning in every client.
+			if !c.historyReplayActive() {
+				if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
+					emit(event)
+				}
 			}
 			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}

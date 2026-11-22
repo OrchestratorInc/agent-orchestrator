@@ -879,6 +879,18 @@ func (f *fakeSessionService) SearchWorkspaceFiles(_ context.Context, id domain.S
 	return sessionsvc.WorkspaceFileSearch{SessionID: id, Query: query}, nil
 }
 
+func (f *fakeSessionService) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFilePaths, error) {
+	files, err := f.ListWorkspaceFiles(ctx, id)
+	if err != nil {
+		return sessionsvc.WorkspaceFilePaths{}, err
+	}
+	var paths []string
+	for _, file := range files.Files {
+		paths = append(paths, file.Path)
+	}
+	return sessionsvc.WorkspaceFilePaths{SessionID: id, Paths: paths, Truncated: files.Truncated}, nil
+}
+
 func (f *fakeSessionService) ListWorkspaceTree(_ context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error) {
 	f.workspaceTreePath = path
 	if f.workspaceErr != nil {
@@ -1160,9 +1172,43 @@ func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 	}
 }
 
+// The Merged list on a phone pages archived workers by PR state. The filter
+// reaches the service, and the response echoes it with the match count so the
+// phone can tell this daemon from one that ignored the parameter.
+func TestSessionsAPI_ListFiltersByPRState(t *testing.T) {
+	svc := newFakeSessionService()
+	total := 7
+	svc.listPage = &sessionsvc.ListPage{Sessions: []domain.Session{svc.sessions["ao-1"]}, NextCursor: "more", Total: &total, Version: "9f3a"}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?active=false&kind=worker&prState=merged&limit=50", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if f := svc.lastListFilter; f.PRState != domain.PRStateMerged || f.Active == nil || *f.Active || f.Limit != 50 {
+		t.Fatalf("filter = %+v, want archived merged page of 50", f)
+	}
+	var page struct {
+		PRState    string `json:"prState"`
+		Total      *int   `json:"total"`
+		NextCursor string `json:"nextCursor"`
+		Version    string `json:"version"`
+	}
+	mustJSON(t, body, &page)
+	if page.PRState != "merged" || page.Total == nil || *page.Total != 7 || page.NextCursor != "more" || page.Version != "9f3a" {
+		t.Fatalf("page = %+v, want prState merged, total 7, cursor more, version 9f3a", page)
+	}
+
+	svc.listPage = nil
+	body, _, _ = doRequest(t, srv, "GET", "/api/v1/sessions", "")
+	if strings.Contains(string(body), "prState") || strings.Contains(string(body), "\"total\"") || strings.Contains(string(body), "\"version\"") {
+		t.Fatalf("unfiltered list carries PR-state fields: %s", body)
+	}
+}
+
 func TestSessionsAPI_ListRejectsBadPagingQuery(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
-	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc"} {
+	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc", "prState=shipped"} {
 		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?"+query, "")
 		if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_QUERY") {
 			t.Fatalf("GET sessions?%s = %d %s, want 400 INVALID_QUERY", query, status, body)
@@ -3943,6 +3989,42 @@ func TestSessionsAPI_KillLeavesPreviewTeardownToSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ListWorkspaceFilePaths(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceFiles = sessionsvc.WorkspaceFiles{
+		SessionID: "ao-1",
+		Files:     []sessionsvc.WorkspaceFileSummary{{Path: "README.md"}, {Path: "src/main.go"}},
+		Truncated: true,
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/workspace/paths", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET workspace paths = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		SessionID string   `json:"sessionId"`
+		Paths     []string `json:"paths"`
+		Truncated bool     `json:"truncated"`
+	}
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || !got.Truncated || len(got.Paths) != 2 || got.Paths[0] != "README.md" || got.Paths[1] != "src/main.go" {
+		t.Fatalf("response = %#v", got)
+	}
+
+	svc.workspaceFiles = sessionsvc.WorkspaceFiles{SessionID: "ao-1"}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/workspace/paths", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"paths":[]`) {
+		t.Fatalf("empty workspace = %d %s, want an empty paths array", status, body)
+	}
+
+	_, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/missing/workspace/paths", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown session = %d, want 404", status)
+	}
+}
+
 func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 	svc := newFakeSessionService()
 	svc.workspaceFiles = sessionsvc.WorkspaceFiles{
@@ -4991,6 +5073,16 @@ func TestSessionsAPI_DelegateTaskRejectsOversizedBody(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 	if svc.delegationInput.ProjectID != "" {
 		t.Fatalf("delegate service called with oversized body: %#v", svc.delegationInput)
+	}
+}
+
+func TestSessionsAPI_SendDuringAHandoffIsARetryableConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrControllerHandoff)
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"hi"}`)
+	if status != http.StatusConflict || !strings.Contains(string(body), "CHAT_INTERFACE_TRANSITION") {
+		t.Fatalf("send = %d %s, want 409 CHAT_INTERFACE_TRANSITION", status, body)
 	}
 }
 

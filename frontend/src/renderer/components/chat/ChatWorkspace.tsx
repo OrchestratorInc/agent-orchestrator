@@ -8,10 +8,12 @@ import "./chat-find.css";
 import { ForkableTurnContext, ForkTextCopyNotice, LatestForkTurnContext } from "../SessionForkControls";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
+import { HistoryAnchorSnapshot } from "./HistoryAnchorSnapshot";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
+import { notifyComposerSent } from "../../lib/guided-tour-signals";
 import { isSettingsPageOpen, onDedicatedShortcut } from "../../hooks/useAppShortcut";
 import { agentAccountProviderFor, fetchSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
@@ -48,11 +50,12 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 	type ReactNode,
+	type Ref,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
-import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, Reorder, usePresence, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
 import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
@@ -186,7 +189,7 @@ import {
 } from "./WorkerUpdates";
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
-import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
 import { pageHidden } from "../../lib/page-hidden";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -195,6 +198,7 @@ import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
+import { nearQuotaWindow, QuotaSign, QuotaStatus } from "./QuotaReadout";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -652,8 +656,15 @@ export interface ChatWorkspaceProps {
 	composerStarting?: boolean;
 	/** The path list was capped by the daemon rather than being all of them. */
 	filePathsTruncated?: boolean;
+	filePathsLoading?: boolean;
 	/** Renderer-only human messages awaiting their exact durable counterpart. */
 	localEchos?: ConversationLocalEcho[];
+	/**
+	 * A send this surface made was accepted, but the turn it starts is not in the
+	 * snapshot yet. For a surface without local echoes (Cloud), which tell this
+	 * themselves.
+	 */
+	sendAwaitingTurn?: boolean;
 	/**
 	 * Writes staged images into the worktree and answers with the paths the agent
 	 * can open. Absent means no attach control is offered — the fixture preview has
@@ -936,9 +947,11 @@ function ChatWorkspaceContent({
 	skillsLoading,
 	filePaths,
 	filePathsTruncated,
+	filePathsLoading,
 	onFileQuery,
 	composerStarting = false,
 	localEchos,
+	sendAwaitingTurn = false,
 	onStageAttachments,
 	cloudAttachments,
 	nativeImages,
@@ -1415,6 +1428,9 @@ function ChatWorkspaceContent({
 		},
 		[onCancelQueuedTurn, queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
+	// Messages and steers this composer sent that the guided tour waits to see
+	// arrive (GuidedTour): the chat holding one is what counts as delivered.
+	const tourAwaitedIds = useRef(new Set<string>());
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
@@ -1471,6 +1487,7 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
+			if (clientMessageId) tourAwaitedIds.current.add(clientMessageId);
 			// A refused send throws past the count.
 			const sent = await onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
 			if (sent !== SENT_OUTSIDE_TRANSCRIPT) setComposerSends((count) => count + 1);
@@ -1539,6 +1556,7 @@ function ChatWorkspaceContent({
 			recoverOnly?: boolean,
 		) => {
 			const id = clientMessageId ?? crypto.randomUUID();
+			tourAwaitedIds.current.add(id);
 			// A recovery re-asks about a steer sent before; the daemon may already have it.
 			const target = recoverOnly ? undefined : steerEchoTarget();
 			if (target) {
@@ -1585,6 +1603,19 @@ function ChatWorkspaceContent({
 			),
 		[snapshot.items],
 	);
+	// Tell the tour once the chat holds something this composer sent, whether
+	// its answer came back, was lost and recovered, or it went in as a steer.
+	// A send the chat never shows (a refused steer, a bare /btw) doesn't count.
+	useEffect(() => {
+		const awaited = tourAwaitedIds.current;
+		let arrived = false;
+		for (const id of awaited) {
+			if (!acceptedClientMessageIds.has(id)) continue;
+			awaited.delete(id);
+			arrived = true;
+		}
+		if (arrived) notifyComposerSent();
+	}, [acceptedClientMessageIds]);
 	// The turn a confirmation is open for. Undo is not reversible and it changes what
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
@@ -1801,8 +1832,12 @@ function ChatWorkspaceContent({
 	// Claude Code compacts at the window picked for it, well before its model's full context.
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
 	const stableUsage = useStableValue(snapshot.usage);
-	// The account's quota, for the meter's warning pill from 75%.
-	const stableRateLimits = useStableValue(snapshot.rateLimits);
+	const { t } = useTranslation();
+	// Near the account's usage limit, a warning sign sits right of the model; its tooltip says why.
+	const nearQuota = useStableValue(nearQuotaWindow(snapshot.rateLimits));
+	// The running agent's limit; a pending switch names another agent, so the sign steps aside.
+	const runningQuota = agentSwitch?.pending ? undefined : nearQuota;
+	const quotaSign = runningQuota ? <QuotaSign quota={runningQuota} /> : null;
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
 	const currentModelReroute =
@@ -1820,7 +1855,8 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
-					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} rateLimits={stableRateLimits} compactsAt={compactsAt} /> : undefined}
+					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					afterPicker={quotaSign}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
 					lastModel={lastModel}
@@ -1867,7 +1903,7 @@ function ChatWorkspaceContent({
 			models,
 			agentSwitch,
 			stableUsage,
-			stableRateLimits,
+			nearQuota,
 			newWorkDisabled,
 			session?.provisionState,
 			onChooseConfigOption,
@@ -1985,6 +2021,17 @@ function ChatWorkspaceContent({
 	// A local or other-provider orchestrator opens its composer once it is up.
 	const startupQueues = cloudStarting || (session?.provisionState === "provisioning" && sessionRole !== "orchestrator");
 	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
+	// A message the user sent whose turn the snapshot does not hold yet: still on
+	// its way, or accepted before the next read lands. A next message waits behind
+	// it, so the composer keeps saying so until the turn itself is in the snapshot,
+	// and from then on the turn's own state decides (a turn that already finished
+	// reads as idle). A failed send drops its echo; one kept to show a failure is
+	// not waiting on anything, and an opening brief has the startup's own words.
+	const sentTurnPending = useMemo(() => sendAwaitingTurn || (localEchos ?? []).some((echo) =>
+		!echo.opening && !echo.delivery &&
+		!(echo.turnId && snapshot.turns.some((entry) => entry.id === echo.turnId)) &&
+		!snapshot.items.some((item) => echoMatchesItem(echo, item, NO_TURN_IDS))),
+	[localEchos, sendAwaitingTurn, snapshot.items, snapshot.turns]);
 	// One steady line for the whole start. A local start runs its steps in a
 	// second or two, and naming each one flickered through the placeholder.
 	const setupPlaceholder = "Starting your orchestrator";
@@ -2026,7 +2073,6 @@ function ChatWorkspaceContent({
 	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
 	const openedDocked = settledDocked !== false;
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
-	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
 		() => sessionRole === "orchestrator"
 			? "Ask anything about this project"
@@ -2367,7 +2413,13 @@ function ChatWorkspaceContent({
 									unavailable={newWorkDisabled || pendingInPlaceStart}
 									onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
-								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
+								{/* The guided tour's last stop (GuidedTour). */}
+								<div
+									ref={composerBoxRef}
+									className="relative z-10"
+									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
+									data-tour="composer"
+								>
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -2426,7 +2478,10 @@ function ChatWorkspaceContent({
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
-											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} rateLimits={snapshot.rateLimits} compactsAt={compactsAt} />}
+											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{/* Normally right of the model control; with no settings bar, beside the ring. */}
+											{composerSettings ? null : quotaSign}
+											<QuotaStatus quota={runningQuota} />
 											{composerSettings}
 										</>}
 										addMenuItems={agentSwitch ? (
@@ -2441,7 +2496,7 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || startupQueues || accountMoveQueues}
+										willQueue={Boolean(turn) || sentTurnPending || startupQueues || accountMoveQueues}
 										queuePlaceholder={
 											session?.provisionState === "provisioning" || cloudStarting || accountMoveQueues
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
@@ -2486,6 +2541,7 @@ function ChatWorkspaceContent({
 										skillsLoading={skillsLoading}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
+										filePathsLoading={filePathsLoading}
 										onFileQuery={onFileQuery}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 										cloudAttachments={cloudAttachments}
@@ -2516,7 +2572,7 @@ function ChatWorkspaceContent({
 										parkUnsentSends={parkUnsentSends}
 									/>}
 								</div>
-								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
+								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center" data-tour="composer-tray">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 								{draftNotice}
 							</div>
@@ -3500,6 +3556,7 @@ export function Timeline({
 		isFlying,
 		isGliding,
 		reaim,
+		shift: shiftScroll,
 		endFlight,
 	} = useScrollFollow(getScroller);
 	// Set when the reader sends or jumps to the latest: the next layout glides there
@@ -3874,12 +3931,6 @@ export function Timeline({
 	// transcript overflows. A wider chat often fits a short history (common on
 	// non-Codex harnesses), and the minimap used to vanish exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
-	// Replies rendered with the chat's first commit were already on screen
-	// before the switch; streamed text in them must not fade in again.
-	const chatOpening = useRef(true);
-	useEffect(() => {
-		chatOpening.current = false;
-	}, []);
 	// The minimap appears once the opened chat is measured. That first reveal is
 	// part of opening the chat, so it is instant; only later changes (the chat
 	// narrowing past it) fade.
@@ -4580,11 +4631,18 @@ export function Timeline({
 			if (!instance.scrollElement) return;
 			// A resize restores its anchor after the new row positions reach the DOM.
 			if (viewportResize.current) return;
-			// An instant write would abort our smooth glide (and land at a stale offset).
-			// Let the glide carry the adjustment: re-aim it at the new end instead. The
-			// next scroll event re-syncs the virtualizer's offset.
+			// While our smooth glide is in flight, writing the virtualizer's offset would
+			// abort it and land at a stale spot (its offset lags the animation). A plain
+			// write re-aims the glide at the new end instead. A size change above the view
+			// (adjustments) moves what is on screen, though: dropped, the reader sees the
+			// chat jump and then ride back down, so the view moves by that much from where
+			// the glide is now, and the glide goes on from there (shiftScroll). The next
+			// scroll event re-syncs the virtualizer's offset.
 			if (isFlying()) {
-				reaim();
+				if (adjustments !== 0 && !spacerTakesResize.current) {
+					shiftScroll(adjustments);
+					lastScrollTop.current = instance.scrollElement.scrollTop;
+				} else reaim();
 				return;
 			}
 			// Anchored to the end, the virtualizer moves the view by every change in the
@@ -5098,6 +5156,8 @@ export function Timeline({
 	// Keeps a settled turn's row still under a reader who scrolled up, while its rows
 	// re-measure (a reply leaving its streaming render, code highlighting landing).
 	const settleHold = useRef<{ observer: ResizeObserver; timer: number } | undefined>(undefined);
+	// How far the history anchor moved the view in the commit running now (see captureHistoryAnchor).
+	const historyShift = useRef(0);
 	const releaseSettleHold = useCallback(() => {
 		const hold = settleHold.current;
 		if (!hold) return;
@@ -5170,7 +5230,9 @@ export function Timeline({
 		let held: Element | undefined;
 		if (settle.following) {
 			const end = Math.max(0, node.scrollHeight - node.clientHeight);
-			const top = Math.min(settle.scrollTop, end);
+			// A reload that settles the turn can also re-page the history above it, which
+			// the history anchor just moved the view by (it runs first in the commit).
+			const top = Math.min(settle.scrollTop + historyShift.current, end);
 			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
@@ -5222,6 +5284,51 @@ export function Timeline({
 			row.animate([{ transform: from }, { transform: "none" }], { duration: SETTLE_SLIDE_MS, easing: SETTLE_EASE });
 		});
 	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+
+	// Rows above the view come and go: an older page loads in, or a reload re-reads the
+	// chat's pages from its new newest row and drops the oldest ones (every send does
+	// this). The log has no scroll anchoring of its own (it is off for the prompt
+	// spacer), so whatever was added or dropped above would move the rows on screen:
+	// the reader would see some earlier part of the chat, then ride back down to the
+	// end. So hold the first rows they can see where they were. Several are noted, as
+	// a reload can re-key the first one (a turn whose prompt it dropped).
+	const captureHistoryAnchor = useCallback((): HistoryAnchor | undefined => {
+		const node = scroller.current;
+		const content = virtualContent.current;
+		if (!node || !content || !initialLayoutDone.current || pendingReading.current) return undefined;
+		const top = node.getBoundingClientRect().top;
+		const rows: HistoryAnchor["rows"] = [];
+		for (const child of Array.from(content.children) as HTMLElement[]) {
+			const key = child.dataset.chatTurn;
+			if (!key) continue;
+			const rect = child.getBoundingClientRect();
+			// Above the view. A hidden chat measures zero everywhere and notes nothing.
+			if (rect.top + rect.height <= top) continue;
+			rows.push({ key, offset: rect.top - top });
+			if (rows.length === HISTORY_ANCHOR_ROWS) break;
+		}
+		return rows.length > 0 ? { scrollTop: node.scrollTop, rows } : undefined;
+	}, []);
+	const restoreHistoryAnchor = useCallback((anchor: HistoryAnchor) => {
+		const node = scroller.current;
+		const content = virtualContent.current;
+		if (!node || !content) return;
+		const elements = new Map((Array.from(content.children) as HTMLElement[]).map((child) => [child.dataset.chatTurn, child]));
+		const row = anchor.rows.find((candidate) => elements.has(candidate.key));
+		if (!row) return;
+		// Reading layout clamps scrollTop first when rows dropped above shrank the log.
+		const delta = elements.get(row.key)!.getBoundingClientRect().top - node.getBoundingClientRect().top - row.offset;
+		// Moves a glide in flight (a send) along with the view, so it carries on from here.
+		if (Math.abs(delta) >= 0.5) shiftScroll(delta);
+		// The whole move since before the commit, clamp included: the settle restore
+		// adds it to the position it noted then.
+		const moved = node.scrollTop - anchor.scrollTop;
+		if (Math.abs(moved) < 0.5) return;
+		historyShift.current = moved;
+		queueMicrotask(() => { historyShift.current = 0; });
+		lastScrollTop.current = node.scrollTop;
+		updateScrollbar();
+	}, [shiftScroll, updateScrollbar]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -5301,17 +5408,42 @@ export function Timeline({
 		if (pinnedRef.current) syncStreamedGrowth();
 		else syncScrollMetrics();
 	};
+	// A history too short to scroll never produces the scroll that loads older
+	// pages, so keep loading them until the chat fills the view or runs out. Once
+	// per page: a page that failed or added nothing is not asked for again here;
+	// an upward wheel at the top and the button above the first turn still ask.
+	const olderPages = useRef({ hasOlder, loadingOlder, onLoadOlder });
+	olderPages.current = { hasOlder, loadingOlder, onLoadOlder };
+	// The oldest loaded row: an older page moves it, live rows and turns do not.
+	const oldestRow = `${groups[0]?.key ?? ""}:${groups[0]?.items[0]?.id ?? ""}`;
+	const oldestRowRef = useRef(oldestRow);
+	oldestRowRef.current = oldestRow;
+	const fillRequestedFor = useRef<string | undefined>(undefined);
+	const loadOlderToFill = useCallback(() => {
+		const node = scroller.current;
+		const { hasOlder, loadingOlder, onLoadOlder } = olderPages.current;
+		// A hidden chat measures zero: it fills once it is shown.
+		if (!node || !hasOlder || loadingOlder || !onLoadOlder || node.clientHeight === 0) return;
+		// Within 2px, an upward scroll cannot register as one (see onScroll).
+		if (node.scrollHeight - node.clientHeight > 2) return;
+		if (fillRequestedFor.current === oldestRowRef.current) return;
+		fillRequestedFor.current = oldestRowRef.current;
+		onLoadOlder();
+	}, []);
+	useEffect(() => loadOlderToFill(), [loadOlderToFill, oldestRow, hasOlder, loadingOlder]);
+
 	useEffect(() => {
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(() => {
 			captureViewportResize(virtualizer);
 			onContentResize.current();
+			loadOlderToFill();
 		});
 		if (scroller.current) observer.observe(scroller.current);
 		if (scrollContent.current) observer.observe(scrollContent.current);
 		return () => observer.disconnect();
-	}, [groups.length, captureViewportResize, virtualizer]);
+	}, [groups.length, captureViewportResize, virtualizer, loadOlderToFill]);
 
 	// The pause-then-resume for a reader who only nudged up a little: armed by their
 	// scroll, re-armed by each further scroll, dropped once they go past the band or
@@ -5376,14 +5508,29 @@ export function Timeline({
 			setPinnedNow(true);
 		}
 		// Older history loads as the reader scrolls up within a screen of the top,
-		// before they reach it. The button above the first turn stays as the
-		// loading state and for histories too short to scroll.
-		if (movedUp && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
+		// before they reach it. A history too short to scroll loads on its own
+		// (loadOlderToFill); the button above the first turn shows the loading state
+		// and retries a page that failed.
+		// A scroll that only clamps to the end after content shrank (a reload dropping
+		// the oldest rows) is not the reader moving up, and must not load a page above them.
+		if (movedUp && distance > 2 && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
 		if (initialLayoutDone.current && !pendingReading.current) {
 			const row = pinnedRef.current ? undefined : virtualizer.getVirtualItemForOffset(top);
 			rememberReadingPosition(uiSessionId, row ? { key: row.key, offset: row.start - top } : undefined);
 		}
 		updateScrollbar();
+	}
+
+	// Already at the top, an upward wheel or key moves nothing, so no scroll comes
+	// to load older history by: ask for it here.
+	function loadOlderAtTop(target: EventTarget) {
+		const node = scroller.current;
+		if (!node || !hasOlder || loadingOlder || !onLoadOlder || node.scrollTop > 1) return;
+		// A nested scroller (a code block) that can still move up takes the input.
+		for (let element = target instanceof Element ? target : null; element && element !== node; element = element.parentElement) {
+			if (element.scrollTop > 0) return;
+		}
+		onLoadOlder();
 	}
 
 	function onViewportWheel(event: ReactWheelEvent<HTMLDivElement>) {
@@ -5394,6 +5541,7 @@ export function Timeline({
 		if (event.deltaY < 0) {
 			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
+			loadOlderAtTop(event.target);
 		}
 	}
 
@@ -5403,6 +5551,7 @@ export function Timeline({
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
 			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
+			loadOlderAtTop(target);
 		}
 	}
 
@@ -5527,7 +5676,6 @@ export function Timeline({
 	}
 
 	return (
-		<ChatOpeningRef.Provider value={chatOpening}>
 		<OpenSubagentContext.Provider value={openSubagent}>
 		{subagentPanel?.container ? createPortal(
 			// A search match in a child's step opens the child here, so its folds read the
@@ -5592,6 +5740,8 @@ export function Timeline({
 				aria-label="Conversation"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
+				{/* Before the settle snapshot: its restore reads how far this one moved the view. */}
+				<HistoryAnchorSnapshot historyKey={`${oldestRow}:${hasOlder ? 1 : 0}`} capture={captureHistoryAnchor} restore={restoreHistoryAnchor} />
 				<TurnSettleSnapshot liveKey={groups.find((group) => group.live)?.key} capture={captureSettle} restore={restoreSettle} />
 				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
@@ -5881,7 +6031,6 @@ export function Timeline({
 		</RevealedChatActivity.Provider>
 		</ChatEntrance.Provider>
 		</OpenSubagentContext.Provider>
-		</ChatOpeningRef.Provider>
 	);
 }
 
@@ -5951,6 +6100,62 @@ function useLiveRowStep(group: TimelineGroup, paused: boolean): ConversationActi
 	}, [holding]);
 	return step;
 }
+
+/**
+ * The live row inside its AnimatePresence: it fades out as the turn settles and
+ * is then removed. An effect removes it, not a motion exit: a chat kept alive
+ * in a hidden <Activity> (KeepRecentAlive) whose turn settles while hidden, or
+ * in the render that shows it again, never started motion's exit, so the row
+ * stayed under the finished answer with its timer still counting. Effects run
+ * again when the chat is shown, so this one always ends the row.
+ */
+function LiveRowPresence({ reducedMotion, className, children, ref }: {
+	reducedMotion: boolean;
+	className?: string;
+	children: ReactNode;
+	/** PopChild measures the leaving row through this. */
+	ref?: Ref<HTMLDivElement>;
+}) {
+	const [isPresent, safeToRemove] = usePresence();
+	const row = useRef<HTMLDivElement | null>(null);
+	const setRow = useCallback((node: HTMLDivElement | null) => {
+		row.current = node;
+		if (typeof ref === "function") ref(node);
+		else if (ref) ref.current = node;
+	}, [ref]);
+	// AnimatePresence hands each render a new callback, so the timer reads the
+	// latest one instead of restarting whenever the turn re-renders.
+	const remove = useRef(safeToRemove);
+	useLayoutEffect(() => {
+		remove.current = safeToRemove;
+	});
+	useEffect(() => {
+		if (isPresent) return;
+		const duration = reducedMotion ? 0 : LIVE_ROW_EXIT_MS;
+		// A script animation, as motion's exit was: restoreSettle hides the row for
+		// a moment as the turn settles, which would cancel a CSS transition.
+		const fade = duration > 0 && typeof row.current?.animate === "function"
+			? row.current.animate([{ opacity: 1 }, { opacity: 0 }], { duration, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" })
+			: undefined;
+		const timer = window.setTimeout(() => remove.current?.(), duration);
+		return () => {
+			window.clearTimeout(timer);
+			fade?.cancel();
+		};
+	}, [isPresent, reducedMotion]);
+	return (
+		<div
+			ref={setRow}
+			className={className}
+			// Kept in the DOM while it fades, but it never outlasts the turn.
+			data-turn-live-row=""
+		>
+			{children}
+		</div>
+	);
+}
+
+const LIVE_ROW_EXIT_MS = 120;
 
 /**
  * One turn, and the memo boundary that keeps a poll from re-rendering the whole
@@ -6350,18 +6555,15 @@ const TurnGroup = memo(function TurnGroup({
 			    that takes its place sits where it was instead of waiting for a collapse. */}
 			<AnimatePresence initial={false} mode="popLayout">
 				{workingRow ? (
-					<motion.div
+					<LiveRowPresence
 						key="turn-working"
-						exit={{ opacity: 0 }}
-						transition={{ duration: reducedMotion ? 0 : 0.12, ease: [0.22, 1, 0.36, 1] }}
+						reducedMotion={Boolean(reducedMotion)}
 						// Under a reply, sit where that reply's action row will (its 4px
 						// gap, not the turn's 10px).
 						className={cn("overflow-hidden", tailIsReply && "-mt-1.5")}
-						// Kept in the DOM while it fades, but it never outlasts the turn.
-						data-turn-live-row=""
 					>
 						{workingRow}
-					</motion.div>
+					</LiveRowPresence>
 				) : null}
 			</AnimatePresence>
 			{/* Both of these are current state of the turn rather than steps in it, which
@@ -6667,6 +6869,8 @@ function withLocalSwitchMarker(echo: ConversationLocalEcho, items: ConversationI
 	return [marker, message];
 }
 
+const NO_TURN_IDS: ReadonlySet<string> = new Set();
+
 /** Whether a durable row is the one a local echo stands in for. */
 function echoMatchesItem(
 	echo: ConversationLocalEcho,
@@ -6817,6 +7021,13 @@ function forkableGroup(group: TimelineGroup): boolean {
 	const state = group.outcome?.state;
 	return state === "completed" || state === "recovered";
 }
+
+/**
+ * The log's scrollTop and the first rows the reader could see, top down, each with
+ * its distance from the view's top, all read just before the commit.
+ */
+type HistoryAnchor = { scrollTop: number; rows: Array<{ key: string; offset: number }> };
+const HISTORY_ANCHOR_ROWS = 4;
 
 type SettleAnchor = {
 	turn: HTMLElement;
@@ -7728,7 +7939,8 @@ function WelcomePromptSuggestions({ open, artifact, unavailable = false, onPick 
 					// padding inside, so it collapses with the height instead of snapping.
 					className="-mb-2 overflow-hidden"
 				>
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4">
+					{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
+					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
 						{prompts.map(({ prompt, chip, icon: Icon }) => (
 							<li key={prompt}>
 								<Button

@@ -41,6 +41,14 @@ type fakePRService struct {
 	stackCalls    []string
 	detailsErr    error
 	detailsCalls  []string
+	dequeueResult prsvc.DequeueResult
+	dequeueErr    error
+	dequeueCalls  []string
+}
+
+func (f *fakePRService) Dequeue(_ context.Context, prID, prURL string) (prsvc.DequeueResult, error) {
+	f.dequeueCalls = append(f.dequeueCalls, prID+" "+prURL)
+	return f.dequeueResult, f.dequeueErr
 }
 
 func (f *fakePRService) AttachmentAccess(_ context.Context, prID, prURL string) (prsvc.AttachmentAccessResult, error) {
@@ -359,4 +367,97 @@ func TestPRStackMerge_PassesHeadsAndValidates(t *testing.T) {
 	if got := post(`{"prUrl":"https://github.com/a/b/pull/2","method":"octopus","expectedHeads":[{"number":2,"headSha":"b"}]}`); got != http.StatusBadRequest {
 		t.Fatalf("bad method status = %d", got)
 	}
+}
+
+// ---- Merge queue ----
+
+func TestPRsRoutes_Merge_ReportsTheMergeQueue(t *testing.T) {
+	at := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	svc := &fakePRService{mergeResult: prsvc.MergeResult{
+		PRNumber: 42, Method: "squash", State: domain.PRStateOpen, StateChangedAt: at,
+		Queue: &domain.MergeQueueEntry{State: domain.MergeQueueQueued, Position: 3, EstimatedSecondsToMerge: 600, EnqueuedAt: at},
+	}}
+	srv := newPRTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/prs/42/merge", validMergeBody)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var resp struct {
+		State domain.PRState `json:"state"`
+		Queue *struct {
+			State                   string    `json:"state"`
+			Position                int       `json:"position"`
+			EstimatedSecondsToMerge int       `json:"estimatedSecondsToMerge"`
+			EnqueuedAt              time.Time `json:"enqueuedAt"`
+		} `json:"queue"`
+	}
+	mustJSON(t, body, &resp)
+	if resp.State != domain.PRStateOpen || resp.Queue == nil || resp.Queue.State != "queued" || resp.Queue.Position != 3 || resp.Queue.EstimatedSecondsToMerge != 600 || !resp.Queue.EnqueuedAt.Equal(at) {
+		t.Fatalf("response = %s", body)
+	}
+
+	// A plain merge carries no queue.
+	svc.mergeResult = prsvc.MergeResult{PRNumber: 42, Method: "squash", State: domain.PRStateMerged, StateChangedAt: at}
+	body, _, _ = doRequest(t, srv, "POST", "/api/v1/prs/42/merge", validMergeBody)
+	if strings.Contains(string(body), `"queue"`) {
+		t.Fatalf("a direct merge reported a queue: %s", body)
+	}
+}
+
+func TestPRsRoutes_Merge_AlreadyQueuedIs409(t *testing.T) {
+	srv := newPRTestServer(t, &fakePRService{mergeErr: prsvc.ErrPRQueued})
+	body, status, headers := doRequest(t, srv, "POST", "/api/v1/prs/1/merge", validMergeBody)
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusConflict, "PR_ALREADY_QUEUED")
+}
+
+func TestPRsRoutes_Dequeue(t *testing.T) {
+	at := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	svc := &fakePRService{dequeueResult: prsvc.DequeueResult{PRNumber: 42, ChangedAt: at}}
+	srv := newPRTestServer(t, svc)
+	const dequeueBody = `{"prUrl":"https://github.com/acme/widgets/pull/42"}`
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/prs/42/dequeue", dequeueBody)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var resp struct {
+		OK        bool      `json:"ok"`
+		PRNumber  int       `json:"prNumber"`
+		ChangedAt time.Time `json:"changedAt"`
+	}
+	mustJSON(t, body, &resp)
+	if !resp.OK || resp.PRNumber != 42 || !resp.ChangedAt.Equal(at) {
+		t.Fatalf("response = %+v", resp)
+	}
+	if len(svc.dequeueCalls) != 1 || svc.dequeueCalls[0] != "42 https://github.com/acme/widgets/pull/42" {
+		t.Fatalf("dequeue calls = %v", svc.dequeueCalls)
+	}
+
+	for name, tc := range map[string]struct {
+		path, body string
+		err        error
+		status     int
+		code       string
+	}{
+		"bad number":    {path: "/api/v1/prs/abc/dequeue", body: dequeueBody, status: http.StatusBadRequest, code: "INVALID_PR"},
+		"missing url":   {path: "/api/v1/prs/42/dequeue", body: `{"prUrl":" "}`, status: http.StatusBadRequest, code: "INVALID_PR"},
+		"bad json":      {path: "/api/v1/prs/42/dequeue", body: `{`, status: http.StatusBadRequest, code: "INVALID_JSON"},
+		"not queued":    {path: "/api/v1/prs/42/dequeue", body: dequeueBody, err: prsvc.ErrPRNotQueued, status: http.StatusConflict, code: "PR_NOT_QUEUED"},
+		"unknown pr":    {path: "/api/v1/prs/42/dequeue", body: dequeueBody, err: prsvc.ErrPRNotFound, status: http.StatusNotFound, code: "PR_NOT_FOUND"},
+		"refused":       {path: "/api/v1/prs/42/dequeue", body: dequeueBody, err: prsvc.ErrPRRejected, status: http.StatusUnprocessableEntity, code: "PR_ACTION_REJECTED"},
+		"no queue here": {path: "/api/v1/prs/42/dequeue", body: dequeueBody, err: prsvc.ErrUnsupported, status: http.StatusNotImplemented, code: "SCM_UNSUPPORTED"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			failing := newPRTestServer(t, &fakePRService{dequeueErr: tc.err})
+			body, status, headers := doRequest(t, failing, "POST", tc.path, tc.body)
+			assertJSON(t, headers)
+			assertErrorCode(t, body, status, tc.status, tc.code)
+		})
+	}
+
+	unwired := newPRTestServer(t, nil)
+	body, status, _ = doRequest(t, unwired, "POST", "/api/v1/prs/42/dequeue", dequeueBody)
+	assertErrorCode(t, body, status, http.StatusNotImplemented, "NOT_IMPLEMENTED")
 }

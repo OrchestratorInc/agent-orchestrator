@@ -218,7 +218,7 @@ func (q *Queries) GetDisplayPRFactsBySession(ctx context.Context, sessionID doma
 }
 
 const getPR = `-- name: GetPR :one
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch FROM pr WHERE url = ?
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch, merge_queue_required, merge_queue_entry FROM pr WHERE url = ?
 `
 
 func (q *Queries) GetPR(ctx context.Context, url string) (PR, error) {
@@ -271,12 +271,14 @@ func (q *Queries) GetPR(ctx context.Context, url string) (PR, error) {
 		&i.ReviewPartial,
 		&i.HeadFromFork,
 		&i.HeadIsDefaultBranch,
+		&i.MergeQueueRequired,
+		&i.MergeQueueEntry,
 	)
 	return i, err
 }
 
 const getPRByNumber = `-- name: GetPRByNumber :one
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch FROM pr
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch, merge_queue_required, merge_queue_entry FROM pr
 WHERE number = ?
 ORDER BY
     CASE WHEN pr_state NOT IN ('merged', 'closed') THEN 0 ELSE 1 END,
@@ -337,12 +339,14 @@ func (q *Queries) GetPRByNumber(ctx context.Context, number int64) (PR, error) {
 		&i.ReviewPartial,
 		&i.HeadFromFork,
 		&i.HeadIsDefaultBranch,
+		&i.MergeQueueRequired,
+		&i.MergeQueueEntry,
 	)
 	return i, err
 }
 
 const getPRByProviderIdentity = `-- name: GetPRByProviderIdentity :one
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch, merge_queue_required, merge_queue_entry
 FROM pr
 WHERE provider = ?1
   AND host = ?2
@@ -406,12 +410,14 @@ func (q *Queries) GetPRByProviderIdentity(ctx context.Context, arg GetPRByProvid
 		&i.ReviewPartial,
 		&i.HeadFromFork,
 		&i.HeadIsDefaultBranch,
+		&i.MergeQueueRequired,
+		&i.MergeQueueEntry,
 	)
 	return i, err
 }
 
 const getPRByURLOrAlias = `-- name: GetPRByURLOrAlias :one
-SELECT pr.url, pr.session_id, pr.number, pr.pr_state, pr.review_decision, pr.ci_state, pr.mergeability, pr.updated_at, pr.provider, pr.host, pr.repo, pr.source_branch, pr.target_branch, pr.head_sha, pr.title, pr.additions, pr.deletions, pr.changed_files, pr.author, pr.base_sha, pr.merge_commit_sha, pr.is_draft, pr.is_merged, pr.is_closed, pr.provider_state, pr.provider_mergeable, pr.provider_merge_state_status, pr.html_url, pr.created_at_provider, pr.updated_at_provider, pr.merged_at_provider, pr.closed_at_provider, pr.metadata_hash, pr.ci_hash, pr.review_hash, pr.observed_at, pr.ci_observed_at, pr.review_observed_at, pr.last_nudge_signature, pr.state_changed_at, pr.auto_inject_ci, pr.provider_id, pr.author_avatar_url, pr.review_partial, pr.head_from_fork, pr.head_is_default_branch
+SELECT pr.url, pr.session_id, pr.number, pr.pr_state, pr.review_decision, pr.ci_state, pr.mergeability, pr.updated_at, pr.provider, pr.host, pr.repo, pr.source_branch, pr.target_branch, pr.head_sha, pr.title, pr.additions, pr.deletions, pr.changed_files, pr.author, pr.base_sha, pr.merge_commit_sha, pr.is_draft, pr.is_merged, pr.is_closed, pr.provider_state, pr.provider_mergeable, pr.provider_merge_state_status, pr.html_url, pr.created_at_provider, pr.updated_at_provider, pr.merged_at_provider, pr.closed_at_provider, pr.metadata_hash, pr.ci_hash, pr.review_hash, pr.observed_at, pr.ci_observed_at, pr.review_observed_at, pr.last_nudge_signature, pr.state_changed_at, pr.auto_inject_ci, pr.provider_id, pr.author_avatar_url, pr.review_partial, pr.head_from_fork, pr.head_is_default_branch, pr.merge_queue_required, pr.merge_queue_entry
 FROM pr
 WHERE pr.url = COALESCE(
     (SELECT canonical_url FROM pr_url_alias WHERE alias_url = ?1),
@@ -469,6 +475,8 @@ func (q *Queries) GetPRByURLOrAlias(ctx context.Context, url string) (PR, error)
 		&i.ReviewPartial,
 		&i.HeadFromFork,
 		&i.HeadIsDefaultBranch,
+		&i.MergeQueueRequired,
+		&i.MergeQueueEntry,
 	)
 	return i, err
 }
@@ -936,8 +944,46 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 	return items, nil
 }
 
+const listPRStateTimes = `-- name: ListPRStateTimes :many
+SELECT session_id, state_changed_at, updated_at
+FROM pr
+WHERE pr_state = ?
+`
+
+type ListPRStateTimesRow struct {
+	SessionID      domain.SessionID
+	StateChangedAt sql.NullTime
+	UpdatedAt      time.Time
+}
+
+// Which sessions own a PR in one state, and when each PR reached it, for the
+// session list's PR-state filter. Narrow on purpose: the filter runs over the
+// whole archive on every page, so it must not load the card facts.
+func (q *Queries) ListPRStateTimes(ctx context.Context, prState domain.PRState) ([]ListPRStateTimesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPRStateTimes, prState)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPRStateTimesRow{}
+	for rows.Next() {
+		var i ListPRStateTimesRow
+		if err := rows.Scan(&i.SessionID, &i.StateChangedAt, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPRsBySession = `-- name: ListPRsBySession :many
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch FROM pr
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch, merge_queue_required, merge_queue_entry FROM pr
 WHERE pr.session_id = ?
 ORDER BY updated_at DESC
 `
@@ -998,6 +1044,8 @@ func (q *Queries) ListPRsBySession(ctx context.Context, sessionID domain.Session
 			&i.ReviewPartial,
 			&i.HeadFromFork,
 			&i.HeadIsDefaultBranch,
+			&i.MergeQueueRequired,
+			&i.MergeQueueEntry,
 		); err != nil {
 			return nil, err
 		}
@@ -1338,9 +1386,9 @@ INSERT INTO pr (
     provider_state, provider_mergeable, provider_merge_state_status, html_url,
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
     metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial,
-    head_from_fork, head_is_default_branch, auto_inject_ci
+    head_from_fork, head_is_default_branch, merge_queue_required, merge_queue_entry, auto_inject_ci
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
@@ -1406,7 +1454,10 @@ ON CONFLICT (url) DO UPDATE SET
     review_partial = CASE
         WHEN excluded.review_observed_at IS NULL THEN pr.review_partial
         ELSE excluded.review_partial
-    END
+    END,
+    merge_queue_required = excluded.merge_queue_required,
+    -- A merged PR has left the queue, whatever an older poll read.
+    merge_queue_entry = CASE WHEN pr.pr_state = 'merged' THEN '' ELSE excluded.merge_queue_entry END
 `
 
 type UpsertPRParams struct {
@@ -1454,6 +1505,8 @@ type UpsertPRParams struct {
 	ReviewPartial            bool
 	HeadFromFork             bool
 	HeadIsDefaultBranch      bool
+	MergeQueueRequired       bool
+	MergeQueueEntry          string
 	ID                       domain.SessionID
 }
 
@@ -1503,6 +1556,8 @@ func (q *Queries) UpsertPR(ctx context.Context, arg UpsertPRParams) error {
 		arg.ReviewPartial,
 		arg.HeadFromFork,
 		arg.HeadIsDefaultBranch,
+		arg.MergeQueueRequired,
+		arg.MergeQueueEntry,
 		arg.ID,
 	)
 	return err

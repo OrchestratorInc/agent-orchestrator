@@ -84,6 +84,7 @@ type Service struct {
 	renderMeasures     sync.WaitGroup
 	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
+	resumeAgent        func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.
@@ -105,12 +106,19 @@ type Service struct {
 	autoResumeRetryAt     map[string]time.Time
 	autoResumeInFlight    map[string]bool
 	autoResumeScanning    bool
-	usageLimitAccounts    usageLimitAccountReader
-	handoffMu             sync.Mutex
-	handoff               accountHandoffDeps
-	handoffSince          time.Time
-	handoffScanning       bool
-	handoffs              map[string]*accountHandoff
+	// autoResumeIdle is set when the last scan found no armed turn; the daemon's
+	// resume loop then waits longer, and arming a turn wakes it (autoResumeWake).
+	autoResumeIdle bool
+	autoResumeWake chan struct{}
+	// autoResumeArms counts arming calls, so a scan that started before one
+	// does not mark the loop idle when it finishes.
+	autoResumeArms     uint64
+	usageLimitAccounts usageLimitAccountReader
+	handoffMu          sync.Mutex
+	handoff            accountHandoffDeps
+	handoffSince       time.Time
+	handoffScanning    bool
+	handoffs           map[string]*accountHandoff
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
@@ -386,6 +394,26 @@ func cloneStartConfig(cfg StartConfig) StartConfig {
 		cloned.MCPServers[index] = server
 	}
 	return cloned
+}
+
+// strandedActivitySettler is implemented by stores that can settle running rows
+// left on turns that have already settled.
+type strandedActivitySettler interface {
+	SettleStrandedActivities(ctx context.Context, conversationID string, now time.Time) error
+}
+
+// settleStrandedActivities stops the spinners older daemons left behind: they
+// stored replayed provider notices as running rows on long-settled turns. Like
+// settleOrphanedWork it is best-effort, so a failure is logged and never blocks
+// the session from starting.
+func (s *Service) settleStrandedActivities(ctx context.Context, session domain.SessionID, conversationID string) {
+	settler, ok := s.store.(strandedActivitySettler)
+	if !ok {
+		return
+	}
+	if err := settler.SettleStrandedActivities(ctx, conversationID, s.now()); err != nil {
+		s.log.Error("chat start: settle stranded activities", "session", session, "conversation", conversationID, "error", err)
+	}
 }
 
 // settleOrphanedWork closes out anything a previous controller left behind.
@@ -1082,6 +1110,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
 		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
 	}
+	// Unlike orphaned work, rows stranded on settled turns are never a live
+	// controller's, so a live reconnect cleans them too. The whole conversation:
+	// a handoff keeps turns another session handled in this timeline.
+	s.settleStrandedActivities(ctx, cfg.SessionID, conversation.ID)
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(

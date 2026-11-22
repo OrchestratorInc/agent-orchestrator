@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -145,6 +146,7 @@ type SessionService interface {
 	SearchWorkspaceContent(ctx context.Context, id domain.SessionID, query string) ([]sessionsvc.WorkspaceContentHit, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
+	ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFilePaths, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
 	Pin(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Unpin(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -205,6 +207,7 @@ type SessionsController struct {
 	Activity                 ActivityRecorder
 	PRRefresh                PRRefresher
 	NativeSessions           ports.AgentNativeSessionResolver
+	TerminalReplies          ports.AgentResolver // adapters whose Stop hook omits the reply
 	DataDir                  string
 	Usage                    UsageHookRecorder
 	Attachments              *attachmentstore.Store
@@ -256,6 +259,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/workspace/history/selection", c.getWorkspaceCommitSelection)
 	r.Get("/sessions/{sessionId}/workspace/branches", c.listWorkspaceBranches)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
+	r.Get("/sessions/{sessionId}/workspace/paths", c.listWorkspaceFilePaths)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
 	r.Get("/sessions/{sessionId}/workspace/file/blob", c.getWorkspaceFileBlob)
@@ -326,6 +330,9 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		Sessions:   sessionViews(r, page.Sessions),
 		NextCursor: page.NextCursor,
 		Archived:   archiveSummaryView(page.Archived),
+		PRState:    filter.PRState,
+		Total:      page.Total,
+		Version:    page.Version,
 	})
 }
 
@@ -1141,6 +1148,22 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
+}
+
+func (c *SessionsController) listWorkspaceFilePaths(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/paths")
+		return
+	}
+	paths, err := c.Svc.ListWorkspaceFilePaths(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	if paths.Paths == nil {
+		paths.Paths = []string{}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListWorkspaceFilePathsResponse{SessionID: paths.SessionID, Paths: paths.Paths, Truncated: paths.Truncated})
 }
 
 func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
@@ -2370,6 +2393,11 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
+	if errors.Is(err, chatsvc.ErrControllerHandoff) {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_INTERFACE_TRANSITION",
+			"the session is switching agents or interfaces; send again after the handoff completes", nil)
+		return
+	}
 	if err != nil {
 		writeAttachmentWriteError(w, r, err)
 		return
@@ -2586,6 +2614,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 			sig.RunningSubagentIDs = &running
 		}
 	}
+	if sig.Event == "stop" && sig.SubagentID == "" && sig.FinalAssistantMessage == "" {
+		sig.FinalAssistantMessage = c.terminalTurnReply(r.Context(), sessionID(r), sig.ExpectedHarness, sig.AgentSessionID)
+	}
 	var activityErr error
 	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "" || sig.SubagentID != "") {
 		activityErr = c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), sig)
@@ -2733,6 +2764,26 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: string(signal.State)})
 }
 
+// terminalTurnReply reads a main Stop's missing reply from the harness's
+// native history, for adapters that keep it (ports.AgentTerminalReplyReader).
+// The harness only selects the reader: the history it reads is located from
+// AO's own data for this session, never from a hook-supplied path.
+func (c *SessionsController) terminalTurnReply(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, nativeID string) string {
+	if c.TerminalReplies == nil || harness == "" || c.DataDir == "" {
+		return ""
+	}
+	agent, ok := c.TerminalReplies.Agent(harness)
+	if !ok {
+		return ""
+	}
+	reader, ok := agent.(ports.AgentTerminalReplyReader)
+	if !ok {
+		return ""
+	}
+	reply := reader.TerminalTurnReply(ctx, ports.TerminalReplyConfig{DataDir: c.DataDir, SessionID: id, NativeSessionID: nativeID})
+	return capActivityText(domain.SanitizeControlChars(strings.TrimSpace(reply)), 16<<10)
+}
+
 // capActivityMeta bounds an optional activity correlation string; overlong
 // values are dropped, not truncated (see the comment at its call site).
 func capActivityMeta(v string) string {
@@ -2874,6 +2925,13 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 			return sessionsvc.ListFilter{}, fmt.Errorf("limit must be an integer from 1 to %d", sessionsvc.MaxListLimit)
 		}
 		filter.Limit = limit
+	}
+	switch state := domain.PRState(q.Get("prState")); state {
+	case "":
+	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateMerged, domain.PRStateClosed:
+		filter.PRState = state
+	default:
+		return sessionsvc.ListFilter{}, errors.New("prState must be open, draft, merged or closed")
 	}
 	if filter.Cursor = q.Get("cursor"); filter.Cursor != "" && filter.Limit == 0 {
 		return sessionsvc.ListFilter{}, errors.New("cursor requires limit")

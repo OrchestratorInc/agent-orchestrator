@@ -5,10 +5,10 @@ import { shouldPoll } from "../appStatePoll";
 import type { ConversationSnapshot } from "../chat/types";
 import type { CloudClient } from "./client";
 import { cloudChatKey, prependOlderCloudEvents, readCloudChatEvents, readOlderCloudChatEvents, retainCloudChat, retainedCloudChat, streamedCloudChatEvents, type CloudChatHistory } from "./chatHistory";
-import { appendCloudEvents, cloudConversationSnapshot, mergeCloudEvents, runningCloudTurnId } from "./conversation";
+import { appendCloudEvents, cloudConversationSnapshot, cloudSessionModel, mergeCloudEvents, runningCloudTurnId } from "./conversation";
 import { followCloudSessionEvents } from "./eventStream";
 import { CloudError, cloudErrorMessage, isPlanRefusal, planResetCopy } from "./errors";
-import { agentModelCatalog, cachedAgentCatalog, cachedSessionCatalog, modelsRetryDelay, rememberSessionCatalog, sessionCatalogKey } from "./modelCatalog";
+import { agentModelCatalog, cachedAgentCatalog, cachedSessionCatalog, catalogAccount, modelsRetryDelay, namedCloudModels, rememberSessionCatalog, sessionCatalogKey } from "./modelCatalog";
 import { cloudLifecycleStage } from "./lifecycle";
 import type { CloudApprovalMode, CloudChatModel, CloudChatModels, CloudClientEvent, CloudSession } from "./types";
 
@@ -115,7 +115,8 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [shown, setShown] = useState<ShownCatalog | undefined>(() => knownCatalog(orgId, sessionId, initial));
-	const models: CloudChatModel[] = shown?.catalog.models ?? [];
+	// Named as New task names them ("Opus 5.5", not Claude's bare "Opus"), as the desktop's chat does.
+	const models: CloudChatModel[] = useMemo(() => namedCloudModels(session?.harness, shown?.catalog.models ?? []), [session?.harness, shown]);
 	const modes: string[] = shown?.catalog.modes ?? [];
 	const [modelsLoading, setModelsLoading] = useState(false);
 	const [settings, setSettings] = useState<CloudTurnSettings>({});
@@ -352,9 +353,10 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 		void (async () => {
 			for (let failures = 0; !cancelled;) {
 				try {
+					const account = catalogAccount();
 					const catalog = await client.listChatModels(orgId, sessionId);
 					if (cancelled) return;
-					rememberSessionCatalog(catalogKey, catalog);
+					rememberSessionCatalog(catalogKey, catalog, account);
 					setShown({ catalog, source: "session" });
 					return;
 				} catch (cause) {
@@ -376,7 +378,7 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 	const snapshot = useMemo(() => {
 		if (!session || !eventsLoaded) return null;
 		return cloudConversationSnapshot(session, events, {
-			settings: { model: settings.model ?? session.model, reasoningEffort: settings.reasoningEffort, approvalMode: settings.approvalMode },
+			settings: { model: settings.model ?? cloudSessionModel(session), reasoningEffort: settings.reasoningEffort, approvalMode: settings.approvalMode },
 			partial: Boolean(history?.hasOlder),
 		});
 	}, [events, eventsLoaded, history?.hasOlder, session, settings]);

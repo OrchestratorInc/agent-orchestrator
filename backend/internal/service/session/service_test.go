@@ -588,6 +588,48 @@ func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID
 	return []domain.PRFacts{pr}, nil
 }
 
+// ListPRStateTimes answers from the same PR facts the fake serves to
+// ListPRFactsForSessions, so a test seeds one place.
+func (f *fakeStore) ListPRStateTimes(_ context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error) {
+	out := map[domain.SessionID]time.Time{}
+	add := func(id domain.SessionID, pr domain.PRFacts) {
+		if fakePRFactsState(pr) != state {
+			return
+		}
+		at := pr.StateChangedAt
+		if at.IsZero() {
+			at = pr.UpdatedAt
+		}
+		if prev, seen := out[id]; !seen || at.After(prev) {
+			out[id] = at
+		}
+	}
+	for id, prs := range f.prFacts {
+		for _, pr := range prs {
+			add(id, pr)
+		}
+	}
+	for id, pr := range f.pr {
+		if _, listed := f.prFacts[id]; !listed {
+			add(id, pr)
+		}
+	}
+	return out, nil
+}
+
+func fakePRFactsState(pr domain.PRFacts) domain.PRState {
+	switch {
+	case pr.Merged:
+		return domain.PRStateMerged
+	case pr.Closed:
+		return domain.PRStateClosed
+	case pr.Draft:
+		return domain.PRStateDraft
+	default:
+		return domain.PRStateOpen
+	}
+}
+
 func (f *fakeStore) ListPRFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error) {
 	f.listPRFactsCalls++
 	out := make(map[domain.SessionID][]domain.PRFacts, len(ids))
@@ -6722,5 +6764,33 @@ func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
 		if !sentryobs.IsRepeat(read("diff")) {
 			t.Error("successful status rearmed unrelated diff")
 		}
+	}
+}
+
+type renewingCommander struct {
+	*fakeCommander
+	renewed []domain.TaskPreparationToken
+}
+
+func (c *renewingCommander) RenewTaskPreparation(token domain.TaskPreparationToken) {
+	c.renewed = append(c.renewed, token)
+}
+
+func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
+	st := newFakeStore()
+	// Still being created: no worktree yet, which the page polls through.
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", IsTaskPreparation: true}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2"}
+	commander := &renewingCommander{fakeCommander: &fakeCommander{}}
+	svc := &Service{store: st, manager: commander}
+
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-1"); err == nil {
+		t.Fatal("listed files of a preparation with no worktree yet")
+	}
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-2"); err == nil {
+		t.Fatal("listed files of a session with no worktree")
+	}
+	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
+		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
 	}
 }

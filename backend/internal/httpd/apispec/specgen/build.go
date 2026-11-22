@@ -474,6 +474,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersWorkspacePathResolutionResponse":          "WorkspacePathResolutionResponse",
 	"ControllersWorkspaceTreeQuery":                       "WorkspaceTreeQuery",
 	"ControllersListWorkspaceTreeResponse":                "ListWorkspaceTreeResponse",
+	"ControllersListWorkspaceFilePathsResponse":           "ListWorkspaceFilePathsResponse",
 	"ControllersWorkspaceTreeEntry":                       "WorkspaceTreeEntry",
 	"ControllersListEditorsResponse":                      "ListEditorsResponse",
 	"ControllersEditorSummary":                            "EditorSummary",
@@ -505,6 +506,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionPRUnresolvedReviewer":              "SessionPRUnresolvedReviewer",
 	"ControllersSessionPRReviewCommentLink":               "SessionPRReviewCommentLink",
 	"ControllersSessionPRMergeabilitySummary":             "SessionPRMergeabilitySummary",
+	"ControllersSessionPRMergeQueueEntry":                 "SessionPRMergeQueueEntry",
 	"ControllersSessionPRConflictFile":                    "SessionPRConflictFile",
 	"ControllersListSessionPRsResponse":                   "ListSessionPRsResponse",
 	"ControllersSetActivityRequest":                       "SetActivityRequest",
@@ -654,6 +656,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersMergePRStackRequest":        "MergePRStackRequest",
 	"ControllersMergePRStackResponse":       "MergePRStackResponse",
 	"ControllersMergePRResponse":            "MergePRResponse",
+	"ControllersDequeuePRRequest":           "DequeuePRRequest",
+	"ControllersDequeuePRResponse":          "DequeuePRResponse",
 	"ControllersResolveCommentsRequest":     "ResolveCommentsRequest",
 	"ControllersResolveCommentsResponse":    "ResolveCommentsResponse",
 	"ControllersChangePRStateRequest":       "ChangePRStateRequest",
@@ -2508,9 +2512,9 @@ func agentOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/login", id: "startAgentAccountLogin", tag: "agents",
-			summary: "Add an account by running the provider's own sign-in in a terminal",
+			summary: "Add an account by running the provider's own sign-in, in the background or in a terminal",
 			reqBody: controllers.StartAgentAccountLoginRequest{},
-			resps:   []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			resps:   []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/login/{operationId}/verify", id: "verifyAgentAccountLogin", tag: "agents",
@@ -2521,6 +2525,18 @@ func agentOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/agents/accounts/login/{operationId}/cancel", id: "cancelAgentAccountLogin", tag: "agents",
 			summary: "Stop a sign-in and remove its unsaved folder", pathParams: []any{controllers.AgentAccountLoginIDParam{}},
 			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/accounts/api-keys", id: "addAgentAccountAPIKey", tag: "agents",
+			summary: "Add an account that runs the provider's CLI with an API key, once the provider accepts the key",
+			reqBody: controllers.AddAgentAccountAPIKeyRequest{},
+			resps:   []respUnit{{http.StatusOK, controllers.AgentAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/accounts/{accountId}/api-key", id: "replaceAgentAccountAPIKey", tag: "agents",
+			summary: "Save a new key for an API key account, once the provider accepts it", pathParams: []any{controllers.AgentAccountIDParam{}},
+			reqBody: controllers.ReplaceAgentAccountAPIKeyRequest{},
+			resps:   []respUnit{{http.StatusOK, controllers.AgentAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/agents/accounts/sessions/{sessionId}", id: "getSessionAgentAccounts", tag: "agents",
@@ -2536,7 +2552,8 @@ func agentOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/login", id: "signInAgentAccountAgain", tag: "agents",
 			summary: "Sign a saved account in again, in its own folder", pathParams: []any{controllers.AgentAccountIDParam{}},
-			resps: []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			reqBody: controllers.SignInAgentAccountAgainRequest{}, optionalReqBody: true,
+			resps: []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/default", id: "setDefaultAgentAccount", tag: "agents",
@@ -3786,6 +3803,17 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/workspace/paths", id: "listSessionWorkspaceFilePaths", tag: "sessions",
+			summary:    "List the visible file paths in a session workspace, without per-file status",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListWorkspaceFilePathsResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/pr/{prNumber}/files", id: "listSessionPRFiles", tag: "sessions",
 			summary:    "List the exact base-to-head changed files for an associated pull request",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.PRNumberParam{}, controllers.PRFilesQuery{}},
@@ -4375,6 +4403,20 @@ func prOperations() []operation {
 			resps: []respUnit{
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusOK, controllers.MergePRResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/dequeue", id: "dequeuePR", tag: "prs",
+			summary:    "Remove a pull request from its base branch's merge queue",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.DequeuePRRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.DequeuePRResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
