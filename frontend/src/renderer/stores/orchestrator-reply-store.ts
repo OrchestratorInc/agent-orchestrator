@@ -55,7 +55,7 @@ export const orchestratorReplyKey = (projectId: string, hostId?: string) => `${h
 
 const checks = new Map<string, Promise<boolean | "unsure">>();
 
-function settledTurnsStandOut(id: string, sessionId: string, hostId: string | undefined, since: number): Promise<boolean | "unsure"> {
+function settledTurnsStandOut(id: string, sessionId: string, hostId: string | undefined, since: number, until: number): Promise<boolean | "unsure"> {
 	let check = checks.get(id);
 	if (!check) {
 		check = fetchRecentConversation(sessionId, hostId).then((snapshot) => {
@@ -67,7 +67,10 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index);
 				return standing !== "background" && standing !== "replaced";
 			});
-			const started = snapshot.turns.some((turn) => turn.state === "running" && Date.parse(turn.requestedAt) >= since);
+			const started = snapshot.turns.some((turn) => {
+				const began = Date.parse(turn.startedAt ?? turn.requestedAt);
+				return turn.state === "running" && began >= since && began <= until;
+			});
 			return standsOut || ((settled.length === 0 || started) && "unsure");
 		}).catch(() => true);
 		checks.set(id, check);
@@ -121,7 +124,7 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 			return;
 		}
 		const checkedFrom = Date.now();
-		void settledTurnsStandOut(`${key}:${at}`, orchestrator.id, hostId, prev.since).then((standsOut) => {
+		void settledTurnsStandOut(`${key}:${at}`, orchestrator.id, hostId, prev.since, at).then((standsOut) => {
 			const again = previous.current?.id === orchestrator.id && previous.current.working;
 			if (!standsOut || (standsOut === "unsure" && again)) return;
 			const replies = useOrchestratorReplyStore.getState();

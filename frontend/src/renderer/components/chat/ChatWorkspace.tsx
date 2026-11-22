@@ -7033,7 +7033,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 				: group);
 			continue;
 		}
-		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d{4}-\d{2}-\d{2}\S*|\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?/gi, "")}` : standing;
+		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[AP]M)?/gi, "")}` : standing;
 		if (run?.key !== key) {
 			close();
 			run = { kind: standing, key, members: [] };

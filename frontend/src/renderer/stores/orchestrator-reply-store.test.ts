@@ -112,6 +112,24 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
+	it("lights up when a turn that began during the work is still marked running", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({ ...quiet, turns: [...quiet.turns, { id: "t2", state: "running", requestedAt: "2026-11-08T10:04:50Z", startedAt: "2026-11-08T10:05:20Z" }] });
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+	});
+
+	it("stays quiet when the only running turn began after the work settled", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({ ...quiet, turns: [...quiet.turns, { id: "t2", state: "running", requestedAt: "2026-11-08T10:05:31Z" }] });
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
+		await act(async () => {});
+		expect(hook.result.current).toBeNull();
+	});
+
 	it("checks a background turn the user wrote during, instead of counting it as their answer", async () => {
 		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
 		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));

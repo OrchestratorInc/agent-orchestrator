@@ -442,6 +442,14 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
 	});
 
+	it("keeps a reply that ends in a question inside Japanese quotes in view", () => {
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "「マージしますか？」"),
+		]);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
 	it("keeps a failed turn whose report still needs the user out of the merged failures", () => {
 		const base = snapshot([
 			report("t1", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?"),
@@ -457,6 +465,21 @@ describe("background turns in the orchestrator chat", () => {
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider returned HTTP ${index ? 500 : 429}.` })) });
 		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
 		expect(screen.getByText(/HTTP 429/)).toBeInTheDocument();
+	});
+
+	it("keeps failures apart when the field after a timestamp differs", () => {
+		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
+		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider error: {"time":"2026-11-22T10:0${index}:00Z","status":${index ? 500 : 429}}` })) });
+		expect(screen.queryByRole("button", { name: /failed the same way/ })).not.toBeInTheDocument();
+	});
+
+	it("leaves a turn whose loaded part starts at a worker steer in view", () => {
+		const steer: ConversationActivity = {
+			kind: "activity", id: "t1-steer", turnId: "t1", sequence: 5, revision: 0, activityKind: "system", status: "completed",
+			summary: "[from proj-187] Also rebase #5051.", createdAt: at(1), detail: { event: "steer", text: "[from proj-187] Also rebase #5051.", senderSessionId: "proj-187" },
+		};
+		renderOrchestrator([steer, reply("t1", 2, "Noted.")]);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
 	});
 
 	it("leaves worker turns that stopped short in view without calling them failed", () => {
