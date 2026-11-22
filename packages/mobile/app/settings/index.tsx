@@ -40,7 +40,7 @@ import {
 	SettingsValueRow,
 	type SettingsOption,
 	type SettingsTone,
-} from "../../lib/SettingsForm";
+} from "../../lib/SettingsPage";
 import { Spinner } from "../../lib/Spinner";
 import { StackRootBack } from "../../lib/StackRootBack";
 import { tunnelMayHaveRotated } from "../../lib/staleTunnel";

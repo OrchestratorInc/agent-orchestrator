@@ -33,7 +33,7 @@ vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: "Keyb
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("expo-crypto", () => ({ getRandomBytes: vi.fn(), digestStringAsync: vi.fn(), CryptoDigestAlgorithm: {}, CryptoEncoding: {} }));
 // The rows stay hosts so the page's wiring can be read off their props.
-vi.mock("./SettingsForm", () => ({
+vi.mock("./SettingsPage", () => ({
 	SettingsForm: "SettingsForm",
 	SettingsSection: "SettingsSection",
 	SettingsButtonRow: "SettingsButtonRow",

@@ -48,7 +48,7 @@ vi.mock("react-native", () => ({
 }));
 // The rows are the native form's (lib/SettingsForm); here they stay as hosts so
 // the screen's structure and wiring can be read off their props.
-vi.mock("./SettingsForm", () => ({
+vi.mock("./SettingsPage", () => ({
 	SettingsForm: "SettingsForm",
 	SettingsSection: "SettingsSection",
 	SettingsLinkRow: "SettingsLinkRow",

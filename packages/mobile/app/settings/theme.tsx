@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { StyleSheet, View } from "react-native";
 import { THEMES, type ThemeStyle } from "../../../shared/theme/palettes";
 import { haptics } from "../../lib/haptics";
-import { SettingsChoiceSection, SettingsForm } from "../../lib/SettingsForm";
+import { SettingsChoiceSection, SettingsForm } from "../../lib/SettingsPage";
 import { themeFor } from "../../lib/theme";
 import { ThemePaletteSwatch } from "../../lib/ThemePaletteSwatch";
 import { useTheme, useThemeState } from "../../lib/ThemeProvider";

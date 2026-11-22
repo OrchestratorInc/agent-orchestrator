@@ -6,7 +6,7 @@ import { themeFor } from "./theme";
 const fixtures = vi.hoisted(() => ({ setStyle: vi.fn(), select: vi.fn(), style: "nord" }));
 
 vi.mock("react-native", () => ({ StyleSheet: { create: (styles: object) => styles }, View: "View" }));
-vi.mock("./SettingsForm", () => ({ SettingsForm: "SettingsForm", SettingsChoiceSection: "SettingsChoiceSection" }));
+vi.mock("./SettingsPage", () => ({ SettingsForm: "SettingsForm", SettingsChoiceSection: "SettingsChoiceSection" }));
 vi.mock("./ThemePaletteSwatch", () => ({ ThemePaletteSwatch: "ThemePaletteSwatch" }));
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));

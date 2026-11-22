@@ -40,7 +40,7 @@ import { CredentialFieldSection } from "../../../../lib/cloud/CredentialFieldSec
 import { cloudErrorMessage } from "../../../../lib/cloud/errors";
 import { FormPasswordField, FormTextField } from "../../../../lib/formFields";
 import { haptics } from "../../../../lib/haptics";
-import { SettingsButtonRow, SettingsForm, SettingsSection, SettingsValueRow, type SettingsTone } from "../../../../lib/SettingsForm";
+import { SettingsButtonRow, SettingsForm, SettingsSection, SettingsValueRow, type SettingsTone } from "../../../../lib/SettingsPage";
 import { Spinner } from "../../../../lib/Spinner";
 import { useTheme } from "../../../../lib/ThemeProvider";
 import { ToastHost } from "../../../../lib/Toast";
