@@ -14,8 +14,8 @@ export function turnStanding(items: readonly ConversationItem[], state: string, 
 	const settled = state === "completed" || state === "recovered";
 	if (automation?.kind === "notice" && automation.notice === "orchestratorReplaced") return settled ? "replaced" : "up";
 	if (!isWorkerLead(lead) || (isTaskTitleUpdate(lead) && !renamedTitle(items))) return "yours";
+	if (items.some((item) => workerUpdatesOf(item).some((update) => needsYouNow(index, update)))) return "up";
 	if (state === "failed") return "failed";
 	if (!settled) return "up";
-	if (items.some((item) => workerUpdatesOf(item).some((update) => needsYouNow(index, update)))) return "up";
 	return /[?？][*_)\]"'”’`]*$/.test(finalReply(items)) ? "up" : "background";
 }

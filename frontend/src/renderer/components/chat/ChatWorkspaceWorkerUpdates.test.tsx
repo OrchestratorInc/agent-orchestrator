@@ -442,6 +442,16 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
 	});
 
+	it("keeps a failed turn whose report still needs the user out of the merged failures", () => {
+		const base = snapshot([
+			report("t1", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?"),
+			report("t3", 3, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+		]);
+		renderSnapshot({ ...base, turns: base.turns.map((turn) => ({ ...turn, state: "failed", errorMessage: "You've hit your usage limit." })) });
+		expect(screen.queryByRole("button", { name: /failed the same way/ })).not.toBeInTheDocument();
+		expect(screen.getByText(/1 needs you/)).toBeInTheDocument();
+	});
+
 	it("keeps failures whose errors differ apart", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider returned HTTP ${index ? 500 : 429}.` })) });
