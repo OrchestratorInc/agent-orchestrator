@@ -9,8 +9,9 @@ name: Linux arm64 host package
 #
 # build-artifacts.yml calls this for every release build, with the pinned ref
 # and version; the conductor reads the package and its digest from that run.
-# Pull requests that touch the package's inputs build and smoke-test it too, so
-# a break shows up before a release depends on it.
+# Pull requests that touch the package's inputs (daemon source, build scripts,
+# ACP runtime, installer) build and smoke-test it too, so a break shows up
+# before a release depends on it.
 #
 # Built on arm64 hardware, not cross-built: tmux is compiled from source and
 # the Node runtime is per-architecture. ubuntu-22.04 matches the x64 build's
@@ -25,11 +26,16 @@ on:
       version:
         type: string
         required: true
+  # The daemon is built from backend/ (a Go change can break only on arm64, for
+  # example through per-architecture syscall types), and frontend/package.json
+  # holds the stamped version and the build:* commands. Test-only Go changes
+  # cannot change the package.
   pull_request:
     paths:
       - ".github/workflows/linux-arm64-host.yml"
-      - "backend/go.mod"
-      - "backend/go.sum"
+      - "backend/**"
+      - "!backend/**/*_test.go"
+      - "frontend/package.json"
       - "frontend/acp-runtime/**"
       - "frontend/scripts/build-acp-runtime*.mjs"
       - "frontend/scripts/build-daemon.mjs"

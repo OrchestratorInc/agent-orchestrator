@@ -55,7 +55,10 @@ user with `sudo`. No inbound ports.
    ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
    ```
 
-   This installs stable. For nightly, end it with `bash -s -- --nightly`.
+   This installs stable. For nightly, end it with `bash -s -- --nightly`. On
+   arm64, if it stops with `No verified release asset: ao-host-linux-arm64.tar.gz`,
+   that release predates arm64 support: end it with `bash -s -- --source-ref main`
+   to build from the main branch (several minutes).
 
 2. Start the sign-in in the background, then read the link:
 
