@@ -1400,6 +1400,27 @@ func TestCurrentCancelledCheckIsFailing(t *testing.T) {
 	}
 }
 
+func TestCISummaryUnknownConclusionBlocksPassing(t *testing.T) {
+	var pr map[string]any
+	basePRFixture().prData(func(m map[string]any) {
+		pr = m
+		commit := m["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["commit"].(map[string]any)
+		roll := commit["statusCheckRollup"].(map[string]any)
+		roll["state"] = "PENDING"
+		roll["contexts"] = map[string]any{
+			"nodes":    []any{actionsCheckRun("Go", "lint", "SUCCESS", 1), actionsCheckRun("Go", "build", "", 2)},
+			"pageInfo": map[string]any{"hasNextPage": false},
+		}
+	})
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIUnknown {
+		t.Fatalf("summary = %q, want unknown while a completed check lacks a conclusion", got)
+	}
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello"}, Number: 42}, pr)
+	if obs.CI.Summary != string(domain.CIUnknown) || len(obs.CI.FailedChecks) != 0 {
+		t.Fatalf("observer CI = %+v, want unknown without failed checks", obs.CI)
+	}
+}
+
 // PR #7774: the same commit ran each workflow three times; the first run was
 // cancelled, and GitHub's rollup state stays FAILURE although every check's
 // newest run passed.

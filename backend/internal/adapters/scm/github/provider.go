@@ -414,7 +414,7 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 		// rather than returning CIUnknown for an otherwise-decided PR.
 		return mapRollupState(str(roll["state"]))
 	}
-	pending, passing := false, false
+	pending, passing, unknown := false, false, false
 	for _, n := range rawNodes {
 		st := checkStatusFromGraphQL(n)
 		switch st {
@@ -424,6 +424,8 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 			pending = true
 		case domain.PRCheckPassed:
 			passing = true
+		case domain.PRCheckUnknown:
+			unknown = true
 		}
 	}
 	if pageInfoHasMore(contexts) {
@@ -432,6 +434,8 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	switch {
 	case pending:
 		return domain.CIPending
+	case unknown:
+		return domain.CIUnknown
 	case passing:
 		return domain.CIPassing
 	default:
