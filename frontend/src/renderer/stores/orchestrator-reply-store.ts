@@ -53,20 +53,22 @@ export const useOrchestratorReplyStore = create<OrchestratorReplyStore>((set, ge
 
 export const orchestratorReplyKey = (projectId: string, hostId?: string) => `${hostId ?? ""}:${projectId}`;
 
-const checks = new Map<string, Promise<boolean>>();
+const checks = new Map<string, Promise<boolean | "unsure">>();
 
-function settledTurnsStandOut(id: string, sessionId: string, hostId: string | undefined, since: number): Promise<boolean> {
+function settledTurnsStandOut(id: string, sessionId: string, hostId: string | undefined, since: number): Promise<boolean | "unsure"> {
 	let check = checks.get(id);
 	if (!check) {
 		check = fetchRecentConversation(sessionId, hostId).then((snapshot) => {
+			if (snapshot.hasMoreBefore && !(Date.parse(snapshot.items[0]?.createdAt ?? "") <= since)) return true;
 			const index = indexWorkerUpdates(snapshot.items);
 			const settled = snapshot.turns.filter((turn) => Date.parse(turn.completedAt ?? "") >= since);
-			const started = snapshot.turns.some((turn) => turn.state === "running" && Date.parse(turn.requestedAt) >= since);
-			return settled.length === 0 || started || settled.some((turn) => {
+			const standsOut = settled.some((turn) => {
 				if (turn.hasHumanPrompt) return true;
 				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index);
 				return standing !== "background" && standing !== "replaced";
 			});
+			const started = snapshot.turns.some((turn) => turn.state === "running" && Date.parse(turn.requestedAt) >= since);
+			return standsOut || ((settled.length === 0 || started) && "unsure");
 		}).catch(() => true);
 		checks.set(id, check);
 		void check.finally(() => checks.delete(id));
@@ -101,6 +103,10 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 	const lastUserAt = Date.parse(orchestrator?.lastUserMessageAt ?? "") || 0;
 	const working = activityState === "active";
 	const previous = useRef<{ id?: string; working: boolean; since: number } | null>(null);
+	const viewedAt = useRef(0);
+	useEffect(() => {
+		if (viewing) viewedAt.current = Date.now();
+	}, [viewing]);
 	useEffect(() => {
 		const prev = previous.current;
 		const parsed = Date.parse(lastActivityAt ?? "");
@@ -114,8 +120,13 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 			store.recordReply(key, at);
 			return;
 		}
+		const checkedFrom = Date.now();
 		void settledTurnsStandOut(`${key}:${at}`, orchestrator.id, hostId, prev.since).then((standsOut) => {
-			if (standsOut) useOrchestratorReplyStore.getState().recordReply(key, at);
+			const again = previous.current?.id === orchestrator.id && previous.current.working;
+			if (!standsOut || (standsOut === "unsure" && again)) return;
+			const replies = useOrchestratorReplyStore.getState();
+			replies.recordReply(key, at);
+			if (viewedAt.current >= checkedFrom) replies.markSeen(key, at);
 		});
 	}, [activityState, hostId, key, lastActivityAt, lastUserAt, orchestrator, quiet, viewing, working]);
 	useEffect(() => {
