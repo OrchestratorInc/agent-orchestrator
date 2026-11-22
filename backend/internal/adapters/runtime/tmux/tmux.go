@@ -371,8 +371,10 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 			_ = os.Remove(envFile)
 		}
 	}()
-	launchCmd := buildLaunchCommand(cfg, envFile)
-	args := newSessionArgs(id, cfg.WorkspacePath, r.shell, launchCmd)
+	launchCmd := buildLaunchCommand(cfg, envFile, r.shell)
+	// The launch command and sourced environment file use POSIX syntax. The
+	// user's $SHELL is only for the interactive fallback after the agent exits.
+	args := newSessionArgs(id, cfg.WorkspacePath, "/bin/sh", launchCmd)
 	if _, err := r.run(ctx, args...); err != nil {
 		return ports.RuntimeHandle{}, tmuxPossibleCreateFailure(
 			fmt.Errorf("tmux runtime: create session %s: %w", id, err),
@@ -459,8 +461,8 @@ func (r *Runtime) Restart(ctx context.Context, handle ports.RuntimeHandle, cfg p
 	if err != nil {
 		return ports.RuntimeHandle{}, err
 	}
-	launchCmd := buildLaunchCommand(cfg, envFile)
-	if _, err := r.runForSession(ctx, id, respawnPaneArgs(id, cfg.WorkspacePath, r.shell, launchCmd)...); err != nil {
+	launchCmd := buildLaunchCommand(cfg, envFile, r.shell)
+	if _, err := r.runForSession(ctx, id, respawnPaneArgs(id, cfg.WorkspacePath, "/bin/sh", launchCmd)...); err != nil {
 		_ = os.Remove(envFile)
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: restart session %s: %w", id, err)
 	}
@@ -1721,7 +1723,7 @@ func shellQuote(s string) string {
 // any local user through `ps`, /proc/<pid>/cmdline, and tmux's
 // #{pane_start_command}; the environment carries saved provider keys and
 // tokens. The shell reads envFile and deletes it before running argv.
-func buildLaunchCommand(cfg ports.RuntimeConfig, envFile string) string {
+func buildLaunchCommand(cfg ports.RuntimeConfig, envFile, userShell string) string {
 	var b strings.Builder
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(cfg.WorkspacePath))
@@ -1755,7 +1757,9 @@ func buildLaunchCommand(cfg ports.RuntimeConfig, envFile string) string {
 	} else {
 		// Keep the tmux session alive after an unsupervised agent exits so the
 		// operator can inspect it and use the historical manual-recovery shell.
-		b.WriteString(`; exec "${SHELL:-/bin/sh}" -i`)
+		b.WriteString(`; if [ -n "${SHELL:-}" ]; then exec "$SHELL" -i; else exec `)
+		b.WriteString(shellQuote(userShell))
+		b.WriteString(` -i; fi`)
 	}
 	return b.String()
 }

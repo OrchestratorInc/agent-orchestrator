@@ -84,6 +84,40 @@ func TestRuntimeIntegration(t *testing.T) {
 	}
 }
 
+func TestRuntimeIntegrationUserShellVariants(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	for _, shell := range []string{"fish", "zsh", "bash", "sh"} {
+		path, err := exec.LookPath(shell)
+		if err != nil {
+			t.Run(shell, func(t *testing.T) { t.Skipf("%s unavailable", shell) })
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			t.Setenv("SHELL", path)
+			ctx := context.Background()
+			id := strings.ReplaceAll(t.Name(), "/", "_")
+			r := New(Options{Timeout: 5 * time.Second, EnvDir: t.TempDir()})
+			t.Cleanup(func() { _ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id}) })
+			h, err := r.Create(ctx, ports.RuntimeConfig{
+				SessionID:     domain.SessionID(id),
+				WorkspacePath: t.TempDir(),
+				Argv:          []string{"/bin/sh", "-c", "printf 'launched-under-posix\\n'"},
+			})
+			if err != nil {
+				t.Fatalf("Create with SHELL=%s: %v", path, err)
+			}
+			if out := waitForOutput(t, r, h, "launched-under-posix", 5*time.Second); !strings.Contains(out, "launched-under-posix") {
+				t.Fatalf("output = %q, want launched-under-posix", out)
+			}
+			if alive, err := r.IsAlive(ctx, h); err != nil || !alive {
+				t.Fatalf("IsAlive after launch = %v, %v; want true", alive, err)
+			}
+		})
+	}
+}
+
 // TestRuntimeIntegrationDeliversEnvironmentThroughAFile checks the agent
 // receives its environment from the sourced launch file, which the pane's
 // shell deletes before the agent runs.
