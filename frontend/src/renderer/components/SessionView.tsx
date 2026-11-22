@@ -84,7 +84,6 @@ import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
-import { SESSION_BROWSER_POPOUT_REQUEST } from "../lib/session-browser-popout-request";
 import { SessionInspector } from "./SessionInspector";
 import { PRTabChip, PRTabPane } from "./PRTabPane";
 import { activatePRTab, closePRTab, deactivatePRTab, prTabKey, prTabUrl, usePRTabs, type PRTabsState } from "../lib/pr-tabs";
@@ -2659,11 +2658,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		[sessionId],
 	);
-	useEffect(() => {
-		const open = () => handleToggleBrowserPopOut(true);
-		window.addEventListener(SESSION_BROWSER_POPOUT_REQUEST, open);
-		return () => window.removeEventListener(SESSION_BROWSER_POPOUT_REQUEST, open);
-	}, [handleToggleBrowserPopOut]);
 
 	useEffect(() => {
 		if (!hasInspector) return;

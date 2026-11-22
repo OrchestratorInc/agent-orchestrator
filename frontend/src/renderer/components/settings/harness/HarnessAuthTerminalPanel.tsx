@@ -6,13 +6,11 @@ import { closeShellTerminal } from "../../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import type { AgentId } from "../../../lib/agent-options";
 import { apiErrorCode, getApiBaseUrl } from "../../../lib/api-client";
-import { aoBridge } from "../../../lib/bridge";
 import { baseUrlForHost } from "../../../lib/host-clients";
-import { requestSessionBrowserPopOut } from "../../../lib/session-browser-popout-request";
 import { useShellMaybe } from "../../../lib/shell-context";
 import { createTerminalMux, muxUrlFromApiBase } from "../../../lib/terminal-mux";
 import { useResolvedTheme } from "../../../stores/ui-store";
-import { AppBrowserLinkContext } from "../../AppLink";
+import { SettingsBrowserLinkContext } from "../SettingsBrowserOverlay";
 import { TerminalPane } from "../../TerminalPane";
 import { Button } from "../../ui/button";
 import { CloseButton } from "../../ui/close-button";
@@ -46,16 +44,7 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 	const { t } = useTranslation();
 	const theme = useResolvedTheme();
 	const shell = useShellMaybe();
-	const openInBrowser = useContext(AppBrowserLinkContext);
-	const openLoginLink = useCallback((uri: string) => {
-		if (openInBrowser) {
-			openInBrowser(uri);
-			// Keep Settings and its login PTY mounted while the Browser is visible.
-			requestSessionBrowserPopOut();
-		} else {
-			void aoBridge.app.openExternal(uri);
-		}
-	}, [openInBrowser]);
+	const openLoginLink = useContext(SettingsBrowserLinkContext);
 	// Logout can exit before attachment. Own its mux so a shell-list refresh
 	// cannot prune the retained cache entry before we receive the exit event.
 	const createMux = useCallback(() => {

@@ -42,6 +42,7 @@ import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSec
 import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../lib/mobile-pairing-code";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 import { useEdgeFade } from "../hooks/useEdgeFade";
+import { SettingsBrowserLinkContext, SettingsBrowserOverlay } from "./settings/SettingsBrowserOverlay";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -473,11 +474,19 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
+	const [browserRequest, setBrowserRequest] = useState<{ id: number; url: string } | null>(null);
+	const openSettingsBrowser = useCallback((url: string) => {
+		setBrowserRequest((current) => ({ id: (current?.id ?? 0) + 1, url }));
+	}, []);
+	useEffect(() => {
+		if (!page) setBrowserRequest(null);
+	}, [page]);
 	useSettingsRowFocus(scrollerRef, page?.active ?? null);
 	useEdgeFade(scrollerRef, "y", [page?.active]);
 	if (!page) return null;
 	const layer = page.active;
 	return (
+		<SettingsBrowserLinkContext.Provider value={openSettingsBrowser}>
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
 			<PageTopbar
 				lead={
@@ -505,6 +514,11 @@ export function SettingsPane() {
 				</div>
 			))}
 		</div>
+		{browserRequest ? createPortal(
+			<SettingsBrowserOverlay request={browserRequest} onClose={() => setBrowserRequest(null)} />,
+			document.body,
+		) : null}
+		</SettingsBrowserLinkContext.Provider>
 	);
 }
 
