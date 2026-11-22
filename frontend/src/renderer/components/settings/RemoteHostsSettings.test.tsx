@@ -146,7 +146,8 @@ it("shows each saved host's version with its update button and the auto-update s
 	useUiStore.setState({ autoUpdateRemoteHosts: false });
 	renderSettings();
 	await waitFor(() => expect(screen.getByText("Box A")).toBeVisible());
-	expect(screen.getByText("· v0.14.10", { exact: false })).toBeVisible();
+	expect(screen.getByText("· v0.14.10 →", { exact: false })).toBeVisible();
+	expect(screen.getByText("v0.15.0")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Update Box A" })).toBeVisible();
 	const autoUpdate = screen.getByRole("switch", { name: "Auto update remote hosts" });
 	expect(autoUpdate).toHaveAttribute("aria-checked", "false");
@@ -162,7 +163,7 @@ it("asks before updating a computer running the desktop app", async () => {
 	renderSettings();
 	fireEvent.click(await screen.findByRole("button", { name: "Update Studio Mac" }));
 	expect(remotes.startHostUpdate).not.toHaveBeenCalled();
-	expect(screen.getByText("Update Orchestrator on Studio Mac?")).toBeVisible();
+	expect(screen.getByText("Update Orchestrator on Studio Mac to v0.15.0?")).toBeVisible();
 	expect(screen.getByText("The app closes and relaunches on that computer. Its agents keep running.")).toBeVisible();
 	fireEvent.click(screen.getByRole("button", { name: "Update" }));
 	await waitFor(() => expect(remotes.startHostUpdate).toHaveBeenCalledWith("http://studio:3011"));

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
-import { hostUpdateAction, startHostUpdate, useHostUpdateStore } from "../../hooks/useHostUpdates";
+import { compareVersions, hostUpdateAction, startHostUpdate, useHostUpdateStore } from "../../hooks/useHostUpdates";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useCloudSession } from "../../lib/cloud-session";
 import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
@@ -159,6 +159,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			{saved.map((host) => {
 				const version = hostUpdates[host.url]?.view?.version;
 				const update = hostUpdateAction(hostUpdates[host.url], localVersion);
+				const target = version && localVersion && (compareVersions(version, localVersion) ?? 0) < 0 ? localVersion.replace(/^v/i, "") : undefined;
 				return (
 				<SettingsRow
 					key={host.url}
@@ -167,8 +168,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 					description={host.hostId ? (
 						<>
 							{host.url}
-							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}</span> : null}
-							{update?.kind === "update" ? <span className="mt-0.5 block text-warning">{t("remote.hostBehind")}</span> : null}
+							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}{target ? <>{" → "}<span className="text-foreground">{`v${target}`}</span></> : null}</span> : null}
 							{update?.kind === "manual" ? <span className="mt-0.5 block text-warning">{t("shell.updateOnThatComputer")}</span> : null}
 							{update?.kind === "failed" ? <span className="mt-0.5 block text-error" role="alert">{update.error || (update.unconfirmed ? t("remote.updateUnconfirmed") : t("shell.updateFailed"))}</span> : null}
 						</>
@@ -234,7 +234,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			}}
 			onOpenChange={(open) => { if (!open) setConfirmingUpdate(null); }}
 			open={confirmingUpdate !== null}
-			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label })}
+			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label, version: localVersion?.replace(/^v/i, "") })}
 		/>
 		<ConfirmDialog
 			busy={removeBusy}
