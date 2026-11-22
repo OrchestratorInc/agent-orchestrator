@@ -5177,5 +5177,11 @@
 	"shell.deleteCloudProjectTitle": "删除项目",
 	"shell.deleteCloudProjectLead": "这将永久删除 {{name}}",
 	"shell.deleteCloudProjectConfirm": "永久删除",
-	"shell.cloudProjectDeleted": "已永久删除 {{name}}"
+	"shell.cloudProjectDeleted": "已永久删除 {{name}}",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API 密钥",
+	"settings.gmi.apiKeyPlaceholder": "粘贴你的 GMI Cloud 密钥",
+	"settings.gmi.description": "让 Agent 生成图片、视频和音频。密钥只保存在 AO 中，不会进入 Agent 的环境。",
+	"settings.gmi.save": "保存",
+	"settings.gmi.getKey": "获取密钥"
 }

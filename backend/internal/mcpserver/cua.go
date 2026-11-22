@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/gmi"
 )
 
 // maxMCPImageBytes bounds one screenshot sent inline.
@@ -19,6 +20,13 @@ type mcpState struct {
 	cuaLoaded bool
 	cuaTools  []map[string]any
 	cuaNames  map[string]bool
+
+	// The GMI Cloud tools and their client (mcp_gmi.go). They are offered
+	// only when AO holds a GMI Cloud API key.
+	gmiLoaded bool
+	gmiTools  []map[string]any
+	gmiNames  map[string]bool
+	gmiClient *gmi.Client
 }
 
 // cuaCallRequest, cuaImage, and cuaCallResponse mirror the daemon's
@@ -54,6 +62,9 @@ var readOnlyCuaTools = map[string]bool{"list_windows": true, "get_window_state":
 // Driver not installed); the list is asked for again on the next tools/list.
 func (s *server) cuaTools(ctx context.Context, state *mcpState) []map[string]any {
 	if os.Getenv(config.EnvComputerUse) != "1" {
+		return nil
+	}
+	if !mcpToolGroupEnabled(config.MCPToolGroupCUA) {
 		return nil
 	}
 	if state.cuaLoaded {

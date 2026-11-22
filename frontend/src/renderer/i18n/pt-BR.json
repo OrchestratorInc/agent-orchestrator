@@ -5343,5 +5343,11 @@
 	"shell.deleteCloudProjectTitle": "Excluir projeto",
 	"shell.deleteCloudProjectLead": "Isso excluirá {{name}} permanentemente",
 	"shell.deleteCloudProjectConfirm": "Excluir permanentemente",
-	"shell.cloudProjectDeleted": "{{name}} excluído"
+	"shell.cloudProjectDeleted": "{{name}} excluído",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "Chave de API",
+	"settings.gmi.apiKeyPlaceholder": "Cole sua chave do GMI Cloud",
+	"settings.gmi.description": "Permite que os agentes gerem imagens, vídeos e áudio. A chave fica na AO e nunca chega ao ambiente de um agente.",
+	"settings.gmi.save": "Salvar",
+	"settings.gmi.getKey": "Obter uma chave"
 }

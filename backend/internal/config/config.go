@@ -23,6 +23,24 @@ import (
 // the CLI reads it.
 const EnvComputerUse = "AO_COMPUTER_USE"
 
+// EnvMCPToolGroups narrows the groups of tools an `ao mcp` server offers. It
+// holds a comma-separated list of group names (see the MCPToolGroup values).
+// It is absent for a chat session, which offers every group the server can:
+// its thread can show a rendered page. A worker session has no thread, so the
+// session manager sets it to the groups that do not need one.
+const EnvMCPToolGroups = "AO_MCP_TOOLS"
+
+// The groups of tools an `ao mcp` server can offer.
+const (
+	// MCPToolGroupHTML covers the HTML preview and render tools, which show a
+	// page in the session's chat thread.
+	MCPToolGroupHTML = "html"
+	// MCPToolGroupCUA covers the computer-use tools.
+	MCPToolGroupCUA = "cua"
+	// MCPToolGroupGMI covers the GMI Cloud generation tools.
+	MCPToolGroupGMI = "gmi"
+)
+
 const (
 	// LoopbackHost is the only host the daemon ever binds. There is deliberately
 	// no AO_HOST env var: the daemon has no auth/CORS/TLS and a stray

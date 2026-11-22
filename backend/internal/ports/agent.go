@@ -245,6 +245,28 @@ type Agent interface {
 	SessionInfo(ctx context.Context, session SessionRef) (info SessionInfo, ok bool, err error)
 }
 
+// MCPServerConfig describes one stdio MCP server AO offers a harness at
+// launch. Env carries only the pointers AO's own server needs to find its own
+// state; a credential never appears here — the server reads what it needs
+// from AO's own store.
+type MCPServerConfig struct {
+	Name    string
+	Command string
+	Args    []string
+	Env     map[string]string
+}
+
+// AgentMCPServerCapable is the optional capability for adapters whose harness
+// can register an MCP server given on the launch command line. The manager
+// offers AO's own tool server only to adapters that implement it, so a harness
+// that cannot take one is launched exactly as before.
+type AgentMCPServerCapable interface {
+	// MCPServerArgs returns the harness-specific launch flags that register
+	// servers with the provider. No flags means the harness cannot take them,
+	// and the session runs without a tool server.
+	MCPServerArgs(servers []MCPServerConfig) ([]string, error)
+}
+
 // AgentNativeRestoreCommand is an optional refinement for adapters that can
 // recover a different native session ID while building a restore command.
 // When ok is true, sessionID is the exact identity selected by cmd. The manager
@@ -879,6 +901,11 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// MCPServers are the tool servers AO offers the harness for this launch, in
+	// the provider-neutral shape an adapter renders into its own flags. Empty
+	// means the harness gets none, which is every session whose harness cannot
+	// take a server or that has nothing to offer.
+	MCPServers []MCPServerConfig
 	// Env is the environment the runtime layers over the daemon's own for this
 	// launch (the project env plus AO's variables). The session manager sets it
 	// for PreLaunch and command construction, so an adapter prepares the
@@ -927,6 +954,11 @@ type RestoreConfig struct {
 	// Env is the environment the runtime layers over the daemon's own for the
 	// resumed process, as LaunchConfig.Env is for a launch.
 	Env map[string]string
+	// MCPServers are the tool servers AO offers the harness for this resume,
+	// as LaunchConfig.MCPServers is for a launch. A resumed conversation
+	// needs the same servers a fresh one gets, or the agent loses the tools
+	// halfway through its work.
+	MCPServers []MCPServerConfig
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

@@ -5195,5 +5195,11 @@
 	"shell.deleteCloudProjectTitle": "プロジェクトを完全に削除",
 	"shell.deleteCloudProjectLead": "{{name}} を完全に削除します",
 	"shell.deleteCloudProjectConfirm": "完全に削除",
-	"shell.cloudProjectDeleted": "{{name}} を完全に削除しました"
+	"shell.cloudProjectDeleted": "{{name}} を完全に削除しました",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API キー",
+	"settings.gmi.apiKeyPlaceholder": "GMI Cloud のキーを貼り付け",
+	"settings.gmi.description": "エージェントが画像・動画・音声を生成できるようにします。キーは AO の中に留まり、エージェントの環境には渡されません。",
+	"settings.gmi.save": "保存",
+	"settings.gmi.getKey": "キーを取得"
 }

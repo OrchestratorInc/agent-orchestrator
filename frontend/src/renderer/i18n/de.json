@@ -5195,5 +5195,11 @@
 	"shell.deleteCloudProjectTitle": "Projekt löschen",
 	"shell.deleteCloudProjectLead": "Dadurch wird {{name}} endgültig gelöscht",
 	"shell.deleteCloudProjectConfirm": "Endgültig löschen",
-	"shell.cloudProjectDeleted": "{{name}} gelöscht"
+	"shell.cloudProjectDeleted": "{{name}} gelöscht",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API-Schlüssel",
+	"settings.gmi.apiKeyPlaceholder": "GMI-Cloud-Schlüssel einfügen",
+	"settings.gmi.description": "Lässt Agents Bilder, Video und Audio erzeugen. Der Schlüssel bleibt in AO und erreicht nie die Umgebung eines Agents.",
+	"settings.gmi.save": "Speichern",
+	"settings.gmi.getKey": "Schlüssel holen"
 }

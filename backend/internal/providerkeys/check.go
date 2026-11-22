@@ -67,6 +67,13 @@ var checkEndpoints = map[string]checkEndpoint{
 	// Matches the China endpoint the Qwen DashScope method configures; an
 	// international key is not accepted there.
 	"DASHSCOPE_API_KEY": {url: "https://dashscope.aliyuncs.com/compatible-mode/v1/models", authorize: bearer, regional: true},
+	// GMI Cloud's media generation API. Its edge rejects the default Go user
+	// agent with a 403 before the request reaches the API, so the check
+	// names itself.
+	"GMI_API_KEY": {url: "https://console.gmicloud.ai/api/v1/ie/requestqueue/apikey/models", authorize: func(req *http.Request, key string) {
+		bearer(req, key)
+		req.Header.Set("User-Agent", "agent-orchestrator/1.0 (+GMI Cloud client)")
+	}},
 }
 
 // checkClient never follows a redirect: Go drops Authorization on a
@@ -140,17 +147,19 @@ func fetch(ctx context.Context, url string, endpoint checkEndpoint, key string) 
 	return CheckValid, body
 }
 
-// modelIDs reads the OpenAI-style {"data":[{"id"}]} and Gemini-style
-// {"models":[{"name"}]} shapes. An unexpected shape lists no models; the key
-// was still accepted.
+// modelIDs reads the OpenAI-style {"data":[{"id"}]}, Gemini-style
+// {"models":[{"name"}]} and GMI-style {"model_ids":["..."]} shapes. An
+// unexpected shape lists no models; the key was still accepted.
 func modelIDs(body []byte, prefix string) []string {
 	var list struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			ModelID string `json:"model_id"`
 		} `json:"data"`
 		Models []struct {
 			Name string `json:"name"`
 		} `json:"models"`
+		ModelIDs []string `json:"model_ids"`
 	}
 	if json.Unmarshal(body, &list) != nil {
 		return nil
@@ -167,9 +176,13 @@ func modelIDs(body []byte, prefix string) []string {
 	}
 	for _, item := range list.Data {
 		add(item.ID)
+		add(item.ModelID)
 	}
 	for _, item := range list.Models {
 		add(item.Name)
+	}
+	for _, id := range list.ModelIDs {
+		add(id)
 	}
 	sort.Strings(out)
 	if len(out) > maxCheckModels {

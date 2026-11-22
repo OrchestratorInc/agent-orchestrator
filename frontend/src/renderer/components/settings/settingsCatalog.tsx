@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
+import { Activity, Bot, CircleHelp, CreditCard, Image, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -11,6 +11,7 @@ import { CoderSettingsSection } from "./CoderSettingsSection";
 import { ComputerUseSection } from "./ComputerUseSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
+import { GMISettingsSection } from "./GMISettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./MobileDevicesSection";
@@ -134,6 +135,12 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: MousePointerClick,
 		label: (t) => t("settings.computerUse"),
 		render: (_t, titleHidden) => <ComputerUseSection titleHidden={titleHidden} />,
+	},
+	{
+		id: "gmi",
+		icon: Image,
+		label: (t) => t("settings.gmi"),
+		render: (_t, titleHidden, { hostId }) => <GMISettingsSection titleHidden={titleHidden} {...(hostId ? { hostId } : {})} />,
 	},
 	{
 		id: "coder",

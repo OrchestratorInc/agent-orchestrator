@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -425,6 +427,13 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 	if m.computerUseEnabled(ctx) {
 		serverEnv[envComputerUse] = "1"
 	}
+	// The groups this session's server offers. A chat session publishes pages
+	// into its thread, may use this computer, and may generate media through
+	// GMI Cloud; the server offers the GMI tools only when AO holds a GMI
+	// Cloud key, so naming the group costs a session nothing.
+	serverEnv[config.EnvMCPToolGroups] = strings.Join([]string{
+		config.MCPToolGroupHTML, config.MCPToolGroupCUA, config.MCPToolGroupGMI,
+	}, ",")
 	command, args := mcpServerCommand(executable)
 	return []ports.ChatMCPServerConfig{{
 		Name: "ao", Type: "stdio", Command: command, Args: args, Env: serverEnv,

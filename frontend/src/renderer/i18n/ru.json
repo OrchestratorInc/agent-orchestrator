@@ -5483,5 +5483,11 @@
 	"shell.deleteCloudProjectTitle": "Удалить проект навсегда",
 	"shell.deleteCloudProjectLead": "Проект {{name}} будет удалён навсегда",
 	"shell.deleteCloudProjectConfirm": "Удалить навсегда",
-	"shell.cloudProjectDeleted": "Проект {{name}} удалён навсегда"
+	"shell.cloudProjectDeleted": "Проект {{name}} удалён навсегда",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API-ключ",
+	"settings.gmi.apiKeyPlaceholder": "Вставьте ключ GMI Cloud",
+	"settings.gmi.description": "Позволяет агентам создавать изображения, видео и аудио. Ключ остаётся в AO и никогда не попадает в окружение агента.",
+	"settings.gmi.save": "Сохранить",
+	"settings.gmi.getKey": "Получить ключ"
 }

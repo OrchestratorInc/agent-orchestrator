@@ -63,6 +63,14 @@ var providerKeyCatalog = func() map[string]providerKeyInfo {
 			out[name] = info
 		}
 	}
+	// A key AO's own tools read belongs to no harness: it is listed so it can
+	// be saved, checked and removed like any other provider key.
+	for _, name := range providerkeys.ToolKeys() {
+		if _, ok := out[name]; ok {
+			continue
+		}
+		out[name] = providerKeyInfo{label: providerkeys.ToolKeyLabel(name)}
+	}
 	return out
 }()
 

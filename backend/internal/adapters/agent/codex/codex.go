@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +78,7 @@ func (p *Plugin) SteersActiveTurn() bool { return true }
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.AgentMCPServerCapable = (*Plugin)(nil)
 var _ ports.ActiveTurnSteerer = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
@@ -133,6 +135,11 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
 	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
+	mcpArgs, err := p.MCPServerArgs(cfg.MCPServers)
+	if err != nil {
+		return nil, err
+	}
+	providerArgs = append(providerArgs, mcpArgs...)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -144,6 +151,52 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
 		ProviderArgs:     providerArgs,
 	})
+}
+
+// MCPServerArgs registers AO's own tool server with Codex as config
+// overrides on the command line: `mcp_servers.<name>.command`, `.args`, and
+// `.env`. Codex reads them from the same layer as ~/.codex/config.toml, so
+// the server is available for this session without a file in the user's home
+// directory and without touching the servers already configured there.
+//
+// AO's own server is pre-approved (`default_tools_approval_mode = "approve"`)
+// so an unattended worker is not left waiting on a permission prompt for a
+// tool AO put in its hands. This mirrors what the chat driver does for the
+// same server.
+func (p *Plugin) MCPServerArgs(servers []ports.MCPServerConfig) ([]string, error) {
+	var args []string
+	for _, server := range servers {
+		name := strings.TrimSpace(server.Name)
+		if name == "" {
+			return nil, fmt.Errorf("codex: MCP server name is required")
+		}
+		if strings.TrimSpace(server.Command) == "" {
+			return nil, fmt.Errorf("codex: MCP server %q requires a command", name)
+		}
+		prefix := "mcp_servers." + name + "."
+		args = append(args,
+			"-c", prefix+"command="+codexTOMLConfigString(server.Command),
+			"-c", prefix+"default_tools_approval_mode="+codexTOMLConfigString("approve"),
+		)
+		if len(server.Args) > 0 {
+			args = append(args, "-c", prefix+"args="+codexTOMLStringArray(server.Args))
+		}
+		for _, key := range sortedEnvKeys(server.Env) {
+			args = append(args, "-c", prefix+"env."+key+"="+codexTOMLConfigString(server.Env[key]))
+		}
+	}
+	return args, nil
+}
+
+// sortedEnvKeys returns the environment keys in a stable order, so the same
+// server always produces the same command line.
+func sortedEnvKeys(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // GetRestoreCommand rebuilds the argv that continues an existing Codex
@@ -173,6 +226,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
 	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
+	mcpArgs, err := p.MCPServerArgs(cfg.MCPServers)
+	if err != nil {
+		return nil, false, err
+	}
+	providerArgs = append(providerArgs, mcpArgs...)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,

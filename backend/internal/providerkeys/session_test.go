@@ -163,7 +163,8 @@ func TestHoldBackAddsWithheldKeysWithoutReplacingSetOnes(t *testing.T) {
 }
 
 // An ended context reads nothing and fails closed: a key Claude Code's own
-// sign-in would yield to is blanked even though the store would allow it.
+// sign-in would yield to is blanked even though the store would allow it, and
+// a key AO's own tools read is blanked too.
 func TestHoldBackFailsClosedOnAnEndedContext(t *testing.T) {
 	dir := t.TempDir()
 	if err := Save(context.Background(), dir, "ANTHROPIC_API_KEY", "ao-ant"); err != nil {
@@ -174,7 +175,7 @@ func TestHoldBackFailsClosedOnAnEndedContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if got := HoldBack(ctx, nil, dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": ""}) {
+	if got := HoldBack(ctx, nil, dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": "", "GMI_API_KEY": ""}) {
 		t.Fatalf("HoldBack after cancellation = %v, want ANTHROPIC_API_KEY blanked", got)
 	}
 }

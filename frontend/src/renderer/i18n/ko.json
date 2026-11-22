@@ -5195,5 +5195,11 @@
 	"shell.deleteCloudProjectTitle": "프로젝트 삭제",
 	"shell.deleteCloudProjectLead": "{{name}}을(를) 영구적으로 삭제합니다",
 	"shell.deleteCloudProjectConfirm": "영구 삭제",
-	"shell.cloudProjectDeleted": "{{name}}을(를) 삭제했습니다"
+	"shell.cloudProjectDeleted": "{{name}}을(를) 삭제했습니다",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API 키",
+	"settings.gmi.apiKeyPlaceholder": "GMI Cloud 키를 붙여넣기",
+	"settings.gmi.description": "에이전트가 이미지, 동영상, 오디오를 생성할 수 있게 합니다. 키는 AO 안에만 남고 에이전트 환경으로 전달되지 않습니다.",
+	"settings.gmi.save": "저장",
+	"settings.gmi.getKey": "키 받기"
 }
