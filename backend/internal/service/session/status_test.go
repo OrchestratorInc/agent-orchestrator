@@ -1,11 +1,80 @@
 package session
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+func TestChangesRequestedPushReviewAndRestart(t *testing.T) {
+	const id, url = domain.SessionID("mer-1"), "https://github.com/acme/repo/pull/1"
+	st := newFakeStore()
+	rec := statusRec(domain.ActivityIdle, false)
+	rec.ID, rec.ProjectID = id, "mer"
+	st.sessions[id] = rec
+	pr := domain.PRFacts{URL: url, HeadSHA: "old-head", Review: domain.ReviewChangesRequest, ExternalChangesRequested: true}
+	st.prFacts[id] = []domain.PRFacts{pr}
+
+	read := func(wantReview domain.ReviewDecision, wantStatus domain.SessionStatus, wantDisplay string) {
+		t.Helper()
+		// A fresh service models daemon restart: only durable store facts survive.
+		svc := &Service{store: st, clock: func() time.Time { return statusNow }}
+		for _, get := range []func() (domain.Session, error){
+			func() (domain.Session, error) { return svc.Get(context.Background(), id) },
+			func() (domain.Session, error) {
+				list, err := svc.List(context.Background(), ListFilter{})
+				if err != nil || len(list) != 1 {
+					return domain.Session{}, err
+				}
+				return list[0], nil
+			},
+		} {
+			sess, err := get()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sess.PRs) != 1 || sess.PRs[0].Review != wantReview || sess.SCMStatus != wantStatus || string(sess.DisplayStatus) != wantDisplay || sess.KanbanColumn != "needs_review" {
+				t.Fatalf("session after read = review %+v, scm %q, column %q, display %q; want review %q, scm %q, in review/%q", sess.PRs, sess.SCMStatus, sess.KanbanColumn, sess.DisplayStatus, wantReview, wantStatus, wantDisplay)
+			}
+		}
+	}
+
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "Changes requested")
+	active := rec
+	active.Activity.State = domain.ActivityActive
+	st.sessions[id] = active
+	working, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
+	if err != nil || working.KanbanColumn != "needs_review" || string(working.DisplayStatus) != "Addressing comments" {
+		t.Fatalf("active worker with requested changes = column %q, display %q, err %v", working.KanbanColumn, working.DisplayStatus, err)
+	}
+	st.sessions[id] = rec
+	// GitHub retains its aggregate verdict, while the review row targeted the old head.
+	pr.HeadSHA, pr.ExternalChangesRequested = "new-head", false
+	st.prFacts[id] = []domain.PRFacts{pr}
+	read(domain.ReviewRequired, domain.StatusReviewPending, "Awaiting review")
+	if st.prFacts[id][0].Review != domain.ReviewChangesRequest {
+		t.Fatal("read changed durable provider decision")
+	}
+	// A current-head request and then approval each replace the awaiting state.
+	pr.ExternalChangesRequested = true
+	st.prFacts[id] = []domain.PRFacts{pr}
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "Changes requested")
+	pr.Review, pr.ExternalChangesRequested = domain.ReviewApproved, false
+	st.prFacts[id] = []domain.PRFacts{pr}
+	approved, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
+	if err != nil || approved.PRs[0].Review != domain.ReviewApproved {
+		t.Fatalf("current-head approval = %+v, err %v", approved.PRs, err)
+	}
+	// An old provider row without a head SHA has no evidence of staleness.
+	pr.HeadSHA, pr.Review = "", domain.ReviewChangesRequest
+	st.prFacts[id] = []domain.PRFacts{pr}
+	unknownHead, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
+	if err != nil || unknownHead.PRs[0].Review != domain.ReviewChangesRequest {
+		t.Fatalf("unknown-head decision = %+v, err %v", unknownHead.PRs, err)
+	}
+}
 
 var statusNow = time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 

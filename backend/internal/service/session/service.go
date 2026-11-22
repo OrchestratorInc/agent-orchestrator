@@ -1918,7 +1918,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		}
 	}
 	runs = canonicalizeCurrentHeadReviewRuns(prs, runs)
-	prs = deduplicatePRFacts(prs)
+	prs = clearStaleChangesRequested(deduplicatePRFacts(prs), runs)
 	// Both derivations read the clock once, from the same instant: they share
 	// the no-signal rule, and two reads could put them either side of its grace
 	// period and have the card contradict its own status.

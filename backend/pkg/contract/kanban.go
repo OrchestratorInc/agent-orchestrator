@@ -467,7 +467,7 @@ func validatingDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now t
 	switch {
 	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
-	case changesRequestedOn(pr) && session.AutoInjectReview && active:
+	case changesRequestedOn(pr) && active:
 		return DisplayAddressingComments
 	case pr.ReviewRun.Running:
 		return DisplayReviewing
@@ -511,7 +511,9 @@ func inReviewDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now tim
 	switch {
 	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
-	case (changesRequestedOn(pr) || pr.ExternalReview.Comments) && session.AutoInjectReview && active:
+	case changesRequestedOn(pr) && active:
+		return DisplayAddressingComments
+	case pr.ExternalReview.Comments && session.AutoInjectReview && active:
 		return DisplayAddressingComments
 	case active:
 		return DisplayWorking
