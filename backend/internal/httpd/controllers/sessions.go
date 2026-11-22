@@ -3275,6 +3275,7 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		PreviewRevision:    s.Metadata.PreviewRevision,
 		Model:              s.Metadata.Model,
 		RoleAgent:          s.Metadata.RoleAgent,
+		Effort:             s.Metadata.Effort,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil

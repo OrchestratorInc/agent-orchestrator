@@ -119,6 +119,8 @@ func sessionJSON(id, project, kind, status string, terminated bool) string {
 		"projectId":    project,
 		"kind":         kind,
 		"harness":      "codex",
+		"model":        "gpt-6.1-sol",
+		"effort":       "high",
 		"displayName":  "Current Name",
 		"activity":     map[string]any{"state": "idle", "lastActivityAt": "2026-06-02T12:00:00Z"},
 		"isTerminated": terminated,
@@ -227,6 +229,9 @@ func TestSessionList_JSONOutputDecodes(t *testing.T) {
 	// `session get --json` already carries the display name; `ls --json` must too so scripts can tell sessions apart.
 	if got.Data[0].DisplayName != "Current Name" {
 		t.Fatalf("displayName = %q, want %q", got.Data[0].DisplayName, "Current Name")
+	}
+	if got.Data[0].Model != "gpt-6.1-sol" || got.Data[0].Effort != "high" {
+		t.Fatalf("list selection = %q/%q, want gpt-6.1-sol/high", got.Data[0].Model, got.Data[0].Effort)
 	}
 }
 
@@ -402,7 +407,8 @@ func TestSessionGet_SuccessWithProjectScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session get failed: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, "id: demo-1") || !strings.Contains(out, "project: demo") {
+	if !strings.Contains(out, "id: demo-1") || !strings.Contains(out, "project: demo") ||
+		!strings.Contains(out, "model: gpt-6.1-sol") || !strings.Contains(out, "effort: high") {
 		t.Fatalf("unexpected get output:\n%s", out)
 	}
 	want := []string{"GET /api/v1/sessions/demo-1"}
@@ -426,7 +432,8 @@ func TestSessionGet_JSONOutputDecodes(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("session get --json output is not decodable: %v\noutput=%s", err, out)
 	}
-	if got.Session.ID != "demo-1" || got.Session.ProjectID != "demo" || got.Session.Status != "working" {
+	if got.Session.ID != "demo-1" || got.Session.ProjectID != "demo" || got.Session.Status != "working" ||
+		got.Session.Model != "gpt-6.1-sol" || got.Session.Effort != "high" {
 		t.Fatalf("unexpected session JSON: %#v", got.Session)
 	}
 }
@@ -453,6 +460,9 @@ func TestSessionGet_PrintsArtifactsWithPublicLinks(t *testing.T) {
 	if !strings.Contains(out, "artifacts:\n  explainer.html (public link: https://share.test/abc)\n  notes.md\n") {
 		t.Fatalf("artifacts not listed with their links:\n%s", out)
 	}
+	if strings.Contains(out, "model:") || strings.Contains(out, "effort:") {
+		t.Fatalf("older daemon response must omit unknown selection:\n%s", out)
+	}
 
 	out, errOut, err = executeCLI(t, deps, "session", "get", "demo-1", "--json")
 	if err != nil {
@@ -464,6 +474,9 @@ func TestSessionGet_PrintsArtifactsWithPublicLinks(t *testing.T) {
 	}
 	if want := []sessionArtifactDTO{{Path: "explainer.html", Kind: "html", ShareURL: "https://share.test/abc"}, {Path: "notes.md", Kind: "markdown"}}; !reflect.DeepEqual(got.Session.ArtifactFiles, want) {
 		t.Fatalf("artifactFiles = %#v, want %#v", got.Session.ArtifactFiles, want)
+	}
+	if got.Session.Model != "" || got.Session.Effort != "" {
+		t.Fatalf("older daemon selection = %q/%q, want empty", got.Session.Model, got.Session.Effort)
 	}
 }
 

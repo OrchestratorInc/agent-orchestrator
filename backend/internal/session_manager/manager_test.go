@@ -2338,7 +2338,7 @@ func TestSpawnModelPersisted(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
 		AgentConfig: domain.AgentConfig{Model: "project-model"},
-		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "role-model"}},
+		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "role-model", Effort: "high"}},
 	}}
 	agent := &recordingAgent{}
 	rt := &fakeRuntime{}
@@ -2346,7 +2346,7 @@ func TestSpawnModelPersisted(t *testing.T) {
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "spawn-model"}})
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "spawn-model", Effort: "high"}, EffortOverride: true})
 	if err != nil {
 		t.Fatalf("spawn failed: %v", err)
 	}
@@ -2356,6 +2356,9 @@ func TestSpawnModelPersisted(t *testing.T) {
 	if agent.lastConfig.Model != "spawn-model" {
 		t.Fatalf("launch model = %q, want spawn-model", agent.lastConfig.Model)
 	}
+	if rec.Metadata.Effort != "high" || agent.lastConfig.Effort != "high" {
+		t.Fatalf("spawn effort = %q, launch effort = %q; want high", rec.Metadata.Effort, agent.lastConfig.Effort)
+	}
 
 	stored, ok, err := st.GetSession(ctx, rec.ID)
 	if err != nil {
@@ -2364,8 +2367,8 @@ func TestSpawnModelPersisted(t *testing.T) {
 	if !ok {
 		t.Fatalf("session %s not found", rec.ID)
 	}
-	if stored.Metadata.Model != "spawn-model" {
-		t.Fatalf("stored metadata model = %q, want spawn-model", stored.Metadata.Model)
+	if stored.Metadata.Model != rec.Metadata.Model || stored.Metadata.Effort != rec.Metadata.Effort {
+		t.Fatalf("stored selection = %q/%q, spawned selection = %q/%q", stored.Metadata.Model, stored.Metadata.Effort, rec.Metadata.Model, rec.Metadata.Effort)
 	}
 }
 
@@ -8868,14 +8871,18 @@ func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
 			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: inherited}}
 			st.projects["mer"] = project
 
-			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
 				ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
 				RequestedMode: domain.SessionModeTUI, Prompt: "do the work",
-			}); err != nil {
+			})
+			if err != nil {
 				t.Fatalf("harness %q inherited %q spawn: %v", harness, inherited, err)
 			}
 			if agent.lastConfig.Effort != want {
 				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, inherited, agent.lastConfig.Effort, want)
+			}
+			if got := st.sessions[rec.ID].Metadata.Effort; got != want {
+				t.Fatalf("harness %q inherited %q saved effort = %q, want %q", harness, inherited, got, want)
 			}
 		}
 	}

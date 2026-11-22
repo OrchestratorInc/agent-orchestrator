@@ -72,6 +72,8 @@ type sessionDTO struct {
 	IssueID       string               `json:"issueId,omitempty"`
 	Kind          string               `json:"kind"`
 	Harness       string               `json:"harness,omitempty"`
+	Model         string               `json:"model,omitempty"`
+	Effort        string               `json:"effort,omitempty"`
 	DisplayName   string               `json:"displayName,omitempty"`
 	Activity      sessionActivity      `json:"activity"`
 	IsTerminated  bool                 `json:"isTerminated"`
@@ -222,6 +224,8 @@ type sessionListEntry struct {
 	Activity       string          `json:"activity,omitempty"`
 	IssueID        string          `json:"issueId,omitempty"`
 	Harness        string          `json:"harness,omitempty"`
+	Model          string          `json:"model,omitempty"`
+	Effort         string          `json:"effort,omitempty"`
 	Branch         string          `json:"branch,omitempty"`
 	PRs            []sessionListPR `json:"prs"`
 	IsTerminated   bool            `json:"isTerminated"`
@@ -1222,6 +1226,8 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 			Activity:       sess.Activity.State,
 			IssueID:        sess.IssueID,
 			Harness:        sess.Harness,
+			Model:          sess.Model,
+			Effort:         sess.Effort,
 			Branch:         sess.Branch,
 			PRs:            listPRsForSession(sess, summaries[sess.ID]),
 			IsTerminated:   sess.IsTerminated,
@@ -1393,6 +1399,8 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"activity", sess.Activity.State},
 		{"start failed", startFailure},
 		{"harness", sess.Harness},
+		{"model", sess.Model},
+		{"effort", sess.Effort},
 		{"issue", sess.IssueID},
 		{"branch", formatBranchState(sess)},
 		{"terminated", fmt.Sprintf("%t", sess.IsTerminated)},
