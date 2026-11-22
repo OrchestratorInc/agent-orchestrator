@@ -1117,7 +1117,7 @@ func TestReadinessCoordinatorFindInstalledIsBoundedAndDoesNotWaitForAuth(t *test
 	})
 
 	found, search := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch)
-	if search != AgentFound || found.ID != "codex" {
+	if search != PresenceFound || found.ID != "codex" {
 		t.Fatalf("FindInstalled() = (%#v, %v), want Codex", found, search)
 	}
 	if got := installed.authCalls.Load(); got != 0 {
@@ -1163,7 +1163,7 @@ func TestReadinessCoordinatorFindInstalledDoesNotStarveLaterHarnesses(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	found, search := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
-	if search != AgentFound || found.ID != "z" {
+	if search != PresenceFound || found.ID != "z" {
 		t.Fatalf("FindInstalled() = (%#v, %v), want Z", found, search)
 	}
 }
@@ -1178,19 +1178,24 @@ func TestReadinessCoordinatorFindInstalledOnlyReportsMissingWhenEveryCheckSaysSo
 	for _, tc := range []struct {
 		name    string
 		resolve func(context.Context) (string, error)
-		want    AgentSearch
+		want    Presence
 	}{
-		{name: "every check says not installed", resolve: notInstalled, want: AgentMissing},
+		{name: "every check says not installed", resolve: notInstalled, want: PresenceMissing},
 		{name: "a check is still running", resolve: func(ctx context.Context) (string, error) {
 			<-ctx.Done()
 			return "", ctx.Err()
-		}, want: AgentUnconfirmed},
+		}, want: PresenceUnconfirmed},
 		{name: "a check timed out", resolve: func(context.Context) (string, error) {
 			return "", context.DeadlineExceeded
-		}, want: AgentUnconfirmed},
+		}, want: PresenceUnconfirmed},
 		{name: "a check failed", resolve: func(context.Context) (string, error) {
 			return "", errors.New("stat: access is denied")
-		}, want: AgentUnconfirmed},
+		}, want: PresenceUnconfirmed},
+		// Present but unverified is not absent: it must not be found, and it must
+		// not block startup either.
+		{name: "an executable's identity is not confirmed yet", resolve: func(context.Context) (string, error) {
+			return "", ports.ErrAgentBinaryIdentityUnknown
+		}, want: PresenceUnconfirmed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1212,6 +1217,38 @@ func TestReadinessCoordinatorFindInstalledOnlyReportsMissingWhenEveryCheckSaysSo
 				t.Fatalf("FindInstalled() search = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A failed re-check keeps the state an earlier check recorded, with the
+// failure as its reason. An earlier "not installed" must not turn that failure
+// into proof of absence.
+func TestReadinessCoordinatorFindInstalledDoesNotTrustAnEarlierAbsenceAfterAFailedCheck(t *testing.T) {
+	t.Parallel()
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	defer cancelDaemon()
+	var fail atomic.Bool
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) {
+			if fail.Load() {
+				return "", context.DeadlineExceeded
+			}
+			return "", ports.ErrAgentBinaryNotFound
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusUnknown, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:  []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+		Context: daemonCtx,
+	})
+
+	if _, got := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch); got != PresenceMissing {
+		t.Fatalf("first FindInstalled() search = %v, want missing after a completed not-found check", got)
+	}
+	fail.Store(true)
+	coordinator.Invalidate("codex", readinessInvalidateInstallation)
+	if _, got := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch); got != PresenceUnconfirmed {
+		t.Fatalf("FindInstalled() after a timed-out re-check = %v, want unconfirmed", got)
 	}
 }
 
@@ -1245,7 +1282,7 @@ func TestReadinessCoordinatorWarmFinishesPresenceBeforeAuthentication(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	found, search := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
-	if search != AgentFound || found.ID != "codex" {
+	if search != PresenceFound || found.ID != "codex" {
 		t.Fatalf("FindInstalled() while auth is running = (%#v, %v), want cached Codex presence", found, search)
 	}
 	close(authRelease)

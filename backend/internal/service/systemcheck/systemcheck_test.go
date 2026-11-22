@@ -18,7 +18,7 @@ type fakeHarnessCatalog struct {
 	err         error
 	calls       int
 	binary      agentsvc.Info
-	search      agentsvc.AgentSearch
+	search      agentsvc.Presence
 	binaryCalls int
 }
 
@@ -58,7 +58,7 @@ func (f *fakeHarnessCatalog) RefreshFresh(context.Context) (agentsvc.Inventory, 
 	return f.inventory, f.err
 }
 
-func (f *fakeHarnessCatalog) FindInstalledBinary(context.Context) (agentsvc.Info, agentsvc.AgentSearch) {
+func (f *fakeHarnessCatalog) FindInstalledBinary(context.Context) (agentsvc.Info, agentsvc.Presence) {
 	f.binaryCalls++
 	return f.binary, f.search
 }
@@ -111,7 +111,7 @@ func TestCheckStartup_SkipsAgentInventory(t *testing.T) {
 	catalog := &fakeHarnessCatalog{
 		err:    errors.New("agent auth probe must not run at startup"),
 		binary: agentsvc.Info{ID: "claude-code", Label: "Claude Code"},
-		search: agentsvc.AgentFound,
+		search: agentsvc.PresenceFound,
 	}
 	runner := &fakeCommandRunner{err: errors.New("credential probe must not run at startup")}
 	svc := NewWithCommandRunner(catalog, executableFinderFunc(lookPathFound(map[string]string{
@@ -147,7 +147,7 @@ func TestCheckStartup_SkipsAgentInventory(t *testing.T) {
 }
 
 func TestCheckStartup_NoAgentBinaryBlocksReady(t *testing.T) {
-	svc := NewWithLookPath(&fakeHarnessCatalog{search: agentsvc.AgentMissing}, lookPathFound(map[string]string{
+	svc := NewWithLookPath(&fakeHarnessCatalog{search: agentsvc.PresenceMissing}, lookPathFound(map[string]string{
 		"git":  "/usr/bin/git",
 		"tmux": "/usr/bin/tmux",
 	}))
@@ -166,8 +166,8 @@ func TestCheckStartup_NoAgentBinaryBlocksReady(t *testing.T) {
 
 // A slow, failed, or unfinished agent check is not proof that no agent is
 // installed. It must not show the blocking "No coding agent found" dialog.
-func TestCheckStartup_UnconfirmedAgentSearchDoesNotBlockReady(t *testing.T) {
-	svc := NewWithLookPath(&fakeHarnessCatalog{search: agentsvc.AgentUnconfirmed}, lookPathFound(map[string]string{
+func TestCheckStartup_UnconfirmedAgentPresenceDoesNotBlockReady(t *testing.T) {
+	svc := NewWithLookPath(&fakeHarnessCatalog{search: agentsvc.PresenceUnconfirmed}, lookPathFound(map[string]string{
 		"git":  "/usr/bin/git",
 		"tmux": "/usr/bin/tmux",
 	}))
@@ -376,7 +376,7 @@ func TestCheck_GHMissing(t *testing.T) {
 }
 
 func TestCheckGitHubAuth_IsAdvisory(t *testing.T) {
-	catalog := &fakeHarnessCatalog{binary: agentsvc.Info{ID: "claude-code", Label: "Claude Code"}, search: agentsvc.AgentFound}
+	catalog := &fakeHarnessCatalog{binary: agentsvc.Info{ID: "claude-code", Label: "Claude Code"}, search: agentsvc.PresenceFound}
 	runner := &fakeCommandRunner{err: errors.New("not logged in")}
 	svc := NewWithCommandRunner(catalog, executableFinderFunc(lookPathFound(map[string]string{
 		"git": "/usr/bin/git", "tmux": "/usr/bin/tmux", "gh": "/usr/bin/gh",

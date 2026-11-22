@@ -909,7 +909,7 @@ func TestFindInstalledBinary_ResolvesWithoutRefreshingInventory(t *testing.T) {
 	})
 
 	got, search := svc.FindInstalledBinary(context.Background())
-	if search != AgentFound {
+	if search != PresenceFound {
 		t.Fatalf("FindInstalledBinary() search = %v, want found Codex", search)
 	}
 	if got.ID != "codex" || got.Label != "Codex" {
@@ -943,7 +943,7 @@ func TestFindInstalledBinaryUsesPresenceResolverWithoutAuthOrNormalResolution(t 
 	})
 
 	got, search := svc.FindInstalledBinary(context.Background())
-	if search != AgentFound || got.ID != "muse" {
+	if search != PresenceFound || got.ID != "muse" {
 		t.Fatalf("FindInstalledBinary() = (%#v, %v), want Muse", got, search)
 	}
 	if got := presenceCalls.Load(); got != 1 {
@@ -970,8 +970,8 @@ func TestFindInstalledBinaryKeepsNameOnlyGooseMatchUnknown(t *testing.T) {
 		},
 	}})
 
-	if _, search := svc.FindInstalledBinary(context.Background()); search != AgentMissing {
-		t.Fatalf("FindInstalledBinary() search = %v for an unverified name match, want missing", search)
+	if _, search := svc.FindInstalledBinary(context.Background()); search != PresenceUnconfirmed {
+		t.Fatalf("FindInstalledBinary() search = %v for an unverified name match, want unconfirmed (never found)", search)
 	}
 	if got := presenceCalls.Load(); got != 1 {
 		t.Fatalf("startup presence calls = %d, want 1", got)
@@ -1017,8 +1017,8 @@ func TestPresslyGooseDoesNotSatisfyStartupOrFreshInventory(t *testing.T) {
 		Manifest: adapters.Manifest{ID: "goose", Name: "Goose"},
 		Agent:    pressly,
 	}})
-	if _, search := svc.FindInstalledBinary(context.Background()); search != AgentMissing {
-		t.Fatalf("Pressly-only PATH match gave startup search %v, want missing", search)
+	if _, search := svc.FindInstalledBinary(context.Background()); search != PresenceUnconfirmed {
+		t.Fatalf("Pressly-only PATH match gave startup search %v, want unconfirmed (never found)", search)
 	}
 	if got := presenceCalls.Load(); got != 1 {
 		t.Fatalf("startup presence calls = %d, want 1", got)

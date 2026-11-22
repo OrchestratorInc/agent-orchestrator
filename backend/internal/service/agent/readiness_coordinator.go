@@ -229,19 +229,19 @@ func (c *readinessCoordinator) Force(ctx context.Context, agentIDs []string, pur
 // continue under the daemon context after this caller stops waiting; presence
 // checks never inherit an execution-enabled identity probe.
 //
-// It reports AgentMissing only when every check finished with a definite
+// It reports PresenceMissing only when every check finished with a definite
 // answer and none found an agent. A check that is still running when ctx ends,
-// timed out, or failed proves nothing, so the result is AgentUnconfirmed.
-func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, AgentSearch) {
+// timed out, or failed proves nothing, so the result is PresenceUnconfirmed.
+func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, Presence) {
 	if err := ctx.Err(); err != nil || !purpose.Valid() {
-		return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 	}
 	ids, err := c.normalizeIDs(nil)
 	if err != nil {
-		return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 	}
 	if len(ids) == 0 {
-		return domain.AgentReadinessSnapshot{}, AgentMissing
+		return domain.AgentReadinessSnapshot{}, PresenceMissing
 	}
 	waitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -254,11 +254,14 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 		go func(id string) {
 			defer wg.Done()
 			snapshot, ensureErr := c.ensureOne(waitCtx, id, purpose, readinessInvalidateInstallation, true)
-			if ensureErr != nil || !installationSettled(snapshot.Installation) {
+			if ensureErr != nil {
 				unconfirmed.Store(true)
 				return
 			}
 			if snapshot.Installation.State != domain.AgentInstallationInstalled {
+				if !installationSettled(snapshot.Installation) {
+					unconfirmed.Store(true)
+				}
 				return
 			}
 			select {
@@ -274,38 +277,37 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 	}()
 	select {
 	case snapshot := <-matches:
-		return snapshot, AgentFound
+		return snapshot, PresenceFound
 	case <-done:
 		select {
 		case snapshot := <-matches:
-			return snapshot, AgentFound
+			return snapshot, PresenceFound
 		default:
 			if unconfirmed.Load() {
-				return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
+				return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 			}
-			return domain.AgentReadinessSnapshot{}, AgentMissing
+			return domain.AgentReadinessSnapshot{}, PresenceMissing
 		}
 	case <-ctx.Done():
-		return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 	}
 }
 
 // installationSettled reports whether an installation observation is a
-// definite answer for the startup search. Installed and not-installed are
-// definite. So is an unknown state the check itself decided on: a name-only
-// match whose identity is unconfirmed (such as Pressly's goose) is not an agent,
-// and a harness with no installation check can never answer. Any other unknown
-// state (a timeout, a failure, or a check replaced while running) is not.
+// definite answer for the startup search. A failed check proves nothing, even
+// when it keeps the state an earlier check recorded. An executable whose
+// identity is not confirmed yet is present but unverified, not absent. Only a
+// completed not-installed result is definite, plus a harness with no
+// installation check, which can never answer.
 func installationSettled(installation domain.AgentInstallationObservation) bool {
+	if isReadinessFailureCode(installation.ReasonCode) {
+		return false
+	}
 	switch installation.State {
 	case domain.AgentInstallationInstalled, domain.AgentInstallationNotInstalled:
 		return true
 	}
-	switch installation.ReasonCode {
-	case domain.AgentReadinessReasonInstallIdentityPending, domain.AgentReadinessReasonInstallCheckUnsupported:
-		return true
-	}
-	return false
+	return installation.ReasonCode == domain.AgentReadinessReasonInstallCheckUnsupported
 }
 
 func (c *readinessCoordinator) ensure(ctx context.Context, agentIDs []string, purpose domain.AgentReadinessPurpose, requested readinessInvalidation) ([]domain.AgentReadinessSnapshot, error) {
