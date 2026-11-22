@@ -292,15 +292,18 @@ describe("ModelMenuChoices", () => {
 		const { container } = renderRows(generateModels(5), undefined, 3);
 		const root = container.firstElementChild as HTMLElement;
 		const notify = () => watching.get(root)?.();
+		// Held no taller than the room the menu has now, so a window made shorter while it is open still
+		// shrinks the list instead of scrolling the whole menu.
+		expect(root).toHaveClass("min-h-[min(var(--model-menu-held,0px),calc(var(--radix-dropdown-menu-content-available-height,100vh)-var(--space-2)-2px))]");
 		act(() => notify());
-		expect(root.style.minHeight).toBe("240px");
+		expect(root.style.getPropertyValue("--model-menu-held")).toBe("240px");
 		// Another agent's footer is one row shorter: the menu keeps its height.
 		height = 204;
 		act(() => notify());
-		expect(root.style.minHeight).toBe("240px");
+		expect(root.style.getPropertyValue("--model-menu-held")).toBe("240px");
 		// A taller one grows it, and that becomes the height held.
 		height = 276;
 		act(() => notify());
-		expect(root.style.minHeight).toBe("276px");
+		expect(root.style.getPropertyValue("--model-menu-held")).toBe("276px");
 	});
 });

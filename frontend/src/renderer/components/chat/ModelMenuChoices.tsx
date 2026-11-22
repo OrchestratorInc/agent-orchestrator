@@ -7,6 +7,9 @@ import { cn } from "../../lib/utils";
 const INITIAL_VISIBLE_COUNT = 100;
 const MAX_SEARCH_RESULTS = 50;
 const BATCH_SIZE = 50;
+// The height held while open, capped by the room Radix leaves the menu less the menu surface's
+// padding and border, so it can never hold the menu taller than the window allows.
+const HELD_HEIGHT_CLASS = "min-h-[min(var(--model-menu-held,0px),calc(var(--radix-dropdown-menu-content-available-height,100vh)-var(--space-2)-2px))]";
 
 /** Mounted inside menu content so closing either menu also clears its query. */
 export function ModelMenuChoices<T extends { id: string; label: string }>({
@@ -122,6 +125,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const holdsHeight = rows !== undefined;
 	// While open, the menu never gets shorter: when the rows under the list shrink (another agent
 	// has fewer settings), the list takes the room instead of the menu's edge moving under the pointer.
+	// The held height is a variable, applied by HELD_HEIGHT_CLASS no taller than the room the menu has
+	// now, so a window made shorter while it is open still shrinks the list before the menu scrolls.
 	useLayoutEffect(() => {
 		const root = rootRef.current;
 		if (!holdsHeight || !root || typeof ResizeObserver === "undefined") return;
@@ -129,12 +134,12 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		const observer = new ResizeObserver(() => {
 			if (root.offsetHeight <= tallest) return;
 			tallest = root.offsetHeight;
-			root.style.minHeight = `${tallest}px`;
+			root.style.setProperty("--model-menu-held", `${tallest}px`);
 		});
 		observer.observe(root);
 		return () => {
 			observer.disconnect();
-			root.style.minHeight = "";
+			root.style.removeProperty("--model-menu-held");
 		};
 	}, [holdsHeight]);
 	useEdgeFade(scrollRef);
@@ -189,7 +194,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		if (scrollRef.current) scrollRef.current.scrollTop = 0;
 	}, [listKey]);
 	return (
-		<div ref={rootRef} className={cn("flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col", className)}>
+		<div ref={rootRef} className={cn("flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col", holdsHeight && HELD_HEIGHT_CLASS, className)}>
 			{showSearch && (
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
