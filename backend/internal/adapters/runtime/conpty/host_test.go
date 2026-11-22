@@ -370,6 +370,117 @@ collect:
 	}
 }
 
+// TestControlClientGetsNoReplayOrOutput: a connection that opens with
+// MsgControlReq, as every daemon probe does, gets only the responses it asks
+// for, with no scrollback replay before them and no terminal output after.
+func TestControlClientGetsNoReplayOrOutput(t *testing.T) {
+	f := startServe(t, 120)
+	defer f.cancel()
+	f.ring.Append([]byte("scrollback a probe must not receive\n"))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	if _, err := c.conn.Write(withControl(mustEncode(t, MsgStatusReq, nil))); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if typ, payload := c.readFrame(t); typ != MsgStatusRes {
+		t.Fatalf("first frame = 0x%02x %q, want MsgStatusRes", typ, payload)
+	}
+
+	live := []byte("live output\n")
+	if _, err := f.pty.WriteOutput(live); err != nil {
+		t.Fatalf("WriteOutput: %v", err)
+	}
+	// record queues a chunk to every viewer in the h.mu hold that appends it,
+	// so any output queued to this client would arrive before this response.
+	waitRecorded(t, f, live)
+	if err := c.send(MsgStatusReq, nil); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if typ, payload := c.readFrame(t); typ != MsgStatusRes {
+		t.Fatalf("frame after live output = 0x%02x %q, want MsgStatusRes", typ, payload)
+	}
+}
+
+// TestViewerReplayDoesNotWaitForTheDecision: a viewer's first frame brings its
+// replay at once, not after replayDecisionWait. Attach sends a resize first
+// when it knows the grid, and a status request first when it does not.
+func TestViewerReplayDoesNotWaitForTheDecision(t *testing.T) {
+	defer func(wait time.Duration) { replayDecisionWait = wait }(replayDecisionWait)
+	replayDecisionWait = time.Minute
+	resize, err := json.Marshal(ResizePayload{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, first := range []struct {
+		name    string
+		msgType byte
+		payload []byte
+	}{
+		{"resize", MsgResize, resize},
+		{"status", MsgStatusReq, nil},
+	} {
+		t.Run(first.name, func(t *testing.T) {
+			f := startServe(t, 121)
+			defer f.cancel()
+			f.ring.Append([]byte("line1\n"))
+
+			c := newTestClient(t, f.addr)
+			defer c.close()
+			if err := c.send(first.msgType, first.payload); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			if typ, payload := c.readFrame(t); typ != MsgTerminalData || string(payload) != "line1\n" {
+				t.Fatalf("first frame = 0x%02x %q, want the replay", typ, payload)
+			}
+		})
+	}
+}
+
+// TestLateControlFrameStopsTerminalOutput: a client silent for
+// replayDecisionWait is registered as a viewer and gets the replay; a
+// MsgControlReq it sends afterwards still turns its terminal output off.
+func TestLateControlFrameStopsTerminalOutput(t *testing.T) {
+	defer func(wait time.Duration) { replayDecisionWait = wait }(replayDecisionWait)
+	replayDecisionWait = 20 * time.Millisecond
+	f := startServe(t, 122)
+	defer f.cancel()
+	f.ring.Append([]byte("line1\n"))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	if typ, payload := c.readFrame(t); typ != MsgTerminalData || string(payload) != "line1\n" {
+		t.Fatalf("first frame = 0x%02x %q, want the replay", typ, payload)
+	}
+	if _, err := c.conn.Write(withControl(mustEncode(t, MsgStatusReq, nil))); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if typ, _ := c.readFrame(t); typ != MsgStatusRes {
+		t.Fatalf("frame = 0x%02x, want MsgStatusRes", typ)
+	}
+
+	live := []byte("live output\n")
+	if _, err := f.pty.WriteOutput(live); err != nil {
+		t.Fatalf("WriteOutput: %v", err)
+	}
+	waitRecorded(t, f, live)
+	if err := c.send(MsgStatusReq, nil); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if typ, payload := c.readFrame(t); typ != MsgStatusRes {
+		t.Fatalf("frame after live output = 0x%02x %q, want MsgStatusRes", typ, payload)
+	}
+}
+
+func mustEncode(t *testing.T, msgType byte, payload []byte) []byte {
+	t.Helper()
+	frame, err := EncodeMessage(msgType, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return frame
+}
+
 // TestFanOut: two clients receive the same PTY output.
 func TestFanOut(t *testing.T) {
 	f := startServe(t, 101)

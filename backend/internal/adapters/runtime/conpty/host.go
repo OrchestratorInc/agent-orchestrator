@@ -1,7 +1,7 @@
 // Package conpty - host.go implements the serve engine for the pty-host
 // detached process. It owns the agent's PTY (via the ptyConn seam), exposes
 // it over a loopback TCP socket using the B1 binary protocol, replays
-// scrollback to new clients, fans output to all connected clients, and shuts
+// scrollback to new viewers, fans output to all connected viewers, and shuts
 // down gracefully (PTY dispose first, then clients, then listener).
 //
 // This file is cross-platform; build-tagged files provide the native PTY.
@@ -61,10 +61,11 @@ type ServeConfig struct {
 }
 
 // Serve runs the host event loop until the listener closes or Shutdown is
-// invoked via the returned ShutdownFunc. It pumps PTY output into the ring
-// and broadcasts to all clients, accepts new clients (replaying ring snapshot),
-// and dispatches client messages. On PTY exit it broadcasts a status update
-// but stays alive (keep-alive, mirroring tmux behavior). Returns when shut down.
+// invoked via the returned ShutdownFunc. It pumps PTY output into the ring and
+// broadcasts to all viewers, accepts new clients (replaying the ring to
+// viewers), and dispatches client messages. On PTY exit it broadcasts a status
+// update but stays alive (keep-alive, mirroring tmux behavior). Returns when
+// shut down.
 func Serve(ctx context.Context, cfg ServeConfig) error {
 	return newHost(cfg).run(ctx)
 }
@@ -80,9 +81,10 @@ func newHost(cfg ServeConfig) *host {
 		clients: make(map[net.Conn]*clientState),
 		surface: newAsyncSurface(initialConPTYColumns, initialConPTYRows,
 			func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, cfg.Ring.Replay, cfg.LazySurface),
-		modes:     newModeTracker(),
-		da1C:      make(chan struct{}, 4),
-		shutdownC: make(chan struct{}),
+		modes:      newModeTracker(),
+		da1C:       make(chan struct{}, 4),
+		replayWait: replayDecisionWait,
+		shutdownC:  make(chan struct{}),
 	}
 }
 
@@ -97,6 +99,8 @@ type clientState struct {
 	watcher    bool // sent MsgWatchForegroundReq; gets no terminal output
 	// titleWatcher sent MsgWatchTitleReq; it also gets no terminal output.
 	titleWatcher bool
+	// control sent MsgControlReq; it gets no replay and no terminal output.
+	control bool
 
 	out       chan []byte
 	drained   chan struct{} // signalled when the writer frees queue space
@@ -113,6 +117,9 @@ func newClientState() *clientState {
 }
 
 func (c *clientState) hasRoom() bool { return len(c.out) < cap(c.out) }
+
+// wantsOutput reports whether the client is a viewer of the terminal stream.
+func (c *clientState) wantsOutput() bool { return !c.watcher && !c.titleWatcher && !c.control }
 
 // enqueue is deliberately non-blocking. A slow client is disposable; the
 // shared PTY and every other viewer are not.
@@ -163,6 +170,8 @@ type host struct {
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
 	curCols, curRows int
+
+	replayWait time.Duration // replayDecisionWait when the host was created
 
 	shutdownOnce sync.Once
 	shutdownC    chan struct{} // closed when Shutdown is called
@@ -455,7 +464,7 @@ func (h *host) lockWithRoom() bool {
 // touch the queues while h.mu is held, so these cannot fail.
 func (h *host) enqueueAllLocked(msg []byte) {
 	for _, client := range h.clients {
-		if (client.watcher || client.titleWatcher) && msg[0] == MsgTerminalData {
+		if !client.wantsOutput() && msg[0] == MsgTerminalData {
 			continue
 		}
 		client.enqueue(msg)
@@ -532,64 +541,124 @@ func (h *host) removeClient(conn net.Conn, client *clientState) {
 	client.close(conn)
 }
 
+// replayDecisionWait bounds how long a new connection waits for its first
+// frame, which decides whether it gets the scrollback replay (a variable so
+// tests can change it before creating a host). Every client in this package
+// writes a frame as soon as it connects; the wait only matters for one that
+// stays silent.
+var replayDecisionWait = 200 * time.Millisecond
+
+// clientFrame is a decoded client message held until the client is registered.
+type clientFrame struct {
+	msgType byte
+	payload []byte
+}
+
 // handleConn manages the lifecycle of a single client connection.
+//
+// The client is registered on its first frame. One whose first frame is
+// MsgControlReq (status probes, output reads, input writers, watchers) gets no
+// replay and no terminal output. Replaying the whole ring to each of these
+// short-lived connections, which they buffer and copy only to discard it, was
+// most of the hosts' and the daemon's memory churn and loopback traffic. Any
+// other first frame registers a viewer with the replay, as does no frame within
+// replayDecisionWait; viewers from before MsgControlReq send a resize or a
+// status request first, so they still get theirs without waiting.
 func (h *host) handleConn(conn net.Conn) {
 	client := newClientState()
 	go h.writeClient(conn, client)
 
-	// Scrollback replay: take the ring snapshot, queue it for the conn's writer,
-	// and add the conn to the broadcast set, all under a SINGLE h.mu hold.
-	// record() appends to the ring and queues to clients in one h.mu hold too,
-	// so any PTY chunk is either already in this snapshot or queued strictly
-	// after it, never both. The writer goroutine keeps the socket itself
-	// outside this critical section.
-	//
-	// The snapshot is prefixed with the modes the program has set that the
-	// snapshot itself no longer carries. The ring is bounded, so the
-	// alternate-screen / mouse / bracketed-paste handshake a full-screen
-	// program prints once at startup is the first thing it forgets; without
-	// the prefix a late attacher renders the replay in its normal buffer with
-	// mouse reporting off and cannot scroll the program (#5039). tmux re-sends
-	// these on every attach, and the mux layer relies on the runtime doing so
-	// (internal/terminal/attachment.go).
-	//
-	// Restore re-scans the snapshot under h.mu, so PTY output waits for it.
-	// The scan is the tracker's byte loop (BenchmarkModeTracker: ~410 MB/s,
-	// no allocation), linear in the replay: about half a millisecond for
-	// 200 KB, on a path that already held this lock while EncodeMessage
-	// copied the same bytes.
-	h.mu.Lock()
-	snap := h.cfg.Ring.Replay()
-	if prefix := h.modes.Restore(snap); len(prefix) > 0 {
-		snap = append(prefix, snap...)
-	}
-	if len(snap) > 0 {
-		snapFrame, err := EncodeMessage(MsgTerminalData, snap)
-		if err != nil || !client.enqueue(snapFrame) {
-			h.mu.Unlock()
+	registered := false
+	defer func() {
+		if registered {
+			h.removeClient(conn, client)
+		} else {
 			client.close(conn)
+		}
+	}()
+
+	var early []clientFrame
+	parser := NewMessageParser(func(msgType byte, payload []byte) {
+		if !registered {
+			early = append(early, clientFrame{msgType, payload})
 			return
 		}
-	}
-	h.clients[conn] = client
-	h.mu.Unlock()
-
-	defer h.removeClient(conn, client)
-
-	parser := NewMessageParser(func(msgType byte, payload []byte) {
 		h.handleClientMsg(conn, msgType, payload)
 	})
 
+	_ = conn.SetReadDeadline(time.Now().Add(h.replayWait))
 	buf := make([]byte, 4096)
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
 			parser.Feed(buf[:n])
 		}
+		if !registered && (len(early) > 0 || isTimeout(err)) {
+			_ = conn.SetReadDeadline(time.Time{})
+			control := len(early) > 0 && early[0].msgType == MsgControlReq
+			if !h.register(conn, client, control) {
+				return
+			}
+			registered = true
+			for _, f := range early {
+				h.handleClientMsg(conn, f.msgType, f.payload)
+			}
+			early = nil
+			if isTimeout(err) {
+				continue
+			}
+		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+// register adds the client to the broadcast set, first queueing a viewer's
+// scrollback replay, all under a SINGLE h.mu hold. record() appends to the ring
+// and queues to clients in one h.mu hold too, so any PTY chunk is either
+// already in this snapshot or queued strictly after it, never both. The writer
+// goroutine keeps the socket itself outside this critical section. A control
+// client is marked before it is added, so no terminal output reaches it. It
+// returns false when the host has shut down or the replay could not be queued.
+//
+// The snapshot is prefixed with the modes the program has set that the
+// snapshot itself no longer carries. The ring is bounded, so the
+// alternate-screen / mouse / bracketed-paste handshake a full-screen program
+// prints once at startup is the first thing it forgets; without the prefix a
+// late attacher renders the replay in its normal buffer with mouse reporting
+// off and cannot scroll the program (#5039). tmux re-sends these on every
+// attach, and the mux layer relies on the runtime doing so
+// (internal/terminal/attachment.go).
+//
+// Restore re-scans the snapshot under h.mu, so PTY output waits for it. The
+// scan is the tracker's byte loop (BenchmarkModeTracker: ~410 MB/s, no
+// allocation), linear in the replay: about half a millisecond for 200 KB, on a
+// path that already held this lock while EncodeMessage copied the same bytes.
+func (h *host) register(conn net.Conn, client *clientState, control bool) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	select {
+	case <-h.shutdownC:
+		return false
+	default:
+	}
+	if control {
+		client.control = true
+	} else {
+		snap := h.cfg.Ring.Replay()
+		if prefix := h.modes.Restore(snap); len(prefix) > 0 {
+			snap = append(prefix, snap...)
+		}
+		if len(snap) > 0 {
+			snapFrame, err := EncodeMessage(MsgTerminalData, snap)
+			if err != nil || !client.enqueue(snapFrame) {
+				return false
+			}
+		}
+	}
+	h.clients[conn] = client
+	return true
 }
 
 // handleClientMsg dispatches a decoded client message. Mirrors handleClientMessage
@@ -683,6 +752,15 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 		if cs != nil {
 			cs.titleWatcher = true
 			cs.enqueue(titleFrame(h.title))
+		}
+		h.mu.Unlock()
+
+	case MsgControlReq:
+		// Normally the first frame, which register already honoured. One that
+		// arrives after replayDecisionWait still stops the terminal output.
+		h.mu.Lock()
+		if cs := h.clients[conn]; cs != nil {
+			cs.control = true
 		}
 		h.mu.Unlock()
 
