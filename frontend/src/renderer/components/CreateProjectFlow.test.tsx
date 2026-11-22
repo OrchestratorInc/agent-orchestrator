@@ -1547,6 +1547,36 @@ describe("CreateProjectFlow project import validation", () => {
 			expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeDisabled();
 	});
 
+	it("shows a long repository name error in full below the field", async () => {
+		const user = userEvent.setup();
+		const message = "Could not check this repository name. Confirm GitHub CLI is signed in.";
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		bridgeMocks.checkGitHubRepositoryAvailability.mockResolvedValue({ available: false, message });
+		apiMocks.POST.mockResolvedValueOnce({
+			data: projectValidation("/repo/project", {
+				nextStep: "prepare_git",
+				root: {
+					hasOrigin: false,
+					requiredActions: ["create_remote_repository"],
+				},
+			}),
+		});
+
+		renderChooseFlow();
+
+		await openSource(user, "Open a local folder");
+
+		const error = await screen.findByRole("alert");
+		expect(error).toHaveTextContent(message);
+		// Nothing forces it onto one clipped line.
+		for (const clipping of ["truncate", "whitespace-nowrap", "absolute"]) expect(error).not.toHaveClass(clipping);
+		expect(error.className).not.toMatch(/max-w-/);
+		// It sits under the field it describes, which still names it.
+		const input = screen.getByLabelText("Repository name");
+		expect(input.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(input).toHaveAccessibleDescription(expect.stringContaining(message));
+	});
+
 	it("checks repository availability again when the repository name changes", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");

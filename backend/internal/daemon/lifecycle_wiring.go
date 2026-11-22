@@ -62,6 +62,7 @@ type lifecycleStack struct {
 	reaperDone       <-chan struct{}
 	activityDone     <-chan struct{}
 	turnFailureDone  <-chan struct{}
+	nativeDone       <-chan struct{}
 	artifactsDone    <-chan struct{}
 	autoReviewDone   <-chan struct{}
 	reviewDoneDone   <-chan struct{}
@@ -107,6 +108,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		Wake:     sessionChanges,
 		IdleTick: turnFailureIdleTick,
 	})
+	nativeSessionPoller := activityobserver.NewNativeSessionObserver(store, lcm, agents, activityobserver.NativeSessionConfig{DataDir: dataDir, Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
 		// fx treats reporting as best effort; an occupied or unavailable socket
@@ -123,6 +125,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		reaperDone:       rp.Start(ctx),
 		activityDone:     activityPoller.Start(ctx),
 		turnFailureDone:  turnFailurePoller.Start(ctx),
+		nativeDone:       nativeSessionPoller.Start(ctx),
 		herdr:            herdrServer,
 		artifactsDone:    artifactsPoller.Start(ctx),
 		activity:         activityPoller,
@@ -231,6 +234,9 @@ func (l *lifecycleStack) Stop() {
 	}
 	if l.turnFailureDone != nil {
 		<-l.turnFailureDone
+	}
+	if l.nativeDone != nil {
+		<-l.nativeDone
 	}
 	if l.artifactsDone != nil {
 		<-l.artifactsDone

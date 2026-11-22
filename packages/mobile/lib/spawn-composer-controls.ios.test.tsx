@@ -49,7 +49,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
 	return {
 		...Object.fromEntries([
-			"accessibilityIdentifier", "accessibilityLabel", "aspectRatio", "backgroundOverlay", "buttonStyle", "clipShape", "contentShape", "controlSize", "disabled", "font",
+			"accessibilityIdentifier", "accessibilityLabel", "aspectRatio", "backgroundOverlay", "buttonStyle", "clipShape", "contentShape", "controlSize", "disabled", "dynamicTypeSize", "font",
 			"foregroundStyle", "frame", "glassEffect", "labelStyle", "layoutPriority", "lineLimit", "menuOrder", "opacity", "padding", "resizable", "tint", "truncationMode",
 		].map((name) => [name, record(name)])),
 		shapes: { rectangle: () => ({ shape: "rectangle" }) },
@@ -297,5 +297,14 @@ describe("iOS spawn selectors", () => {
 			for (const text of face!.root.findAll((node) => hostType(node) === "Text")) expect(modifier(text, "font")?.args[0]).not.toHaveProperty("size");
 			await act(async () => face!.unmount());
 		}
+	});
+
+	it("stops the controls row's text at the first accessibility size, where the capsule still holds it", async () => {
+		const root = await render(baseProps());
+		const row = root.findAll((node) => hostType(node) === "HStack" && node.findAll((child) => child.props.modifiers?.some?.((m: Modifier) => m.args?.[0] === "spawn-harness")).length > 0)[0];
+		expect(modifier(row, "dynamicTypeSize")?.args).toEqual([{ max: "accessibility1" }]);
+		// The machine and project rows above keep the reader's full setting.
+		const selector = root.findAll((node) => hostType(node) === "VStack")[0];
+		expect(selector.findAll((node) => modifier(node, "dynamicTypeSize") !== undefined)).toHaveLength(0);
 	});
 });

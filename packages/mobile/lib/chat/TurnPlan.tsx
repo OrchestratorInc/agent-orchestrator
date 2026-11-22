@@ -20,12 +20,13 @@ import { type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEve
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from "react-native-svg";
 
+import { AppSymbol } from "../AppSymbol";
 import { Feather } from "../icons";
 import { LAYOUT_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { usePressFeedback } from "../pressFeedback";
-import { font, fontScaleCap, radius, space, type } from "../tokens";
+import { font, fontScaleCap, iconSize, radius, space, type } from "../tokens";
 import { Spinner } from "../Spinner";
 import { useReducedMotion } from "../useReducedMotion";
 import {
@@ -234,7 +235,7 @@ function HeaderChevron({ open, color }: { open: boolean; color: string }) {
 	const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${progress.value * 180}deg` }] }));
 	return (
 		<Animated.View style={style}>
-			<Feather name="chevron-down" size={16} color={color} />
+			<AppSymbol name="chevronDown" size={iconSize.sm} color={color} weight="semibold" />
 		</Animated.View>
 	);
 }

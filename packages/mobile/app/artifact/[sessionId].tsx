@@ -44,6 +44,7 @@ import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 import { ViewModeControl, type ViewMode } from "../../lib/view-mode-control";
+import { ARTIFACT_MEDIA_PLAYBACK, artifactMediaActiveScript, artifactMediaGateScript } from "../../lib/artifactMediaPlayback";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
 // would stall the JS thread.
@@ -499,7 +500,7 @@ function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }
 	const file = { sessionId, path: artifact.path };
 	switch (kind) {
 		case "html":
-			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} page={file} />;
+			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} page={file} active={active} />;
 		case "svg":
 			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} />;
 		case "video":
@@ -613,13 +614,15 @@ function LargeArtifact({ backend, sessionId, artifact }: { backend: ArtifactsBac
 	return <ArtifactWeb backend={backend} file={{ sessionId, path: artifact.path }} version={artifact.updatedAt} />;
 }
 
-function ArtifactWeb({ backend, file, version, page }: {
+function ArtifactWeb({ backend, file, version, page, active = true }: {
 	backend: ArtifactsBackend;
 	/** The file the web view loads by itself, from its source on the live connection. */
 	file: { sessionId: string; path: string };
 	version: string;
 	/** An HTML page, loaded with the files it links inlined. */
 	page?: { sessionId: string; path: string };
+	/** The pager's page on screen; a neighbour's media is held until it is shown. */
+	active?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -653,6 +656,16 @@ function ArtifactWeb({ backend, file, version, page }: {
 	useEffect(() => {
 		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [inlined.html, theme]);
+	// An HTML page plays its media inline, and a neighbour in the pager holds it
+	// (see artifactMediaGateScript) without reloading, so its scroll and form
+	// state stay. The gate is written for the page as it is now, so a view
+	// created after a swipe starts right (a new script only reaches the next
+	// load; it never reloads the page); changes reach a loaded page as posts.
+	const pageView = Boolean(page);
+	const mediaGate = pageView ? artifactMediaGateScript(active) : undefined;
+	useEffect(() => {
+		if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(active));
+	}, [active, pageView]);
 	// One fresh signed address per version: refused again with it, the page
 	// says so and offers Retry rather than renewing forever.
 	const renewed = useRef(false);
@@ -662,6 +675,10 @@ function ArtifactWeb({ backend, file, version, page }: {
 	return (
 		<View style={styles.screen}>
 			<WebView
+				{...(pageView ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
+				injectedJavaScriptBeforeContentLoaded={mediaGate}
+				// The relaxed policy covers the page's frames too, so the gate goes into each.
+				injectedJavaScriptBeforeContentLoadedForMainFrameOnly={!pageView}
 				// A new version of the file reloads the page, and so does Retry.
 				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}`}
 				ref={web}
@@ -683,6 +700,8 @@ function ArtifactWeb({ backend, file, version, page }: {
 				onLoadEnd={() => {
 					loaded.current = true;
 					if (inlined.html) web.current?.injectJavaScript(renderThemeScript(theme));
+					// A change while the page was loading was posted before the gate could take it.
+					if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(active));
 				}}
 				onHttpError={(event) => {
 					const status = event.nativeEvent.statusCode;

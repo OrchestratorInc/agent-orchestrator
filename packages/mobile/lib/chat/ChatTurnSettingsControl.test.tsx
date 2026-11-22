@@ -30,7 +30,18 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 });
 vi.mock("../composeMenu.android", async () => {
 	const React = await import("react");
+	const h = React.createElement;
+	// The shared row and capsule, drawn by their contract: composeMenu's own
+	// test covers how they lay out.
+	type Capsule = { expanded: boolean; onDismiss(): void; children?: React.ReactNode; harness?: string; title: string; onClick(): void; enabled: boolean; testTag: string; contentDescription: string };
 	return {
+		ComposerControlsRow: ({ capsule, effort, end }: { capsule: React.ReactNode; effort?: React.ReactElement | null; end?: React.ReactNode }) =>
+			h("ComposeHost", null, h("Row", null, capsule, effort ? h("RNHostView", null, effort) : null, end)),
+		ModelCapsuleMenu: ({ expanded, onDismiss, children, harness, title, onClick, enabled, testTag, contentDescription }: Capsule) =>
+			h("DropdownMenu", { expanded, onDismissRequest: onDismiss },
+				h("DropdownMenuTrigger", null, h("Button", { onClick, enabled, modifiers: [{ modifier: "testID", args: [testTag] }, { modifier: "semantics", args: [{ contentDescription }] }] },
+					harness ? h("HarnessMark", { harness }) : null, h("ComposeText", null, title))),
+				h("DropdownMenuItems", null, children)),
 		KEEP_KEYBOARD: { focusable: false },
 		SUBMENU: { focusable: false, dismissOnClickOutside: false },
 		HarnessMark: (props: object) => React.createElement("HarnessMark", props),

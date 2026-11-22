@@ -15,8 +15,11 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 		return domain.ActivityActive, true
 	case "permission-request":
 		// waiting_input, not blocked: Codex's only PostToolUse hook tracks
-		// successful subagent spawns, not approval resolution. A blocked
-		// state could therefore remain stuck until the turn ends.
+		// successful subagent spawns, not approval resolution, so no hook can
+		// clear this before the turn ends. Terminal reconciliation clears it
+		// once the pane shows the turn running again (see
+		// ContinuouslyDetectTerminalActivityWhileWaiting). waiting_input still
+		// suppresses automated nudges.
 		return domain.ActivityWaitingInput, true
 	case "stop":
 		return domain.ActivityIdle, true
