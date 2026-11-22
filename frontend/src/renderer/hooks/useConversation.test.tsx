@@ -724,9 +724,10 @@ describe("provider catalog controller epochs", () => {
 			firstPatch.resolve({ data: { options: [{ id: "model", name: "Model", type: "select" }] }, error: undefined });
 			await firstWrite;
 		});
-		expect(await secondOutcome).toMatch(/choices are not available/);
+		const expectedError = "No choices are available for this option. Your selection was not sent.";
+		expect(await secondOutcome).toBe(expectedError);
 		expect(patchMock).toHaveBeenCalledOnce();
-		await waitFor(() => expect(result.current.error).toMatch(/choices are not available/));
+		await waitFor(() => expect(result.current.error).toBe(expectedError));
 	});
 
 	it("discards a config mutation response from before switch admission", async () => {

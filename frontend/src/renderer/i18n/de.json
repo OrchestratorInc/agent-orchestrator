@@ -3901,6 +3901,7 @@
 	"chat.draft.storageUnavailable": "Entwürfe können gerade nicht gespeichert werden. Sie können weiterchatten, aber nicht gesendeter Text geht verloren, wenn Sie diesen Chat verlassen.",
 	"chat.draft.queueSaveLocalFailed": "Der Entwurf konnte nicht gespeichert werden. Lassen Sie diesen Chat geöffnet oder kopieren Sie den Entwurf vor dem Verlassen.",
 	"chat.draft.queueUnavailable": "Wartende Nachrichten können derzeit nicht bearbeitet werden.",
+	"chat.configOption.noChoices": "Für diese Option sind keine Auswahlmöglichkeiten verfügbar. Ihre Auswahl wurde nicht gesendet.",
 	"chat.draft.queueMissing": "Diese Nachricht wartet nicht mehr. Kopieren oder verwerfen Sie diese Änderung, um fortzufahren.",
 	"chat.draft.queueReplaced": "Diese Änderung der wartenden Nachricht wurde ersetzt. Es wurde nichts gesendet.",
 	"chat.draft.queuePrepareFailed": "Der Entwurf und seine Wiederherstellungs-ID konnten nicht lokal gespeichert werden. Es wurde nichts gesendet. Stellen Sie den lokalen Speicher wieder her und versuchen Sie es erneut.",

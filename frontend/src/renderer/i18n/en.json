@@ -3883,6 +3883,7 @@
 	"chat.draft.storageUnavailable": "Drafts can’t be saved right now. You can keep chatting, but unsent text won’t be kept if you leave this chat.",
 	"chat.draft.queueSaveLocalFailed": "Queued edit could not be saved. Keep this chat open or copy it before leaving.",
 	"chat.draft.queueUnavailable": "Queued message edits are unavailable right now.",
+	"chat.configOption.noChoices": "No choices are available for this option. Your selection was not sent.",
 	"chat.draft.queueMissing": "This message is no longer queued. Copy or cancel this edit to continue.",
 	"chat.draft.queueReplaced": "This queued edit was replaced. Nothing was sent.",
 	"chat.draft.queuePrepareFailed": "Queued edit could not be saved locally. Nothing was sent.",
