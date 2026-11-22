@@ -634,8 +634,8 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 			// `docker-agent doctor` (15s) then the provider key check (10s).
 			timeout = dockerAgentAuthCheckTimeout
 		case domain.HarnessMiMoCode:
-			// Allow separate 20-second credential detection and verification budgets.
-			timeout = 40 * time.Second
+			// Allow separate credential detection (40s) and verification (20s) budgets.
+			timeout = 60 * time.Second
 		case domain.HarnessMiniMaxCode:
 			// `mcode provider list` has its own 20-second budget after the
 			// binary is resolved and its version probed.

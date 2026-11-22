@@ -211,7 +211,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	useTranscriptTiming(session.id, Boolean(snapshot), hostId);
-	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(snapshot && activeTurn(snapshot)));
+	const currentTurn = snapshot ? activeTurn(snapshot) : undefined;
+	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(currentTurn), currentTurn?.id);
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
@@ -433,7 +434,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (session.kind !== "worker" || !snapshot?.harness || !skillsSettled) return;
 		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
 	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
+	const { paths, truncated, isLoading: filePathsLoading } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
@@ -867,6 +868,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
+				stoppingTurn={commands.stoppingTurn}
 				onContinueTurn={() => {
 					const turnId = `${renderSnapshot.conversationId}:${renderSnapshot.activeBranchId ?? ""}:${stoppedTurnId}`;
 					if (continueIntent.current?.turnId !== turnId) {
@@ -929,6 +931,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				skillsLoading={skillsLoading}
 				filePaths={paths}
 				filePathsTruncated={truncated}
+				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
 				onStageAttachments={stageAttachments}
 				nativeImages={can(renderSnapshot, "images")}

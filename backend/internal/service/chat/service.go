@@ -1798,6 +1798,19 @@ func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
 	return controller.Interrupt(ctx)
 }
 
+// InterruptTurn cancels a session's in-flight turn only while it is still the
+// turn the user pressed Stop on. See Controller.InterruptTurn.
+func (s *Service) InterruptTurn(ctx context.Context, id domain.SessionID, turnID string) error {
+	if _, err := s.requireChatSession(ctx, id); err != nil {
+		return err
+	}
+	controller, err := s.Controller(id)
+	if err != nil {
+		return err
+	}
+	return controller.InterruptTurn(ctx, turnID)
+}
+
 // InterruptForOwner cancels the in-flight turn for an owner-specific controller.
 func (s *Service) InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error {
 	controller, err := s.ControllerForOwner(owner)
