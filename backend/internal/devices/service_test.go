@@ -26,6 +26,8 @@ type fakeProvider struct {
 	// set, hears each Boot as it starts.
 	bootGate    chan struct{}
 	bootEntered chan string
+	// gateDevice, when set, limits bootGate and bootEntered to that device.
+	gateDevice string
 	// bootID, when set, renames a booted device (an emulator back under a new
 	// serial).
 	bootID func(ports.DeviceInfo) string
@@ -33,6 +35,8 @@ type fakeProvider struct {
 	releaseGate chan struct{}
 	installed   []string
 	released    []string
+	// bound records each agent command written, as session=device.
+	bound []string
 }
 
 func (f *fakeProvider) Name() string { return "local" }
@@ -55,10 +59,11 @@ func (f *fakeProvider) setBooted(id string, booted bool) {
 	}
 }
 func (f *fakeProvider) Boot(_ context.Context, d ports.DeviceInfo) (ports.DeviceInfo, error) {
-	if f.bootEntered != nil {
+	gated := f.gateDevice == "" || f.gateDevice == d.ID
+	if f.bootEntered != nil && gated {
 		f.bootEntered <- d.ID
 	}
-	if f.bootGate != nil {
+	if f.bootGate != nil && gated {
 		<-f.bootGate
 	}
 	f.mu.Lock()
@@ -88,6 +93,9 @@ func (f *fakeProvider) Hub(context.Context) (ports.DeviceHubEndpoint, error) {
 	return ports.DeviceHubEndpoint{Origin: "http://127.0.0.1:1", Headers: map[string]string{"Authorization": "Bearer t"}}, nil
 }
 func (f *fakeProvider) AgentControl(d ports.DeviceInfo, session string) (ports.DeviceAgentControl, error) {
+	f.mu.Lock()
+	f.bound = append(f.bound, session+"="+d.ID)
+	f.mu.Unlock()
 	return ports.DeviceAgentControl{Command: "/bin/agent-device", Args: []string{"--udid", d.ID, "--session", "ao-" + session}}, nil
 }
 func (f *fakeProvider) ReleaseControl(_ context.Context, d ports.DeviceInfo, keep string) error {
@@ -869,5 +877,48 @@ func TestHubTargetEndsWithTheLease(t *testing.T) {
 	case <-watch.Done():
 	case <-time.After(time.Second):
 		t.Fatal("releasing the device left its hub connections open")
+	}
+}
+
+// A reopen that finishes after its lease changed must not rewrite the
+// session's agent command: it would point a newer lease's command at the old
+// device.
+func TestStaleReopenDoesNotRebindTheAgentCommand(t *testing.T) {
+	ctx := context.Background()
+	p := &fakeProvider{
+		platforms: []ports.DevicePlatformAvailability{{Platform: ports.DevicePlatformAndroid, Available: true}},
+		devices: []ports.DeviceInfo{
+			{ID: "emulator-5554", Name: "pixel", Platform: ports.DevicePlatformAndroid, Booted: true},
+			{ID: "emulator-5560", Name: "tablet", Platform: ports.DevicePlatformAndroid, Booted: true},
+		},
+	}
+	svc := newTestService(t, p, 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "emulator-5554"}); err != nil {
+		t.Fatal(err)
+	}
+	// The emulator stopped; reopening boots it back under a new serial, slowly.
+	p.mu.Lock()
+	p.devices[0] = ports.DeviceInfo{ID: "pixel", Name: "pixel", Platform: ports.DevicePlatformAndroid}
+	p.bootID = func(ports.DeviceInfo) string { return "emulator-5556" }
+	p.mu.Unlock()
+	p.gateDevice, p.bootGate, p.bootEntered = "pixel", make(chan struct{}), make(chan string, 1)
+	stale := make(chan error, 1)
+	go func() { _, err := svc.Open(ctx, "s-1", OpenRequest{}); stale <- err }()
+	<-p.bootEntered
+	// Meanwhile the session moves to the other device.
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "emulator-5560"}); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	before := len(p.bound)
+	p.mu.Unlock()
+	close(p.bootGate)
+	if err := <-stale; apiCode(err) != "DEVICE_LEASE_CHANGED" {
+		t.Fatalf("stale reopen = %v, want DEVICE_LEASE_CHANGED", err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.bound) != before {
+		t.Fatalf("the stale reopen rebound the command: %v", p.bound[before:])
 	}
 }
