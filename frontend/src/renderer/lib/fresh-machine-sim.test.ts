@@ -61,6 +61,12 @@ describe("simulateFreshMachine", () => {
 		expect(listed.jobs.map((job: { target: string }) => job.target)).toEqual(["codex"]);
 	});
 
+	it("treats Check again as the person having installed git", async () => {
+		const recheck = new Request("http://127.0.0.1:3001/api/v1/system/requirements/recheck", { method: "POST" });
+		const body = await (await simulateFreshMachine(recheck, noDaemon))!.json();
+		expect(body.requirements.find((req: { id: string }) => req.id === "git").satisfied).toBe(true);
+	});
+
 	it("lets every other request through to the daemon", async () => {
 		expect(await simulateFreshMachine(get("/api/v1/sessions"), noDaemon)).toBeUndefined();
 	});

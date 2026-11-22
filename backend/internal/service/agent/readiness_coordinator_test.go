@@ -1220,6 +1220,58 @@ func TestReadinessCoordinatorFindInstalledOnlyReportsMissingWhenEveryCheckSaysSo
 	}
 }
 
+// "Check again" answers as soon as one agent is confirmed, without waiting for
+// slower harnesses, and never probes sign-in: those waits are what pushed a
+// full refresh past the request timeout.
+func TestReadinessCoordinatorRecheckInstalledAnswersEarlyWithoutAuthentication(t *testing.T) {
+	t.Parallel()
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	defer cancelDaemon()
+	release := make(chan struct{})
+	defer close(release)
+	installed := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "/bin/codex", nil },
+		auth: func(context.Context) (ports.AgentAuthStatus, error) {
+			return ports.AgentAuthStatusAuthorized, nil
+		},
+	}
+	slow := &readinessTestAgent{
+		resolve: func(ctx context.Context) (string, error) {
+			select {
+			case <-release:
+				return "", ports.ErrAgentBinaryNotFound
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) {
+			return ports.AgentAuthStatusAuthorized, nil
+		},
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{
+			readinessHarness("codex", "Codex", installed),
+			readinessHarness("slow", "Slow", slow),
+		},
+		Context:        daemonCtx,
+		InstallTimeout: time.Minute,
+		Workers:        2,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	found, search := coordinator.RecheckInstalled(ctx, domain.AgentReadinessPurposeLaunch)
+	if search != PresenceFound || found.ID != "codex" {
+		t.Fatalf("RecheckInstalled() = (%#v, %v), want Codex while Slow is still checking", found, search)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("RecheckInstalled() waited for the slow harness instead of answering early")
+	}
+	if got := installed.authCalls.Load() + slow.authCalls.Load(); got != 0 {
+		t.Fatalf("authentication checks = %d, want none for Check again", got)
+	}
+}
+
 // Only a fresh, completed observation is a definite answer. A re-check in
 // flight, a stale result, or a failure can all show an earlier "not installed"
 // that proves nothing now.

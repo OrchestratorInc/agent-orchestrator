@@ -240,6 +240,30 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 	if err != nil {
 		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 	}
+	return c.findInstalled(ctx, ids, purpose, true)
+}
+
+// RecheckInstalled is the explicit "check again" search. It discards every
+// cached installation observation, then runs each harness's normal
+// installation check, including the identity probes the process-free startup
+// search skips, and returns as soon as one harness is confirmed. It never
+// checks authentication: the caller only needs to know whether an agent is
+// installed, and sign-in probes are the slow part of a full refresh.
+func (c *readinessCoordinator) RecheckInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, Presence) {
+	if err := ctx.Err(); err != nil || !purpose.Valid() {
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
+	}
+	ids, err := c.normalizeIDs(nil)
+	if err != nil {
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
+	}
+	for _, id := range ids {
+		c.Invalidate(id, readinessInvalidateInstallation)
+	}
+	return c.findInstalled(ctx, ids, purpose, false)
+}
+
+func (c *readinessCoordinator) findInstalled(ctx context.Context, ids []string, purpose domain.AgentReadinessPurpose, presenceOnly bool) (domain.AgentReadinessSnapshot, Presence) {
 	if len(ids) == 0 {
 		return domain.AgentReadinessSnapshot{}, PresenceMissing
 	}
@@ -253,7 +277,7 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 	for _, id := range ids {
 		go func(id string) {
 			defer wg.Done()
-			snapshot, ensureErr := c.ensureOne(waitCtx, id, purpose, readinessInvalidateInstallation, true)
+			snapshot, ensureErr := c.ensureOne(waitCtx, id, purpose, readinessInvalidateInstallation, presenceOnly)
 			if ensureErr != nil {
 				unconfirmed.Store(true)
 				return

@@ -1054,6 +1054,15 @@ func systemOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/system/requirements/recheck", id: "recheckSystemRequirements", tag: "system",
+			summary: "Re-run the startup readiness checks, re-checking every agent installation (never sign-in)",
+			resps: []respUnit{
+				{http.StatusOK, controllers.SystemRequirementsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/system/github-auth", id: "getGitHubAuthRequirement", tag: "system",
 			summary: "Check advisory GitHub CLI authentication without blocking startup",
 			resps: []respUnit{

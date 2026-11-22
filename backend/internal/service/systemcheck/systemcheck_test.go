@@ -20,6 +20,8 @@ type fakeHarnessCatalog struct {
 	binary      agentsvc.Info
 	search      agentsvc.Presence
 	binaryCalls int
+	recheck     agentsvc.Presence
+	rechecks    int
 }
 
 type fakeCommandRunner struct {
@@ -61,6 +63,38 @@ func (f *fakeHarnessCatalog) RefreshFresh(context.Context) (agentsvc.Inventory, 
 func (f *fakeHarnessCatalog) FindInstalledBinary(context.Context) (agentsvc.Info, agentsvc.Presence) {
 	f.binaryCalls++
 	return f.binary, f.search
+}
+
+func (f *fakeHarnessCatalog) RecheckInstalledBinary(context.Context) (agentsvc.Info, agentsvc.Presence) {
+	f.rechecks++
+	return f.binary, f.recheck
+}
+
+// "Check again" must re-run the agent installation checks instead of reusing
+// the startup answer, and must never fall back to the full agent refresh,
+// which also probes sign-in for every agent.
+func TestRecheckStartup_UsesTheInstallationRecheck(t *testing.T) {
+	catalog := &fakeHarnessCatalog{
+		err:     errors.New("a full agent refresh must not run for Check again"),
+		binary:  agentsvc.Info{ID: "claude-code", Label: "Claude Code"},
+		search:  agentsvc.PresenceMissing,
+		recheck: agentsvc.PresenceFound,
+	}
+	svc := NewWithLookPath(catalog, lookPathFound(map[string]string{"git": "/usr/bin/git", "tmux": "/usr/bin/tmux"}))
+
+	report, err := svc.RecheckStartup(context.Background())
+	if err != nil {
+		t.Fatalf("RecheckStartup() error = %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("Ready = false, want true; requirements=%+v", report.Requirements)
+	}
+	if harness := requirementByID(t, report, "harness"); !harness.Satisfied || harness.Detail != "Claude Code" {
+		t.Fatalf("harness = %+v, want Claude Code from the recheck", harness)
+	}
+	if catalog.rechecks != 1 || catalog.binaryCalls != 0 || catalog.calls != 0 {
+		t.Fatalf("rechecks = %d, cached searches = %d, full refreshes = %d; want only one recheck", catalog.rechecks, catalog.binaryCalls, catalog.calls)
+	}
 }
 
 func lookPathFound(paths map[string]string) func(string) (string, error) {

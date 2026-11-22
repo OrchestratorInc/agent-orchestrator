@@ -22,11 +22,11 @@ describe("isActiveInstallJob", () => {
 });
 
 describe("checkRequirementsAgain", () => {
-	it("forces an agent refresh before refetching startup requirements", async () => {
+	it("re-checks agent installations before refetching startup requirements", async () => {
 		const order: string[] = [];
-		apiMocks.post.mockImplementation(async () => {
-			order.push("refresh");
-			return { data: {}, error: undefined };
+		apiMocks.post.mockReset().mockImplementation(async (path: string) => {
+			order.push(path);
+			return { data: { ready: true, requirements: [] }, error: undefined };
 		});
 		const refetch = vi.fn(async () => {
 			order.push("refetch");
@@ -34,9 +34,11 @@ describe("checkRequirementsAgain", () => {
 
 		await checkRequirementsAgain(refetch);
 
-		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/agents/refresh");
-		expect(refetch).toHaveBeenCalledOnce();
-		expect(order).toEqual(["refresh", "refetch"]);
+		// The install-only recheck keeps identity probes but skips the sign-in
+		// probes of a full agent refresh, which outran the request timeout.
+		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/system/requirements/recheck");
+		expect(apiMocks.post).not.toHaveBeenCalledWith("/api/v1/agents/refresh");
+		expect(order).toEqual(["/api/v1/system/requirements/recheck", "refetch"]);
 	});
 });
 

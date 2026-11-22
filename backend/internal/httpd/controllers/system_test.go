@@ -20,6 +20,7 @@ type fakeSystemChecker struct {
 	report        systemcheck.Report
 	err           error
 	calls         int
+	rechecks      int
 	auth          systemcheck.Requirement
 	authErr       error
 	authCalls     int
@@ -65,6 +66,36 @@ func TestOpenGitHubAuthTerminal(t *testing.T) {
 func (f *fakeSystemChecker) CheckStartup(context.Context) (systemcheck.Report, error) {
 	f.calls++
 	return f.report, f.err
+}
+
+func (f *fakeSystemChecker) RecheckStartup(context.Context) (systemcheck.Report, error) {
+	f.rechecks++
+	return f.report, f.err
+}
+
+func TestRecheckSystemRequirementsRunsTheRecheck(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	checker := &fakeSystemChecker{report: systemcheck.Report{
+		Ready:        true,
+		Requirements: []systemcheck.Requirement{{ID: "harness", Label: "agent harness", Satisfied: true, Required: true, Detail: "Claude Code"}},
+	}}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+		SystemChecks: checker,
+	}, httpd.ControlDeps{}))
+	defer srv.Close()
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/system/requirements/recheck", "")
+	if status != http.StatusOK {
+		t.Fatalf("POST /system/requirements/recheck = %d, body=%s", status, body)
+	}
+	for _, want := range []string{`"ready":true`, `"id":"harness"`, `"satisfied":true`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("body missing %s: %s", want, body)
+		}
+	}
+	if checker.rechecks != 1 || checker.calls != 0 {
+		t.Fatalf("rechecks = %d, cached checks = %d; want one recheck and no cached check", checker.rechecks, checker.calls)
+	}
 }
 
 func TestGetGitHubAuthRequirement(t *testing.T) {

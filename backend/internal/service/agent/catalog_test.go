@@ -1001,6 +1001,53 @@ func TestFindInstalledBinaryKeepsNameOnlyGooseMatchUnknown(t *testing.T) {
 	}
 }
 
+// The process-free startup search cannot confirm an identity-checked agent
+// such as Goose. "Check again" must run the identity check and find it.
+func TestRecheckInstalledBinaryConfirmsWhatTheStartupSearchCannotVerify(t *testing.T) {
+	var normalResolveCalls atomic.Int32
+	var presenceCalls atomic.Int32
+	svc := NewWithAgents([]agentregistry.HarnessAgent{{
+		Harness:  domain.AgentHarness("goose"),
+		Manifest: adapters.Manifest{ID: "goose", Name: "Goose"},
+		Agent: identityPendingAgent{
+			fakeAgent:          fakeAgent{},
+			normalResolveCalls: &normalResolveCalls,
+			presenceCalls:      &presenceCalls,
+		},
+	}})
+
+	if _, search := svc.FindInstalledBinary(context.Background()); search != PresenceUnconfirmed {
+		t.Fatalf("startup search = %v, want unconfirmed for an identity-pending Goose", search)
+	}
+	got, search := svc.RecheckInstalledBinary(context.Background())
+	if search != PresenceFound || got.ID != "goose" {
+		t.Fatalf("RecheckInstalledBinary() = (%#v, %v), want Goose found by its identity check", got, search)
+	}
+	if got := normalResolveCalls.Load(); got != 1 {
+		t.Fatalf("identity-checking resolutions = %d, want 1", got)
+	}
+}
+
+// An agent installed after the startup search must be found by "Check again"
+// even while the earlier "not installed" answer is still cached.
+func TestRecheckInstalledBinaryFindsAnAgentInstalledSinceTheLastCheck(t *testing.T) {
+	agent := &mutableInstallAgent{}
+	svc := NewWithAgents([]agentregistry.HarnessAgent{{
+		Harness:  domain.AgentHarness("codex"),
+		Manifest: adapters.Manifest{ID: "codex", Name: "Codex"},
+		Agent:    agent,
+	}})
+
+	if _, search := svc.FindInstalledBinary(context.Background()); search != PresenceMissing {
+		t.Fatalf("startup search = %v, want missing before the install", search)
+	}
+	agent.installed.Store(true)
+	got, search := svc.RecheckInstalledBinary(context.Background())
+	if search != PresenceFound || got.ID != "codex" {
+		t.Fatalf("RecheckInstalledBinary() after install = (%#v, %v), want Codex found", got, search)
+	}
+}
+
 func TestPresslyGooseDoesNotSatisfyStartupOrFreshInventory(t *testing.T) {
 	var normalResolveCalls atomic.Int32
 	var presenceCalls atomic.Int32

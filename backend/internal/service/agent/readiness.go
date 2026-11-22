@@ -17,6 +17,14 @@ import (
 // authentication.
 var startupBinaryProbeTimeout = 500 * time.Millisecond
 
+// recheckBinaryTimeout bounds an explicit "Check again". The user asked for an
+// answer, so it waits longer than the first-render budget and lets identity
+// probes run, but it stays well inside the daemon's request timeout. A
+// confirmed agent still returns as soon as its own check finishes; checks
+// still running at the bound keep going in the background, and the answer is
+// unconfirmed rather than missing.
+var recheckBinaryTimeout = 15 * time.Second
+
 // ProbeResult describes launch-fresh readiness for one supported agent.
 type ProbeResult struct {
 	Agent     Info `json:"agent"`
@@ -228,6 +236,22 @@ func (s *Service) FindInstalledBinary(ctx context.Context) (Info, Presence) {
 	waitCtx, cancel := context.WithTimeout(ctx, startupBinaryProbeTimeout)
 	defer cancel()
 	snapshot, search := s.readiness.FindInstalled(waitCtx, domain.AgentReadinessPurposeLaunch)
+	if search != PresenceFound {
+		return Info{}, search
+	}
+	return readinessInfo(snapshot), PresenceFound
+}
+
+// RecheckInstalledBinary answers the startup gate's "Check again": it re-runs
+// every harness's installation check, identity probes included, and returns
+// as soon as one agent CLI is confirmed. Authentication is never probed.
+func (s *Service) RecheckInstalledBinary(ctx context.Context) (Info, Presence) {
+	if ctx.Err() != nil {
+		return Info{}, PresenceUnconfirmed
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, recheckBinaryTimeout)
+	defer cancel()
+	snapshot, search := s.readiness.RecheckInstalled(waitCtx, domain.AgentReadinessPurposeLaunch)
 	if search != PresenceFound {
 		return Info{}, search
 	}

@@ -15596,6 +15596,32 @@ paths:
       summary: Check local machine readiness (git, tmux, agent harness, gh)
       tags:
       - system
+  /api/v1/system/requirements/recheck:
+    post:
+      operationId: recheckSystemRequirements
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemRequirementsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Re-run the startup readiness checks, re-checking every agent installation
+        (never sign-in)
+      tags:
+      - system
   /api/v1/task-preparations/{token}:
     delete:
       operationId: cancelTaskPreparation
