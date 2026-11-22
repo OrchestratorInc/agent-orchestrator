@@ -313,7 +313,6 @@
 	"session.importedNotOpened": "İçe aktarıldı, henüz açılmadı",
 	"artifactLink.unavailable": "Çıktı kullanılamıyor",
 	"artifactLink.noPreview": "Önizleme yok",
-	"session.agentTerminated": "Aracı sonlandırıldı",
 	"activity.active": "Çalışıyor",
 	"activity.blocked": "Karar Bekleniyor",
 	"activity.exited": "Sona erdi",

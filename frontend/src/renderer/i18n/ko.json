@@ -313,7 +313,6 @@
 	"session.importedNotOpened": "가져옴, 아직 열지 않음",
 	"artifactLink.unavailable": "아티팩트를 사용할 수 없음",
 	"artifactLink.noPreview": "미리보기 없음",
-	"session.agentTerminated": "에이전트 종료됨",
 	"activity.active": "작업 중",
 	"activity.blocked": "결정 대기",
 	"activity.exited": "종료됨",

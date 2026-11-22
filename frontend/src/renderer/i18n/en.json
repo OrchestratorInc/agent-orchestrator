@@ -313,7 +313,6 @@
 	"session.importedNotOpened": "Imported, not opened yet",
 	"artifactLink.unavailable": "Artifact unavailable",
 	"artifactLink.noPreview": "No preview available",
-	"session.agentTerminated": "Agent terminated",
 	"activity.active": "Working",
 	"activity.blocked": "Awaiting Decision",
 	"activity.exited": "Exited",

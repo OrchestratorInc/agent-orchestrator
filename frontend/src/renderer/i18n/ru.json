@@ -307,7 +307,6 @@
 	"session.importedNotOpened": "Импортирован, ещё не открыт",
 	"artifactLink.unavailable": "Артефакт недоступен",
 	"artifactLink.noPreview": "Предпросмотр недоступен",
-	"session.agentTerminated": "Агент завершил работу",
 	"activity.active": "В работе",
 	"activity.blocked": "Ожидает решения",
 	"activity.exited": "Завершено",
