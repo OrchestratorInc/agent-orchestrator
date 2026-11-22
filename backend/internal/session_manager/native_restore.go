@@ -137,6 +137,55 @@ func (m *Manager) rollbackNativeInitialization(ctx context.Context, original dom
 	return errors.Join(destroyErr, rollbackErr)
 }
 
+// The handle remains unpublished and ordinary input remains fenced throughout
+// this proof. A failed witness destroys only this replacement runtime.
+func (m *Manager) verifyNativeRestore(ctx context.Context, verifier ports.NativeRestoreVerifier, cfg ports.RestoreConfig, generation string, handle ports.RuntimeHandle) error {
+	reader, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return errors.New("native restore requires a current rendered terminal")
+	}
+	wait := m.nativeRestoreProofWait
+	if wait <= 0 {
+		wait = 60 * time.Second
+	}
+	proofCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for {
+		output, err := reader.GetStyledOutput(proofCtx, handle, 32)
+		if err != nil {
+			// A failed read of the replacement's screen is not evidence against
+			// it: retry like an unready composer until the proof deadline, and
+			// report the last read failure if the deadline ends the proof.
+			if proofCtx.Err() != nil {
+				return errors.Join(proofCtx.Err(), err)
+			}
+			if sleepErr := sleepContext(proofCtx, 250*time.Millisecond); sleepErr != nil {
+				return errors.Join(sleepErr, err)
+			}
+			continue
+		}
+		ready, err := verifier.VerifyNativeRestore(proofCtx, cfg, generation, output)
+		if err != nil {
+			return err
+		}
+		if ready {
+			// A receipt and retained viewport survive the child. Publish identity
+			// only while the exact replacement generation is still observable.
+			alive, err := m.exactLaunchAlive(proofCtx, handle, domain.SessionID(cfg.Session.ID), generation)
+			if err != nil {
+				return fmt.Errorf("native restore process verification: %w", err)
+			}
+			if !alive {
+				return errors.New("native restore process exited before identity publication")
+			}
+			return nil
+		}
+		if err := sleepContext(proofCtx, 250*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
+
 // exactLaunchAlive reports whether the exact AO supervisor for launchID, and
 // its managed agent child, are still alive in handle.
 func (m *Manager) exactLaunchAlive(ctx context.Context, handle ports.RuntimeHandle, id domain.SessionID, launchID string) (bool, error) {

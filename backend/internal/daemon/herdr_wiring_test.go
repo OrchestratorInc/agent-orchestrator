@@ -32,7 +32,7 @@ func TestWiringLifecycleOwnsHerdrSocket(t *testing.T) {
 	defer store.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stack := startLifecycle(ctx, dir, store, tmux.New(tmux.Options{}), nil, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stack := startLifecycle(ctx, dir, store, tmux.New(tmux.Options{}), nil, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	defer func() { cancel(); stack.Stop() }()
 	conn, err := net.DialTimeout("unix", herdr.SocketPath(dir), time.Second)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestWiringHerdrFailureDoesNotPreventLifecycleStartup(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stack := startLifecycle(ctx, dir, store, tmux.New(tmux.Options{}), nil, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stack := startLifecycle(ctx, dir, store, tmux.New(tmux.Options{}), nil, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	defer func() { cancel(); stack.Stop() }()
 	if stack.LCM == nil {
 		t.Fatal("listener failure disabled lifecycle")

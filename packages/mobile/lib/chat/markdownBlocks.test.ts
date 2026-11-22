@@ -210,3 +210,16 @@ describe("fourth review fixes", () => {
 		expect(repairStreamingInline("```js\nx\n```\nNow **bold ▍")).toBe("```js\nx\n```\nNow **bold** ▍");
 	});
 });
+
+describe("parseBlocks fence guard", () => {
+	it("keeps a guarded fence line inside the block and drops the guard from its text", () => {
+		expect(parseBlocks("```md\n​```js\nx\n​```\n```\nafter")).toEqual([
+			{ kind: "code", language: "md", text: "```js\nx\n```" },
+			{ kind: "paragraph", text: "after" },
+		]);
+	});
+
+	it("leaves a zero-width space that guards no fence line as written", () => {
+		expect(parseBlocks("```\n​hello\n```")).toEqual([{ kind: "code", language: undefined, text: "​hello" }]);
+	});
+});

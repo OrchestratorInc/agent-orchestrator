@@ -1868,9 +1868,9 @@ describe("SessionView", () => {
 			const invalidate = vi.spyOn(view.client, "invalidateQueries");
 			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
 			await act(async () => { finishView({ error: undefined }); });
-			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
-			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
-			expect(conversationReloads, state).toHaveLength(reloads);
+			const conversationReloads = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
+			await waitFor(() => expect(conversationReloads(), state).toHaveLength(reloads));
+			expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
 			view.unmount();
 			chatViewPostMock.mockClear();
 		}

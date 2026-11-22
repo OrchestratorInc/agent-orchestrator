@@ -136,6 +136,7 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen = false,
 	agentSwitch,
 	beforePicker,
+	afterPicker,
 	modelsLoading,
 	lastModel,
 	unsetModelLabel,
@@ -189,6 +190,8 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
+	/** Right after the model control, in either picker, such as the usage-limit sign. */
+	afterPicker?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
@@ -542,6 +545,8 @@ export function TurnSettingsBar({
 							onChange={applyOption}
 						/>
 					) : null}
+
+					{afterPicker}
 
 					{standaloneExecutionMode && onChangeConfigOption ? (
 						<ExecutionModePicker

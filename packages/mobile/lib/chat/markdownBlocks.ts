@@ -18,6 +18,15 @@ export type MarkdownBlock =
 
 export type TableAlign = "left" | "center" | "right" | undefined;
 
+/**
+ * Put before a line inside a code block that would otherwise read as a fence, by
+ * text built for this parser (GitHub comments, githubHtml.ts): it keeps the block
+ * open here and in safeMarkdown, and the parser drops it from the block's text, so
+ * what is drawn, selected and copied is the line as written.
+ */
+export const FENCE_GUARD = "\u200B";
+const GUARDED_LINE = /^\u200B(?= {0,3}(?:`{3}|~{3}))/;
+
 const FENCE = /^(\s*)(`{3,}|~{3,})(.*)$/;
 const LIST_ITEM = /^(\s*)(?:(\d{1,9})[.)]|([-*+]))\s+(.*)$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/;
@@ -69,7 +78,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 			// Under a list item the closer's indent is the item's; at top level, at most three spaces.
 			const closes = (candidate: string) => closesFence(candidate, marker, inList ? Infinity : 3);
 			const code: string[] = [];
-			for (i += 1; i < lines.length && !closes(lines[i]); i++) code.push(dedent(raw[i], fence[1].length));
+			for (i += 1; i < lines.length && !closes(lines[i]); i++) code.push(dedent(raw[i].replace(GUARDED_LINE, ""), fence[1].length));
 			blocks.push({ kind: "code", language, text: code.join("\n") });
 			if (inList) listResumes = true;
 			listProse = null;

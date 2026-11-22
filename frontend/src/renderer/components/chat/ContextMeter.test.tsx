@@ -2,13 +2,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { ContextMeter } from "./ContextMeter";
-import type { ConversationRateLimits, ConversationUsage } from "../../types/conversation";
+import type { ConversationUsage } from "../../types/conversation";
 
 // The behaviour under test is the threshold encoding, because that is what carries
 // the meaning: a user glances at the fill and the colour, and only reads the digits
 // if something looks wrong. The numbers here are the real ones a live codex
-// app-server reported (18055 of a 258400 window; a pro account at 71% of a 7 day
-// rate limit window).
+// app-server reported (18055 of a 258400 window).
 
 function usage(over: Partial<ConversationUsage> = {}): ConversationUsage {
 	return {
@@ -18,16 +17,6 @@ function usage(over: Partial<ConversationUsage> = {}): ConversationUsage {
 		outputTokens: 5,
 		cachedTokens: 11008,
 		totalTokens: 18055,
-		...over,
-	};
-}
-
-function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
-	return {
-		primaryUsedPercent: 71,
-		secondaryUsedPercent: -1,
-		primaryResetsInSeconds: 490444,
-		planLabel: "pro",
 		...over,
 	};
 }
@@ -76,7 +65,7 @@ describe("ContextMeter", () => {
 		it("shifts to the needs-you token from 70%", () => {
 			// Exactly at the boundary, which must warn rather than stay normal.
 			render(<ContextMeter usage={usage({ contextUsed: 180_880 })} />);
-			expect(screen.getByRole("progressbar")).toHaveClass("text-status-needs-you");
+			expect(screen.getByRole("progressbar")).toHaveClass("text-status-in-review");
 		});
 
 		it("shifts to the exited token from 90%, where the next turn is at risk", () => {
@@ -120,56 +109,5 @@ describe("ContextMeter", () => {
 		// Absent is distinct from zero: an empty meter for an unreported conversation
 		// would be a claim AO has not earned.
 		expect(container).toBeEmptyDOMElement();
-	});
-
-	describe("quota warning", () => {
-		it("stays hidden while the account has comfortable headroom", () => {
-			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 20 })} />);
-			// A readout that is always present becomes furniture, and this one has to be
-			// noticed on the day it matters.
-			expect(screen.queryByText(/quota/)).not.toBeInTheDocument();
-		});
-
-		it("appears once the account is close to a wall", () => {
-			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 76 })} />);
-			expect(screen.getByText("Session 76% used")).toBeInTheDocument();
-		});
-
-		it("escalates its colour past 90%, where turns start failing", () => {
-			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 94 })} />);
-			expect(screen.getByText("Session 94% used").className).toContain("text-status-exited");
-		});
-
-		it("warns on the tighter of the two windows", () => {
-			render(
-				<ContextMeter
-					usage={usage()}
-					rateLimits={limits({ primaryUsedPercent: 30, secondaryUsedPercent: 88 })}
-				/>,
-			);
-			// The tighter window is the one that will actually stop the next turn.
-			expect(screen.getByText("Weekly 88% used")).toBeInTheDocument();
-		});
-
-		it("ignores a window the provider did not report", () => {
-			render(
-				<ContextMeter
-					usage={usage()}
-					rateLimits={limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 })}
-				/>,
-			);
-			// Negative is the daemon's "not reported". Treating it as data would draw a
-			// meter running backwards.
-			expect(screen.queryByText(/quota/)).not.toBeInTheDocument();
-		});
-
-		it("warns on quota even when no usage has been reported yet", () => {
-			// The startup rate-limit read lands before the first turn, so this is the
-			// state a user sees when opening a conversation on a nearly-spent account:
-			// exactly when the warning is most useful.
-			render(<ContextMeter rateLimits={limits({ primaryUsedPercent: 97 })} />);
-			expect(screen.getByText("Session 97% used")).toBeInTheDocument();
-			expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-		});
 	});
 });

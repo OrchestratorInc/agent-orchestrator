@@ -40,7 +40,7 @@ func TestCapturedExcerptSurvivesQueueAndSourceDeletion(t *testing.T) {
 	}
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["explain"] == domain.TurnStateRunning
+		return turnStateByText(t, s)["explain"] == domain.TurnStateRunning && len(h.conv.sentMessages()) == 2
 	})
 	sent := h.conv.sentMessages()
 	if len(sent) != 2 || !strings.Contains(sent[1].Text, ref.Text) || !strings.Contains(sent[1].Text, ref.Snapshot.RawText) {
@@ -177,7 +177,10 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				ProviderTurnID: "provider-turn-3", TurnState: domain.TurnStateCompleted})
 			snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				states := turnStateByText(t, s)
-				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning
+				// The turn is marked running before its provider send returns, so
+				// wait for the send too rather than racing it.
+				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning &&
+					len(h.conv.sentTexts()) == 4
 			})
 			if turnStateByText(t, snapshot)["stale excerpt"] != domain.TurnStateFailed {
 				t.Fatal("later drains retried the stale turn")
