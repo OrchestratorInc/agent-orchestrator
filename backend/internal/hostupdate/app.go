@@ -73,9 +73,9 @@ func (u *Updater) runApp(notApplied string) {
 	}
 	_, err = u.app.Execute(ctx, appSession, appAction, map[string]interface{}{"step": "install", "version": version})
 	var refused browserruntime.CommandError
-	if errors.As(err, &refused) && refused.Code != linkClosed {
+	if errors.Is(err, browserruntime.ErrReconnecting) || (errors.As(err, &refused) && refused.Code != linkClosed) {
 		_ = os.Remove(u.resultPath)
-		u.finishApp(refused.Message)
+		u.finishApp(appError(err))
 		return
 	}
 	time.Sleep(u.restartWait)

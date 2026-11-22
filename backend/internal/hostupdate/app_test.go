@@ -3,6 +3,7 @@ package hostupdate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -111,17 +112,23 @@ func TestAppUpdateReportsTheAppsRefusal(t *testing.T) {
 	}
 }
 
-func TestAppUpdateInstallRefusedClearsResult(t *testing.T) {
-	app := &fakeApp{prepare: ready("0.16.0"), install: func() (browserruntime.Result, error) {
-		return browserruntime.Result{}, browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Orchestrator on that computer has an unsent draft. Update it there."}
-	}}
-	u := appUpdater(t, app, time.Hour)
-	if err := u.Start(context.Background()); err != nil {
-		t.Fatal(err)
+func TestAppUpdateInstallNotSentClearsResult(t *testing.T) {
+	cases := map[string]error{
+		"Orchestrator on that computer has an unsent draft. Update it there.":              browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Orchestrator on that computer has an unsent draft. Update it there."},
+		"Orchestrator's window is closed on that computer. Open it there, then try again.": fmt.Errorf("%w: %w", browserruntime.ErrReconnecting, browserruntime.ErrUnavailable),
 	}
-	eventually(t, u, StateFailed)
-	if _, err := os.Stat(u.resultPath); !os.IsNotExist(err) {
-		t.Fatalf("result left behind: %v", err)
+	for want, refusal := range cases {
+		app := &fakeApp{prepare: ready("0.16.0"), install: func() (browserruntime.Result, error) { return browserruntime.Result{}, refusal }}
+		u := appUpdater(t, app, time.Hour)
+		if err := u.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := eventually(t, u, StateFailed); got.Error != want {
+			t.Errorf("error = %q, want %q", got.Error, want)
+		}
+		if _, err := os.Stat(u.resultPath); !os.IsNotExist(err) {
+			t.Fatalf("result left behind: %v", err)
+		}
 	}
 }
 
