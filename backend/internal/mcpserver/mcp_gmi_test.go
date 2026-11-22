@@ -146,6 +146,39 @@ func TestGMISearchModelsFiltersAndDescribesTheCatalog(t *testing.T) {
 	}
 }
 
+// The catalog answers with bare model ids, so a model's provider is only
+// known once its description has been read. A filter on a detail is applied
+// after the descriptions are read, or it would drop every model it could
+// have matched.
+func TestGMISearchModelsFiltersOnTheDetailsItReads(t *testing.T) {
+	state := gmiToolState(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			_, _ = w.Write([]byte(`{"data":[{"model_id":"kling-video"},{"model_id":"seedream-image"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/models/kling-video"):
+			_, _ = w.Write([]byte(`{"model_id":"kling-video","model_type":"video","provider":"kuaishou"}`))
+		case strings.HasSuffix(r.URL.Path, "/models/seedream-image"):
+			_, _ = w.Write([]byte(`{"model_id":"seedream-image","model_type":"image","provider":"byteplus-seedream"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	result := (&server{}).callGMISearchModels(context.Background(), state, json.RawMessage(`{"provider":"kuaishou"}`))
+	if gmiToolFailed(result) {
+		t.Fatalf("the call failed: %s", gmiResultText(t, result))
+	}
+	decoded := gmiResultJSON(t, result)
+	models, ok := decoded["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("models = %v, want the one model of that provider", decoded["models"])
+	}
+	entry, _ := models[0].(map[string]any)
+	if entry["model_id"] != "kling-video" {
+		t.Fatalf("model id = %v, want kling-video", entry["model_id"])
+	}
+}
+
 func TestGMISubmitGenerationSendsTheModelsOwnParameters(t *testing.T) {
 	var submitted map[string]any
 	state := gmiToolState(t, func(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +223,42 @@ func TestGMISubmitGenerationSendsTheModelsOwnParameters(t *testing.T) {
 	}
 	if payload["image_size"] != "1024x1536" {
 		t.Fatalf("payload image_size = %v, want the size that matches 3:4", payload["image_size"])
+	}
+}
+
+// The estimate prices the payload that is submitted, not the arguments the
+// tool schema happens to expose: the generation runs with the payload's own
+// count, so that is what it costs.
+func TestGMISubmitGenerationPricesThePayloadItSubmits(t *testing.T) {
+	state := gmiToolState(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models/seedream-4"):
+			_, _ = w.Write([]byte(`{"model_id":"seedream-4","model_type":"image","price_info":{"price":85000,"unit":"image"},"parameters":[
+				{"name":"prompt","type":"string","required":true},
+				{"name":"max_images","type":"integer"}
+			]}`))
+		case r.URL.Path == "/requests":
+			_, _ = w.Write([]byte(`{"request_id":"req-9"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	args := json.RawMessage(`{"model_id":"seedream-4","prompt":"a cat","parameters":{"n":3}}`)
+	result := (&server{}).callGMISubmitGeneration(context.Background(), state, args)
+	if gmiToolFailed(result) {
+		t.Fatalf("the call failed: %s", gmiResultText(t, result))
+	}
+	decoded := gmiResultJSON(t, result)
+	estimate, ok := decoded["estimate"].(map[string]any)
+	if !ok {
+		t.Fatalf("estimate = %v, want the cost of the generation", decoded["estimate"])
+	}
+	if estimate["multiplier"] != float64(3) {
+		t.Fatalf("multiplier = %v, want the three images the payload asks for", estimate["multiplier"])
+	}
+	if estimate["total_usd"] != 0.255 {
+		t.Fatalf("total = %v, want 0.255", estimate["total_usd"])
 	}
 }
 
@@ -299,6 +368,35 @@ func TestGMIAccountSummaryCountsTheRequestsAndSaysTheBalanceIsNotAvailable(t *te
 	}
 	if _, ok := decoded["balance_not_available"]; !ok {
 		t.Fatal("the summary does not say that the balance is not available")
+	}
+}
+
+// A model whose description cannot be read is looked up once, not once per
+// request that used it.
+func TestGMIAccountSummaryAsksForAModelThatFailedOnlyOnce(t *testing.T) {
+	lookups := 0
+	state := gmiToolState(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/requests" {
+			_, _ = w.Write([]byte(`{"data":[
+				{"request_id":"a","model":"gone","status":"failed"},
+				{"request_id":"b","model":"gone","status":"failed"}
+			]}`))
+			return
+		}
+		lookups++
+		w.WriteHeader(http.StatusNotFound)
+	})
+	result := (&server{}).callGMIGetAccountSummary(context.Background(), state, json.RawMessage(`{}`))
+	if gmiToolFailed(result) {
+		t.Fatalf("the call failed: %s", gmiResultText(t, result))
+	}
+	if lookups != 1 {
+		t.Fatalf("the missing model was looked up %d times, want once", lookups)
+	}
+	decoded := gmiResultJSON(t, result)
+	if decoded["unpriced_requests"] != float64(2) {
+		t.Fatalf("unpriced_requests = %v, want 2", decoded["unpriced_requests"])
 	}
 }
 

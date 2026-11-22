@@ -250,6 +250,75 @@ func TestModelReadsAModalitiesList(t *testing.T) {
 	}
 }
 
+// An option published as a bare number or boolean is an option the model
+// accepts, so it has to be readable: an option that cannot be read is an
+// option a caller can break.
+func TestParameterReadsNumericAndBooleanOptions(t *testing.T) {
+	var model Model
+	if err := json.Unmarshal([]byte(`{"parameters":[
+		{"name":"steps","type":"integer","options":[5,10]},
+		{"name":"enhance","type":"boolean","options":[true,false]}
+	]}`), &model); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	steps := model.Parameter("steps")
+	if steps == nil || len(steps.Options) != 2 || steps.Options[0] != "5" || steps.Options[1] != "10" {
+		t.Fatalf("steps options = %+v, want the two numbers", steps)
+	}
+	enhance := model.Parameter("enhance")
+	if enhance == nil || len(enhance.Options) != 2 || enhance.Options[0] != "true" || enhance.Options[1] != "false" {
+		t.Fatalf("enhance options = %+v, want the two booleans", enhance)
+	}
+}
+
+// A model priced only by a chart publishes its rate inside the nested
+// pricing, so the chart travels with the price it belongs to.
+func TestPriceInfoReadsTheChartOfItsNestedPricing(t *testing.T) {
+	var info PriceInfo
+	if err := json.Unmarshal([]byte(`{"pricing":{"price_chart":{"rate":50000},"unit":"image"}}`), &info); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !info.HasPublishedPrice() {
+		t.Fatal("a model priced by a nested chart has no published price")
+	}
+	if info.PriceChart == nil || info.PriceChart.Rate == nil || *info.PriceChart.Rate != 50000 {
+		t.Fatalf("price chart = %+v, want the nested rate", info.PriceChart)
+	}
+	if info.UnitPriceUSD() != 0.05 {
+		t.Fatalf("unit price = %v, want 0.05", info.UnitPriceUSD())
+	}
+}
+
+// A video model is priced per second, so the length the catalog publishes
+// as its default is part of its cost.
+func TestEstimateCostUsesTheModelsDeclaredDuration(t *testing.T) {
+	model := Model{
+		ModelID:   "video",
+		PriceInfo: PriceInfo{Price: price(100000), Unit: "second"},
+		Parameters: []Parameter{
+			{Name: "durationSeconds", Type: "integer", Default: float64(10)},
+		},
+	}
+	estimate, err := EstimateCost(model, EstimateOptions{})
+	if err != nil {
+		t.Fatalf("EstimateCost: %v", err)
+	}
+	if estimate.Multiplier != 10 {
+		t.Fatalf("multiplier = %v, want the model's declared length of ten seconds", estimate.Multiplier)
+	}
+	if estimate.TotalUSD != 1 {
+		t.Fatalf("total = %v, want 1", estimate.TotalUSD)
+	}
+	// A length the caller asked for still wins over the declared default.
+	estimate, err = EstimateCost(model, EstimateOptions{Duration: 4, HasDuration: true})
+	if err != nil {
+		t.Fatalf("EstimateCost: %v", err)
+	}
+	if estimate.TotalUSD != 0.4 {
+		t.Fatalf("total = %v, want 0.4", estimate.TotalUSD)
+	}
+}
+
 // A price published as a bare number is still a price.
 func TestPriceInfoReadsABareNumber(t *testing.T) {
 	var info PriceInfo

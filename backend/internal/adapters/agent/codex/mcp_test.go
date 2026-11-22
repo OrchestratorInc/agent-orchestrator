@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -87,7 +88,7 @@ func TestGetLaunchCommandAddsNoMCPFlagsWithoutAServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, arg := range cmd {
-		if len(arg) > 12 && arg[:12] == "mcp_servers" {
+		if strings.HasPrefix(arg, "mcp_servers.") {
 			t.Fatalf("command carries an MCP override without a server: %#v", cmd)
 		}
 	}

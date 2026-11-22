@@ -145,14 +145,32 @@ func (m Model) BuildPayload(prompt string, options map[string]any) (map[string]a
 		if _, ok := payload[parameter.Name]; ok {
 			continue
 		}
-		if parameter.Required {
+		// A default the catalog publishes is a value the model accepts, so
+		// it fills a required parameter as well as an optional one. A
+		// required parameter with no usable default is still reported as
+		// missing.
+		if !usableDefault(parameter.Default) {
 			continue
 		}
-		if parameter.Default != nil && parameter.Default != "" {
-			payload[parameter.Name] = parameter.Default
-		}
+		payload[parameter.Name] = parameter.Default
 	}
 	return payload, dropped
+}
+
+// usableDefault reports whether a published default is a value the model can
+// be given.
+func usableDefault(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	}
+	return true
 }
 
 // MissingRequired returns the required parameters the payload does not
@@ -201,7 +219,26 @@ func mapOptionValue(parameter *Parameter, semantic string, value any) (any, bool
 // coerce converts a value to the parameter's declared type. A value that
 // cannot be converted is dropped rather than sent on and rejected.
 func coerce(parameter *Parameter, value any) (any, bool) {
-	switch parameter.Type {
+	if isArrayType(parameter.Type) {
+		return coerceArray(value)
+	}
+	final, ok := coerceType(parameter.Type, value)
+	if !ok {
+		return nil, false
+	}
+	// The model publishes the values it accepts for this parameter, whatever
+	// it calls the parameter's type. A value outside them is dropped: the
+	// model would refuse it, and the caller is told it was not sent.
+	if len(parameter.Options) == 0 {
+		return final, true
+	}
+	return matchOption(parameter.Options, final)
+}
+
+// coerceType converts a value to the type a parameter declares, for the
+// types whose conversion is not a plain pass-through.
+func coerceType(parameterType string, value any) (any, bool) {
+	switch parameterType {
 	case "integer", "int":
 		switch typed := value.(type) {
 		case float64:
@@ -245,25 +282,54 @@ func coerce(parameter *Parameter, value any) (any, bool) {
 		}
 		return nil, false
 	case "enum":
-		text := fmt.Sprintf("%v", value)
-		if len(parameter.Options) == 0 {
-			// The model names no allowed values, so there is nothing to
-			// check the value against.
-			return text, true
-		}
-		for _, option := range parameter.Options {
-			if option == text {
-				return text, true
-			}
-		}
-		for _, option := range parameter.Options {
-			if strings.EqualFold(option, text) {
-				return option, true
-			}
-		}
-		return nil, false
+		// An enum's value is one of the values the model publishes, so it
+		// is checked against them rather than converted.
+		return fmt.Sprintf("%v", value), true
 	}
 	return value, true
+}
+
+// matchOption checks a value against the values a model publishes for a
+// parameter, and returns the published spelling of the value.
+func matchOption(options []string, value any) (any, bool) {
+	text := fmt.Sprintf("%v", value)
+	for _, option := range options {
+		if option == text {
+			return text, true
+		}
+	}
+	for _, option := range options {
+		if strings.EqualFold(option, text) {
+			return option, true
+		}
+	}
+	return nil, false
+}
+
+// isArrayType reports whether a parameter takes a list of values.
+func isArrayType(parameterType string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(parameterType))
+	return trimmed == "array" || trimmed == "list" ||
+		strings.HasPrefix(trimmed, "array[") || strings.HasSuffix(trimmed, "[]")
+}
+
+// coerceArray sends one value as the one entry of a list, and keeps a list
+// the caller supplied.
+//
+// A model that declares a list of images takes one image as well, so a
+// single reference is sent as a list of one rather than as a value of the
+// wrong shape.
+func coerceArray(value any) (any, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, false
+	case []any:
+		return typed, true
+	case []string:
+		return typed, true
+	default:
+		return []any{value}, true
+	}
 }
 
 // clampToRange brings a number inside the bounds the model publishes for

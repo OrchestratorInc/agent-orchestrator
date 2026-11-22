@@ -233,6 +233,48 @@ func (m Model) Modality() string {
 // catalog only marks a model unavailable when it knows it is.
 func (m Model) IsAvailable() bool { return m.Available == nil || *m.Available }
 
+// DeclaredDuration returns the length the catalog publishes as this model's
+// default, in seconds, or 0 when it publishes none.
+//
+// A video model is priced per second, so the length a generation runs for is
+// part of its cost. The catalog publishes the default length it will use
+// when the caller names none, and that default is what the estimate prices.
+func (m Model) DeclaredDuration() float64 {
+	name := m.ResolveOption("duration")
+	if name == "" {
+		return 0
+	}
+	parameter := m.Parameter(name)
+	if parameter == nil {
+		return 0
+	}
+	value, ok := numberValue(parameter.Default)
+	if !ok || value <= 0 {
+		return 0
+	}
+	return value
+}
+
+// numberValue reads a number the catalog published as a number or as a
+// string.
+func numberValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	case string:
+		return parseNumber(json.RawMessage(typed))
+	}
+	return 0, false
+}
+
 // Parameter is one input a media model declares.
 //
 // The catalog publishes an option either as a bare value or as an object
@@ -284,16 +326,8 @@ func (p *Parameter) UnmarshalJSON(data []byte) error {
 	p.Description = raw.Description
 	p.Options = nil
 	for _, option := range append(raw.Options, raw.Enum...) {
-		var text string
-		if err := json.Unmarshal(option, &text); err == nil {
+		if text, ok := optionText(option); ok {
 			p.Options = append(p.Options, text)
-			continue
-		}
-		var object struct {
-			Value any `json:"value"`
-		}
-		if err := json.Unmarshal(option, &object); err == nil && object.Value != nil {
-			p.Options = append(p.Options, fmt.Sprintf("%v", object.Value))
 		}
 	}
 	if value, ok := parseNumber(raw.Minimum); ok {
@@ -303,6 +337,38 @@ func (p *Parameter) UnmarshalJSON(data []byte) error {
 		p.Maximum = &value
 	}
 	return nil
+}
+
+// optionText renders one published option as text.
+//
+// The catalog publishes an option as a bare string, as a bare number or
+// boolean, or as an object with a "value" field. Every spelling is read, so
+// an option published as a number stays available to check a value against:
+// an option that cannot be read is an option a caller can break.
+func optionText(option json.RawMessage) (string, bool) {
+	trimmed := strings.TrimSpace(string(option))
+	if trimmed == "" || trimmed == "null" {
+		return "", false
+	}
+	var text string
+	if err := json.Unmarshal(option, &text); err == nil {
+		return text, true
+	}
+	var number json.Number
+	if err := json.Unmarshal(option, &number); err == nil {
+		return number.String(), true
+	}
+	var flag bool
+	if err := json.Unmarshal(option, &flag); err == nil {
+		return strconv.FormatBool(flag), true
+	}
+	var object struct {
+		Value any `json:"value"`
+	}
+	if err := json.Unmarshal(option, &object); err == nil && object.Value != nil {
+		return fmt.Sprintf("%v", object.Value), true
+	}
+	return "", false
 }
 
 // PriceInfo is what the catalog publishes about a model's price.
@@ -352,6 +418,11 @@ func (p *PriceInfo) UnmarshalJSON(data []byte) error {
 	p.PriceChart = raw.PriceChart
 	if !p.HasPublishedPrice() && raw.Pricing != nil {
 		p.Price = raw.Pricing.Price
+		// The nested pricing carries its own chart. It travels with the
+		// price it belongs to: a model priced only by a chart publishes no
+		// price of its own, and copying the rate without the chart would
+		// leave the model looking unpriced.
+		p.PriceChart = raw.Pricing.PriceChart
 		if p.Unit == "" {
 			p.Unit = raw.Pricing.Unit
 		}
@@ -636,6 +707,11 @@ func EstimateCost(model Model, opts EstimateOptions) (Estimate, error) {
 		seconds := float64(defaultVideoDuration)
 		if opts.HasDuration && opts.Duration > 0 {
 			seconds = opts.Duration
+		} else if declared := model.DeclaredDuration(); declared > 0 {
+			// The catalog publishes the length this model runs for when the
+			// caller names none. That length is what the generation costs,
+			// so it is what the estimate prices.
+			seconds = declared
 		}
 		estimate.Multiplier = seconds
 	case "character":

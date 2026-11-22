@@ -74,8 +74,11 @@ func NewWithBaseURL(baseURL, apiKey string) (*Client, error) {
 	if baseURL == "" {
 		return nil, errors.New("gmi: a base URL is required")
 	}
-	if !strings.HasPrefix(baseURL, "https://") && !strings.HasPrefix(baseURL, "http://") {
-		return nil, errors.New("gmi: the base URL must be http or https")
+	// The API key travels in the Authorization header of every request, so
+	// the request may only be sent over plain HTTP to a loopback address,
+	// where it never leaves the machine.
+	if !strings.HasPrefix(baseURL, "https://") && !isLoopbackURL(baseURL) {
+		return nil, errors.New("gmi: the base URL must be https, or http for a loopback address")
 	}
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, ErrNoKey
@@ -85,6 +88,32 @@ func NewWithBaseURL(baseURL, apiKey string) (*Client, error) {
 		apiKey:  apiKey,
 		http:    &http.Client{Timeout: 60 * time.Second},
 	}, nil
+}
+
+// isLoopbackURL reports whether a URL is a plain-HTTP address on this
+// machine.
+func isLoopbackURL(rawURL string) bool {
+	if !strings.HasPrefix(rawURL, "http://") {
+		return false
+	}
+	host := strings.TrimPrefix(rawURL, "http://")
+	if index := strings.IndexAny(host, "/?#"); index >= 0 {
+		host = host[:index]
+	}
+	if index := strings.LastIndex(host, "@"); index >= 0 {
+		host = host[index+1:]
+	}
+	if index := strings.LastIndex(host, ":"); index >= 0 && !strings.Contains(host[index:], "]") {
+		host = host[:index]
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	switch {
+	case host == "localhost", host == "::1", host == "0:0:0:0:0:0:0:1":
+		return true
+	case strings.HasPrefix(host, "127."):
+		return true
+	}
+	return false
 }
 
 // BaseURL returns the API root this client talks to.
@@ -235,8 +264,12 @@ func (c *Client) UploadURL(ctx context.Context, fileType string) (uploadURL, pub
 //
 // The upload URL is signed by GMI Cloud and carries its own authorization, so
 // the API key is not sent with the bytes: the key belongs to the API, not to
-// the file store.
+// the file store. The signature is a credential of its own, so the bytes are
+// only sent over HTTPS, or to a loopback address.
 func Upload(ctx context.Context, uploadURL, contentType string, data []byte) error {
+	if !strings.HasPrefix(uploadURL, "https://") && !isLoopbackURL(uploadURL) {
+		return errors.New("gmi: the upload URL must be https, or http for a loopback address")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("gmi: build upload request: %w", err)

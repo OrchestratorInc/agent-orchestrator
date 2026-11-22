@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,13 @@ const (
 	// gmiDetailConcurrency bounds how many model descriptions one search
 	// fetches at once.
 	gmiDetailConcurrency = 6
+	// gmiSearchBatch is how many catalog entries one search reads
+	// descriptions for at a time.
+	gmiSearchBatch = 20
+	// gmiMaxSearchCandidates bounds how many catalog entries one search
+	// reads descriptions for, so a search over a large catalog does not
+	// read the whole catalog.
+	gmiMaxSearchCandidates = 200
 )
 
 // gmiToolArgs are the arguments the GMI tools share. Every tool reads the
@@ -350,13 +358,6 @@ func (s *server) callGMISearchModels(ctx context.Context, state *mcpState, raw j
 	if err != nil {
 		return mcpToolError(err)
 	}
-	matched := make([]gmi.Model, 0, len(models))
-	for _, model := range models {
-		if !gmiModelMatches(model, args.Query, args.Modality, args.Provider) {
-			continue
-		}
-		matched = append(matched, model)
-	}
 	limit := args.Limit
 	if limit <= 0 {
 		limit = gmiDefaultSearchResults
@@ -364,12 +365,33 @@ func (s *server) callGMISearchModels(ctx context.Context, state *mcpState, raw j
 	if limit > gmiMaxSearchResults {
 		limit = gmiMaxSearchResults
 	}
-	if len(matched) > limit {
-		matched = matched[:limit]
+	// The catalog answers with bare model ids, so a model's provider and
+	// modality are only known once its description has been fetched. The
+	// descriptions are read before the filters are applied: a filter on a
+	// detail would otherwise drop every model it could have matched.
+	candidates := gmiCandidateModels(models, args.Query)
+	if len(candidates) > gmiMaxSearchCandidates {
+		candidates = candidates[:gmiMaxSearchCandidates]
 	}
-	// The catalog answers with bare model ids, so the descriptions and
-	// prices have to be fetched for the models this call returns.
-	gmiFillModelDetails(ctx, client, matched)
+	matched := make([]gmi.Model, 0, limit)
+	for start := 0; start < len(candidates) && len(matched) < limit; start += gmiSearchBatch {
+		end := start + gmiSearchBatch
+		if end > len(candidates) {
+			end = len(candidates)
+		}
+		batch := make([]gmi.Model, end-start)
+		copy(batch, candidates[start:end])
+		gmiFillModelDetails(ctx, client, batch)
+		for _, model := range batch {
+			if !gmiModelMatches(model, args.Query, args.Modality, args.Provider) {
+				continue
+			}
+			matched = append(matched, model)
+			if len(matched) >= limit {
+				break
+			}
+		}
+	}
 	summaries := make([]map[string]any, 0, len(matched))
 	for _, model := range matched {
 		summaries = append(summaries, gmiModelSummary(model))
@@ -378,6 +400,33 @@ func (s *server) callGMISearchModels(ctx context.Context, state *mcpState, raw j
 		"models": summaries,
 		"count":  len(summaries),
 	})
+}
+
+// gmiCandidateModels narrows the catalog to the entries one search may
+// match.
+//
+// The catalog lists bare model ids, so a query can only be matched against
+// an id or a name before the descriptions are fetched. The entries that
+// carry the query are the candidates; when none of them does, every entry
+// is one, because the query may match a description the list does not
+// carry.
+func gmiCandidateModels(models []gmi.Model, query string) []gmi.Model {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return models
+	}
+	candidates := make([]gmi.Model, 0, len(models))
+	for _, model := range models {
+		if strings.Contains(strings.ToLower(model.ModelID), query) ||
+			strings.Contains(strings.ToLower(model.DisplayName), query) ||
+			strings.Contains(strings.ToLower(model.Description), query) {
+			candidates = append(candidates, model)
+		}
+	}
+	if len(candidates) == 0 {
+		return models
+	}
+	return candidates
 }
 
 // callGMIGetModel describes one model.
@@ -474,10 +523,14 @@ func (s *server) callGMISubmitGeneration(ctx context.Context, state *mcpState, r
 	}
 	// An unpublished price is reported as such. It is not a price of zero,
 	// and saying so keeps a caller from treating the generation as free.
+	// The estimate prices the payload that is submitted, not the arguments
+	// the tool schema happens to expose: the generation runs with the
+	// payload's own count and duration, so that is what it costs.
+	count, duration := gmiPayloadCounts(*model, payload)
 	estimate, estimateErr := gmi.EstimateCost(*model, gmi.EstimateOptions{
-		Count:       args.N,
-		Duration:    args.Duration,
-		HasDuration: args.Duration > 0,
+		Count:       count,
+		Duration:    duration,
+		HasDuration: duration > 0,
 		Text:        args.Prompt,
 	})
 	if estimateErr != nil {
@@ -634,20 +687,25 @@ func gmiEstimateSpend(ctx context.Context, client *gmi.Client, requests []gmi.Re
 		}
 		model, err := client.GetModel(ctx, request.Model)
 		if err != nil || model == nil {
+			// The lookup failed. The failure is remembered, so the
+			// requests that follow do not ask again: every one of them
+			// would wait on the same answer.
+			prices[request.Model] = nil
 			continue
 		}
 		prices[request.Model] = model
 	}
 	for _, request := range requests {
 		model, ok := prices[request.Model]
-		if !ok || !model.PriceInfo.HasPublishedPrice() {
+		if !ok || model == nil || !model.PriceInfo.HasPublishedPrice() {
 			unpriced++
 			continue
 		}
+		count, duration := gmiPayloadCounts(*model, request.Payload)
 		estimate, err := gmi.EstimateCost(*model, gmi.EstimateOptions{
-			Count:       gmiPayloadInt(request.Payload, "n"),
-			Duration:    gmiPayloadFloat(request.Payload, "duration", "durationSeconds", "duration_seconds", "seconds"),
-			HasDuration: gmiPayloadFloat(request.Payload, "duration", "durationSeconds", "duration_seconds", "seconds") > 0,
+			Count:       count,
+			Duration:    duration,
+			HasDuration: duration > 0,
 			Text:        gmiPayloadText(request.Payload, "prompt", "text"),
 		})
 		if err != nil {
@@ -787,7 +845,12 @@ func gmiReadUploadSource(ctx context.Context, args gmiToolArgs) ([]byte, string,
 	case path != "" && remote != "":
 		return nil, "", fmt.Errorf("pass either path or url, not both")
 	case path != "":
-		info, err := os.Stat(path)
+		handle, err := os.Open(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("read %s: %w", path, err)
+		}
+		defer func() { _ = handle.Close() }()
+		info, err := handle.Stat()
 		if err != nil {
 			return nil, "", fmt.Errorf("read %s: %w", path, err)
 		}
@@ -797,9 +860,14 @@ func gmiReadUploadSource(ctx context.Context, args gmiToolArgs) ([]byte, string,
 		if info.Size() > gmiMaxUploadBytes {
 			return nil, "", fmt.Errorf("%s is %d bytes, over the %d-byte limit", path, info.Size(), gmiMaxUploadBytes)
 		}
-		data, err := os.ReadFile(path)
+		// The file is read through a limit, so a file that grew after the
+		// size was taken cannot send more than the limit allows.
+		data, err := io.ReadAll(io.LimitReader(handle, gmiMaxUploadBytes+1))
 		if err != nil {
 			return nil, "", fmt.Errorf("read %s: %w", path, err)
+		}
+		if len(data) > gmiMaxUploadBytes {
+			return nil, "", fmt.Errorf("%s is over the %d-byte limit", path, gmiMaxUploadBytes)
 		}
 		return data, filepath.Base(path), nil
 	case remote != "":
@@ -877,8 +945,36 @@ func gmiPayloadInt(payload map[string]any, name string) int {
 		return int(typed)
 	case int:
 		return typed
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err != nil {
+			return 0
+		}
+		return parsed
 	}
 	return 0
+}
+
+// gmiPayloadCounts reads the count and the length out of a payload, under
+// the names the model uses for them.
+//
+// A model names its count "n", "max_images" or "num_images", and its length
+// "duration", "durationSeconds" or "seconds". The model's own name is the
+// one that decides what the generation costs, so it is read first.
+func gmiPayloadCounts(model gmi.Model, payload map[string]any) (count int, duration float64) {
+	count = gmiPayloadInt(payload, "n")
+	if name := model.ResolveOption("n"); name != "" && name != "n" {
+		if value := gmiPayloadInt(payload, name); value > 0 {
+			count = value
+		}
+	}
+	duration = gmiPayloadFloat(payload, "duration", "durationSeconds", "duration_seconds", "seconds")
+	if name := model.ResolveOption("duration"); name != "" {
+		if value := gmiPayloadFloat(payload, name); value > 0 {
+			duration = value
+		}
+	}
+	return count, duration
 }
 
 // gmiPayloadFloat reads a number out of a request's own payload, under any

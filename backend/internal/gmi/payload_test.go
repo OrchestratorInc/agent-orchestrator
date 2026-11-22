@@ -90,6 +90,73 @@ func TestBuildPayloadClampsAValueToTheModelsRange(t *testing.T) {
 	}
 }
 
+// A default the catalog publishes is a value the model accepts, so it fills
+// a required parameter as well as an optional one.
+func TestBuildPayloadFillsARequiredParameterFromItsDefault(t *testing.T) {
+	model := Model{Parameters: []Parameter{
+		{Name: "prompt", Type: "string", Required: true},
+		{Name: "n", Type: "integer", Required: true, Default: float64(2)},
+		{Name: "first_frame", Type: "string", Required: true},
+	}}
+	payload, dropped := model.BuildPayload("a cat", nil)
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %v, want nothing", dropped)
+	}
+	if payload["n"] != float64(2) {
+		t.Fatalf("n = %v, want the model's declared default", payload["n"])
+	}
+	// A required parameter with no usable default is still missing.
+	missing := model.MissingRequired(payload)
+	if len(missing) != 1 || missing[0] != "first_frame" {
+		t.Fatalf("missing = %v, want first_frame", missing)
+	}
+}
+
+// The values a model publishes for a parameter are checked whatever it calls
+// the parameter's type.
+func TestBuildPayloadChecksTheValuesAStringParameterAccepts(t *testing.T) {
+	model := Model{Parameters: []Parameter{
+		{Name: "prompt", Type: "string", Required: true},
+		{Name: "image_size", Type: "string", Options: []string{"1024x1024", "1024x1536"}},
+	}}
+	payload, dropped := model.BuildPayload("a cat", map[string]any{"image_size": "999x999"})
+	if len(dropped) != 1 || dropped[0] != "image_size" {
+		t.Fatalf("dropped = %v, want the value the model does not accept", dropped)
+	}
+	if _, ok := payload["image_size"]; ok {
+		t.Fatalf("payload = %v, want the refused value left out", payload)
+	}
+	payload, dropped = model.BuildPayload("a cat", map[string]any{"image_size": "1024x1536"})
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %v, want nothing", dropped)
+	}
+	if payload["image_size"] != "1024x1536" {
+		t.Fatalf("image_size = %v, want the value the model accepts", payload["image_size"])
+	}
+}
+
+// A model that declares a list of images takes one image as well.
+func TestBuildPayloadSendsOneImageAsAListOfOne(t *testing.T) {
+	model := Model{Parameters: []Parameter{
+		{Name: "prompt", Type: "string", Required: true},
+		{Name: "images", Type: "array"},
+	}}
+	payload, dropped := model.BuildPayload("a cat", map[string]any{"image": "https://cdn/a.png"})
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %v, want nothing", dropped)
+	}
+	images, ok := payload["images"].([]any)
+	if !ok || len(images) != 1 || images[0] != "https://cdn/a.png" {
+		t.Fatalf("images = %v (%T), want the one image as a list", payload["images"], payload["images"])
+	}
+	// A list the caller supplied is kept as it is.
+	payload, _ = model.BuildPayload("a cat", map[string]any{"image": []any{"https://cdn/a.png", "https://cdn/b.png"}})
+	images, ok = payload["images"].([]any)
+	if !ok || len(images) != 2 {
+		t.Fatalf("images = %v, want both images", payload["images"])
+	}
+}
+
 func TestResolveOptionFindsTheNameTheModelUses(t *testing.T) {
 	model := Model{Parameters: []Parameter{{Name: "durationSeconds"}}}
 	if got := model.ResolveOption("duration"); got != "durationSeconds" {

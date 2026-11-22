@@ -28,6 +28,35 @@ func TestNewRejectsAnEmptyKey(t *testing.T) {
 	}
 }
 
+// The API key travels in the Authorization header of every request, so a
+// request may only be sent over plain HTTP to a loopback address.
+func TestNewWithBaseURLKeepsTheKeyOffTheWireInPlainHTTP(t *testing.T) {
+	if _, err := NewWithBaseURL("http://console.gmicloud.ai/api", "test-key"); err == nil {
+		t.Fatal("NewWithBaseURL accepted a plain-HTTP address")
+	}
+	for _, baseURL := range []string{
+		"http://127.0.0.1:8080/api",
+		"http://localhost:8080/api",
+		"http://[::1]:8080/api",
+	} {
+		if _, err := NewWithBaseURL(baseURL, "test-key"); err != nil {
+			t.Fatalf("NewWithBaseURL(%q) error = %v, want the client", baseURL, err)
+		}
+	}
+}
+
+// A pre-signed upload URL carries a signature of its own, so the bytes are
+// not sent to a plain-HTTP address either.
+func TestUploadRefusesAPlainHTTPAddress(t *testing.T) {
+	err := Upload(context.Background(), "http://storage.example/upload", "image/png", []byte("bytes"))
+	if err == nil {
+		t.Fatal("Upload sent the bytes to a plain-HTTP address")
+	}
+	if !strings.Contains(err.Error(), "https") {
+		t.Fatalf("error = %q, want it to name the scheme it insists on", err)
+	}
+}
+
 func TestListModelsReadsEveryPublishedShape(t *testing.T) {
 	cases := []struct {
 		name string
