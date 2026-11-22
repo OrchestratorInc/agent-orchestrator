@@ -48,11 +48,44 @@ describe("TurnChangedFiles", () => {
 	it("shows the bordered summary with files visible", () => {
 		render(<TurnChangedFiles diff={diff()} />);
 		expect(screen.getByText("2 Files Changed")).toBeInTheDocument();
-		expect(screen.getByText("a.ts")).toBeInTheDocument();
-		expect(screen.getByText("new.ts")).toBeInTheDocument();
+		expect(screen.getByText("src/a.ts")).toBeInTheDocument();
+		expect(screen.getByText("src/new.ts")).toBeInTheDocument();
 		expect(screen.getByText("+12")).toBeInTheDocument();
 		expect(screen.getByText("+40")).toBeInTheDocument();
 		expect(screen.getByText("−3")).toBeInTheDocument();
+	});
+
+	it.each([true, false])("shows distinct repository paths for changed, created, and renamed files (openable: %s)", async (openable) => {
+		const onOpenFile = vi.fn();
+		render(<TurnChangedFiles diff={{ files: [
+			{ path: "alpha/workspace-test.txt", additions: 1, deletions: 1, status: "modified" },
+			{ path: "beta/workspace-test.txt", additions: 1, deletions: 0, status: "added" },
+			{ path: "alpha/new-name.txt", oldPath: "alpha/old-name.txt", additions: 0, deletions: 0, status: "renamed" },
+		] }} onOpenFile={openable ? onOpenFile : undefined} />);
+		for (const path of ["alpha/workspace-test.txt", "beta/workspace-test.txt", "alpha/new-name.txt"]) {
+			expect(screen.getByText(path)).toBeInTheDocument();
+			if (openable) {
+				await userEvent.click(screen.getByRole("button", { name: `Open ${path} in Files` }));
+				expect(onOpenFile).toHaveBeenLastCalledWith(path);
+			}
+		}
+	});
+
+	it("shows the repository from the turn's file change when the diff reports only a basename", async () => {
+		const cwd = "/Users/me/.ao/data/worktrees/demo/demo-1";
+		const path = `${cwd}/alpha/workspace-test.txt`;
+		const onOpenFile = vi.fn();
+		render(<TurnChangedFiles
+			diff={{ files: [{ path: "workspace-test.txt", additions: 1, deletions: 0, status: "added" }] }}
+			items={[
+				commandActivity({ cwd, command: "ls" }),
+				{ ...commandActivity({ files: [{ path, status: "added", additions: 1, deletions: 0 }] }), id: "act-2", activityKind: "file_change" },
+			]}
+			onOpenFile={onOpenFile}
+		/>);
+		expect(screen.getByText("alpha/workspace-test.txt")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Open alpha/workspace-test.txt in Files" }));
+		expect(onOpenFile).toHaveBeenCalledWith(path);
 	});
 
 	it("offers Review when a handler is provided", async () => {
@@ -137,10 +170,10 @@ describe("TurnChangedFiles", () => {
 		expect(onOpenFile).toHaveBeenCalledWith(path);
 	});
 
-	it("shows the full path on basename hover", async () => {
+	it("shows the full path on card label hover", async () => {
 		const user = userEvent.setup();
 		render(<TurnChangedFiles diff={diff()} />);
-		await user.hover(screen.getByText("a.ts"));
+		await user.hover(screen.getByText("src/a.ts"));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/a.ts");
 	});
 
@@ -175,7 +208,7 @@ describe("TurnChangedFiles", () => {
 				]}
 			/>,
 		);
-		await user.hover(screen.getByText("random_words_1.txt"));
+		await user.hover(screen.getByText("wexaai-21/random_words_1.txt"));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent(
 			"~/.ao/dev/data/worktrees/wexaai/wexaai-21/random_words_1.txt",
 		);
@@ -221,8 +254,8 @@ describe("TurnChangedFiles", () => {
 			/>,
 		);
 		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
-		expect(screen.getByText("new.ts")).toBeInTheDocument();
-		await user.hover(screen.getByText("new.ts"));
+		expect(screen.getByText("src/new.ts")).toBeInTheDocument();
+		await user.hover(screen.getByText("src/new.ts"));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/old.ts → src/new.ts");
 	});
 
@@ -242,10 +275,10 @@ describe("TurnChangedFiles", () => {
 			})),
 		};
 		render(<TurnChangedFiles diff={many} />);
-		expect(screen.getByText("file-0.ts")).toBeInTheDocument();
-		expect(screen.queryByText("file-5.ts")).not.toBeInTheDocument();
+		expect(screen.getByText("src/file-0.ts")).toBeInTheDocument();
+		expect(screen.queryByText("src/file-5.ts")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
-		expect(screen.getByText("file-5.ts")).toBeInTheDocument();
+		expect(screen.getByText("src/file-5.ts")).toBeInTheDocument();
 	});
 
 	it("marks a running turn's diff as still growing", () => {
@@ -633,7 +666,7 @@ describe("TurnResults", () => {
 		expect(screen.getByText("1 Artifact")).toBeInTheDocument();
 		expect(screen.getByText("Created")).toBeInTheDocument();
 		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
-		expect(screen.getByText("a.ts")).toBeInTheDocument();
+		expect(screen.getByText("src/a.ts")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open guide.md, created in this turn" }));
 		// By artifact path, never through the workspace-file opener.
 		expect(onOpenArtifact).toHaveBeenCalledWith({ path: "guide.md" });

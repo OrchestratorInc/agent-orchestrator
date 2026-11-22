@@ -47,7 +47,7 @@ export function turnPathHints(items: ConversationItem[] | undefined): TurnPathHi
 /** Prefer an absolute path from the turn; otherwise join the worktree cwd. */
 export function resolveTurnFilePath(path: string, hints: TurnPathHints): string {
 	if (looksAbsolutePath(path)) return path;
-	const fromBasename = hints.byBase.get(fileBasename(path));
+	const fromBasename = path === fileBasename(path) ? hints.byBase.get(path) : undefined;
 	if (fromBasename) return fromBasename;
 	if (hints.cwd) {
 		const rel = path.replace(/^\.\//, "");
@@ -77,7 +77,7 @@ export function workspaceRelativeOpenPath(absolutePath: string, cwd?: string): s
 export function turnFileOpenPath(path: string, hints: TurnPathHints): string {
 	const normalized = path.replace(/^\.\//, "");
 	if (!looksAbsolutePath(normalized)) {
-		const fromBasename = hints.byBase.get(fileBasename(normalized));
+		const fromBasename = normalized === fileBasename(normalized) ? hints.byBase.get(normalized) : undefined;
 		if (fromBasename && looksAbsolutePath(fromBasename)) {
 			return workspaceRelativeOpenPath(fromBasename, hints.cwd);
 		}

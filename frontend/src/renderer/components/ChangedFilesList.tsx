@@ -27,7 +27,7 @@ export function ChangeCounts({ additions, deletions, className }: { additions: n
 
 /**
  * A branch row's files, opened in place under it: one flat line per file
- * (name, its folder dimmed, +/−, change letter), each opening its own diff.
+ * (workspace-relative path, +/−, change letter), each opening its own diff.
  * "View all changes" opens the full changes view.
  */
 export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
@@ -48,7 +48,6 @@ export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 				const mark = statusMark[file.status] ?? statusMark.modified;
 				const slash = file.path.lastIndexOf("/");
 				const name = file.path.slice(slash + 1);
-				const dir = slash < 0 ? "" : file.path.slice(0, slash);
 				return (
 					<li className="min-w-0" key={file.path}>
 						<button
@@ -58,11 +57,7 @@ export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 							type="button"
 						>
 							<WorkspaceEntryIcon className="size-icon-2xs" kind="file" name={name} />
-							<span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-								<span className="min-w-0 truncate text-foreground">{name}</span>
-								{/* The folder gives way first when the line is tight. */}
-								{dir ? <span className="min-w-0 shrink-[100] truncate text-passive">{dir}</span> : null}
-							</span>
+							<span className="min-w-0 flex-1 truncate text-foreground">{file.path}</span>
 							<ChangeCounts additions={file.additions ?? 0} deletions={file.deletions ?? 0} className="text-micro" />
 							<span aria-hidden="true" className={cn("w-3 shrink-0 text-center font-mono text-micro font-semibold", mark.className)}>{mark.letter}</span>
 							<span className="sr-only">, {t(`inspector.git.fileStatus.${mark.key}`)}</span>
