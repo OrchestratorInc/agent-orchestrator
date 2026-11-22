@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -30,10 +32,16 @@ func listedPaths(t *testing.T, svc *Service, id domain.SessionID) ([]string, map
 
 func TestListWorkspaceFilePathsMatchesFullListWithoutDeletions(t *testing.T) {
 	repo := newWorkspaceRepo(t)
+	writeWorkspaceFile(t, repo, "docs/old.md", "old\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-q", "-m", "old")
 	writeWorkspaceFile(t, repo, "README.md", "changed\n")
 	writeWorkspaceFile(t, repo, "notes/new.txt", "untracked\n")
 	writeWorkspaceFile(t, repo, "node_modules/pkg/index.js", "ignored\n")
-	runGit(t, repo, "rm", "-q", "src/app.go")
+	runGit(t, repo, "rm", "-q", "docs/old.md")
+	if err := os.Remove(filepath.Join(repo, "src", "app.go")); err != nil {
+		t.Fatal(err)
+	}
 	svc := workspaceReviewService(t, repo)
 
 	got, err := svc.ListWorkspaceFilePaths(context.Background(), "ao-1")
@@ -44,8 +52,17 @@ func TestListWorkspaceFilePathsMatchesFullListWithoutDeletions(t *testing.T) {
 	if !slices.Equal(got.Paths, want) || got.Truncated != truncated {
 		t.Fatalf("paths = %v truncated=%v, want %v truncated=%v", got.Paths, got.Truncated, want, truncated)
 	}
-	if !slices.Contains(got.Paths, "notes/new.txt") || slices.Contains(got.Paths, "src/app.go") || slices.Contains(got.Paths, "node_modules/pkg/index.js") {
-		t.Fatalf("paths = %v, want the untracked file and neither the deleted nor the ignored one", got.Paths)
+	if !slices.Contains(got.Paths, "notes/new.txt") || slices.Contains(got.Paths, "src/app.go") || slices.Contains(got.Paths, "docs/old.md") || slices.Contains(got.Paths, "node_modules/pkg/index.js") {
+		t.Fatalf("paths = %v, want the untracked file and neither the deleted nor the ignored ones", got.Paths)
+	}
+	for _, deleted := range []string{"src/app.go", "docs/old.md"} {
+		search, err := svc.SearchWorkspaceFiles(context.Background(), "ao-1", deleted, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(search.Results) != 1 || search.Results[0].Status != WorkspaceFileDeleted {
+			t.Fatalf("search %q = %#v, want its deleted row", deleted, search.Results)
+		}
 	}
 }
 
@@ -88,7 +105,7 @@ func TestWorkspaceSourcePathsKeepsChangedFilesWhenCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths, truncated, err := svc.workspaceSourcePaths(context.Background(), "ao-1", sources, 10)
+	paths, truncated, err := svc.workspaceSourcePaths(context.Background(), "ao-1", sources, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +151,18 @@ func TestListWorkspaceFilePathsPrefixesWorkspaceChildRepos(t *testing.T) {
 		if result.Status != full.Status || result.Size != full.Size || result.Binary != full.Binary || result.FileFingerprint != full.FileFingerprint {
 			t.Fatalf("search result %#v differs from the full list row %#v", result, full)
 		}
+	}
+
+	_, sources, _, err := svc.workspacePathSources(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	capped, truncated, err := svc.workspaceSourcePaths(context.Background(), "ws-1", sources, 2, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"alpha/added.txt", "alpha/service.go"}; !truncated || !slices.Equal(capped, want) {
+		t.Fatalf("capped = %v truncated=%v, want the child repo's changed files %v", capped, truncated, want)
 	}
 }
 

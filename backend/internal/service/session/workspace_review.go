@@ -664,7 +664,7 @@ func (s *Service) SearchWorkspaceFiles(ctx context.Context, id domain.SessionID,
 			paths = append(paths, file.Path)
 		}
 		truncated = scratchTruncated
-	} else if paths, truncated, err = s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths); err != nil {
+	} else if paths, truncated, err = s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths, true); err != nil {
 		return WorkspaceFileSearch{}, err
 	}
 	needle := strings.ToLower(query)

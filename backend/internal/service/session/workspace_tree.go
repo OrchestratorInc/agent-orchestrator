@@ -123,7 +123,7 @@ func (s *Service) workspaceTreeChildrenCached(
 	if err := g.Wait(); err != nil {
 		return nil, false, err
 	}
-	paths, truncated := mergeWorkspaceFilePaths(lsParts, changes.changedPaths(), maxWorkspaceFiles)
+	paths, truncated := mergeWorkspaceFilePaths(lsParts, changes.changedPaths())
 	entries := buildWorkspaceTreeEntries(root, prefix, excludePrefixes, dir, paths, changes)
 	return entries, truncated, nil
 }

@@ -3,13 +3,14 @@ package session
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// WorkspaceFilePaths lists the files ListWorkspaceFiles lists, by path only.
 type WorkspaceFilePaths struct {
 	SessionID domain.SessionID
 	Paths     []string
@@ -25,8 +26,6 @@ type workspacePathSource struct {
 	resolve func(context.Context) workspaceCompareTarget
 }
 
-// ListWorkspaceFilePaths returns the session workspace's visible file paths
-// without reading each file or computing the Git review sections.
 func (s *Service) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (WorkspaceFilePaths, error) {
 	rec, sources, scratch, err := s.workspacePathSources(ctx, id)
 	if err != nil {
@@ -43,7 +42,7 @@ func (s *Service) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionI
 		}
 		return WorkspaceFilePaths{SessionID: id, Paths: paths, Truncated: truncated}, nil
 	}
-	paths, truncated, err := s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths)
+	paths, truncated, err := s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths, false)
 	if err != nil {
 		return WorkspaceFilePaths{}, err
 	}
@@ -114,7 +113,7 @@ func (s *Service) workspacePathSources(ctx context.Context, id domain.SessionID)
 	return rec, sources, false, nil
 }
 
-func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID, sources []workspacePathSource, limit int) ([]string, bool, error) {
+func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID, sources []workspacePathSource, limit int, includeDeleted bool) ([]string, bool, error) {
 	inventories := make([][]string, len(sources))
 	total := 0
 	for i, source := range sources {
@@ -125,25 +124,46 @@ func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID,
 		inventories[i] = parts
 		total += len(parts)
 	}
-	var paths []string
-	truncated := false
+	var changed, unchanged []string
+	seen := map[string]struct{}{}
 	for i, source := range sources {
-		var changed map[string]struct{}
-		if total > limit {
-			_, changes, err := s.resolveWorkspaceChanges(ctx, id, source.root, source.resolve)
+		var changes workspaceChangeSet
+		if includeDeleted || total > limit {
+			_, resolved, err := s.resolveWorkspaceChanges(ctx, id, source.root, source.resolve)
 			if err != nil {
 				return nil, false, err
 			}
-			changed = changes.changedPaths()
+			changes = resolved
 		}
-		merged, repoTruncated := mergeWorkspaceFilePaths(inventories[i], changed, limit)
-		repoPaths := make([]string, 0, len(merged))
-		for _, rel := range merged {
-			if !workspacePathExcluded(rel, source.exclude) {
-				repoPaths = append(repoPaths, joinWorkspaceRelative(source.prefix, rel))
+		add := func(part string, into *[]string) {
+			rel := filepath.ToSlash(part)
+			if rel == "" || workspacePathExcluded(rel, source.exclude) {
+				return
 			}
+			if !includeDeleted {
+				if _, err := os.Lstat(filepath.Join(source.root, filepath.FromSlash(rel))); err != nil {
+					return
+				}
+			}
+			path := joinWorkspaceRelative(source.prefix, rel)
+			if _, ok := seen[path]; ok {
+				return
+			}
+			seen[path] = struct{}{}
+			*into = append(*into, path)
 		}
-		paths, truncated = appendWorkspaceFilesWithCap(paths, repoPaths, truncated || repoTruncated, limit)
+		for rel := range changes.changedPaths() {
+			add(rel, &changed)
+		}
+		for _, rel := range inventories[i] {
+			add(rel, &unchanged)
+		}
+	}
+	sort.Strings(changed)
+	paths := append(changed, unchanged...)
+	truncated := len(paths) > limit
+	if truncated {
+		paths = paths[:limit]
 	}
 	sort.Strings(paths)
 	return paths, truncated, nil

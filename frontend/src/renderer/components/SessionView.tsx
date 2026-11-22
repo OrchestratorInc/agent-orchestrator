@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
-import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isCancelledError, useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
@@ -2324,10 +2324,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				if (error) throw error;
 				if (active) renewedAt = Date.now();
 				// Remote conversations already refresh every two seconds. A ready or
-				// working chat hears every change through events, but clearing the
-				// sleep marker on wake emits none, so a chat still waking or stopped
-				// is refreshed here; refreshing a settled one reloaded every page it
-				// had on each return.
+				// working chat hears every change through events, so only a chat still
+				// waking or stopped is refreshed here; refreshing a settled one reloaded
+				// every page it had on each return.
 				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
 					if (!conversationSettled(queryClient, sessionId)) {
@@ -2445,9 +2444,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserOnly, sessionId, uiSessionId, setFilesChangedOnly, setInspectorOpenForSession, transitionInspectorView]);
 
 	const fetchWorkspaceFiles = useCallback(async () => {
-		return queryClient.fetchQuery(
-			sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
-		);
+		const options = sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId);
+		return queryClient.fetchQuery(options).catch((error: unknown) => {
+			if (isCancelledError(error)) return queryClient.fetchQuery(options);
+			throw error;
+		});
 	}, [hostId, queryClient, sessionId, t]);
 
 	const handleOpenArtifact = useCallback(

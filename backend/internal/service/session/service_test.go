@@ -2497,7 +2497,7 @@ func TestAppendWorkspaceFilesWithCapEnforcesGlobalLimit(t *testing.T) {
 	existing := make([]WorkspaceFileSummary, maxWorkspaceFiles-1)
 	added := []WorkspaceFileSummary{{Path: "one.go"}, {Path: "two.go"}}
 
-	got, truncated := appendWorkspaceFilesWithCap(existing, added, false, maxWorkspaceFiles)
+	got, truncated := appendWorkspaceFilesWithCap(existing, added, false)
 	if len(got) != maxWorkspaceFiles || !truncated {
 		t.Fatalf("len,truncated = %d,%v; want %d,true", len(got), truncated, maxWorkspaceFiles)
 	}

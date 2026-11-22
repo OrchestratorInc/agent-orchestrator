@@ -21,8 +21,8 @@ function prefetchChat(queryClient: QueryClient, sessionId: string) {
 // loads its chunk: with no pending screen the previous page stays up until the
 // session can paint, and the host owns the error panel if the chunk fails.
 export const Route = createFileRoute("/_shell/projects/$projectId_/sessions/$sessionId")({
-	loader: async ({ context, params }) => {
-		prefetchChat(context.queryClient, params.sessionId);
+	loader: async ({ context, params, preload }) => {
+		if (!preload) prefetchChat(context.queryClient, params.sessionId);
 		await loadSessionView();
 	},
 	pendingMs: Number.POSITIVE_INFINITY,
