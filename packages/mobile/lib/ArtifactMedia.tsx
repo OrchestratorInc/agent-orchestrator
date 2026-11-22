@@ -2,6 +2,7 @@ import { useEvent } from "expo";
 import { useVideoPlayer, VideoView, type VideoPlayer } from "expo-video";
 import { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, ActivityIndicator, Platform, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { haptics } from "./haptics";
 import { formatMediaTime } from "./mediaTime";
 import { Feather } from "./icons";
@@ -183,21 +184,24 @@ function VideoControls({ player, ready }: { player: VideoPlayer; ready: boolean 
 							<Feather name={isPlaying ? "pause" : "play"} size={iconSize.xl} color={ON_VIDEO.glyph} />
 						</Pressable>
 					</View>
-					<View style={styles.videoBar}>
-						<View style={styles.videoPosition}>
-							<MediaPosition player={player} currentTime={currentTime} length={length} onVideo onSeek={touched} />
+					{/* With no filmstrip the page runs to the screen's bottom edge: keep the bar above the home indicator. */}
+					<SafeAreaView edges={["bottom"]}>
+						<View style={styles.videoBar}>
+							<View style={styles.videoPosition}>
+								<MediaPosition player={player} currentTime={currentTime} length={length} onVideo onSeek={touched} />
+							</View>
+							<Pressable
+								accessibilityRole="button"
+								accessibilityLabel="Full screen"
+								disabled={!ready}
+								onPress={enterFullscreen}
+								hitSlop={space.sm}
+								style={({ pressed }) => [styles.videoFullscreen, pressed && styles.pressed, !ready && styles.disabled]}
+							>
+								<Feather name="maximize-2" size={iconSize.md} color={ON_VIDEO.glyph} />
+							</Pressable>
 						</View>
-						<Pressable
-							accessibilityRole="button"
-							accessibilityLabel="Full screen"
-							disabled={!ready}
-							onPress={enterFullscreen}
-							hitSlop={space.sm}
-							style={({ pressed }) => [styles.videoFullscreen, pressed && styles.pressed, !ready && styles.disabled]}
-						>
-							<Feather name="maximize-2" size={iconSize.md} color={ON_VIDEO.glyph} />
-						</Pressable>
-					</View>
+					</SafeAreaView>
 				</View>
 			) : null}
 		</View>

@@ -16,6 +16,7 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
+vi.mock("react-native-safe-area-context", () => ({ SafeAreaView: "SafeAreaView" }));
 vi.mock("expo", () => ({
 	useEvent: (_player: unknown, event: string, initial: object) => (event === "statusChange" ? { status: player.status } : initial),
 }));
