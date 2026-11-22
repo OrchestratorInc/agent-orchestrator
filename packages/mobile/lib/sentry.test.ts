@@ -206,3 +206,22 @@ it("drops a hash in progress when consent changes", async () => {
 	finishDigest("0123456789abc");
 	expect(await send).toBeNull();
 });
+
+it.each([
+	["open /Users/alice/My ConfidentialProject/offer.txt failed", "open <path> failed", /alice|ConfidentialProject|offer\.txt/],
+	["request failed access_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed refresh_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed client_secret=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+] as const)("scrubs sensitive values in the final mobile event", async (value, title, privateText) => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	sentry.captureMobileException(new Error(value), { category: "render_crash" });
+	const event = await sentry.sanitizeMobileSentryEvent({
+		type: undefined,
+		tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
+		exception: { values: [{ type: "Error", value }] },
+	});
+	expect(event?.message).toBe(title);
+	expect(JSON.stringify(event)).not.toMatch(privateText);
+});

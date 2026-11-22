@@ -2,6 +2,9 @@ import { safeSentryCode } from "./ao-error";
 
 const ERROR_PREFIX = /^(?:Uncaught(?: \(in promise\))? )?(?:[A-Za-z_$][\w$]*)?Error:\s+|^Uncaught(?: \(in promise\))? /;
 const IPC_WRAPPER = /^Error invoking remote method '([a-z][\w:-]{0,63})':\s*/;
+// An unquoted path may span words. Keep consuming a segment if a later word
+// contains a separator, stopping at the start of another absolute path.
+const ABSOLUTE_PATH = /(?:[A-Za-z]:[\\/]|\\\\|~\/|(?<![\w/])\/)(?:\\[ \t]|[^\s"'‘’“”<>\x60])+(?:(?:[ \t]+[^\s\\/:"'‘’“”<>\x60]+)*[ \t]+(?![\\/~]|[A-Za-z]:)[^\s\\/:"'‘’“”<>\x60]+[\\/](?:\\[ \t]|[^\s"'‘’“”<>\x60])+)*/g;
 
 function normalizeSentryMessage(value: unknown): { text: string; unsafe: boolean; channel?: string } {
 	if (typeof value !== "string" || !value || value.length > 4096) return { text: "", unsafe: false };
@@ -12,9 +15,9 @@ function normalizeSentryMessage(value: unknown): { text: string; unsafe: boolean
 	const text = message
 		.replace(/\b(?:(?:https?|app|wss?):\/\/|file:\/)[^\s"'‘’“”<>\x60]+/gi, "<url>")
 		.replace(/[\w.!#$%&*+/=?^{}|~-]+@[\w-]+(?:\.[\w-]+)+/g, "<email>")
-		.replace(/(?:[A-Za-z]:[\\/]|\\\\)[^\s"'‘’“”<>\x60]+(?:[ \t]+(?!(?:[\\/~]|[A-Za-z]:))[^\s"'‘’“”<>\x60]*[\\/][^\s"'‘’“”<>\x60]+)*|(?:~\/|(?<![\w/])\/)[^\s"'‘’“”<>\x60]+/g, "<path>")
+		.replace(ABSOLUTE_PATH, "<path>")
 		.replace(/"(?:\\.|[^"\\])*(?:"|$)|(?<![\p{L}\p{N}])'(?:\\.|[^'\\]|'(?=\p{L}))*?(?:'(?!\p{L})|$)|\x60(?:\\.|[^\x60\\])*(?:\x60|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$)/gu, "'?'")
-		.replace(/\b(?:password|token|api[_-]?key|authorization|secret)\s*[:=]\s*(?:(?:bearer|basic)\s+)?[^\s,;]+/gi, "<credential>")
+		.replace(/\b[\w-]*(?:password|token|api[_-]?key|authorization|secret)\s*[:=].*/gi, "<credential>")
 		.replace(/\bbearer\s+[\w./+=-]+/gi, "<credential>")
 		.replace(/\b(?:prompt|conversation|source code)\s*[:=].*/gi, "<content>")
 		.replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "<id>")

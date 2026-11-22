@@ -752,3 +752,16 @@ it("omits quoted prompts, email addresses, home paths and remote URLs from the f
 	expect(event?.message).toBe("Could not send '?' to <email> from <path> via <url>");
 	expect(JSON.stringify(event)).not.toMatch(/my private prompt|alice|host\.test/);
 });
+
+it.each([
+	["open /Users/alice/My ConfidentialProject/offer.txt failed", "open <path> failed", /alice|ConfidentialProject|offer\.txt/],
+	["request failed access_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed refresh_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed client_secret=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+] as const)("scrubs sensitive values in the final event", async (message, title, privateText) => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type: "Error", frames: [] } });
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe(title);
+	expect(JSON.stringify(event)).not.toMatch(privateText);
+});
