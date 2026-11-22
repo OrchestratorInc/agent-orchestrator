@@ -1,11 +1,10 @@
 import { Host } from "@expo/ui";
-import { HStack, Label, Menu, Picker, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { HStack, Label, Menu, Picker, Section, Text, Toggle } from "@expo/ui/swift-ui";
 import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag, layoutPriority } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
-import { approvalSymbol } from "../approvalSymbol";
-import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
+import { Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
@@ -33,6 +32,8 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
 	const modelRow = select("model");
+	// The approval mode is not offered in the composer: it is left as the
+	// session has it, and kept out of the model menu's other settings.
 	const approvalRow = select("permissions");
 	// Effort is one of the model menu's settings, as on the desktop, where the
 	// row holds the model and approvals alone; a gauge beside the model left
@@ -121,17 +122,6 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 						</Section>
 					) : null}
 				</Menu>
-				<Spacer minLength={0} />
-				{approvalRow ? (
-					<ApprovalMenu
-						key={`approval-${generation}`}
-						choices={approvalRow.choices.map((choice) => ({ value: choice.value, label: choice.label, symbol: approvalSymbol(choice.permissionMode, snapshot.harness), selected: choice.selected }))}
-						onChoose={(value) => choose(approvalRow, value)}
-						disabled={off}
-						id="chat-approval"
-						labelled
-					/>
-				) : null}
 			</HStack>
 		</Host>
 	);

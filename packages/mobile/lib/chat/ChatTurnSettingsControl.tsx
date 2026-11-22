@@ -38,6 +38,8 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
 	const modelRow = select("model");
+	// The approval mode is not offered in the composer: it is left as the
+	// session has it, and kept out of the model menu's other settings.
 	const approvalRow = select("permissions");
 	// The effort has its slider; everything else the provider offers is listed
 	// under the models, or Android would have no way to reach it.
@@ -204,31 +206,6 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 
 				<Spacer modifiers={[weight(1)]} />
 
-				{/* The approval mode as the desktop composer's "Auto ▾": its shield, its name and a dropdown arrow. */}
-				{approvalRow ? (
-					<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
-						<DropdownMenu.Trigger>
-							<Button
-								onClick={() => setOpenMenu("approval")}
-								enabled={!off}
-								colors={{ containerColor: "transparent", contentColor: t.textSecondary }}
-								contentPadding={{ start: space.xs, end: space.xxs }}
-								modifiers={[height(touchTarget), testID("chat-approval"), semantics({ contentDescription: `Approval, ${approvalRow.choices.find((choice) => choice.selected)?.label ?? approvalRow.value}` })]}
-							>
-								<Icon source={materialDrawable("verified_user")} size={iconSize.md} tint={t.textSecondary} />
-								<Text maxLines={1} style={{ typography: "labelLarge", fontFamily: font.medium }} modifiers={[padding(space.xxs, 0, 0, 0)]}>
-									{approvalRow.choices.find((choice) => choice.selected)?.label ?? approvalRow.value}
-								</Text>
-								<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.md} tint={t.textTertiary} />
-							</Button>
-						</DropdownMenu.Trigger>
-						<DropdownMenu.Items>
-							{approvalRow.choices.map((choice) => (
-								<MenuRow key={choice.value} label={choice.label} selected={choice.selected} width={MENU_WIDTH} onClick={() => choose(approvalRow, choice.value)} />
-							))}
-						</DropdownMenu.Items>
-					</DropdownMenu>
-				) : null}
 			</Row>
 		</Host>
 	);

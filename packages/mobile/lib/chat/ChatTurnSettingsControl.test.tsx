@@ -146,11 +146,13 @@ describe("Android chat controls row", () => {
 	});
 
 
-	// The desktop composer's "Auto ▾": the shield, the mode's name and an arrow.
-	it("offers the approval modes from the shield, named as on the desktop", () => {
+	// The composer does not offer the approval mode: not as a control in the
+	// row, and not among the model menu's other settings.
+	it("offers no approval mode", () => {
 		render();
-		expect(trigger("chat-approval").findAllByType("ComposeText" as never).map((node) => node.props.children)).toContain("Ask when unsure");
-		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Ask when unsure", "on"]);
+		expect(renderer!.root.findAll((node) => hasTestID(node, "chat-approval"))).toHaveLength(0);
+		open("chat-model");
+		expect(rows("chat-model").some((row) => String(row.props.label).includes("Ask when unsure"))).toBe(false);
 	});
 
 	// The M3 menu once listed models only, and with the settings sheet gone
@@ -184,10 +186,8 @@ describe("Android chat controls row", () => {
 		pick("chat-model", 1);
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
 		expect(menu("chat-model").props.expanded).toBe(false);
-		pick("chat-approval", 3);
-		expect(onSettings).toHaveBeenLastCalledWith(expect.objectContaining({ approvalMode: "bypass-permissions" }));
 		expect(onOption).not.toHaveBeenCalled();
-		expect(fixtures.select).toHaveBeenCalledTimes(2);
+		expect(fixtures.select).toHaveBeenCalledTimes(1);
 	});
 
 	// A long catalog keeps the newest of each family on top and its older
@@ -260,13 +260,13 @@ describe("Android chat controls row", () => {
 
 	it("closes an open menu on back, since it does not take focus", () => {
 		render();
-		open("chat-approval");
+		open("chat-model");
 		act(() => { for (const handler of [...fixtures.back]) handler(); });
-		expect(menu("chat-approval").props.expanded).toBe(false);
+		expect(menu("chat-model").props.expanded).toBe(false);
 	});
 
 	it("disables every control while the conversation cannot take a change", () => {
 		render({ disabled: true });
-		for (const id of ["chat-model", "chat-approval"]) expect(trigger(id).props.enabled).toBe(false);
+		expect(trigger("chat-model").props.enabled).toBe(false);
 	});
 });
