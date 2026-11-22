@@ -62,4 +62,7 @@ type SCMStacker interface {
 	RegisterStacked(ctx context.Context, request SCMStackRegisterRequest) (SCMStack, error)
 	// MergeStack lands the requested layers, waiting a bounded time for the result.
 	MergeStack(ctx context.Context, request SCMStackMergeRequest) (SCMStackMergeStatus, error)
+	// CommitsBehind counts the commits on base that head lacks. base and head
+	// are commit SHAs, so the answer for a pair never changes.
+	CommitsBehind(ctx context.Context, repo SCMRepo, base, head string) (int, error)
 }

@@ -114,6 +114,12 @@ const chatHibernateSweepTick = 30 * time.Second
 // Its work is retry and bookkeeping, not anything a user waits on.
 const workspaceCleanupSweepTick = 10 * time.Minute
 
+// usageLimitIdleRescan is how often the usage-limit loop scans while no turn is
+// armed or resuming, no account handoff is in flight, and handoff is off.
+// Arming a turn or turning handoff on wakes the loop at once, so this only
+// backs those up.
+const usageLimitIdleRescan = 30 * time.Second
+
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
 func sentryEnvironment(version string) string {
@@ -418,7 +424,7 @@ func Run(buildVersion string) (retErr error) {
 	}
 	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
-	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
+	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log, cdcPipe.sessionChanges())
 	// ao.sessions.ended joins the usage summaries through the same grouping IDs,
 	// which are scoped to the install and only minted while export is on.
 	lcStack.LCM.DeliveryTelemetry().SetInstallID(func() string {
@@ -445,8 +451,9 @@ func Run(buildVersion string) (retErr error) {
 	// Daemon-owned preferences. The store's type is field-compatible with the
 	// service's, adapted here so neither package imports the other. Offering
 	// gates ride along: they are boot-time config, not stored preferences.
+	accountHandoffChanged := make(chan struct{}, 1)
 	settingsSvc := settingssvc.New(
-		settingsStore{store: store},
+		settingsStore{store: store, accountHandoffChanged: accountHandoffChanged},
 		chatDrivers,
 		settingssvc.OfferingFromConfig(cfg),
 		func() time.Time { return time.Now().UTC() },
@@ -1139,6 +1146,7 @@ func Run(buildVersion string) (retErr error) {
 			Attachments:   prReader,
 			Stacker:       prReader,
 			HeadChecks:    prReader,
+			Queuer:        prReader,
 			Details:       store,
 			Lifecycle:     lcStack.LCM,
 			Logger:        log,
@@ -1586,8 +1594,12 @@ func Run(buildVersion string) (retErr error) {
 			case <-ctx.Done():
 				return
 			}
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
+			// Every second while a turn is armed or resuming, an account handoff
+			// is in flight, or handoff is on; otherwise every usageLimitIdleRescan.
+			// Arming a turn or turning handoff on wakes the loop at once.
+			timer := time.NewTimer(time.Second)
+			defer timer.Stop()
+			armed := chatSvc.AutoResumeArmed()
 			for {
 				if ctx.Err() != nil {
 					return
@@ -1606,10 +1618,17 @@ func Run(buildVersion string) (retErr error) {
 						log.Warn("usage-limit account handoff failed", "err", err)
 					}
 				})
+				wait := time.Second
+				if chatSvc.AutoResumeIdle() && chatSvc.AccountHandoffIdle() && !settingsSvc.AccountHandoffEnabled(ctx) {
+					wait = usageLimitIdleRescan
+				}
+				timer.Reset(wait)
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
+				case <-timer.C:
+				case <-armed:
+				case <-accountHandoffChanged:
 				}
 			}
 		}()

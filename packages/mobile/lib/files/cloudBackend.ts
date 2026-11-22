@@ -89,9 +89,9 @@ export function cloudFilesBackend(client: CloudClient, orgId: string): FilesBack
 			};
 		}),
 		// The control plane reads no commit and has no one Uncommitted scope.
-		file: (sessionId, path, read) => inCloudWords(async () => {
+		file: (sessionId, path, read, signal) => inCloudWords(async () => {
 			const section = read?.section === "uncommitted" ? undefined : read?.section;
-			const file = await client.getWorkspaceReviewFile(orgId, sessionId, { path, scope: section });
+			const file = await client.getWorkspaceReviewFile(orgId, sessionId, { path, scope: section }, signal);
 			const status = workspaceStatus(file.status);
 			const content = file.content ?? "";
 			const untrackedDiff = status === "added" && !file.diff && !file.binary && !file.deleted && !file.contentTruncated && Boolean(content);
@@ -113,16 +113,16 @@ export function cloudFilesBackend(client: CloudClient, orgId: string): FilesBack
 				workspaceVersion: file.workspaceVersion ?? "",
 			};
 		}),
-		tree: (sessionId, dir) => inCloudWords(async () => {
-			const tree = await client.getWorkspaceTree(orgId, sessionId, dir);
+		tree: (sessionId, dir, signal) => inCloudWords(async () => {
+			const tree = await client.getWorkspaceTree(orgId, sessionId, dir, signal);
 			return {
 				path: tree.path ?? dir,
 				entries: (tree.entries ?? []).map((entry) => ({ ...entry, status: entry.status ? workspaceStatus(entry.status) : undefined })),
 				truncated: Boolean(tree.truncated),
 			};
 		}),
-		search: (sessionId, query) => inCloudWords(async () => {
-			const found = await client.searchWorkspace(orgId, sessionId, { query, limit: 50 });
+		search: (sessionId, query, signal) => inCloudWords(async () => {
+			const found = await client.searchWorkspace(orgId, sessionId, { query, limit: 50 }, signal);
 			return {
 				results: (found.results ?? []).map((result) => ({ path: result.path, status: workspaceStatus(result.status), binary: result.binary, size: result.size })),
 				truncated: Boolean(found.truncated || found.nextCursor),
@@ -130,9 +130,9 @@ export function cloudFilesBackend(client: CloudClient, orgId: string): FilesBack
 		}),
 		// The control plane has no image URL: the revision route returns the
 		// bytes, base64 for a binary file, which an image reads as a data URI.
-		imageSource: async (sessionId, path, side, version) => {
+		imageSource: async (sessionId, path, side, version, _read, signal) => {
 			try {
-				const revision = await client.getWorkspaceRevision(orgId, sessionId, { path, side, workspaceVersion: version || undefined });
+				const revision = await client.getWorkspaceRevision(orgId, sessionId, { path, side, workspaceVersion: version || undefined }, signal);
 				if (!revision.exists || revision.truncated || revision.encoding !== "base64" || !revision.mediaType?.startsWith("image/")) return undefined;
 				return { uri: `data:${revision.mediaType};base64,${revision.content}` };
 			} catch {
@@ -141,9 +141,11 @@ export function cloudFilesBackend(client: CloudClient, orgId: string): FilesBack
 		},
 		// The person's own words, as a message: the control plane's message
 		// route takes the text alone (it refuses unknown fields).
-		sendFeedback: (sessionId, comments, onSent) => inCloudWords(async () => {
+		sendFeedback: (sessionId, comments, onSent, signal) => inCloudWords(async () => {
 			let sent = 0;
 			for (const { message, count } of formatFileAnnotationMessages(comments)) {
+				// Cancelled between messages, never during one: a message cut off mid-send may still arrive.
+				if (signal?.aborted) throw Object.assign(new Error("Request cancelled"), { name: "AbortError" });
 				await client.sendMessage(orgId, sessionId, { text: message });
 				sent += count;
 				onSent?.(count);

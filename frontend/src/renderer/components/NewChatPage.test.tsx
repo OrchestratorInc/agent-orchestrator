@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
+import { takeComposerHandoff } from "../lib/chat-context-bus";
 import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
 import type { ApprovalMode, ChatModel } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
@@ -22,6 +23,9 @@ const h = vi.hoisted(() => ({
 	error: undefined as string | undefined,
 	status: undefined as string | undefined,
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
+	remoteLoadError: undefined as string | undefined,
+	remoteLoadErrorAction: undefined as { label: string; onClick: () => void } | undefined,
+	canSubmit: true,
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 	harness: "codex",
@@ -64,9 +68,11 @@ vi.mock("./TaskComposer", () => ({
 		error: h.error,
 		status: h.status,
 		errorAction: h.errorAction,
+		remoteLoadError: h.remoteLoadError,
+		remoteLoadErrorAction: h.remoteLoadErrorAction,
 		submitMode: undefined,
 		isCloudProject: h.isCloudProject,
-		canSubmit: true,
+		canSubmit: h.canSubmit,
 		catalogProjectId: "proj-1",
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
@@ -113,6 +119,9 @@ beforeEach(() => {
 	h.error = undefined;
 	h.status = undefined;
 	h.errorAction = undefined;
+	h.remoteLoadError = undefined;
+	h.remoteLoadErrorAction = undefined;
+	h.canSubmit = true;
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	h.harness = "codex";
@@ -199,6 +208,51 @@ describe("NewChatPage", () => {
 			params: { projectId: "proj-1", sessionId: "sess-1" },
 			replace: true,
 		}));
+	});
+
+	it("hands a follow-up typed while the session is created to the session's composer", async () => {
+		let resolve!: (sessionId: string) => void;
+		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));
+		renderPage();
+		// The box takes typing while the session is created, as its placeholder says.
+		expect(h.workspace?.followUpWhileOpening).toBe(true);
+		const takeDraft = vi.fn(() => ({ text: "Also add tests", send: true }));
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft: vi.fn(), takeDraft };
+
+		let sent!: Promise<unknown>;
+		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")); });
+		await act(async () => {
+			resolve("sess-1");
+			await sent;
+		});
+
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "sess-1" } })));
+		expect(takeDraft).toHaveBeenCalledOnce();
+		expect(takeComposerHandoff("sess-1")).toEqual({ text: "Also add tests", send: true });
+	});
+
+	it("keeps a follow-up typed while a refused brief started, below the brief it returns", async () => {
+		h.launch.mockRejectedValue(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
+		renderPage();
+		const setDraft = vi.fn();
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft, takeDraft: () => ({ text: "Also add tests", send: true }) };
+
+		await act(async () => {
+			// The composer puts the refused brief back as the send rejects.
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => {
+				writeChatComposerText(draftScope, "Fix the build");
+			});
+		});
+
+		await waitFor(() => expect(setDraft).toHaveBeenCalledWith("Fix the build\n\nAlso add tests"));
+		expect(h.navigate).not.toHaveBeenCalled();
+		expect(takeComposerHandoff("sess-1")).toBeUndefined();
+	});
+
+	it("keeps a Cloud task's box shut while it starts: its session takes no follow-up from here", () => {
+		h.isCloudProject = true;
+		renderPage();
+		expect(h.workspace?.followUpWhileOpening).toBe(false);
 	});
 
 	it("starts a cloud project's task on the page, with its approval mode and without attachments", async () => {
@@ -400,6 +454,33 @@ describe("NewChatPage", () => {
 		h.errorAction = { label: "Open Agent Harnesses", onClick: openSettings };
 		act(() => page.refresh());
 		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
+	});
+
+	it("offers Harness settings beside the no-agent message", () => {
+		const openSettings = vi.fn();
+		h.remoteLoadError = "No agent is ready. Set one up in Settings.";
+		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		renderPage();
+		expect(screen.getByRole("alert")).toHaveTextContent(h.remoteLoadError);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the Harness settings action after a send is refused for having no agent", async () => {
+		const openSettings = vi.fn();
+		h.canSubmit = false;
+		h.remoteLoadError = "No agent is ready. Set one up in Settings.";
+		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		renderPage();
+		let refusal: unknown;
+		await act(async () => {
+			refusal = await Promise.resolve(h.workspace?.onSend?.("Set up my project", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(refusal).toMatchObject({ message: h.remoteLoadError });
+		// The composer shows the refused send's reason, so the notice keeps only the action.
+		expect(screen.queryByText(h.remoteLoadError)).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
 		expect(openSettings).toHaveBeenCalledOnce();
 	});
