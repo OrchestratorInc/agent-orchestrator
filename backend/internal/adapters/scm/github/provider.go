@@ -234,10 +234,9 @@ func (p *Provider) fetchRESTPull(ctx context.Context, owner, repo string, number
 // request in one GraphQL hop. 100 is GitHub's documented per-page max
 // for the contexts connection. When the rollup has MORE than this many
 // contexts the response surfaces pageInfo.hasNextPage=true and
-// ciSummaryFromGraphQL is conservative (see the "CIUnknown on
-// hasNextPage when not already CIFailing" branch — a partial visible
-// set could hide a failure, so we degrade the verdict rather than
-// risk reporting a broken PR as passing).
+// ciSummaryFromGraphQL is conservative: a partial visible set could hide a
+// failure or a newer run that supersedes one, so uncertain verdicts stay
+// unknown until all pages are fetched.
 const graphQLCheckContextLimit = 100
 
 // checkRunFields is the CheckRun selection every rollup query uses. The
@@ -392,15 +391,11 @@ func cancellationGateLog(log string) bool {
 // ---------------------------------------------------------------------------
 
 // ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
-// If ANY visible context concluded failure-class we return CIFailing.
-// A current cancelled check is failing, including when unrelated checks are
-// pending or passed. A newer pending occurrence of the same job supersedes the
-// cancelled one before this function sees it. An empty
-// rollup is CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
-// the verdict is conservative: a known failure is still safe — failures
-// don't get un-failed by more pages — but passing/pending/unknown
-// verdicts could hide a failing context on the next page, so we degrade
-// them all to CIUnknown rather than risk reporting a broken PR as ready.
+// A failure or cancellation is failing unless a newer run of the same workflow,
+// event, and job supersedes it. An empty rollup is CIUnknown. On a paginated
+// rollup, a later page could contain a superseding run for a workflow-keyed
+// failure or cancellation, so those verdicts remain unknown until all pages
+// are fetched. Failures without matchable workflow metadata stay actionable.
 func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	roll := statusRollup(pr)
 	if roll == nil {
@@ -415,11 +410,17 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 		return mapRollupState(str(roll["state"]))
 	}
 	pending, passing, unknown := false, false, false
+	incomplete := pageInfoHasMore(contexts)
 	for _, n := range rawNodes {
 		st := checkStatusFromGraphQL(n)
 		switch st {
 		case domain.PRCheckFailed, domain.PRCheckCancelled:
-			return domain.CIFailing
+			if !incomplete {
+				return domain.CIFailing
+			}
+			if key, _, _ := checkRunKey(n); key == "" {
+				return domain.CIFailing
+			}
 		case domain.PRCheckQueued, domain.PRCheckInProgress:
 			pending = true
 		case domain.PRCheckPassed:
@@ -428,7 +429,7 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 			unknown = true
 		}
 	}
-	if pageInfoHasMore(contexts) {
+	if incomplete {
 		return domain.CIUnknown
 	}
 	switch {

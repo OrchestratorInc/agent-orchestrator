@@ -1185,6 +1185,32 @@ func TestObserve_CIPaginationDoesNotMaskKnownFailure(t *testing.T) {
 	}
 }
 
+func TestObserve_CIPaginationDefersSupersedableFailures(t *testing.T) {
+	for _, conclusion := range []string{"FAILURE", "CANCELLED"} {
+		t.Run(conclusion, func(t *testing.T) {
+			f := newFakeGH(t)
+			fx := basePRFixture()
+			fx.prData(func(pr map[string]any) {
+				contexts := statusRollup(pr)["contexts"].(map[string]any)
+				check := actionsCheckRun("Go", "lint", conclusion, 1)
+				check["databaseId"] = float64(0) // Skip optional job-log enrichment.
+				contexts["nodes"] = []any{check}
+				contexts["pageInfo"] = map[string]any{"hasNextPage": true}
+			})
+			fx.install(t, f)
+			p := newProviderForTest(t, f)
+
+			obs, err := p.Observe(ctx(), fx.prURL())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if obs.CI != domain.CIUnknown {
+				t.Fatalf("CI = %q, want unknown until later pages can rule out a newer run", obs.CI)
+			}
+		})
+	}
+}
+
 // TestObserve_StatusContextLegacyHasNoLogTail pins that we do NOT try to
 // fetch a job log for a legacy commit-status row (those have no Actions
 // job ID, so /actions/jobs/0/logs would 404 if we let the path leak).
