@@ -178,6 +178,26 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
+	it("checks an unsure span again at the next settle when work restarted before the check came back", async () => {
+		let resolve!: (value: ConversationSnapshot) => void;
+		const asked = workerTurn("Tunnel or loopback?");
+		fetchRecentConversation.mockReturnValueOnce(new Promise<ConversationSnapshot>((done) => { resolve = done; }));
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalledTimes(1));
+		hook.rerender({ orchestrator: orchestrator("active", "2026-11-08T10:05:40Z"), viewing: false, projectId: "project-a" });
+		await act(async () => resolve({ ...asked, turns: [{ ...asked.turns[0]!, state: "running", completedAt: undefined }] }));
+		expect(hook.result.current).toBeNull();
+		const later = workerTurn("Noted.").items.map((item, index) => ({ ...item, id: `later-${index}`, turnId: "t2", sequence: 3 + index, createdAt: "2026-11-08T10:05:40Z" }));
+		fetchRecentConversation.mockResolvedValueOnce({
+			...asked,
+			turns: [...asked.turns, { id: "t2", state: "completed", requestedAt: "2026-11-08T10:05:40Z", completedAt: "2026-11-08T10:06:00Z" }],
+			items: [...asked.items, ...later],
+		});
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:06:00Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+	});
+
 	it("lights up when the settled turns cannot be read", async () => {
 		fetchRecentConversation.mockRejectedValue(new Error("offline"));
 		const hook = afterYourReply();

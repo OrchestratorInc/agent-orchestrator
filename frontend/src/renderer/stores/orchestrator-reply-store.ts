@@ -83,12 +83,11 @@ export type OrchestratorReplyState = "working" | "unread" | null;
 
 /**
  * What a project's orchestrator buttons should signal: a reply the user has not
- * seen, or a turn of theirs in progress. A reply is the orchestrator's activity
- * settling from working back to idle or waiting for input, observed live from
- * the streamed workspace, when the orchestrator waits for the user or the turns
- * that settled include one the user started or one the chat keeps in view.
- * Worker traffic the orchestrator handled on its own stays quiet. Resets to idle on restore or resume never count, and
- * tool calls inside a turn keep it working. Viewing the orchestrator marks its
+ * seen, or a turn in progress. A reply is the orchestrator's activity settling
+ * from working back to idle or waiting for input, observed live from the
+ * streamed workspace; in chat mode, only turns the chat keeps in view count.
+ * Resets to idle on restore or resume never count, and tool
+ * calls inside a turn keep it working. Viewing the orchestrator marks its
  * replies seen; both facts persist per project across restarts.
  */
 export function useOrchestratorReplyState({ projectId, hostId, orchestrator, viewing }: {
@@ -125,8 +124,12 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 		}
 		const checkedFrom = Date.now();
 		void settledTurnsStandOut(`${key}:${at}`, orchestrator.id, hostId, prev.since, at).then((standsOut) => {
-			const again = previous.current?.id === orchestrator.id && previous.current.working;
-			if (!standsOut || (standsOut === "unsure" && again)) return;
+			const now = previous.current;
+			if (standsOut === "unsure" && now?.id === orchestrator.id && now.working) {
+				now.since = Math.min(now.since, prev.since);
+				return;
+			}
+			if (!standsOut) return;
 			const replies = useOrchestratorReplyStore.getState();
 			replies.recordReply(key, at);
 			if (viewedAt.current >= checkedFrom) replies.markSeen(key, at);

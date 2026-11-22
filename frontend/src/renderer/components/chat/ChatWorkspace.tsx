@@ -7016,7 +7016,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 		const first = members[0]!;
 		out.push(kind === "failed" && members.length === 1
 			? first
-			: { key: `${kind}:${first.key}`, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
+			: { key: `${kind}:${members.at(-1)!.key}`, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
 		run = undefined;
 	};
 	const segments = new Map<string, number>();
