@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -11,6 +12,97 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
+
+func TestQueuedEditPreservesWorkerReports(t *testing.T) {
+	const suffix = "\n\n<ao-worker-reports>\n[checkpoint] worker one\n\n[done] worker two\npr_created: https://example.com/pr/1\n</ao-worker-reports>"
+	const example = "\n\n<ao-worker-reports>\nliteral user example\n</ao-worker-reports>"
+	const stagedFiles = "\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-added.png"
+	for _, tc := range []struct{ name, editedSuffix, humanSuffix string }{
+		{"human text only", "", ""},
+		{"legacy full text", suffix, ""},
+		{"legacy trailing newline", suffix + "\n", ""},
+		{"legacy trailing whitespace", suffix + "\r\n \t\u00a0", ""},
+		{"older client adds a staged file after the recorded reports", suffix + stagedFiles, stagedFiles},
+		{"authored report example", example, example},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, provider := steerHarness(t)
+			ctx := context.Background()
+			turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "original" + suffix, ClientMessageID: "report-message", Origin: domain.MessageOriginHuman,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			zero := int64(0)
+			text := "Review café 👋" + tc.editedSuffix
+			wantText := "Review café 👋" + tc.humanSuffix + suffix
+			edit := chatsvc.QueuedMessageEdit{Text: text, ClientMessageID: "report-edit", ExpectedRevision: &zero}
+			for range 2 {
+				if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshot, err := h.svc.Snapshot(ctx, testSession)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, msg := range snapshot.Messages {
+				if msg.TurnID == turn.ID {
+					found = true
+					if msg.Text != wantText || msg.Revision != 1 {
+						t.Fatalf("saved message lost or duplicated worker reports: %+v", msg)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("edited message missing")
+			}
+			if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, turn.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
+				t.Fatal(err)
+			}
+			calls := provider.steers()
+			if len(calls) != 1 || calls[0].msg.Text != wantText || strings.Count(calls[0].msg.Text, "[checkpoint]") != 1 {
+				t.Fatalf("provider must receive edited text and reports once: %+v", calls)
+			}
+		})
+	}
+}
+
+func TestQueuedReportEditRequiresHumanContent(t *testing.T) {
+	const suffix = "\n\n<ao-worker-reports>\n[checkpoint] worker\n</ao-worker-reports>"
+	for _, text := range []string{"", suffix} {
+		h, _ := steerHarness(t)
+		ctx := context.Background()
+		turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+			Text: "original" + suffix, ClientMessageID: "report-message", Origin: domain.MessageOriginHuman,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, chatsvc.QueuedMessageEdit{Text: text}); !errors.Is(err, chatsvc.ErrQueuedTurnTextRequired) {
+			t.Fatalf("empty human edit = %v, want text required", err)
+		}
+		if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, chatsvc.QueuedMessageEdit{
+			Text: text, Content: []ports.ChatContent{{Type: "image", MIMEType: "image/png", Data: "aGVsbG8="}},
+		}); err != nil {
+			t.Fatalf("attachment-only edit: %v", err)
+		}
+		snapshot, err := h.svc.Snapshot(ctx, testSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, msg := range snapshot.Messages {
+			if msg.TurnID == turn.ID && msg.Text != suffix {
+				t.Fatalf("report suffix changed: %q", msg.Text)
+			}
+		}
+	}
+}
 
 func TestQueuedEditAttachmentChanges(t *testing.T) {
 	zero := int64(0)

@@ -7315,6 +7315,35 @@ describe("durable queued edits", () => {
 		};
 	}
 
+	it.each([
+		{ label: "ordinary prose with an attachment", human: "Review café 👋", attachment: true },
+		{ label: "a literal report example", human: "Review café 👋\n\n<ao-worker-reports>\nLiteral user example\n</ao-worker-reports>", attachment: false },
+	])("persists and reopens human prose including $label", async ({ human, attachment }) => {
+		const snapshot = queuedSnapshot();
+		const path = ".ao/attachments/attachment-proof.png";
+		const references = attachment ? `\n\nAttached files (read these files in the workspace):\n- ${path}` : "";
+		const suffix = "\n\n<ao-worker-reports>\n[checkpoint] hidden worker context\n</ao-worker-reports>";
+		snapshot.items = snapshot.items.map((item) => item.kind === "message"
+			? { ...item, text: human + references + suffix }
+			: item);
+		const save = vi.fn().mockResolvedValue(undefined);
+		const props = { snapshot, onSend: vi.fn(), onEditQueuedTurn: save, preserveQueuedWorkerReports: true };
+		const first = render(<ChatWorkspace {...props} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		for (const line of human.split("\n").filter(Boolean)) {
+			expect(screen.getByLabelText("Message the agent")).toHaveTextContent(line);
+		}
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("hidden worker context");
+		if (attachment) expect(screen.getByLabelText("Remove attachment-proof.png")).toBeInTheDocument();
+		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.text).toBe(human);
+		first.unmount();
+		render(<ChatWorkspace {...props} />);
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("hidden worker context");
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledOnce());
+		expect(save.mock.calls[0]![1]).toBe(human + references + suffix);
+	});
+
 	it("keeps the sharing notice directly above the locked form and below the queue", () => {
 		render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} composerLockedPlaceholder="" composerNotice={<div data-composer-notice>Live draft stays visible</div>} />);
 		const notice = screen.getByText("Live draft stays visible");
@@ -7451,16 +7480,20 @@ describe("durable queued edits", () => {
 
 	it("preserves an unavailable queue target and never converts its recovery into a send", async () => {
 		const snapshot = queuedSnapshot();
+		const suffix = "\n\n<ao-worker-reports>\n[checkpoint] pending worker report\n</ao-worker-reports>";
+		snapshot.items = snapshot.items.map((item) => item.kind === "message" ? { ...item, text: item.text + suffix } : item);
 		const save = vi.fn().mockRejectedValue(new Error("response lost"));
 		const send = vi.fn();
-		const first = render(<ChatWorkspace snapshot={snapshot} onSend={send} onEditQueuedTurn={save} />);
+		const first = render(<ChatWorkspace snapshot={snapshot} onSend={send} onEditQueuedTurn={save} preserveQueuedWorkerReports />);
 		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
 		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), " uncertain");
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() => expect(save).toHaveBeenCalledOnce());
+		expect(save.mock.calls[0]![1]).toBe("queued text uncertain" + suffix);
 		first.unmount();
-		render(<ChatWorkspace snapshot={{ ...snapshot, turns: [] }} onSend={send} onEditQueuedTurn={save} />);
+		render(<ChatWorkspace snapshot={{ ...snapshot, turns: [] }} onSend={send} onEditQueuedTurn={save} preserveQueuedWorkerReports />);
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("queued text uncertain");
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("pending worker report");
 		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "false");
 		await userEvent.click(screen.getByRole("button", { name: "Retry edit safely" }));
 		await waitFor(() => expect(save).toHaveBeenCalledTimes(2));

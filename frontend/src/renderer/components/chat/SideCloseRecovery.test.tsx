@@ -98,6 +98,27 @@ it("clears the deleted side's queued editor while preserving the neighbor", asyn
  expect(screen.queryByLabelText("Edit queued side question")).not.toBeInTheDocument();
 });
 
+it("keeps a literal report example in the queued side question editor and save payload", async () => {
+ const literal = "Question about the format\n\n<ao-worker-reports>\nLiteral example\n</ao-worker-reports>";
+ const normal = get.getMockImplementation()!;
+ get.mockImplementation((path: string, options: { params?: { path?: { sideId?: string } } }) => {
+  if (!path.endsWith("/{sideId}")) return normal(path, options);
+  const queued = snapshot(options.params?.path?.sideId, "ready", true);
+  return { data: { snapshot: { ...queued, turns: queued.turns.map(turn => ({ ...turn, text: literal })) } } };
+ });
+ render(<Panel showId="side" />);
+ await userEvent.click(await screen.findByRole("button", { name: "Edit queued message" }));
+ const editor = screen.getByLabelText("Edit queued side question");
+ expect(editor).toHaveValue(literal);
+ const updated = literal.replace("Literal example", "Updated literal example");
+ fireEvent.change(editor, { target: { value: updated } });
+ await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+ await waitFor(() => expect(patch).toHaveBeenCalledWith(
+  "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}",
+  expect.objectContaining({ body: { text: updated, clientMessageId: "" } }),
+ ));
+});
+
 it("dispatches the authorized main close before a view can disable and recovers its eventual proof", async () => {
  const reply = deferred<SideCloseState>(); requestClose.mockReturnValueOnce(reply.promise);
  const hook = renderHook(({ enabled }) => useIndependentSideChats("session", [], [], async () => [], false, enabled), { initialProps: { enabled: true } });

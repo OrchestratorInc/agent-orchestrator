@@ -66,6 +66,21 @@ function rowTexts() {
 		.map((row) => row.textContent?.replace(/\s+/g, " ").trim() ?? "");
 }
 
+describe("QueuedMessageDock worker report boundary", () => {
+	it("keeps worker context out of the preview and tooltip, and passes only the turn id to Edit", async () => {
+		const onBeginQueuedEdit = vi.fn();
+		const human = "Review café changes 👋";
+		const messages = queuedMessages([`${human}\n\n<ao-worker-reports>\n[checkpoint] worker one\n\npr_created: https://example.com/pr/1\n</ao-worker-reports>`]);
+		render(<QueuedMessageDock messages={messages} onBeginQueuedEdit={onBeginQueuedEdit} />);
+		const preview = screen.getByText(human);
+		expect(preview).toHaveAttribute("title", human);
+		expect(screen.getByTestId("queued-message-dock")).not.toHaveTextContent("worker one");
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		expect(onBeginQueuedEdit).toHaveBeenCalledWith("queued-1");
+		expect(messages[0]!.message.text).toContain("[checkpoint] worker one");
+	});
+});
+
 function simulateDrag(activeId: string, overId: string) {
 	const dragStart = dragStarts.get("queue-dock-reorder");
 	const dragEnd = dragEnds.get("queue-dock-reorder");

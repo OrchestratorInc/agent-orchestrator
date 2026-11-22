@@ -943,6 +943,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						: undefined
 				}
 				onEditQueuedTurn={commands.editQueuedTurn}
+				preserveQueuedWorkerReports
 				onCancelQueuedTurn={commands.cancelQueuedTurn}
 				onReorderQueuedTurns={commands.reorderQueuedTurns}
 				promoteQueuedTurnPendingTurnId={commands.promoteQueuedTurnPendingTurnId}

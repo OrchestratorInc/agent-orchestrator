@@ -63,6 +63,8 @@ export interface ChatDraftInlineEdit {
 }
 
 export interface ChatDraftQueuedEdit {
+	/** Server report suffix captured for the exact pending request, never part of draft text. */
+	reportSuffix?: string;
 	/** Original request mode, independent of current controller capabilities. */
 	nativeImages?: boolean;
 	/** Stable daemon receipt key for the exact pending save. */
@@ -863,6 +865,7 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 			typeof draft.queuedEdit.revision === "string" && draft.queuedEdit.revision.length > 0 &&
 			typeof draft.queuedEdit.turnId === "string" && draft.queuedEdit.turnId.length > 0 &&
 			typeof draft.queuedEdit.text === "string" &&
+			(draft.queuedEdit.reportSuffix === undefined || typeof draft.queuedEdit.reportSuffix === "string") &&
 			(draft.queuedEdit.nativeImages === undefined || typeof draft.queuedEdit.nativeImages === "boolean") &&
 			(draft.queuedEdit.clientMessageId === undefined || typeof draft.queuedEdit.clientMessageId === "string") &&
 			(draft.queuedEdit.ownerId === undefined || typeof draft.queuedEdit.ownerId === "string") &&
