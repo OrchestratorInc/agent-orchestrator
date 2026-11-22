@@ -23,6 +23,7 @@ import { Stack } from "expo-router";
 import { useMemo, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import { formModifiers, FormTextField, sectionModifiers } from "../formFields";
+import { HeaderPrimaryButton, HeaderTextButton } from "../HeaderTextButton";
 import { InlineBanner } from "../InlineBanner";
 import { PlacementPicker } from "../localProject/PlacementPicker";
 import { SettingsSection } from "../SettingsForm";
@@ -58,11 +59,12 @@ export { NEW_PROJECT_TITLE, type NewProjectBarProps, type NewProjectFormProps } 
 // section: nothing is listed until something is typed.
 
 /**
- * Cancel and Create in the sheet's native bar, as a form sheet's are. Memoized
- * on what the bar shows, so typing does not register the header again on
- * every key; the buttons call the latest handlers. Create is semibold rather
- * than the done style, which iOS 26 fills with the tint, near white in the
- * dark theme. While the project is being made a spinner holds its place.
+ * Cancel and Create in the sheet's bar, in the app's own style rather than
+ * the system's glass capsules: Cancel as plain text, Create as the filled
+ * pill, dimmed until the form can be created (HeaderTextButton). Memoized on
+ * what the bar shows, so typing does not register the header again on every
+ * key; the buttons call the latest handlers. While the project is being made
+ * a spinner holds Create's place.
  */
 export function NewProjectBar({ canCreate, busy, onCancel, onCreate }: NewProjectBarProps) {
 	const cancelRef = useRef(onCancel);
@@ -72,16 +74,18 @@ export function NewProjectBar({ canCreate, busy, onCancel, onCreate }: NewProjec
 	return useMemo(() => (
 		<>
 			<Stack.Toolbar placement="left">
-				<Stack.Toolbar.Button onPress={() => cancelRef.current()}>Cancel</Stack.Toolbar.Button>
+				<Stack.Toolbar.View hidesSharedBackground>
+					<HeaderTextButton title="Cancel" onPress={() => cancelRef.current()} testID="new-project-cancel" />
+				</Stack.Toolbar.View>
 			</Stack.Toolbar>
 			<Stack.Toolbar placement="right">
-				{busy ? (
-					<Stack.Toolbar.View hidesSharedBackground>
+				<Stack.Toolbar.View hidesSharedBackground>
+					{busy ? (
 						<Spinner accessibilityLabel="Creating project" />
-					</Stack.Toolbar.View>
-				) : (
-					<Stack.Toolbar.Button accessibilityLabel="Create project" disabled={!canCreate} style={{ fontWeight: "600" }} onPress={() => createRef.current()}>Create</Stack.Toolbar.Button>
-				)}
+					) : (
+						<HeaderPrimaryButton title="Create" accessibilityLabel="Create project" disabled={!canCreate} onPress={() => createRef.current()} testID="new-project-create" />
+					)}
+				</Stack.Toolbar.View>
 			</Stack.Toolbar>
 		</>
 	), [busy, canCreate]);
