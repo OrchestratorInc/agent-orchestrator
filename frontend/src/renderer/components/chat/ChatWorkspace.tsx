@@ -243,6 +243,7 @@ import {
 	type ChatEditOutcome,
 	type ConversationActivity,
 	type ConversationBranchPoint,
+	type ConversationContentSummary,
 	type ConversationItem,
 	type ConversationMessage,
 	type ConversationTurn,
@@ -368,6 +369,22 @@ const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
 type MessageEditDraft = ChatDraftInlineEdit;
+
+/** The excerpts and file references a local echo carries, as its message's content. */
+export function localEchoContent(echo: Pick<ConversationLocalEcho, "excerpts" | "fileReferences">): ConversationContentSummary[] {
+	return [
+		...(echo.excerpts ?? []).map((excerpt) => ({
+			annotationId: excerpt.id, annotationOrder: excerpt.order,
+			type: "excerpt",
+			text: excerpt.text,
+			comment: excerpt.comment,
+			sourceConversationId: excerpt.conversationId,
+			sourceMessageId: excerpt.messageId,
+			sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
+		})),
+		...(echo.fileReferences ?? []).map((fileReference) => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order })),
+	];
+}
 
 /**
  * A stream refresh replaces the complete snapshot object. Queue prompts do not
@@ -731,6 +748,14 @@ export interface ChatWorkspaceProps {
 	 * settles the chat reads as working from that moment, with no connecting banner.
 	 */
 	openingStartedAt?: string;
+	/**
+	 * The composer stays open while the opening brief creates the session, as
+	 * its "queue a follow-up" placeholder says: what is typed, and Enter pressed
+	 * on it, waits in the box for the surface to hand over (composerRef).
+	 */
+	followUpWhileOpening?: boolean;
+	/** The composer, for a surface that hands its draft on (the new chat page). */
+	composerRef?: MutableRefObject<ChatComposerHandle | null>;
 	/** A tray tucked under the composer while the chat is empty, e.g. the new chat page's project picker. */
 	composerTray?: ReactNode;
 	/** Off where another flow owns an unanswered send, such as the new chat page's pending launch. */
@@ -977,6 +1002,8 @@ function ChatWorkspaceContent({
 	draftSettings,
 	draftNotice,
 	openingStartedAt,
+	followUpWhileOpening = false,
+	composerRef,
 	composerTray,
 	parkUnsentSends = true,
 	centerInWindow = false,
@@ -1285,6 +1312,7 @@ function ChatWorkspaceContent({
 					origin: "human",
 					text: echo.text,
 				continuation: echo.continuation,
+					content: localEchoContent(echo),
 					streaming: false,
 					delivery: "queued",
 					clientMessageId: echo.clientMessageId,
@@ -1631,7 +1659,8 @@ function ChatWorkspaceContent({
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const previewRollback = useStableCallback(onPreviewRollback);
 	const surfaceRef = useRef<HTMLElement | null>(null);
-	const composerFocusRef = useRef<ChatComposerHandle>(null);
+	const ownComposerRef = useRef<ChatComposerHandle>(null);
+	const composerFocusRef = composerRef ?? ownComposerRef;
 	const artifactSession = session?.requestedOutput === "artifact";
 	// The sample prompts show only while the composer is empty: picking one hides
 	// them, and clearing the draft brings them back. A saved draft hides them from
@@ -2516,7 +2545,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
 										// keeps its look; the agent and model can still be changed.
@@ -2580,6 +2609,8 @@ function ChatWorkspaceContent({
 										compactBlocked={Boolean(durableTurn)}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
+										// Kept when drafts cannot be saved, so a follow-up from the new chat page still arrives.
+										handoffSessionId={queueEdit ? undefined : draftScope.sessionId}
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
@@ -4404,15 +4435,7 @@ export function Timeline({
 				origin: "human",
 				text: echo.text,
 				continuation: echo.continuation,
-				content: [...(echo.excerpts?.map((excerpt) => ({
-					annotationId: excerpt.id, annotationOrder: excerpt.order,
-					type: "excerpt",
-					text: excerpt.text,
-					comment: excerpt.comment,
-					sourceConversationId: excerpt.conversationId,
-					sourceMessageId: excerpt.messageId,
-					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
-				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
+				content: localEchoContent(echo),
 				streaming: false,
 				delivery: echo.delivery ?? (echo.backgroundWake || echo.turnId ? "accepted" : "sending"),
 				createdAt: echo.createdAt,
