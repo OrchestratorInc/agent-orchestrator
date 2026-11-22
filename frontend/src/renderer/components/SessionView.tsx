@@ -1,4 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { useSessionDevice } from "./DevicePanel";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
@@ -1764,6 +1765,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
 	}, [hostId, remoteBase, browserSlotVisible, remoteSessionQuery.refetch]);
 	const terminated = session ? !sessionIsActive(session) : false;
+	// An agent's `ao device open` reveals the Device tab, as `ao preview` reveals
+	// Browser: a lease opened while this session is on screen opens the tab once;
+	// entering a session that already holds one does not.
+	const deviceAvailable = Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
+	const deviceLease = useSessionDevice(sessionId, deviceAvailable && !terminated);
+	const deviceLeaseKey = deviceLease.data ? `${deviceLease.data.device.id}:${deviceLease.data.openedAt}` : "";
+	const deviceBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
+	useEffect(() => {
+		if (!deviceAvailable || deviceLease.isPending) return;
+		const baseline = deviceBaselineRef.current;
+		if (!baseline || baseline.sessionId !== uiSessionId) {
+			deviceBaselineRef.current = { sessionId: uiSessionId, key: deviceLeaseKey };
+			return;
+		}
+		if (baseline.key === deviceLeaseKey) return;
+		deviceBaselineRef.current = { sessionId: uiSessionId, key: deviceLeaseKey };
+		if (!deviceLeaseKey || terminated) return;
+		transitionInspectorView("device");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [deviceAvailable, deviceLease.isPending, deviceLeaseKey, setInspectorOpenForSession, terminated, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.

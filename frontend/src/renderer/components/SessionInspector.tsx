@@ -4,7 +4,8 @@ import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
-import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
+import { Chat, CheckWaves, Folder, List, Package, Smartphone } from "@/components/app-icons";
+import { DevicePanel, useSessionDevice } from "./DevicePanel";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
 import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
@@ -139,13 +140,14 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.device" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
 	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
 	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "device", labelKey: "inspector.device", icon: <Smartphone aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
 	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
@@ -270,6 +272,10 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
+	// Simulators and emulators run on this machine: the Device tab serves
+	// local worker sessions only until remote and cloud providers exist.
+	const deviceAvailable = session !== undefined && !session.cloud && !hostId && !orchestrator;
+	const deviceLease = useSessionDevice(session?.id ?? "", deviceAvailable);
 	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
@@ -279,6 +285,7 @@ export const SessionInspector = memo(function SessionInspector({
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			&& (entry.id !== "subagents" || subagentsView !== undefined)
+			&& (entry.id !== "device" || deviceAvailable)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
@@ -298,7 +305,7 @@ export const SessionInspector = memo(function SessionInspector({
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen) || (entry.id === "device" && view !== "device" && Boolean(deviceLease.data)),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
@@ -326,6 +333,7 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				browserPoppedOut={browserPoppedOut}
+				deviceView={session && deviceAvailable ? <DevicePanel isActive={isInspectorVisible} key={session.id} sessionId={session.id} /> : undefined}
 				browserView={
 					session && (!hostId || browserView) ? (
 						<BrowserView
