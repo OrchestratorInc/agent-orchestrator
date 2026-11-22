@@ -874,8 +874,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						onDismiss={accountSwitch.clearError}
 					/>
 				) : undefined)}</>}
-				onDecide={commands.resolve}
-				onResolveInput={commands.resolveInput}
+				onDecide={savedCopy ? undefined : commands.resolve}
+				onResolveInput={savedCopy ? undefined : commands.resolveInput}
 				onInterrupt={commands.interrupt}
 				stoppingTurn={commands.stoppingTurn}
 				onContinueTurn={() => {

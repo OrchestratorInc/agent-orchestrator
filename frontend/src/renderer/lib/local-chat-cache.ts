@@ -18,7 +18,10 @@ function openDatabase(): Promise<IDBDatabase> {
 		const request = indexedDB.open(DB_NAME, 1);
 		request.onupgradeneeded = () => request.result.createObjectStore(STORE, { keyPath: "sessionId" }).createIndex("savedAt", "savedAt");
 		request.onsuccess = () => resolve(request.result);
-		request.onerror = () => reject(request.error);
+		request.onerror = () => {
+			database = undefined;
+			reject(request.error);
+		};
 	});
 	return database;
 }
@@ -34,6 +37,20 @@ async function pruneOldChats(): Promise<void> {
 		if (++kept > MAX_CHATS) store.delete(cursor.result.primaryKey);
 		cursor.result.continue();
 	};
+}
+
+export function keepLocalChats(sessionIds: string[]): Promise<void> {
+	if (typeof indexedDB === "undefined") return Promise.resolve();
+	const keep = new Set(sessionIds);
+	return openDatabase()
+		.then(async (db) => {
+			const store = db.transaction(STORE, "readwrite").objectStore(STORE);
+			for (const key of (await done(store.getAllKeys())) as string[]) {
+				if (!keep.has(key)) store.delete(key);
+			}
+		})
+		.then(pruneOldChats)
+		.catch(() => undefined);
 }
 
 export function persistLocalChats(queryClient: QueryClient): () => void {
