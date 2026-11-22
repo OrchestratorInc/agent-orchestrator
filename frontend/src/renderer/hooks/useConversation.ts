@@ -23,7 +23,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
@@ -119,6 +119,14 @@ interface ConversationSendMutationInput {
 
 interface ConversationSessionMutationInput {
 	targetSessionId: string;
+}
+
+/** How long Stop shows progress before it can be pressed again for the same turn. */
+const STOP_RETRY_AFTER_MS = 10_000;
+
+interface ConversationInterruptMutationInput extends ConversationSessionMutationInput {
+	/** The running turn the user pressed Stop on; the daemon refuses to stop any other. */
+	turnId?: string;
 }
 
 interface ConversationRetryMutationInput extends ConversationSessionMutationInput {
@@ -927,10 +935,16 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
- * `turnActive` comes from the caller's snapshot: reading the conversation
- * cache here would re-render every consumer on each streamed chunk.
+ * `turnActive` and `activeTurnId` come from the caller's snapshot: reading the
+ * conversation cache here would re-render every consumer on each streamed chunk.
  */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false, turnActive = false) {
+export function useConversationCommands(
+	sessionId: string | undefined,
+	hostId?: string,
+	terminated = false,
+	turnActive = false,
+	activeTurnId?: string,
+) {
 	const queryClient = useQueryClient();
 	const restoreSession = useRestoreSession();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
@@ -1177,16 +1191,24 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	});
 
 	const interrupt = useMutation({
-		mutationFn: async ({ targetSessionId }: ConversationSessionMutationInput) => {
+		/** Resolves true when the daemon took the Stop, false when there was nothing to stop. */
+		mutationFn: async ({ targetSessionId, turnId }: ConversationInterruptMutationInput): Promise<boolean> => {
 			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/interrupt",
-				{ params: { path: { sessionId: targetSessionId } } },
+				turnId
+					? { params: { path: { sessionId: targetSessionId } }, body: { turnId } }
+					: { params: { path: { sessionId: targetSessionId } } },
 			);
-			if (error) throw error;
+			// Nothing left to stop: the turn already ended, or the one now running is a
+			// later turn this Stop must not touch. That is the answer, not a failure;
+			// the refetch below shows how the turn really ended.
+			if (!error) return true;
+			if (apiErrorCode(error) === "CHAT_NO_ACTIVE_TURN") return false;
+			throw error;
 		},
 		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
-		// A failed interrupt (e.g. CHAT_NO_ACTIVE_TURN) means the cached turn
-		// state is wrong. Refetch so the UI discovers the real state instead of
+		// After any Stop answer, including "nothing left to stop", the cached turn
+		// state may be wrong. Refetch so the UI discovers the real state instead of
 		// keeping a Working bar the user cannot dismiss.
 		onError: (_error, variables) => refreshSessionInBackground(variables.targetSessionId),
 	});
@@ -1308,6 +1330,23 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	 * so a success has to be followed by a refetch rather than an optimistic edit —
 	 * how much was discarded is the daemon's answer, not the client's guess.
 	 */
+	// A steer refusal is about the turn the steer was sent on. It shows only while
+	// the turn current when it came back is still current, and only if that is
+	// the steer's own turn or no turn at all: a refusal that lands after its turn
+	// ended still shows ("send it as a message"), one that lands during a later
+	// turn does not, and any refusal goes once another turn starts. The error
+	// itself is kept, so steerUnsupported stays sticky.
+	const currentTurnIdRef = useRef(activeTurnId);
+	useLayoutEffect(() => {
+		currentTurnIdRef.current = activeTurnId;
+	});
+	const [steerRefusedOn, setSteerRefusedOn] = useState<{ sentOn?: string; arrivedOn?: string }>();
+	// A turn starting ends any refusal from before it. Without this, one that came
+	// back while idle would show again once that turn ends and the chat is idle.
+	useEffect(() => {
+		if (activeTurnId === undefined) return;
+		setSteerRefusedOn((refused) => (refused && refused.arrivedOn !== activeTurnId ? undefined : refused));
+	}, [activeTurnId]);
 	/**
 	 * Guidance delivered INTO the running turn.
 	 *
@@ -1321,6 +1360,11 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
 	const steer = useMutation({
+		onMutate: () => {
+			setSteerRefusedOn(undefined);
+			return { sentOn: currentTurnIdRef.current };
+		},
+		onError: (_error, _input, sent) => setSteerRefusedOn({ sentOn: sent?.sentOn, arrivedOn: currentTurnIdRef.current }),
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/steer",
@@ -1563,11 +1607,33 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		[queryClient, sessionId, stateSessionId],
 	);
+	// The turn this surface already asked to stop. The daemon accepts Stop at once,
+	// but the agent takes a moment to wind the turn down and it shows as running
+	// until then. A second press (or Escape) in that window is the same request, so
+	// it is dropped here instead of reaching the daemon again.
+	const activeStopKey = stateSessionId && activeTurnId ? `${stateSessionId}\u0000${activeTurnId}` : undefined;
+	const stopRequestedRef = useRef<string | undefined>(undefined);
+	const [stopRequestedKey, setStopRequestedKey] = useState<string>();
+	const stoppingTurn = activeStopKey !== undefined && stopRequestedKey === activeStopKey;
+	const releaseStop = useCallback((key: string) => {
+		if (stopRequestedRef.current !== key) return;
+		stopRequestedRef.current = undefined;
+		setStopRequestedKey(undefined);
+	}, []);
+	// An agent that accepted the cancel but never ends the turn must not leave Stop
+	// disabled for good. After a while the button works again, so the user can retry.
+	useEffect(() => {
+		if (!stopRequestedKey) return;
+		const timer = setTimeout(() => releaseStop(stopRequestedKey), STOP_RETRY_AFTER_MS);
+		return () => clearTimeout(timer);
+	}, [releaseStop, stopRequestedKey]);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
 	const sendCode = apiErrorCode(send.error);
 	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) && sendCode !== undefined && !HOST_UNREACHABLE_CODES.has(sendCode) ? send.error : undefined;
-	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
+	// A failed Stop is only news while the turn it was aimed at is still running.
+	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId &&
+		(!interrupt.variables?.turnId || interrupt.variables.turnId === activeTurnId);
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
@@ -1624,7 +1690,28 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			action: "accept" | "decline" | "cancel",
 			content?: Record<string, unknown>,
 		) => resolveInput.mutateAsync({ requestId, action, content }),
-		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
+		interrupt: () => {
+			if (!sessionId) return;
+			const key = activeStopKey;
+			if (key) {
+				if (stopRequestedRef.current === key) return;
+				stopRequestedRef.current = key;
+				setStopRequestedKey(key);
+			}
+			interrupt.mutate({ targetSessionId: sessionId, turnId: activeTurnId }, {
+				// Nothing was stopping: the turn had not started, or it already ended.
+				// The refetch shows which, and Stop stays usable if it is still there.
+				onSuccess: (stopped) => {
+					if (key && !stopped) releaseStop(key);
+				},
+				// The Stop did not land, so the turn is still the user's to stop.
+				onError: () => {
+					if (key) releaseStop(key);
+				},
+			});
+		},
+		/** Stop landed for the running turn, which the agent is still winding down. */
+		stoppingTurn,
 		resumeAgent: () => resume.mutateAsync(),
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
@@ -1785,7 +1872,10 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		 * send-instead cases produce copy: `CHAT_STEER_UNSUPPORTED` is answered by
 		 * hiding the control entirely, since the harness will never accept one.
 		 */
-		steerRefusal: steerRefusal(steer.error),
+		steerRefusal: steerRefusedOn && steerRefusedOn.arrivedOn === activeTurnId &&
+			(steerRefusedOn.arrivedOn === undefined || steerRefusedOn.arrivedOn === steerRefusedOn.sentOn)
+			? steerRefusal(steer.error)
+			: undefined,
 		/**
 		 * A harness that cannot steer at all. Learned from the daemon's typed refusal
 		 * rather than from the harness name, and sticky for the life of the surface: the

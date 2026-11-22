@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
+import { takeComposerHandoff } from "../lib/chat-context-bus";
 import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
 import type { ApprovalMode, ChatModel } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
@@ -207,6 +208,51 @@ describe("NewChatPage", () => {
 			params: { projectId: "proj-1", sessionId: "sess-1" },
 			replace: true,
 		}));
+	});
+
+	it("hands a follow-up typed while the session is created to the session's composer", async () => {
+		let resolve!: (sessionId: string) => void;
+		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));
+		renderPage();
+		// The box takes typing while the session is created, as its placeholder says.
+		expect(h.workspace?.followUpWhileOpening).toBe(true);
+		const takeDraft = vi.fn(() => ({ text: "Also add tests", send: true }));
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft: vi.fn(), takeDraft };
+
+		let sent!: Promise<unknown>;
+		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")); });
+		await act(async () => {
+			resolve("sess-1");
+			await sent;
+		});
+
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "sess-1" } })));
+		expect(takeDraft).toHaveBeenCalledOnce();
+		expect(takeComposerHandoff("sess-1")).toEqual({ text: "Also add tests", send: true });
+	});
+
+	it("keeps a follow-up typed while a refused brief started, below the brief it returns", async () => {
+		h.launch.mockRejectedValue(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
+		renderPage();
+		const setDraft = vi.fn();
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft, takeDraft: () => ({ text: "Also add tests", send: true }) };
+
+		await act(async () => {
+			// The composer puts the refused brief back as the send rejects.
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => {
+				writeChatComposerText(draftScope, "Fix the build");
+			});
+		});
+
+		await waitFor(() => expect(setDraft).toHaveBeenCalledWith("Fix the build\n\nAlso add tests"));
+		expect(h.navigate).not.toHaveBeenCalled();
+		expect(takeComposerHandoff("sess-1")).toBeUndefined();
+	});
+
+	it("keeps a Cloud task's box shut while it starts: its session takes no follow-up from here", () => {
+		h.isCloudProject = true;
+		renderPage();
+		expect(h.workspace?.followUpWhileOpening).toBe(false);
 	});
 
 	it("starts a cloud project's task on the page, with its approval mode and without attachments", async () => {

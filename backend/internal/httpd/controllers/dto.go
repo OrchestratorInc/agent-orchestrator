@@ -3821,6 +3821,15 @@ type ConversationTurnSettingsPayload struct {
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
 }
 
+// InterruptConversationRequest is the optional body of a chat Stop. TurnID is
+// the conversation turn the user pressed Stop on. With it, a Stop that lands
+// after that turn ended cannot cancel a later turn, and a repeated Stop for a
+// turn that already stopped succeeds without reaching the agent. Without it the
+// in-flight turn is stopped, as older clients expect.
+type InterruptConversationRequest struct {
+	TurnID string `json:"turnId,omitempty"`
+}
+
 // ResolveConversationApprovalRequest answers a pending approval. DecisionID must
 // be one the provider offered for that request; AO does not invent options.
 type ResolveConversationApprovalRequest struct {
