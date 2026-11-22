@@ -1,10 +1,33 @@
-import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chatFixtureEmpty } from "../lib/chat-fixture";
+import type { ConversationSnapshot } from "../types/conversation";
 import type { WorkspaceSession } from "../types/workspace";
 import { useOrchestratorReplyState, useOrchestratorReplyStore } from "./orchestrator-reply-store";
 
-function orchestrator(state: "active" | "idle" | "waiting_input" | "exited", at: string, id = "orch-1") {
-	return { id, kind: "orchestrator", activity: { state, lastActivityAt: at } } as unknown as WorkspaceSession;
+const fetchRecentConversation = vi.hoisted(() => vi.fn());
+vi.mock("../hooks/useConversation", () => ({ fetchRecentConversation }));
+
+function orchestrator(state: "active" | "idle" | "waiting_input" | "exited", at: string, id = "orch-1", mode: "chat" | "terminal" = "chat") {
+	return { id, kind: "orchestrator", mode, lastUserMessageAt: "2026-11-08T09:59:00Z", activity: { state, lastActivityAt: at } } as unknown as WorkspaceSession;
+}
+
+function workerTurn(reply: string): ConversationSnapshot {
+	return {
+		...chatFixtureEmpty,
+		turns: [{ id: "t1", state: "completed", requestedAt: "2026-11-08T10:05:00Z", completedAt: "2026-11-08T10:05:30Z" }],
+		items: [
+			{ kind: "message", id: "m1", turnId: "t1", sequence: 1, revision: 0, role: "user", origin: "automation", streaming: false, createdAt: "2026-11-08T10:05:00Z", text: "Reports since your previous turn:\n\n[done] [Menus](ao://sessions/proj/proj-285)\nMenus render." },
+			{ kind: "message", id: "m2", turnId: "t1", sequence: 2, revision: 0, role: "assistant", origin: "provider", streaming: false, createdAt: "2026-11-08T10:05:30Z", text: reply },
+		],
+	};
+}
+
+function afterYourReply() {
+	act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
+	const hook = setup(orchestrator("active", "2026-11-08T10:05:00Z"));
+	expect(hook.result.current).toBeNull();
+	return hook;
 }
 
 function setup(initial: WorkspaceSession, viewing = false, projectId = "project-a") {
@@ -16,6 +39,7 @@ function setup(initial: WorkspaceSession, viewing = false, projectId = "project-
 
 describe("useOrchestratorReplyState", () => {
 	beforeEach(() => {
+		fetchRecentConversation.mockReset();
 		window.localStorage.clear();
 		act(() => useOrchestratorReplyStore.setState({ replyAt: {}, seenAt: {} }));
 	});
@@ -62,6 +86,38 @@ describe("useOrchestratorReplyState", () => {
 		const other = setup(orchestrator("idle", "2026-11-08T10:00:05Z"), false, "project-b");
 		expect(hook.result.current).toBe("unread");
 		expect(other.result.current).toBeNull();
+	});
+
+	it("stays quiet through worker traffic the orchestrator handled on its own", async () => {
+		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalledWith("orch-1", undefined));
+		await act(async () => {});
+		expect(hook.result.current).toBeNull();
+	});
+
+	it("lights up when worker traffic leaves a question for the user", async () => {
+		fetchRecentConversation.mockResolvedValue(workerTurn("Tunnel or loopback?"));
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+	});
+
+	it("lights up when the settled turns cannot be read", async () => {
+		fetchRecentConversation.mockRejectedValue(new Error("offline"));
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+	});
+
+	it("keeps a terminal orchestrator lighting for every turn", () => {
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
+		const hook = setup(orchestrator("active", "2026-11-08T10:05:00Z", "orch-1", "terminal"));
+		expect(hook.result.current).toBe("working");
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z", "orch-1", "terminal"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("unread");
+		expect(fetchRecentConversation).not.toHaveBeenCalled();
 	});
 
 	it("persists replies and seen times", () => {

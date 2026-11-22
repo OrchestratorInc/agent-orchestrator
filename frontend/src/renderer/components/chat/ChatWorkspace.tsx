@@ -168,6 +168,8 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
+	BackgroundTurnRow,
+	BackgroundUpdates,
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
@@ -184,10 +186,12 @@ import {
 	placeBatchedReports,
 	ReportsLine,
 	type WorkerUpdate,
+	type WorkerUpdateIndex,
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, ReplacedNotice, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { turnStanding } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
@@ -4514,6 +4518,7 @@ export function Timeline({
 		() => workerUpdates ? placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items) : NO_BATCHED_REPORTS,
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
+	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4535,17 +4540,17 @@ export function Timeline({
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
 		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return placed;
-		return placed
+		const cleaned = spawnedIds.size === 0 ? placed : placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdates]);
+		return foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)));
+	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
 	const subagentPanelEnabled = subagentPanel !== undefined;
 	const subagents = useMemo(
-		() => (subagentPanelEnabled ? conversationSubagents(groups) : NO_SUBAGENTS),
+		() => (subagentPanelEnabled ? conversationSubagents(groups.flatMap(turnsIn)) : NO_SUBAGENTS),
 		[groups, subagentPanelEnabled],
 	);
 	const [openSubagentId, setOpenSubagentId] = useState<string>();
@@ -4570,7 +4575,6 @@ export function Timeline({
 	// Whether the reader opened a step from the live row, kept for the step's own row
 	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
 	const [liveStepChoices] = useState(() => new Map<string, boolean>());
-	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
 	// anywhere else first would make it jump lines when the turn arrives.
@@ -4703,8 +4707,8 @@ export function Timeline({
 			.some((element) => element.dataset.findMessageId === findTarget.messageId);
 		// The active highlight persists; mounting completes this one reveal request.
 		if (mounted) { setFindTarget(undefined); return; }
-		const disclosureKey = `${groups[index].key}:worked`;
-		if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+		const keys = revealKeys(groups[index], (item) => item.id === findTarget.messageId);
+		if (keys.some((key) => !activityDisclosureOverrides[key])) setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
 		if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 	}, [find.open, find.engaged, find.active, findTarget, groups, virtualRows, virtualized, virtualizer, activityDisclosureOverrides]);
 	renderedVirtualHeight.current = virtualHeight;
@@ -4712,13 +4716,7 @@ export function Timeline({
 		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;
 	// Fork is offered on finished turns; the latest is marked because every
 	// agent can fork it, while older turns need one that cuts its copy.
-	const latestForkTurnId = useMemo(() => {
-		for (let i = groups.length - 1; i >= 0; i--) {
-			const group = groups[i];
-			if (forkableGroup(group)) return group.turnId as string;
-		}
-		return undefined;
-	}, [groups]);
+	const latestForkTurnId = useMemo(() => groups.flatMap(turnsIn).findLast(forkableGroup)?.turnId, [groups]);
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
@@ -4756,7 +4754,7 @@ export function Timeline({
 			if (owner && inPanel) {
 				if (openSubagentId !== owner.launchId) openSubagent!(owner.launchId);
 			} else {
-				const keys = [`${groups[holder]!.key}:worked`];
+				const keys = revealKeys(groups[holder]!, (item) => item.id === activity.id);
 				if (owner) keys.push(owner.teamKey, `${owner.teamKey}:agent:${owner.launchId}`);
 				if (keys.some((key) => !activityDisclosureOverrides[key])) {
 					setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
@@ -4815,9 +4813,9 @@ export function Timeline({
 		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
 		if (!source) {
-			const disclosureKey = `${groups[index].key}:worked`;
-			if (!activityDisclosureOverrides[disclosureKey]) {
-				setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+			const keys = revealKeys(groups[index], (item) => item.id === annotationTarget.messageId);
+			if (keys.some((key) => !activityDisclosureOverrides[key])) {
+				setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
 			}
 			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 			if (annotationRetryCount.current++ >= 20) {
@@ -5787,53 +5785,39 @@ export function Timeline({
 					<div ref={virtualContent} className={virtualized ? "relative w-full" : "contents"}
 						style={virtualized ? { height: virtualHeight } : undefined}>
 					{renderedGroups.map(({ group, row, index }) => {
-						const retrySelected = !retryControl?.turnId || retryControl.turnId === group.turnId;
-						const retryableTurn = group.turnId ? retryableTurns.get(group.turnId) : undefined;
-						const retry =
-							group.turnId &&
-							retryControl &&
-							retryableTurn &&
-							group.turnId !== composerRecoveryTurnId &&
-								group.outcome?.state === "failed"
-								? {
-										onRetry: () => {
-											void Promise.resolve(retryTurn(group.turnId as string)).catch(
-												() => undefined,
-											);
-										},
-										pending: retryControl.pending && retrySelected,
-										error: retrySelected ? retryControl.error : undefined,
-										disabled:
-											Boolean(durableTurn) ||
-											Boolean(retryControl.pending) ||
-											Boolean(newWorkDisabled),
-									}
-								: undefined;
-						return (
-							<div
-								key={group.key}
-								ref={virtualizer.measureElement}
-								data-index={index}
-								style={row ? {
-									position: "absolute", top: 0, left: 0, width: "100%",
-									transform: `translateY(${row.start - virtualScrollMargin}px)`,
-								} : undefined}
-								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
-								data-chat-turn={group.key}
-							>
-								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
-								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
-								<BatchedReportsContext.Provider value={batchedReports}>
-								<LatestForkTurnContext.Provider value={latestForkTurnId}>
-								<ForkableTurnContext.Provider value={forkableGroup(group) ? (group.turnId as string) : null}>
+						const renderTurn = (turn: TimelineGroup) => {
+							const retrySelected = !retryControl?.turnId || retryControl.turnId === turn.turnId;
+							const retryableTurn = turn.turnId ? retryableTurns.get(turn.turnId) : undefined;
+							const retry =
+								turn.turnId &&
+								retryControl &&
+								retryableTurn &&
+								turn.turnId !== composerRecoveryTurnId &&
+									turn.outcome?.state === "failed"
+									? {
+											onRetry: () => {
+												void Promise.resolve(retryTurn(turn.turnId as string)).catch(
+													() => undefined,
+												);
+											},
+											pending: retryControl.pending && retrySelected,
+											error: retrySelected ? retryControl.error : undefined,
+											disabled:
+												Boolean(durableTurn) ||
+												Boolean(retryControl.pending) ||
+												Boolean(newWorkDisabled),
+										}
+									: undefined;
+							return (
+								<ForkableTurnContext.Provider value={forkableGroup(turn) ? (turn.turnId as string) : null}>
 								<TurnGroup
-									group={group}
+									group={turn}
 									harness={snapshot.harness}
-									login={group.turnId && group.outcome?.state === "failed" && group.outcome.failureCode === "auth_required"
-										? loginLines?.get(group.turnId)
+									login={turn.turnId && turn.outcome?.state === "failed" && turn.outcome.failureCode === "auth_required"
+										? loginLines?.get(turn.turnId)
 										: undefined}
 									workerUpdates={workerUpdates}
-									startup={group.key === startupGroupKey ? rowStartup : undefined}
+									startup={turn.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
@@ -5857,14 +5841,14 @@ export function Timeline({
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
-									editBusy={turnEditing(group, messageEdit) && Boolean(editBusy || newWorkDisabled)}
+									editBusy={turnEditing(turn, messageEdit) && Boolean(editBusy || newWorkDisabled)}
 									editError={translateDraft(editError ??
 										draftPersistenceError ??
 										inlineEditRecoveryNotice ??
 										inlineEditOutcomeNotice)}
 									branchPoints={branchPoints}
 									editableTurns={editableTurns}
-									newHumanMessageIds={turnNewHumanMessageIds(group, newHumanMessageIds)}
+									newHumanMessageIds={turnNewHumanMessageIds(turn, newHumanMessageIds)}
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
 									activateBranchDisabled={activateBranchDisabled || Boolean(durableTurn)}
@@ -5873,12 +5857,38 @@ export function Timeline({
 									// Only a turn the provider actually accepted can be undone: a turn it
 									// never saw holds no history to discard, and the daemon refuses it
 									// rather than hiding rows the agent still remembers.
-									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
+									canRollback={Boolean(onRollback && turn.turnId && turn.rollbackable)}
 									rollbackDisabled={rollbackDisabled}
-									busy={turnShowsApproval(group) ? busy : undefined}
-									queued={Boolean(group.turnId && queued.has(group.turnId))}
+									busy={turnShowsApproval(turn) ? busy : undefined}
+									queued={Boolean(turn.turnId && queued.has(turn.turnId))}
 								/>
 								</ForkableTurnContext.Provider>
+							);
+						};
+						return (
+							<div
+								key={group.key}
+								ref={virtualizer.measureElement}
+								data-index={index}
+								style={row ? {
+									position: "absolute", top: 0, left: 0, width: "100%",
+									transform: `translateY(${row.start - virtualScrollMargin}px)`,
+								} : undefined}
+								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
+								data-chat-turn={group.key}
+							>
+								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
+								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<BatchedReportsContext.Provider value={batchedReports}>
+								<LatestForkTurnContext.Provider value={latestForkTurnId}>
+								{group.folded ? (
+									<FoldedTurns
+										group={group}
+										overrides={activityDisclosureOverrides}
+										onOpenChange={onActivityDisclosureChange}
+										renderTurn={renderTurn}
+									/>
+								) : renderTurn(group)}
 								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
@@ -6977,8 +6987,93 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		a.items.length === b.items.length &&
 		// The items are already identity-stable by the time a group is compared, so a
 		// reference check here is exact and avoids walking their contents twice.
-		a.items.every((item, index) => item === b.items[index])
+		a.items.every((item, index) => item === b.items[index]) &&
+		a.folded?.kind === b.folded?.kind &&
+		a.folded?.members.length === b.folded?.members.length &&
+		(a.folded?.members.every((member, index) => sameGroup(member, b.folded!.members[index]!)) ?? true)
 	);
+}
+
+const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members ?? [group];
+
+function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
+	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
+	return member ? [`${group.key}:open`, `${member.key}:open`, `${member.key}:worked`] : [`${group.key}:worked`];
+}
+
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>): TimelineGroup[] {
+	const out: TimelineGroup[] = [];
+	let run: { kind: "background" | "failed"; key: string; members: TimelineGroup[] } | undefined;
+	const close = () => {
+		if (!run) return;
+		const { kind, members } = run;
+		const first = members[0]!;
+		out.push(kind === "failed" && members.length === 1
+			? first
+			: { key: `${kind}:${first.key}`, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
+		run = undefined;
+	};
+	for (const group of groups) {
+		const outcome = group.turnId && !group.live
+			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
+			: undefined;
+		const standing = outcome ? turnStanding(group.items, outcome.state, index) : "yours";
+		if (standing !== "background" && standing !== "failed") {
+			close();
+			out.push(standing === "replaced"
+				? { key: `replaced:${group.key}`, anchor: group.anchor, items: group.items, folded: { kind: "replaced", members: [group] } }
+				: group);
+			continue;
+		}
+		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d+/g, "")}` : standing;
+		if (run?.key !== key) {
+			close();
+			run = { kind: standing, key, members: [] };
+		}
+		run.members.push(group);
+	}
+	close();
+	return out;
+}
+
+function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
+	group: TimelineGroup;
+	overrides: Readonly<Record<string, boolean>>;
+	onOpenChange: (key: string, open: boolean) => void;
+	renderTurn: (turn: TimelineGroup) => ReactNode;
+}) {
+	const { kind, members } = group.folded!;
+	const lineKey = `${group.key}:open`;
+	const body = (member: TimelineGroup) => renderTurn({ ...member, items: member.items.slice(1) });
+	if (kind === "replaced") {
+		return (
+			<ReplacedNotice open={Boolean(overrides[lineKey])} onOpenChange={(open) => onOpenChange(lineKey, open)}>
+				{body(members[0]!)}
+			</ReplacedNotice>
+		);
+	}
+	const listed = kind === "failed" ? members.slice(0, -1) : members;
+	const line = (
+		<BackgroundUpdates
+			turns={listed.map((member) => member.items)}
+			failed={kind === "failed"}
+			open={Boolean(overrides[lineKey])}
+			onOpenChange={(open) => onOpenChange(lineKey, open)}
+		>
+			{listed.map((member) => (
+				<BackgroundTurnRow
+					key={member.key}
+					items={member.items}
+					open={Boolean(overrides[`${member.key}:open`])}
+					onOpenChange={(open) => onOpenChange(`${member.key}:open`, open)}
+				>
+					{body(member)}
+				</BackgroundTurnRow>
+			))}
+		</BackgroundUpdates>
+	);
+	if (kind !== "failed") return line;
+	return <div className="flex min-w-0 flex-col gap-2.5">{line}{renderTurn(members.at(-1)!)}</div>;
 }
 
 /**
@@ -7106,6 +7201,7 @@ type TimelineGroup = {
 	accountSwitched?: boolean;
 	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
 	subagents?: GroupSubagents;
+	folded?: { kind: "background" | "failed" | "replaced"; members: TimelineGroup[] };
 };
 
 type GroupSubagents = {

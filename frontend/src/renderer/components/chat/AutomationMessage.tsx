@@ -477,6 +477,24 @@ function NoticeLine({ notice }: { notice: AutomationNotice }) {
 	);
 }
 
+export function ReplacedNotice({ open, onOpenChange, children }: { open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
+	const { t } = useTranslation();
+	return (
+		<div className="min-w-0" data-testid="automation-notice">
+			<Pressable
+				aria-expanded={open}
+				onClick={() => onOpenChange(!open)}
+				className="-mx-1.5 flex min-h-7 min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+			>
+				<RefreshCw aria-hidden="true" className="size-3.5 shrink-0" />
+				<span className="min-w-0">{t("chat.automation.orchestratorReplaced")}</span>
+				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+			</Pressable>
+			{open ? <div className="ml-[22px] mt-1 flex min-w-0 flex-col gap-2.5">{children}</div> : null}
+		</div>
+	);
+}
+
 // The forges AO reads PRs from. A URL in the message's text is a link only to
 // these, so a message that merely looks like AO's cannot send the user elsewhere.
 const FORGE_HOSTS = new Set(["github.com", "gitlab.com"]);

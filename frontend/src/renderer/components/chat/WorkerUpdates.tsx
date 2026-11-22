@@ -9,7 +9,7 @@
  * with where each one is now.
  */
 
-import { Bot, ChevronDown, ChevronRight, FileText, GitPullRequest, LoaderCircle, Split, Tag } from "@/components/app-icons";
+import { Bot, ChevronDown, ChevronRight, CircleAlert, FileText, GitPullRequest, Layers, LoaderCircle, Split, Tag } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
@@ -18,7 +18,7 @@ import { cn } from "../../lib/utils";
 import { isSteer, type BatchedDelivery, type ConversationItem } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
-import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
+import { formatMessageTimestamp, formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { AgentAvatar } from "../AgentAvatar";
 import { Pressable } from "../ui/pressable";
 
@@ -155,6 +155,14 @@ export function isWorkerLead(item: ConversationItem | undefined): boolean {
 	return item !== undefined && (workerUpdatesOf(item).length > 0 || isTaskTitleUpdate(item));
 }
 
+export function finalReply(items: readonly ConversationItem[]): string {
+	for (let index = items.length - 1; index >= 0; index -= 1) {
+		const item = items[index]!;
+		if (item.kind === "message" && item.role === "assistant" && item.text.trim()) return item.text.trim();
+	}
+	return "";
+}
+
 /** Reports the daemon folded into a human message because the orchestrator was busy. */
 export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
 	if (item.kind !== "message" || item.role !== "user" || item.origin !== "human") return [];
@@ -268,6 +276,10 @@ function isCurrent(index: WorkerUpdateIndex | null, update: WorkerUpdate): boole
 	return !index || index.latestKeys.has(update.key);
 }
 
+export function needsYouNow(index: WorkerUpdateIndex | null, update: WorkerUpdate): boolean {
+	return Boolean(update.state && STATES[update.state]?.attention && isCurrent(index, update));
+}
+
 const plain = (text: string) =>
 	text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/`([^`]*)`/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1");
 
@@ -341,14 +353,14 @@ function AgentProse({ text, muted, className }: { text: string; muted?: boolean;
 	return <ChatMarkdown text={text} muted={muted} safeOrigin remarkPlugins={references} className={className} />;
 }
 
-function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
-	const [open, setOpen] = useState(false);
+function WorkerUpdateRow({ update, initiallyOpen = false }: { update: WorkerUpdate; initiallyOpen?: boolean }) {
+	const [open, setOpen] = useState(initiallyOpen);
 	const session = useWorkerSession(update.sessionId, update.projectId);
 	const index = useContext(WorkerUpdateIndexContext);
 	const { text, artifacts } = splitArtifacts(update.body);
 	const { headline, detail } = splitHeadline(text);
 	const state = update.state ? STATES[update.state] : undefined;
-	const attention = state?.attention && isCurrent(index, update);
+	const attention = needsYouNow(index, update);
 	// An older message names its sender only by session id; the session supplies its project and title.
 	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session?.workspaceId });
 	const name = <span className="block truncate">{update.name === update.sessionId ? session?.title || update.name : update.name}</span>;
@@ -407,11 +419,11 @@ function artifactReference(path: string, sessionId: string | undefined): string 
 	return absolute || !sessionId ? path : `${sessionId}/${path}`;
 }
 
-export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[] }) {
+export function WorkerUpdateRows({ updates, initiallyOpen }: { updates: readonly WorkerUpdate[]; initiallyOpen?: boolean }) {
 	return (
 		<div className="flex min-w-0 flex-col">
 			{updates.map((update) => (
-				<WorkerUpdateRow key={update.key} update={update} />
+				<WorkerUpdateRow key={update.key} update={update} initiallyOpen={initiallyOpen} />
 			))}
 		</div>
 	);
@@ -432,7 +444,7 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 }) {
 	const { t } = useTranslation();
 	const index = useContext(WorkerUpdateIndexContext);
-	const needsYou = updates.filter((update) => update.state && STATES[update.state]?.attention && isCurrent(index, update)).length;
+	const needsYou = updates.filter((update) => needsYouNow(index, update)).length;
 	// One logo per sender, however many reports it sent.
 	const senders = [...new Map(updates.map((update) => [update.sessionId ?? update.key, update])).values()];
 	return (
@@ -456,6 +468,107 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 			</Pressable>
 			{open ? <WorkerUpdateRows updates={updates} /> : null}
+		</div>
+	);
+}
+
+export function BackgroundUpdates({ turns, failed = false, open, onOpenChange, children }: {
+	turns: readonly (readonly ConversationItem[])[];
+	failed?: boolean;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactNode;
+}) {
+	const { t } = useTranslation();
+	const workers = new Set(turns.flatMap((items) => (items[0] ? workerUpdatesOf(items[0]) : []).map((update) => update.sessionId ?? update.name))).size;
+	const first = turns[0]?.[0]?.createdAt ?? "";
+	const last = turns.at(-1)?.[0]?.createdAt ?? first;
+	const start = formatMessageTimestamp(first);
+	const span = new Date(first).toDateString() !== new Date(last).toDateString()
+		? `${start} – ${formatMessageTimestamp(last)}`
+		: first !== last && start.endsWith(formatTime(first)) ? `${start}–${formatTime(last)}` : start;
+	return (
+		<div className="min-w-0 text-[length:var(--font-size-base)]" data-testid="background-updates">
+			<Pressable
+				aria-expanded={open}
+				onClick={() => onOpenChange(!open)}
+				className="-mx-1.5 inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+			>
+				{failed
+					? <CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-destructive" />
+					: <Layers aria-hidden="true" className="size-3.5 shrink-0" />}
+				<span className="min-w-0 truncate">
+					<span className="font-medium text-foreground/85">
+						{t(failed ? "chat.background.failedEarlier" : "chat.background.count", { count: turns.length })}
+					</span>
+					{workers > 0 ? ` · ${t("chat.background.workers", { count: workers })}` : null} · {span}
+				</span>
+				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+			</Pressable>
+			{open ? <div className="ml-[7px] mt-1 flex min-w-0 flex-col border-l border-border pl-3">{children}</div> : null}
+		</div>
+	);
+}
+
+export function BackgroundTurnRow({ items, open, onOpenChange, children }: {
+	items: readonly ConversationItem[];
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactNode;
+}) {
+	const { t } = useTranslation();
+	const lead = items[0];
+	const updates = lead ? workerUpdatesOf(lead) : [];
+	const top = updates.find((update) => update.state && STATES[update.state]?.attention) ?? updates[0];
+	const senders = [...new Set(updates.map((update) => update.sessionId ?? update.name))];
+	const session = useWorkerSession(top?.sessionId, top?.projectId);
+	const title = top ? undefined : renamedTitle(items);
+	const name = top && (top.name === top.sessionId ? session?.title || top.name : top.name);
+	const stateLabel = top?.state === "needs_input"
+		? t("chat.background.neededYou")
+		: top?.state === "stuck"
+			? t("chat.background.wasStuck")
+			: top?.state && (STATES[top.state]?.label ?? top.state.replaceAll("_", " "));
+	const result = splitHeadline(finalReply(items)).headline;
+	return (
+		<div className="min-w-0 text-xs" data-testid="background-turn">
+			<Pressable
+				aria-expanded={open}
+				onClick={() => onOpenChange(!open)}
+				className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 flex-col rounded-md px-1.5 py-1 text-left text-muted-foreground transition-colors hover:bg-interactive-hover"
+			>
+				<span className="flex h-5 w-full min-w-0 items-center gap-2">
+					{top ? <Bot aria-hidden="true" className="size-3.5 shrink-0" /> : <Tag aria-hidden="true" className="size-3.5 shrink-0" />}
+					{top ? (
+						<>
+							<span className="max-w-[40%] shrink-0 truncate font-medium text-foreground">
+								{name}
+								{senders.length > 1 ? <span className="font-normal text-muted-foreground"> +{senders.length - 1}</span> : null}
+							</span>
+							{stateLabel ? (
+								<span className="shrink-0">
+									{updates.length > 1 ? `${t("chat.reports.count", { count: updates.length })} · ` : null}
+									{stateLabel}
+								</span>
+							) : null}
+							<span className="min-w-0 flex-1 truncate group-hover:text-foreground">{splitHeadline(splitArtifacts(top.body).text).headline}</span>
+						</>
+					) : (
+						<span className="min-w-0 flex-1 truncate">
+							<Trans t={t} i18nKey="chat.taskNamed" values={{ title }} components={{ task: <span className="font-medium text-foreground" /> }} />
+						</span>
+					)}
+					<span className="shrink-0 tabular-nums">{lead ? formatTime(lead.createdAt) : null}</span>
+					<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+				</span>
+				{!open && result.length > 12 ? <span className="block w-full truncate pl-[22px] text-muted-foreground/80">{result}</span> : null}
+			</Pressable>
+			{open ? (
+				<div className="mb-2 ml-[22px] mt-1 flex min-w-0 flex-col gap-2.5">
+					{updates.length > 0 ? <WorkerUpdateRows updates={updates} initiallyOpen /> : null}
+					{children}
+				</div>
+			) : null}
 		</div>
 	);
 }

@@ -203,7 +203,7 @@ describe("orchestrator worker updates", () => {
 		renderOrchestrator([
 			report("t1", 1, "[done] [Check regressions](ao://sessions/proj/proj-288)\nOne strong candidate: #7043\nScreened 58 PRs."),
 			command("t1", 1, "gh pr merge 7054"),
-			reply("t1", 2, "Merged [#7054](https://github.com/o/r/pull/7054)."),
+			reply("t1", 2, "Merged [#7054](https://github.com/o/r/pull/7054). Close #7043 too?"),
 		]);
 
 		const line = screen.getByRole("button", { name: "1 Agent Report" });
@@ -240,7 +240,7 @@ describe("orchestrator worker updates", () => {
 		}] as unknown as WorkspaceSummary[];
 		renderOrchestrator([
 			automation("t1", 1, "[from proj-187] Rebased #5051; disk full during validation, retrying."),
-			reply("t1", 2, "Noted."),
+			reply("t1", 2, "Should I free some disk?"),
 		], vi.fn(), workspaces);
 
 		const row = screen.getByTestId("worker-update");
@@ -250,14 +250,15 @@ describe("orchestrator worker updates", () => {
 		expect(within(row).getByRole("link", { name: "PR 5051 rebase" })).toHaveAttribute("href", "ao://sessions/proj/proj-187");
 	});
 
-	it("draws AO's task-naming prompt as the name it produced", () => {
+	it("folds AO's task-naming prompt into a row that names the task it produced", async () => {
 		renderOrchestrator([
 			automation("t1", 1, "AO TASK TITLE UPDATE\nChoose a concise task title from the brief and run:\nao session rename proj-150 \"<title>\""),
 			command("t1", 1, 'ao session rename proj-150 "Chat Link Browser"'),
 			reply("t1", 2, "Renamed the worker task to **Chat Link Browser**."),
 		]);
 
-		expect(screen.getByText("Chat Link Browser", { selector: "span" }).closest("p")).toHaveTextContent("New task named Chat Link Browser");
+		await userEvent.click(screen.getByRole("button", { name: /^1 background update/ }));
+		expect(screen.getByTestId("background-turn")).toHaveTextContent("New task named Chat Link Browser");
 		expect(screen.queryByText(/AO TASK TITLE UPDATE/)).not.toBeInTheDocument();
 	});
 
@@ -315,7 +316,7 @@ describe("orchestrator worker updates", () => {
 
 	it("draws one logo per sender on the reports line", () => {
 		const entries = [1, 2, 3, 4].map((n) => `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${n}.`).join("\n\n");
-		renderOrchestrator([report("t1", 1, entries), reply("t1", 2, "Noted.")]);
+		renderOrchestrator([report("t1", 1, entries), reply("t1", 2, "Which one first?")]);
 		const line = screen.getByRole("button", { name: /^4 Agent Reports/ });
 		expect(line.querySelectorAll("[data-report-logo]")).toHaveLength(1);
 		expect(line).not.toHaveTextContent("...");
@@ -327,10 +328,130 @@ describe("orchestrator worker updates", () => {
 			command("t1", 1, "gh pr merge 7054"),
 		]);
 
-		await userEvent.click(screen.getByRole("button", { name: "1 Agent Report" }));
+		await userEvent.click(screen.getByRole("button", { name: /^1 background update/ }));
+		await userEvent.click(within(screen.getByTestId("background-turn")).getAllByRole("button")[0]!);
 		expect(screen.getByTestId("worker-update")).toHaveTextContent("Menus");
 		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^Worked for/ })).toBeInTheDocument();
+	});
+});
+
+function human(turnId: string, minute: number, text: string): ConversationMessage {
+	return {
+		kind: "message", id: `${turnId}-human`, turnId, sequence: minute * 10, revision: 0, role: "user", origin: "human",
+		streaming: false, createdAt: at(minute), text,
+	};
+}
+
+function renderSnapshot(value: ConversationSnapshot) {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(workspaceQueryKey, []);
+	render(
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>
+				<ChatWorkspace snapshot={value} sessionRole="orchestrator" />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+}
+
+describe("background turns in the orchestrator chat", () => {
+	it("folds worker turns the orchestrator handled on its own into one line per run, around the user's turns", async () => {
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser."),
+			reply("t1", 2, "Noted."),
+			automation("t2", 3, "[from proj-187] Rebased #5051 cleanly."),
+			reply("t2", 4, "Merged the rebased #5051 after CI went green."),
+			human("t3", 5, "How is the browser work going?"),
+			reply("t3", 6, "Menus are done and #5051 is merged."),
+			report("t4", 7, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages load over the tunnel."),
+			reply("t4", 8, "Noted."),
+		]);
+
+		expect(screen.getByText("How is the browser work going?")).toBeInTheDocument();
+		expect(screen.getByText("Menus are done and #5051 is merged.")).toBeInTheDocument();
+		expect(screen.queryByText("Noted.")).not.toBeInTheDocument();
+		const lines = screen.getAllByTestId("background-updates");
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toHaveTextContent(/^2 background updates · 2 workers/);
+		expect(lines[1]).toHaveTextContent(/^1 background update · 1 worker/);
+
+		await userEvent.click(within(lines[0]!).getByRole("button", { name: /^2 background updates/ }));
+		const rows = within(lines[0]!).getAllByTestId("background-turn");
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toHaveTextContent("Menus");
+		expect(rows[0]).toHaveTextContent("done");
+		expect(rows[0]).not.toHaveTextContent("Noted.");
+		expect(rows[1]).toHaveTextContent("Merged the rebased #5051 after CI went green");
+
+		await userEvent.click(within(rows[0]!).getAllByRole("button")[0]!);
+		expect(within(rows[0]!).getByText("Menus render above the browser.")).toBeInTheDocument();
+		expect(within(rows[0]!).getByText("Noted.")).toBeInTheDocument();
+	});
+
+	it("keeps a report that still needs the user in view, and folds it once that worker moves on", () => {
+		renderOrchestrator([
+			report("t1", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?"),
+			reply("t1", 2, "Noted."),
+		]);
+		expect(screen.getByTestId("worker-reports")).toHaveTextContent("1 needs you");
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
+	it("folds a needs-you report a newer update from the same worker overtook", () => {
+		renderOrchestrator([
+			report("t1", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?"),
+			reply("t1", 2, "Noted."),
+			report("t2", 3, "[done] [iOS pages](ao://sessions/proj/proj-286)\nWent with the tunnel."),
+			reply("t2", 4, "Noted."),
+		]);
+		expect(screen.queryByTestId("worker-reports")).not.toBeInTheDocument();
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 1 worker/);
+	});
+
+	it("merges repeated failures with the same error into one line above the latest", async () => {
+		const items = [1, 3, 5].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]);
+		const base = snapshot(items);
+		renderSnapshot({
+			...base,
+			turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `You've hit your usage limit. Try again at 9:2${index} AM.` })),
+		});
+
+		expect(screen.getByRole("button", { name: /^2 earlier updates failed the same way/ })).toBeInTheDocument();
+		expect(screen.getAllByText(/You've hit your usage limit/)).toHaveLength(1);
+		expect(screen.getByText(/Try again at 9:22 AM/)).toBeInTheDocument();
+	});
+
+	it("draws the orchestrator's replacement as one notice that opens to its goodbye", async () => {
+		renderOrchestrator([
+			automation("t1", 1, "AO is replacing this project orchestrator. Stop coordinating new work now and hand off."),
+			reply("t1", 2, "Handing off to the next orchestrator."),
+		]);
+		const notice = screen.getByRole("button", { name: /The orchestrator agent is being replaced/ });
+		expect(screen.queryByText("Handing off to the next orchestrator.")).not.toBeInTheDocument();
+		await userEvent.click(notice);
+		expect(screen.getByText("Handing off to the next orchestrator.")).toBeInTheDocument();
+		expect(screen.getAllByText(/The orchestrator agent is being replaced/)).toHaveLength(1);
+	});
+
+	it("folds a worker message AO delivered inside another turn", () => {
+		const base = snapshot([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Noted."),
+			automation("t2", 3, "[from proj-187] Rebased #5051 cleanly."),
+		]);
+		renderSnapshot({ ...base, turns: base.turns.filter((turn) => turn.id !== "t2") });
+		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 workers/);
+	});
+
+	it("leaves a turn a tool sent for the user in view", () => {
+		renderOrchestrator([
+			automation("t1", 1, "[via Grok Bot #c1] What's the status?"),
+			reply("t1", 2, "Noted."),
+		]);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+		expect(screen.getByText("Noted.")).toBeInTheDocument();
 	});
 });
 

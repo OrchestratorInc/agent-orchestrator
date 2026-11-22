@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
+import { turnStanding } from "../components/chat/background-turns";
+import { indexWorkerUpdates } from "../components/chat/WorkerUpdates";
+import { fetchRecentConversation } from "../hooks/useConversation";
 import type { WorkspaceSession } from "../types/workspace";
 
 const STORAGE_KEY = "ao.orchestrator.replies";
@@ -50,14 +53,36 @@ export const useOrchestratorReplyStore = create<OrchestratorReplyStore>((set, ge
 
 export const orchestratorReplyKey = (projectId: string, hostId?: string) => `${hostId ?? ""}:${projectId}`;
 
+const checks = new Map<string, Promise<boolean>>();
+
+function settledTurnsStandOut(id: string, sessionId: string, hostId: string | undefined, since: number): Promise<boolean> {
+	let check = checks.get(id);
+	if (!check) {
+		check = fetchRecentConversation(sessionId, hostId).then((snapshot) => {
+			const index = indexWorkerUpdates(snapshot.items);
+			const settled = snapshot.turns.filter((turn) => Date.parse(turn.completedAt ?? "") >= since);
+			return settled.length === 0 || settled.some((turn) => {
+				if (turn.hasHumanPrompt) return true;
+				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index);
+				return standing !== "background" && standing !== "replaced";
+			});
+		}, () => true);
+		checks.set(id, check);
+		void check.finally(() => checks.delete(id));
+	}
+	return check;
+}
+
 export type OrchestratorReplyState = "working" | "unread" | null;
 
 /**
  * What a project's orchestrator buttons should signal: a reply the user has not
- * seen, or a turn in progress. A reply is the orchestrator's activity settling
- * from working back to idle or waiting for input, observed live from the
- * streamed workspace. Resets to idle on restore or resume never count, and tool
- * calls inside a turn keep it working. Viewing the orchestrator marks its
+ * seen, or a turn of theirs in progress. A reply is the orchestrator's activity
+ * settling from working back to idle or waiting for input, observed live from
+ * the streamed workspace, when the turns that settled include one the user
+ * started or one the chat keeps in view. Worker traffic the orchestrator handled
+ * on its own stays quiet. Resets to idle on restore or resume never count, and
+ * tool calls inside a turn keep it working. Viewing the orchestrator marks its
  * replies seen; both facts persist per project across restarts.
  */
 export function useOrchestratorReplyState({ projectId, hostId, orchestrator, viewing }: {
@@ -71,20 +96,30 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 	const seenAt = useOrchestratorReplyStore((state) => state.seenAt[key] ?? 0);
 	const activityState = orchestrator?.activity?.state;
 	const lastActivityAt = orchestrator?.activity?.lastActivityAt;
+	const quiet = orchestrator?.mode === "chat";
+	const lastUserAt = Date.parse(orchestrator?.lastUserMessageAt ?? "") || 0;
 	const working = activityState === "active";
-	const previous = useRef<{ id?: string; working: boolean } | null>(null);
+	const previous = useRef<{ id?: string; working: boolean; since: number } | null>(null);
 	useEffect(() => {
 		const prev = previous.current;
-		previous.current = { id: orchestrator?.id, working };
+		const parsed = Date.parse(lastActivityAt ?? "");
+		const at = Number.isFinite(parsed) ? parsed : Date.now();
+		previous.current = { id: orchestrator?.id, working, since: prev?.working && prev.id === orchestrator?.id ? prev.since : at };
 		if (!key || !orchestrator || prev?.id !== orchestrator.id || !prev.working) return;
 		if (activityState !== "idle" && activityState !== "waiting_input") return;
-		const at = Date.parse(lastActivityAt ?? "");
-		useOrchestratorReplyStore.getState().recordReply(key, Number.isFinite(at) ? at : Date.now());
-	}, [activityState, key, lastActivityAt, orchestrator, working]);
+		const store = useOrchestratorReplyStore.getState();
+		if (!quiet || viewing || lastUserAt > (store.replyAt[key] ?? 0)) {
+			store.recordReply(key, at);
+			return;
+		}
+		void settledTurnsStandOut(`${key}:${at}`, orchestrator.id, hostId, prev.since).then((standsOut) => {
+			if (standsOut) useOrchestratorReplyStore.getState().recordReply(key, at);
+		});
+	}, [activityState, hostId, key, lastActivityAt, lastUserAt, orchestrator, quiet, viewing, working]);
 	useEffect(() => {
 		if (viewing && key && replyAt > seenAt) useOrchestratorReplyStore.getState().markSeen(key, replyAt);
 	}, [key, replyAt, seenAt, viewing]);
 	if (!orchestrator || viewing) return null;
-	if (working) return "working";
+	if (working && (!quiet || lastUserAt > replyAt)) return "working";
 	return replyAt > seenAt ? "unread" : null;
 }
