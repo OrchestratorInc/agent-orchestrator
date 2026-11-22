@@ -42,7 +42,7 @@ type Report struct {
 // The implementation delegates freshness to the shared readiness coordinator.
 type HarnessCatalog interface {
 	RefreshFresh(ctx context.Context) (agentsvc.Inventory, error)
-	FindInstalledBinary(ctx context.Context) (agentsvc.Info, bool)
+	FindInstalledBinary(ctx context.Context) (agentsvc.Info, agentsvc.Presence)
 }
 
 // GitHubAuthTerminalOpener starts the reviewed GitHub CLI login command in a
@@ -222,8 +222,17 @@ func (s *Service) checkHarness(ctx context.Context) Requirement {
 // determine it by starting a process, which must not delay first render.
 func (s *Service) checkStartupHarness(ctx context.Context) Requirement {
 	const label = "agent harness"
-	info, ok := s.harnesses.FindInstalledBinary(ctx)
-	if !ok {
+	info, search := s.harnesses.FindInstalledBinary(ctx)
+	if search == agentsvc.PresenceUnconfirmed {
+		// A slow or failed check is not proof that no agent is installed, so it
+		// must not block startup. The checks keep running in the background, and
+		// a session still verifies its agent before it launches.
+		return Requirement{
+			ID: "harness", Label: label,
+			Detail: "Orchestrator could not finish checking for an agent CLI in time. It keeps checking in the background.",
+		}
+	}
+	if search != agentsvc.PresenceFound {
 		return Requirement{
 			ID: "harness", Label: label, Required: true,
 			Detail: "No agent CLI (Claude Code, Codex, etc.) was found on PATH or in a supported install location.",
