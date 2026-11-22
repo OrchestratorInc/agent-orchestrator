@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
@@ -200,5 +201,39 @@ func TestScratchProjectForkArchiveSkipsGit(t *testing.T) {
 	m.store = lineageStore{fakeStore: st, forks: map[domain.SessionID]domain.SessionFork{fork.ID: {ForkSessionID: fork.ID, SourceSessionID: source.ID}}}
 	if m.dropInheritedForkChanges(context.Background(), fork, workspaceInfo(fork)) {
 		t.Fatal("a Scratch project's folder was discarded as inherited changes")
+	}
+}
+
+// A standalone fork's folder carries any repository the original cloned,
+// still on the original's branch, and AO never tracked the pull requests the
+// original opened there, so the fork is told to branch before committing and
+// to leave the original's branches and pull requests alone.
+func TestPlainForkPromptTellsTheAgentToBranch(t *testing.T) {
+	m, _, root := standaloneForkManager(t)
+	_, source := standaloneForkRecords(root)
+	ctx := withForkOrigin(context.Background(), source.ID, "Standalone demo", source.Metadata.WorkspacePath, true)
+	prompt := m.forkBoundaryPrompt(ctx, "standalone-2")
+	for _, want := range []string{
+		"fork of Orchestrator session standalone-1", "copy of its folder", "own folder",
+		"still checked out on the original's branch", "create a new branch", "never push to the original's branches",
+		source.Metadata.WorkspacePath,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("plain fork prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "own worktree, branch") || strings.Contains(prompt, "from this session's branch") {
+		t.Errorf("plain fork prompt promises a branch it doesn't have:\n%s", prompt)
+	}
+}
+
+func TestPlainForkPromptSurvivesRestore(t *testing.T) {
+	m, st, root := standaloneForkManager(t)
+	fork, source := standaloneForkRecords(root)
+	st.sessions[fork.ID], st.sessions[source.ID] = fork, source
+	m.store = lineageStore{fakeStore: st, forks: map[domain.SessionID]domain.SessionFork{fork.ID: {ForkSessionID: fork.ID, SourceSessionID: source.ID, SourceTitle: "Standalone demo"}}}
+	prompt := m.forkBoundaryPrompt(context.Background(), fork.ID)
+	if !strings.Contains(prompt, "create a new branch") || !strings.Contains(prompt, "own folder") {
+		t.Fatalf("restored plain fork's prompt is the git one:\n%s", prompt)
 	}
 }

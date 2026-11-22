@@ -6972,7 +6972,7 @@ func (m *Manager) spawnTexts(ctx context.Context, cfg ports.SpawnConfig, session
 	if cfg.Fork != nil {
 		// The lineage row is written after spawn returns, so name the
 		// original here; restores read it from the lineage.
-		ctx = withForkOrigin(ctx, cfg.Fork.SourceSessionID, cfg.Fork.SourceTitle, cfg.Fork.SourceWorkspace)
+		ctx = withForkOrigin(ctx, cfg.Fork.SourceSessionID, cfg.Fork.SourceTitle, cfg.Fork.SourceWorkspace, cfg.Fork.SeedDir != "")
 	}
 	// Decide attribution once, before the first prompt asks for the footer.
 	attr = m.recordSpawnAttribution(ctx, cfg.ProjectID, sessionID)

@@ -441,10 +441,13 @@ type forkOrigin struct {
 	// workspace is the original's worktree, which the copied conversation
 	// names.
 	workspace string
+	// plain marks a fork of a plain folder: a copy of the original's folder,
+	// with no branch of its own.
+	plain bool
 }
 
-func withForkOrigin(ctx context.Context, sourceID domain.SessionID, title, workspace string) context.Context {
-	return context.WithValue(ctx, forkOriginKey{}, forkOrigin{sourceID: sourceID, title: title, workspace: workspace})
+func withForkOrigin(ctx context.Context, sourceID domain.SessionID, title, workspace string, plain bool) context.Context {
+	return context.WithValue(ctx, forkOriginKey{}, forkOrigin{sourceID: sourceID, title: title, workspace: workspace, plain: plain})
 }
 
 type forkLineageReader interface {
@@ -468,6 +471,11 @@ func (m *Manager) forkBoundaryPrompt(ctx context.Context, id domain.SessionID) s
 		if source, found, err := m.store.GetSession(ctx, fork.SourceSessionID); err == nil && found {
 			origin.workspace = source.Metadata.WorkspacePath
 		}
+		if rec, found, err := m.store.GetSession(ctx, id); err == nil && found {
+			if project, err := m.loadProject(ctx, rec.ProjectID); err == nil {
+				origin.plain = plainFolderProject(project, rec)
+			}
+		}
 	}
 	if origin.sourceID == "" {
 		return ""
@@ -475,6 +483,9 @@ func (m *Manager) forkBoundaryPrompt(ctx context.Context, id domain.SessionID) s
 	title := ""
 	if origin.title != "" {
 		title = fmt.Sprintf(" (%q)", origin.title)
+	}
+	if origin.plain {
+		return plainForkBoundaryPrompt(origin, title, id)
 	}
 	worktree := ""
 	if path := strings.TrimSpace(origin.workspace); path != "" {
@@ -487,6 +498,24 @@ This session is a fork of Orchestrator session %s%s. It started with that sessio
 The original's pull requests belong to the original session. Don't push to their branches, comment on them, request reviews of them, or claim them. If this work needs a PR, open a new one from this session's branch; target the original's branch when this work builds on it.
 
 Plans and tasks from before the fork are background. Continue only what the user asks in this session, and report progress as this session, not as the original.`, origin.sourceID, title, id, worktree)
+}
+
+// plainForkBoundaryPrompt is the fork note for a copy of a plain folder. The
+// folder may hold a repository the original cloned, still on the original's
+// branch, whose pull requests AO never tracked, so the fork is told to branch
+// before committing rather than given a list of PRs to leave alone.
+func plainForkBoundaryPrompt(origin forkOrigin, title string, id domain.SessionID) string {
+	folder := ""
+	if path := strings.TrimSpace(origin.workspace); path != "" {
+		folder = fmt.Sprintf(" The original's folder is `%s`, and the conversation you copied names paths in it. Those files are the original's: never read, write, or run commands in that folder. The same files are in this session's own folder, your working directory; use the same relative paths there.", path)
+	}
+	return fmt.Sprintf(`## Session Fork
+
+This session is a fork of Orchestrator session %s%s. It started with that session's conversation and a copy of its folder, but it is a separate session (%s) with its own folder and artifact folder. Work only in this session's own folder; never edit the original's.%s
+
+Any git repository in this folder is a copy of the original's: it is still checked out on the original's branch, with the same remotes. The branches the original pushed and the pull requests it opened belong to the original session. Before you commit, create a new branch, and never push to the original's branches, comment on its pull requests, or request reviews of them. If this work needs a pull request, open a new one from your own branch.
+
+Plans and tasks from before the fork are background. Continue only what the user asks in this session, and report progress as this session, not as the original.`, origin.sourceID, title, id, folder)
 }
 
 func (m *Manager) isSessionFork(ctx context.Context, id domain.SessionID) bool {
