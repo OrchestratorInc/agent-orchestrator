@@ -28,7 +28,6 @@ type Store interface {
 	DeleteAutomation(context.Context, domain.AutomationID) (bool, error)
 	ListAutomationRuns(context.Context, domain.AutomationRunFilter) (domain.AutomationRunPage, error)
 	ListLatestAutomationRuns(context.Context, []domain.AutomationID) (map[domain.AutomationID]domain.AutomationRun, error)
-	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
 }
 
 // Deps are the automation service's injectable dependencies.
@@ -195,15 +194,6 @@ func (s *Service) Get(ctx context.Context, id domain.AutomationID) (domain.Autom
 	if run, found := latest[id]; found {
 		rec.LatestRun = &run
 	}
-	active, err := s.store.ListActiveAutomationRuns(ctx)
-	if err != nil {
-		return domain.Automation{}, apierr.Internal("AUTOMATION_READ_FAILED", "Failed to read automation")
-	}
-	for _, run := range active {
-		if run.AutomationID == id {
-			rec.ActiveRun = &run
-		}
-	}
 	return rec, nil
 }
 
@@ -227,22 +217,10 @@ func (s *Service) List(ctx context.Context, filter domain.AutomationFilter) (dom
 	if err != nil {
 		return domain.AutomationPage{}, apierr.Internal("AUTOMATION_LIST_FAILED", "Failed to list automations")
 	}
-	activeRuns, err := s.store.ListActiveAutomationRuns(ctx)
-	if err != nil {
-		return domain.AutomationPage{}, apierr.Internal("AUTOMATION_LIST_FAILED", "Failed to list automations")
-	}
-	active := make(map[domain.AutomationID]domain.AutomationRun, len(activeRuns))
-	for _, run := range activeRuns {
-		active[run.AutomationID] = run
-	}
 	for i := range page.Items {
 		if run, ok := latest[page.Items[i].ID]; ok {
 			latestRun := run
 			page.Items[i].LatestRun = &latestRun
-		}
-		if run, ok := active[page.Items[i].ID]; ok {
-			activeRun := run
-			page.Items[i].ActiveRun = &activeRun
 		}
 	}
 	return page, nil

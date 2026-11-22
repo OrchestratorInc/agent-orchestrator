@@ -4824,7 +4824,6 @@ export interface components {
             automation: components["schemas"]["AutomationResponse"];
         };
         AutomationResponse: {
-            activeRun?: components["schemas"]["AutomationRunSummaryResponse"];
             /** Format: date-time */
             createdAt: string;
             displayName: string;

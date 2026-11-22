@@ -76,26 +76,6 @@ func TestAutomationsCreateReturnsDefinition(t *testing.T) {
 	}
 }
 
-// The card names the run that later occurrences wait behind, so the API keeps
-// it apart from the newest run.
-func TestAutomationGetReturnsBlockingRun(t *testing.T) {
-	session := domain.SessionID("worker-1")
-	service := &fakeAutomationService{items: []domain.Automation{{
-		ID:        "automation-1",
-		LatestRun: &domain.AutomationRun{ID: "today", Status: domain.AutomationRunPending},
-		ActiveRun: &domain.AutomationRun{ID: "yesterday", Status: domain.AutomationRunRunning, SessionID: &session},
-	}}}
-	rec := httptest.NewRecorder()
-	automationTestRouter(service).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/automations/automation-1", nil))
-	var response AutomationEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
-	}
-	if active := response.Automation.ActiveRun; active == nil || active.ID != "yesterday" || active.SessionID != "worker-1" || response.Automation.LatestRun.ID != "today" {
-		t.Fatalf("automation=%#v", response.Automation)
-	}
-}
-
 func TestAutomationsDeleteReturnsNoContent(t *testing.T) {
 	service := &fakeAutomationService{}
 	req := httptest.NewRequest(http.MethodDelete, "/automations/automation-1", nil)
