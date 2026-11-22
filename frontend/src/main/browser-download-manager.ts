@@ -63,6 +63,7 @@ const DOWNLOAD_DESTINATION_ERROR = "Could not prepare the Downloads folder.";
 const DOWNLOAD_DELETE_ERROR = "Could not delete the downloaded file.";
 const DOWNLOAD_UNAVAILABLE_ERROR = "This download is no longer available. Open the link again.";
 const MAX_FILENAME_BYTES = 255;
+const filenameSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 // How long an explicit approval waits for Chromium to request the file again.
 const DOWNLOAD_APPROVAL_TTL_MS = 60_000;
 
@@ -93,10 +94,10 @@ function safeFilename(value: string): string {
 function truncateToBytes(value: string, maxBytes: number): string {
 	let result = "";
 	let bytes = 0;
-	for (const character of value) {
-		const size = Buffer.byteLength(character, "utf8");
+	for (const { segment } of filenameSegmenter.segment(value)) {
+		const size = Buffer.byteLength(segment, "utf8");
 		if (bytes + size > maxBytes) break;
-		result += character;
+		result += segment;
 		bytes += size;
 	}
 	return result;
@@ -106,10 +107,12 @@ function collisionSafePath(directory: string, fileName: string, unavailable: Set
 	const parsed = path.parse(fileName);
 	const candidateName = (suffix: string): string => {
 		// Keep the extension when it fits. An unusually long extension must also
-		// yield space for the suffix and at least the first stem character.
-		const stemBytes = Buffer.byteLength([...parsed.name][0] ?? "", "utf8");
-		const extension = truncateToBytes(parsed.ext, MAX_FILENAME_BYTES - Buffer.byteLength(suffix) - stemBytes);
-		const stem = truncateToBytes(parsed.name, MAX_FILENAME_BYTES - Buffer.byteLength(suffix) - Buffer.byteLength(extension));
+		// yield space for the suffix and at least the first stem grapheme.
+		const suffixBytes = Buffer.byteLength(suffix);
+		const firstStemBytes = Buffer.byteLength(filenameSegmenter.segment(parsed.name).containing(0)?.segment ?? "", "utf8");
+		const stemBytes = firstStemBytes <= MAX_FILENAME_BYTES - suffixBytes ? firstStemBytes : Buffer.byteLength("download");
+		const extension = truncateToBytes(parsed.ext, MAX_FILENAME_BYTES - suffixBytes - stemBytes);
+		const stem = truncateToBytes(parsed.name, MAX_FILENAME_BYTES - suffixBytes - Buffer.byteLength(extension)) || "download";
 		return `${stem}${suffix}${extension}`.replace(/[. ]+$/u, "");
 	};
 	let candidate = path.join(directory, candidateName(""));

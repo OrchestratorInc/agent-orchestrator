@@ -130,6 +130,31 @@ describe("browser download manager", () => {
 		expect(Buffer.byteLength(result)).toBeLessThanOrEqual(255);
 	});
 
+	it.each([
+		[`${"a".repeat(246)}e\u0301.txt`, `${"a".repeat(246)} (1).txt`],
+		[`${"a".repeat(230)}👨‍👩‍👧.txt`, `${"a".repeat(230)} (1).txt`],
+	])("keeps a grapheme cluster intact at the collision boundary", (fileName, expected) => {
+		const test = setup();
+		const first = new FakeDownloadItem();
+		first.getFilename = () => fileName;
+		test.start(first);
+		writeFileSync(first.setSavePath.mock.calls[0][0] as string, "first download");
+		const second = new FakeDownloadItem();
+		second.getFilename = () => fileName;
+		test.start(second);
+		const result = path.basename(second.setSavePath.mock.calls[0][0] as string);
+		expect(result).toBe(expected);
+		expect(Buffer.byteLength(result)).toBeLessThanOrEqual(255);
+	});
+
+	it("uses a readable fallback when one grapheme exceeds the filename limit", () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+		item.getFilename = () => `e${"\u0301".repeat(130)}.txt`;
+		test.start(item);
+		expect(path.basename(item.setSavePath.mock.calls[0][0] as string)).toBe("download.txt");
+	});
+
 	it("makes room when the collision number gains a digit", () => {
 		const test = setup();
 		const fileName = `${"a".repeat(251)}.txt`;
