@@ -2469,11 +2469,12 @@ export function CloudSessionChatSurface({
 					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
 				</>
 			) : undefined}
-			composerLockedPlaceholder={readOnly
+			// Only the sharer's organization can restore it, and a message to an archived
+			// session would wait unanswered, so a guest cannot send one whatever their role.
+			composerLockedPlaceholder={session.isTerminated === true && cloud?.shared
+				? appI18n.t("chat.shared.archived")
+				: readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
-				// Only the sharer's organization can restore it, and a message to an archived
-				// session would wait unanswered, so a guest cannot send one.
-				: session.isTerminated === true && cloud?.shared ? appI18n.t("chat.shared.archived")
 				// The attached notice already names the writer and the place in line.
 				// An empty placeholder keeps the input locked without repeating it.
 				: lease.locked ? "" : undefined}
