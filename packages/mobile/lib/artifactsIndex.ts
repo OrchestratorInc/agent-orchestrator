@@ -67,3 +67,21 @@ export function filterArtifactRows(rows: readonly ArtifactIndexRow[], query: str
 	if (!needle) return [...rows];
 	return rows.filter((row) => [row.name, row.sessionTitle, row.projectName ?? ""].some((text) => text.toLowerCase().includes(needle)));
 }
+
+/** A location chip on the Artifacts page: a paired machine or Orchestrator Cloud. */
+export type ArtifactLocation = { hostId: string; label: string };
+
+/** The rows at one location, or every row when none is chosen. */
+export function rowsAtLocation(rows: readonly ArtifactIndexRow[], hostId: string | undefined): ArtifactIndexRow[] {
+	return hostId ? rows.filter((row) => row.hostId === hostId) : [...rows];
+}
+
+/**
+ * How many rows each location chip would show, under the search, as the
+ * desktop's chips count: every location listed, with zero where it has none.
+ */
+export function artifactLocationCounts(rows: readonly ArtifactIndexRow[], locations: readonly ArtifactLocation[]): { all: number; byHost: ReadonlyMap<string, number> } {
+	const byHost = new Map<string, number>(locations.map((location) => [location.hostId, 0]));
+	for (const row of rows) byHost.set(row.hostId, (byHost.get(row.hostId) ?? 0) + 1);
+	return { all: rows.length, byHost };
+}

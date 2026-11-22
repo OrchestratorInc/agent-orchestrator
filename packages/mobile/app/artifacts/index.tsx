@@ -1,9 +1,10 @@
 import { Stack, useRouter } from "expo-router";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { FlatList, RefreshControl, StyleSheet, Text, TextInput, useWindowDimensions, View, type ViewToken } from "react-native";
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArtifactCard, ARTIFACT_GRID_WINDOW, ARTIFACT_VIEWABILITY } from "../../lib/ArtifactCard";
-import { artifactIndexRows, filterArtifactRows, type ArtifactIndexRow } from "../../lib/artifactsIndex";
+import { artifactIndexRows, artifactLocationCounts, filterArtifactRows, rowsAtLocation, type ArtifactIndexRow, type ArtifactLocation } from "../../lib/artifactsIndex";
+import { CLOUD_HOST_ID } from "../../lib/cloud/mapping";
 import { daemonArtifactsBackend, type ArtifactsBackend } from "../../lib/artifactsBackend";
 import { haptics } from "../../lib/haptics";
 import { Feather } from "../../lib/icons";
@@ -48,7 +49,17 @@ export default function ArtifactsPage() {
 			(hostId, projectId) => projects.get(`${hostId}:${projectId}`),
 		);
 	}, [app.allProjects, app.allSessions]);
-	const shown = useMemo(() => filterArtifactRows(rows, query), [query, rows]);
+	// The location chips, as the desktop's: All, each paired machine, and Cloud when it is on.
+	const [location, setLocation] = useState<string>();
+	const locations = useMemo((): ArtifactLocation[] => [
+		...app.hostStates.map((host) => ({ hostId: host.hostId, label: host.name })),
+		...(app.cloud ? [{ hostId: CLOUD_HOST_ID, label: "Cloud" }] : []),
+	], [app.cloud, app.hostStates]);
+	// A machine that is no longer paired shows everything again.
+	const chosen = location && locations.some((item) => item.hostId === location) ? location : undefined;
+	const searched = useMemo(() => filterArtifactRows(rows, query), [query, rows]);
+	const counts = useMemo(() => artifactLocationCounts(searched, locations), [locations, searched]);
+	const shown = useMemo(() => rowsAtLocation(searched, chosen), [chosen, searched]);
 
 	// One backend per paired machine: a card reads its file from its own machine.
 	const backends = useMemo(() => {
@@ -92,6 +103,13 @@ export default function ArtifactsPage() {
 				// Lazy: a few screens of cards are mounted at a time, not the whole list.
 				{...ARTIFACT_GRID_WINDOW}
 				ListHeaderComponent={rows.length ? (
+					<>
+					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips} style={styles.chipsBar} testID="artifact-locations">
+						<LocationChip label="All" count={counts.all} selected={!chosen} onPress={() => setLocation(undefined)} styles={styles} />
+						{locations.map((item) => (
+							<LocationChip key={item.hostId} label={item.label} count={counts.byHost.get(item.hostId) ?? 0} selected={chosen === item.hostId} onPress={() => setLocation(item.hostId)} styles={styles} />
+						))}
+					</ScrollView>
 					<View style={styles.search}>
 						<Feather name="search" size={15} color={t.textTertiary} />
 						<TextInput
@@ -105,6 +123,7 @@ export default function ArtifactsPage() {
 							{...textSelectionColors(t)}
 						/>
 					</View>
+					</>
 				) : null}
 				ListEmptyComponent={(
 					<View style={styles.empty}>
@@ -119,6 +138,23 @@ export default function ArtifactsPage() {
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} {...refreshControlColors(t)} />}
 			/>
 		</>
+	);
+}
+
+/** A location chip: its name and how many artifacts it holds, the chosen one filled. */
+function LocationChip({ label, count, selected, onPress, styles }: { label: string; count: number; selected: boolean; onPress(): void; styles: ReturnType<typeof makeStyles> }) {
+	return (
+		<Pressable
+			accessibilityRole="button"
+			accessibilityState={{ selected }}
+			accessibilityLabel={`${label}, ${count} artifact${count === 1 ? "" : "s"}`}
+			onPress={() => { haptics.select(); onPress(); }}
+			style={({ pressed }) => [styles.chip, selected && styles.chipSelected, pressed && !selected && styles.chipPressed]}
+			testID={`artifact-location-${label}`}
+		>
+			<Text style={[styles.chipLabel, selected && styles.chipLabelSelected]} numberOfLines={1}>{label}</Text>
+			<Text style={styles.chipCount}>{count}</Text>
+		</Pressable>
 	);
 }
 
@@ -157,6 +193,14 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	page: { flex: 1, backgroundColor: t.bgBase },
 	content: { paddingHorizontal: space.lg - space.xs, paddingTop: space.sm },
 	row: { marginBottom: space.md },
+	chipsBar: { marginHorizontal: -(space.lg - space.xs), marginBottom: space.sm },
+	chips: { paddingHorizontal: space.lg, gap: space.xs },
+	chip: { height: 32, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, borderRadius: 8 },
+	chipSelected: { backgroundColor: t.bgElevated },
+	chipPressed: { backgroundColor: t.bgSubtle },
+	chipLabel: { fontFamily: font.medium, fontSize: 14, color: t.textSecondary },
+	chipLabelSelected: { color: t.textPrimary },
+	chipCount: { fontFamily: font.regular, fontSize: 13, color: t.textTertiary },
 	search: { height: 38, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, marginHorizontal: space.xs, marginBottom: space.md, borderRadius: 10, backgroundColor: t.bgElevated },
 	searchInput: { flex: 1, fontFamily: font.regular, fontSize: 15, color: t.textPrimary },
 	empty: { alignItems: "center", gap: 8, paddingTop: 80, paddingHorizontal: 32 },
