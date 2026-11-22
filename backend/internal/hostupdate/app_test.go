@@ -112,6 +112,25 @@ func TestAppUpdateReportsTheAppsRefusal(t *testing.T) {
 	}
 }
 
+func TestAppUpdateOnTheNewestReleaseEndsIdle(t *testing.T) {
+	app := &fakeApp{prepare: func() (browserruntime.Result, error) {
+		return browserruntime.Result{Value: map[string]interface{}{"current": true}}, nil
+	}}
+	u := appUpdater(t, app, time.Hour)
+	if err := u.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := eventually(t, u, StateIdle); got.Error != "" {
+		t.Fatalf("status = %+v", got)
+	}
+	if steps := app.steps(); len(steps) != 1 {
+		t.Fatalf("steps = %v", steps)
+	}
+	if _, err := os.Stat(u.resultPath); !os.IsNotExist(err) {
+		t.Fatalf("result written: %v", err)
+	}
+}
+
 func TestAppUpdateInstallNotSentClearsResult(t *testing.T) {
 	cases := map[string]error{
 		"Orchestrator on that computer has a draft that isn't saved yet. Update it there.": browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Orchestrator on that computer has a draft that isn't saved yet. Update it there."},

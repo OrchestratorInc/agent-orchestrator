@@ -62,6 +62,10 @@ func (u *Updater) runApp(notApplied string) {
 	result, err := u.app.Execute(ctx, appSession, appAction, map[string]interface{}{"step": "prepare", "notApplied": notApplied})
 	reply, _ := result.Value.(map[string]interface{})
 	version, _ := reply["version"].(string)
+	if current, _ := reply["current"].(bool); err == nil && current {
+		u.finishApp("")
+		return
+	}
 	if err != nil || version == "" {
 		u.finishApp(appError(err))
 		return
