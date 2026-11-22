@@ -2861,9 +2861,8 @@ const SessionRow = memo(function SessionRow({
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 					{...preview.triggerProps}
 				>
-			{/* No layout animation: a new or resorted session takes its final slot in
-			    the same frame. Only an active drag displaces rows (dnd-kit). */}
-			<div>
+				{/* No layout animation: a new or resorted session takes its final slot in
+				    the same frame. Only an active drag displaces rows (dnd-kit). */}
 				<div
 					className={cn(
 						"group/session-row group/nav-row relative flex h-8 w-full items-center rounded-lg",
@@ -2964,7 +2963,6 @@ const SessionRow = memo(function SessionRow({
 						session={session}
 					/>
 				</div>
-			</div>
 				</SidebarMenuSubItem>
 				</HoverCardTrigger>
 			</ContextMenuTrigger>
