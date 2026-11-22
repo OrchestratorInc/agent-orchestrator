@@ -2597,7 +2597,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	if (startCancelled() || (autoRestartIntent && orphanProbe)) return daemonStatus;
 	const holder = autoRestartIntent
 		? { pid: null, reason: "automatic recovery never signals a port holder" }
-		: !orphanProbe && runFile && runFile.port !== configuredPort
+		: process.platform === "win32" && !orphanProbe && runFile && runFile.port !== configuredPort
 			? { pid: null, reason: `running.json names port ${runFile.port}, not configured port ${configuredPort}` }
 			: await portHolderPidToReplace({
 				probe: orphanProbe,
