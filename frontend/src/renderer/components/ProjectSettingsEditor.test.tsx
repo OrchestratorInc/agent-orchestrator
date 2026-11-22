@@ -105,7 +105,14 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Project name is required." })));
 		expect(within(screen.getByTestId("setting-displayName")).getByText(/Unsaved changes.*Project name is required/)).toBeInTheDocument();
 		expect(save).not.toHaveBeenCalled();
-		await edit("Project name", "Valid name");
+		const editName = screen.getByRole("button", { name: "Edit Project name" });
+		expect(editName).toHaveAttribute("aria-describedby", "setting-displayName-feedback");
+		await userEvent.click(editName);
+		const name = screen.getByRole("textbox", { name: "Project name" });
+		expect(name).toHaveAttribute("aria-invalid", "true");
+		expect(name).toHaveAttribute("aria-describedby", "setting-displayName-feedback");
+		fireEvent.change(name, { target: { value: "Valid name" } });
+		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", dirty: false, error: undefined })));
 	});

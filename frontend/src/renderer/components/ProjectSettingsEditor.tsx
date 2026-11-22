@@ -108,7 +108,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(initialValues);
 	const saved = useRef(JSON.stringify(initialValues));
-	const failedKey = useRef<string | undefined>(undefined);
+	const failedKey = useRef<{ draft: string; validity?: string } | undefined>(undefined);
 	const [error, setError] = useState<string>();
 	const [replacementError, setReplacementError] = useState<string>();
 	const [didSave, setDidSave] = useState(false);
@@ -125,17 +125,20 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 			setDidSave(true);
 		},
 		onError: (cause, values) => {
-			failedKey.current = JSON.stringify(values);
+			failedKey.current = { draft: JSON.stringify(values) };
 			setError(cause instanceof Error ? cause.message : t("settings.project.saveFailed"));
 		},
 	});
 	const dirty = JSON.stringify(draft) !== saved.current;
 	const savedValues = JSON.parse(saved.current) as ProjectSettingsDraft;
+	const failed = failedKey.current;
+	const failedDraft = failed !== undefined && failed.draft === JSON.stringify(draft) &&
+		(failed.validity === undefined || failed.validity === JSON.stringify(validity));
 	const settingRow = (id: string, fields: (keyof ProjectSettingsDraft)[], content: ReactNode) => {
 		const changed = fields.some((field) => draft[field] !== savedValues[field]);
 		return <div data-testid={`setting-${id}`}>
 			{content}
-			{changed && <p className="px-(--settings-row-inset) pb-2 text-xs text-warning" aria-live="polite">
+			{changed && <p id={`setting-${id}-feedback`} className="px-(--settings-row-inset) pb-2 text-xs text-warning" aria-live="polite">
 				{t("settings.project.unsavedChanges")}{error ? ` · ${error}` : ""}
 			</p>}
 		</div>;
@@ -144,6 +147,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const intakeIncomplete = capabilities.intake && intakeNeedsRule(intake);
 	const visibleRoles = capabilities.reviewer ? roles : roles.slice(0, 2);
 	const nameLimit = capabilities.nameLimit ?? MAX_PROJECT_DISPLAY_NAME_LEN;
+	const nameInvalid = error === t("settings.project.nameRequired") || error === t("settings.project.nameTooLong", { max: nameLimit });
 	const validate = () => {
 		if (capabilities.requiredAgents &&
 			(section === "agents" || draft.workerAgent !== savedValues.workerAgent || draft.orchestratorAgent !== savedValues.orchestratorAgent) &&
@@ -159,7 +163,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		const problem = validate();
 		setError(problem);
 		if (problem) {
-			failedKey.current = JSON.stringify(draft);
+			failedKey.current = { draft: JSON.stringify(draft), validity: JSON.stringify(validity) };
 			return;
 		}
 		setReplacementError(undefined);
@@ -167,10 +171,10 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		mutation.mutate(draft);
 	};
 	useEffect(() => {
-		if (error && JSON.stringify(draft) !== failedKey.current) setError(undefined);
-	}, [draft, error]);
+		if (error && !failedDraft) setError(undefined);
+	}, [draft, error, failedDraft, validity]);
 	useEffect(() => {
-		if (disabled || !dirty || mutation.isPending || JSON.stringify(draft) === failedKey.current) return;
+		if (disabled || !dirty || mutation.isPending || failedDraft) return;
 		const timeout = window.setTimeout(submit, 650);
 		return () => window.clearTimeout(timeout);
 	}, [disabled, draft, dirty, mutation.isPending, validity]);
@@ -193,7 +197,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-(--size-settings-section-gap)">
 			{section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
-					{settingRow("displayName", ["displayName"], <ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />)}
+					{settingRow("displayName", ["displayName"], <ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} describedBy={error && draft.displayName !== savedValues.displayName ? "setting-displayName-feedback" : undefined} invalid={nameInvalid} onChange={(displayName) => patch({ displayName })} />)}
 					{details.map((detail) => <ProjectSettingsValueRow key={detail.label} {...detail} externalLink={ProductExternalLink} />)}
 				</ProjectSettingsSection>
 				{workspaceRepos && <ProjectSettingsSection title={t("settings.project.workspaceRepos")} grouped>
@@ -201,8 +205,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				</ProjectSettingsSection>}
 				{capabilities.workflow && <>
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
-						{settingRow("defaultBranch", ["defaultBranch"], <ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />)}
-						{capabilities.sessionPrefix && settingRow("sessionPrefix", ["sessionPrefix"], <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />)}
+						{settingRow("defaultBranch", ["defaultBranch"], <ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} describedBy={error && draft.defaultBranch !== savedValues.defaultBranch ? "setting-defaultBranch-feedback" : undefined} invalid={error === t("settings.cloudProject.identityValidation")} onChange={(defaultBranch) => patch({ defaultBranch })} />)}
+						{capabilities.sessionPrefix && settingRow("sessionPrefix", ["sessionPrefix"], <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" describedBy={error && draft.sessionPrefix !== savedValues.sessionPrefix ? "setting-sessionPrefix-feedback" : undefined} onChange={(sessionPrefix) => patch({ sessionPrefix })} />)}
 					</ProjectSettingsSection>
 					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped>{settingRow("intake", ["intakeEnabled", "intakeRepo", "intakeAssignee"], <IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} />)}</ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
