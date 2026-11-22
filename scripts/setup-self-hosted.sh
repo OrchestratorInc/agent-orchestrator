@@ -305,6 +305,7 @@ if [[ "$platform" == Linux ]]; then
 else
 	plist="$HOME/Library/LaunchAgents/dev.aoagents.self-hosted.plist"
 	mkdir -p "$(dirname "$plist")" "$host_root/logs"
+	if ! "$upgrade"; then
 	AO_HOST_PLIST="$plist" AO_HOST_RUNNER="$runner" AO_HOST_LOG_DIR="$host_root/logs" python3 - <<'PY'
 import os, plistlib
 data = {
@@ -318,6 +319,7 @@ data = {
 with open(os.environ['AO_HOST_PLIST'], 'wb') as f:
     plistlib.dump(data, f)
 PY
+	fi
 	restore_previous_launch_agent() {
 		launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
 		if [[ -z "$previous_target" ]]; then

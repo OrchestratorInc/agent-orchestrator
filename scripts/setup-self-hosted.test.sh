@@ -294,17 +294,24 @@ PY
 			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
 		good="$(readlink "$tmp/host/current")"
 		failure=()
+		args=(--bundle "$bundle")
+		plist="$tmp/home/Library/LaunchAgents/dev.aoagents.self-hosted.plist"
 		if [[ "$1" == failed-mac-bootstrap ]]; then
 			failure=(TEST_LAUNCHCTL_FAIL_ONCE="$tmp/fail-once")
 		else
 			rm "$tmp/bin/sleep"
 			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/sleep"
 			chmod +x "$tmp/bin/sleep"
+			args+=(--upgrade)
+			python3 -c 'import plistlib, sys; d = plistlib.load(open(sys.argv[1], "rb")); d["EnvironmentVariables"] = {"CUSTOM": "1"}; plistlib.dump(d, open(sys.argv[1], "wb"))' "$plist"
 		fi
 		result=0
 		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_HOST_ROOT="$tmp/host" \
 			TEST_AO_READY_FOR_TARGET="$good" TEST_LAUNCHCTL_LOG="$tmp/upgrade-launch.log" "${failure[@]}" \
-			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+			/bin/bash "$script" "${args[@]}" > "$tmp/out" 2>&1 || result=$?
+		if [[ "$1" == failed-mac-readiness ]]; then
+			grep -q CUSTOM "$plist" || { printf '%s\n' 'Mac upgrade replaced the installed LaunchAgent' >&2; exit 1; }
+		fi
 		[[ "$result" != 0 ]] || { printf '%s\n' 'failed Mac upgrade unexpectedly succeeded' >&2; exit 1; }
 		[[ "$(readlink "$tmp/host/current")" == "$good" ]] || { printf '%s\n' 'failed Mac upgrade left the new release active' >&2; exit 1; }
 		[[ "$(grep -c '^bootstrap$' "$tmp/upgrade-launch.log")" == 2 ]] || { printf '%s\n' 'failed Mac upgrade did not restart the previous agent' >&2; exit 1; }
