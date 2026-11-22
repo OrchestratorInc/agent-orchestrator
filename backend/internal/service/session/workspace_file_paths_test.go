@@ -105,7 +105,7 @@ func TestWorkspaceSourcePathsKeepsChangedFilesWhenCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths, truncated, err := svc.workspaceSourcePaths(context.Background(), "ao-1", sources, 10, false)
+	paths, truncated, err := svc.workspaceSourcePaths(context.Background(), "ao-1", sources, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestListWorkspaceFilePathsPrefixesWorkspaceChildRepos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	capped, truncated, err := svc.workspaceSourcePaths(context.Background(), "ws-1", sources, 2, false)
+	capped, truncated, err := svc.workspaceSourcePaths(context.Background(), "ws-1", sources, 2, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

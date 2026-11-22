@@ -651,6 +651,7 @@ func (s *Service) SearchWorkspaceFiles(ctx context.Context, id domain.SessionID,
 	if err != nil {
 		return WorkspaceFileSearch{}, err
 	}
+	needle := strings.ToLower(query)
 	var paths []string
 	var truncated bool
 	var scratchFiles map[string]WorkspaceFileSummary
@@ -665,10 +666,11 @@ func (s *Service) SearchWorkspaceFiles(ctx context.Context, id domain.SessionID,
 			paths = append(paths, file.Path)
 		}
 		truncated = scratchTruncated
-	} else if paths, truncated, err = s.workspaceSourcePaths(ctx, id, sources, math.MaxInt, true); err != nil {
+	} else if paths, truncated, err = s.workspaceSourcePaths(ctx, id, sources, math.MaxInt, true, func(path string) bool {
+		return strings.Contains(strings.ToLower(path), needle)
+	}); err != nil {
 		return WorkspaceFileSearch{}, err
 	}
-	needle := strings.ToLower(query)
 	matches := make([]string, 0)
 	for _, path := range paths {
 		if strings.Contains(strings.ToLower(path), needle) {

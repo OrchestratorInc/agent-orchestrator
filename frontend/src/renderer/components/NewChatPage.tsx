@@ -489,6 +489,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
 				filePathsTruncated={workspaceFiles.data?.truncated}
+				filePathsLoading={workspaceFiles.isLoading}
 				skills={skills}
 				composerTray={
 					<>

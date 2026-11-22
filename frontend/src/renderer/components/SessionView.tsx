@@ -2445,11 +2445,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const fetchWorkspaceFiles = useCallback(async () => {
 		const options = sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId);
-		for (;;) {
+		for (let attempt = 1; ; attempt++) {
 			try {
 				return await queryClient.fetchQuery(options);
 			} catch (error) {
-				if (!isCancelledError(error)) throw error;
+				if (!isCancelledError(error) || attempt === 3) throw error;
 			}
 		}
 	}, [hostId, queryClient, sessionId, t]);

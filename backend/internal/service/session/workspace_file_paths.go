@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,7 +46,7 @@ func (s *Service) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionI
 		}
 		return WorkspaceFilePaths{SessionID: id, Paths: paths, Truncated: truncated}, nil
 	}
-	paths, truncated, err := s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths, false)
+	paths, truncated, err := s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths, false, nil)
 	if err != nil {
 		return WorkspaceFilePaths{}, err
 	}
@@ -116,7 +117,7 @@ func (s *Service) workspacePathSources(ctx context.Context, id domain.SessionID)
 	return rec, sources, false, nil
 }
 
-func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID, sources []workspacePathSource, limit int, includeDeleted bool) ([]string, bool, error) {
+func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID, sources []workspacePathSource, limit int, includeDeleted bool, keep func(string) bool) ([]string, bool, error) {
 	inventories := make([][]string, len(sources))
 	total := 0
 	for i, source := range sources {
@@ -127,43 +128,47 @@ func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID,
 		inventories[i] = parts
 		total += len(parts)
 	}
-	changed, unchanged := make([]string, 0), make([]string, 0, total)
+	paths := make([]string, 0, min(total, limit))
 	seen := map[string]struct{}{}
-	for i, source := range sources {
-		var changes workspaceChangeSet
-		if includeDeleted || total > limit {
-			_, resolved, err := s.resolveWorkspaceChanges(ctx, id, source.root, source.resolve)
+	add := func(source workspacePathSource, part string) {
+		rel := filepath.ToSlash(part)
+		if rel == "" || workspacePathExcluded(rel, source.exclude) {
+			return
+		}
+		path := joinWorkspaceRelative(source.prefix, rel)
+		if keep != nil && !keep(path) {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		if !includeDeleted {
+			if _, err := os.Lstat(filepath.Join(source.root, filepath.FromSlash(rel))); err != nil {
+				return
+			}
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	if includeDeleted || total > limit {
+		for _, source := range sources {
+			_, changes, err := s.resolveWorkspaceChanges(ctx, id, source.root, source.resolve)
 			if err != nil {
 				return nil, false, err
 			}
-			changes = resolved
-		}
-		add := func(part string, into *[]string) {
-			rel := filepath.ToSlash(part)
-			if rel == "" || workspacePathExcluded(rel, source.exclude) {
-				return
+			for _, rel := range slices.Sorted(maps.Keys(changes.changedPaths())) {
+				add(source, rel)
 			}
-			if !includeDeleted {
-				if _, err := os.Lstat(filepath.Join(source.root, filepath.FromSlash(rel))); err != nil {
-					return
-				}
-			}
-			path := joinWorkspaceRelative(source.prefix, rel)
-			if _, ok := seen[path]; ok {
-				return
-			}
-			seen[path] = struct{}{}
-			*into = append(*into, path)
-		}
-		for rel := range changes.changedPaths() {
-			add(rel, &changed)
-		}
-		for _, rel := range inventories[i] {
-			add(rel, &unchanged)
 		}
 	}
-	sort.Strings(changed)
-	paths := slices.Concat(changed, unchanged)
+	for i, source := range sources {
+		for _, rel := range inventories[i] {
+			if len(paths) > limit {
+				break
+			}
+			add(source, rel)
+		}
+	}
 	truncated := len(paths) > limit
 	if truncated {
 		paths = paths[:limit]
