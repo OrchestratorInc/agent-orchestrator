@@ -130,12 +130,24 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		},
 	});
 	const dirty = JSON.stringify(draft) !== saved.current;
+	const savedValues = JSON.parse(saved.current) as ProjectSettingsDraft;
+	const settingRow = (id: string, fields: (keyof ProjectSettingsDraft)[], content: ReactNode) => {
+		const changed = fields.some((field) => draft[field] !== savedValues[field]);
+		return <div data-testid={`setting-${id}`}>
+			{content}
+			{changed && <p className="px-(--settings-row-inset) pb-2 text-xs text-warning" role="status">
+				{t("settings.project.unsavedChanges")}{error ? ` · ${error}` : ""}
+			</p>}
+		</div>;
+	};
 	const intake = { enabled: draft.intakeEnabled, repo: draft.intakeRepo, assignee: draft.intakeAssignee };
 	const intakeIncomplete = capabilities.intake && intakeNeedsRule(intake);
 	const visibleRoles = capabilities.reviewer ? roles : roles.slice(0, 2);
 	const nameLimit = capabilities.nameLimit ?? MAX_PROJECT_DISPLAY_NAME_LEN;
 	const validate = () => {
-		if (capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent)) return t("settings.project.agentsRequired");
+		if (capabilities.requiredAgents &&
+			(draft.workerAgent !== savedValues.workerAgent || draft.orchestratorAgent !== savedValues.orchestratorAgent) &&
+			(!draft.workerAgent || !draft.orchestratorAgent)) return t("settings.project.agentsRequired");
 		if (!draft.displayName.trim()) return t("settings.project.nameRequired");
 		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return t("settings.project.nameTooLong", { max: nameLimit });
 		if (capabilities.requiredBranch && (!draft.defaultBranch.trim() || [...draft.defaultBranch.trim()].length > 255)) return t("settings.cloudProject.identityValidation");
@@ -146,11 +158,17 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		if (disabled || mutation.isPending || intakeIncomplete || (!dirty && !saveUnchanged)) return;
 		const problem = validate();
 		setError(problem);
-		if (problem) return;
+		if (problem) {
+			failedKey.current = JSON.stringify(draft);
+			return;
+		}
 		setReplacementError(undefined);
 		setDidSave(false);
 		mutation.mutate(draft);
 	};
+	useEffect(() => {
+		if (error && JSON.stringify(draft) !== failedKey.current) setError(undefined);
+	}, [draft, error]);
 	useEffect(() => {
 		if (disabled || !dirty || mutation.isPending || JSON.stringify(draft) === failedKey.current) return;
 		const timeout = window.setTimeout(submit, 650);
@@ -175,7 +193,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-(--size-settings-section-gap)">
 			{section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
-					<ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />
+					{settingRow("displayName", ["displayName"], <ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />)}
 					{details.map((detail) => <ProjectSettingsValueRow key={detail.label} {...detail} externalLink={ProductExternalLink} />)}
 				</ProjectSettingsSection>
 				{workspaceRepos && <ProjectSettingsSection title={t("settings.project.workspaceRepos")} grouped>
@@ -183,14 +201,14 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				</ProjectSettingsSection>}
 				{capabilities.workflow && <>
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
-						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />
-						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
+						{settingRow("defaultBranch", ["defaultBranch"], <ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />)}
+						{capabilities.sessionPrefix && settingRow("sessionPrefix", ["sessionPrefix"], <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />)}
 					</ProjectSettingsSection>
-					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
+					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped>{settingRow("intake", ["intakeEnabled", "intakeRepo", "intakeAssignee"], <IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} />)}</ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
-						<ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />
-						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}
-						{capabilities.coAuthorCommits && <ProjectCoAuthorCommitsToggle checked={draft.coAuthorCommits ?? true} onCheckedChange={(coAuthorCommits) => patch({ coAuthorCommits })} />}
+						{settingRow("autoReview", ["autoReview"], <ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />)}
+						{capabilities.workersRequestReview && settingRow("workersRequestReview", ["workersRequestReview"], <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />)}
+						{capabilities.coAuthorCommits && settingRow("coAuthorCommits", ["coAuthorCommits"], <ProjectCoAuthorCommitsToggle checked={draft.coAuthorCommits ?? true} onCheckedChange={(coAuthorCommits) => patch({ coAuthorCommits })} />)}
 					</ProjectSettingsSection>
 				</>}
 				{generalExtra}
@@ -219,7 +237,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					}));
 					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
 						{/* A warning wraps onto its own line under the whole row, starting at the label. Top-aligned, so it grows the row downward and moves nothing; the control-height label box keeps "Agent" level with the pickers. */}
-						<ProjectSettingsRow label={t("settings.project.agent")} className="flex-wrap items-start justify-end gap-x-2 gap-y-1.5 [&>:first-child]:mr-auto [&>:first-child]:min-h-control-md [&>:last-child]:contents"><div className="contents"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
+						{settingRow(`${role}-agent`, [fields.agent, fields.model, fields.mode, fields.effort], <ProjectSettingsRow label={t("settings.project.agent")} className="flex-wrap items-start justify-end gap-x-2 gap-y-1.5 [&>:first-child]:mr-auto [&>:first-child]:min-h-control-md [&>:last-child]:contents"><div className="contents"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
 						<div className="contents"><AgentModelField warningClassName="order-last basis-full px-0" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
@@ -227,8 +245,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 							independentMode={capabilities.runtimeDefaults && agent === "cursor"}
 							onModelChange={(value) => updateConfig(fields.model, value)} onModeChange={(value) => updateConfig(fields.mode, value)} onEffortChange={(value) => updateConfig(fields.effort, value)} onValidityChange={(valid) => setValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />
 							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-fit" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
-						</div></div></ProjectSettingsRow>
-						<ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>
+						</div></div></ProjectSettingsRow>)}
+						{settingRow(`${role}-permissions`, [fields.permissions], <ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>)}
 					</ProjectSettingsSection>;
 				})}
 				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
