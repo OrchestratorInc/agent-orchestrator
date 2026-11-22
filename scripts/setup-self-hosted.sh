@@ -338,7 +338,9 @@ PY
 	fi
 fi
 
-for attempt in {1..20}; do
+ready_attempts=20
+"$upgrade" && ready_attempts=180
+for ((attempt = 1; attempt <= ready_attempts; attempt++)); do
 	status="$("$host_root/current/resources/daemon/ao" status --json)"
 	state="$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))')"
 	[[ "$state" == ready ]] && break

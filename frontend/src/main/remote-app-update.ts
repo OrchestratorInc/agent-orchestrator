@@ -40,7 +40,7 @@ export async function runRemoteAppUpdate(deps: RemoteAppUpdateDeps, args: Record
 	let status = deps.status();
 	const checkFailure = failure(status, "Couldn't check for updates.");
 	if (checkFailure) throw checkFailure;
-	if (!stagedVersion(status) && status.state === "available") {
+	if (status.state === "available" && status.version !== stagedVersion(status)) {
 		await deps.download();
 		status = deps.status();
 		const downloadFailure = failure(status, "Couldn't download the update.");

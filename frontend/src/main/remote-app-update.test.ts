@@ -33,6 +33,15 @@ describe("runRemoteAppUpdate", () => {
 		expect(d.download).not.toHaveBeenCalled();
 	});
 
+	it("downloads a newer version than the one already staged", async () => {
+		const d = deps({ statuses: [
+			{ state: "available", version: "0.16.1", staged: { version: "0.16.0", stagedAt: 1, escalated: false } },
+			{ state: "downloaded", version: "0.16.1", staged: { version: "0.16.1", stagedAt: 2, escalated: false } },
+		] });
+		await expect(runRemoteAppUpdate(d, { step: "prepare" })).resolves.toEqual({ version: "0.16.1" });
+		expect(d.download).toHaveBeenCalledTimes(1);
+	});
+
 	it("installs the prepared version", async () => {
 		const d = deps();
 		await expect(runRemoteAppUpdate(d, { step: "install", version: "0.16.0" })).resolves.toEqual({ version: "0.16.0" });

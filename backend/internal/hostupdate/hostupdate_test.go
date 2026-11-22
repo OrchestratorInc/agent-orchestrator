@@ -138,3 +138,21 @@ func TestRunCommandKeepsStderr(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestStartOutlivesTheRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var cancelled []string
+	u := &Updater{version: "0.15.0", kind: kindSystemd, root: "/opt/ao", getenv: func(string) string { return "" }, run: func(ctx context.Context, name string, _ ...string) ([]byte, error) {
+		if ctx.Err() != nil {
+			cancelled = append(cancelled, name)
+		}
+		return nil, nil
+	}}
+	if err := u.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(cancelled) > 0 {
+		t.Fatalf("commands ran with the request's cancelled context: %v", cancelled)
+	}
+}

@@ -254,6 +254,8 @@ func (u *Updater) Start(ctx context.Context) error {
 	case kindApp:
 		return u.startApp()
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.Status(ctx).State == StateUpdating {
