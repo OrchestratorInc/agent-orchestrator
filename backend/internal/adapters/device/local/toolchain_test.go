@@ -580,3 +580,61 @@ func TestHubExitDuringARestartIsQueued(t *testing.T) {
 		t.Fatal("an exit seen during a restart was dropped")
 	}
 }
+
+// A lease's command stops working when the lease ends: run again, it would
+// open a driver session on a device another session may hold.
+func TestRevokeControlTurnsTheLeaseCommandOff(t *testing.T) {
+	p := New(Config{DataDir: t.TempDir()})
+	if err := p.RevokeControl("aa-47"); err != nil {
+		t.Fatalf("revoking a session that never had a command = %v", err)
+	}
+	ctl, err := p.AgentControl(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS}, "aa-47")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RevokeControl("aa-47"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(ctl.Command, "snapshot", "-i").CombinedOutput() //nolint:gosec // test runs the wrapper it just wrote
+	if err == nil || !strings.Contains(string(out), "no device lease") || strings.Contains(string(out), "UDID-1") {
+		t.Fatalf("revoked command ran: err=%v out=%q", err, out)
+	}
+}
+
+// Shutting down must not wait for an install or hub start in flight, and a
+// start that arrives after shutdown must not run a hub nobody stops.
+func TestCloseDoesNotWaitForASlowStart(t *testing.T) {
+	dir := t.TempDir()
+	slowNPM := filepath.Join(dir, "npm")
+	if err := os.WriteFile(slowNPM, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil { //nolint:gosec // test fixture must be executable
+		t.Fatal(err)
+	}
+	p := New(Config{DataDir: t.TempDir()})
+	p.lookPath = func(name string) (string, error) {
+		if name == "npm" {
+			return slowNPM, nil
+		}
+		return "/usr/bin/true", nil
+	}
+	started := make(chan error, 1)
+	go func() { started <- p.EnsureReady(context.Background()) }()
+	time.Sleep(200 * time.Millisecond) // inside the install
+	closed := time.Now()
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(closed); waited > 2*time.Second {
+		t.Fatalf("Close waited %v for the install", waited)
+	}
+	select {
+	case err := <-started:
+		if err == nil {
+			t.Fatal("a start cut short by Close reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the install kept running after Close")
+	}
+	if err := p.EnsureReady(context.Background()); !errors.Is(err, errProviderClosed) {
+		t.Fatalf("EnsureReady after Close = %v, want errProviderClosed", err)
+	}
+}

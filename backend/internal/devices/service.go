@@ -156,6 +156,14 @@ func (s *Service) endLeaseLocked(id domain.SessionID) (Lease, bool) {
 	}
 	delete(s.leases, id)
 	s.stopWatchLocked(id)
+	// The agent's command was bound to this lease; left as is, it would open a
+	// new driver session on a device another session may take next. Under s.mu,
+	// like every bind, so it cannot undo a newer lease's command.
+	if revoker, ok := s.cfg.Provider.(ports.DeviceControlRevoker); ok {
+		if err := revoker.RevokeControl(string(id)); err != nil {
+			s.log.Warn("revoke device agent command", "session", id, "err", err)
+		}
+	}
 	if s.releasing == nil {
 		s.releasing = map[string]bool{}
 	}
