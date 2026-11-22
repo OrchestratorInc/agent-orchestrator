@@ -285,7 +285,9 @@ function toLocalWorkspaceSession(
 type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 
 class DaemonNotReadyError extends Error {
-	readonly code: string = "DAEMON_NOT_READY_ERROR";
+	get code(): string {
+		return "DAEMON_NOT_READY_ERROR";
+	}
 	constructor() {
 		super("Orchestrator daemon API is not ready");
 		markApiError(this);

@@ -130,3 +130,17 @@ it("keeps an early rejection's minified frame and debug ID", async () => {
 		vi.unstubAllGlobals();
 	}
 });
+
+it("preserves a remotes:list code across the preload bridge without changing its displayed error", async () => {
+	const { controller, resolvePolicy } = await setup(true);
+	resolvePolicy(controller.snapshot());
+	mocks.invoke.mockImplementation(async (channel: string) => channel === "remotes:list"
+		? { code: "REMOTES_READ_FAILED", message: "Error: Could not read remote hosts" }
+		: null);
+	const { listRemoteHosts } = await import("./renderer/lib/remote-host-list");
+	await expect(listRemoteHosts()).rejects.toMatchObject({
+		code: "REMOTES_READ_FAILED",
+		message: "Error invoking remote method 'remotes:list': Error: Could not read remote hosts",
+	});
+	expect(mocks.invoke).toHaveBeenCalledWith("remotes:list", true);
+});

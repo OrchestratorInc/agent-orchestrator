@@ -1,5 +1,3 @@
-import { AoError } from "../../../../packages/shared/telemetry/ao-error";
-import type { RemoteHostView } from "../../main/remotes-ipc";
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { createWebSideCloseBridge } from "./web-side-close";
@@ -11,23 +9,8 @@ async function desktopIssueArtifactRequired(): Promise<never> {
 	throw new Error("Open the desktop app to add an issue artifact.");
 }
 
-type RendererBridge = Omit<AoBridge, "remotes"> & {
-	remotes: Omit<AoBridge["remotes"], "list"> & { list: () => Promise<RemoteHostView[]> };
-};
-
-const desktop = window.ao;
-export const aoBridge: RendererBridge =
-	desktop ? {
-		...desktop,
-		remotes: {
-			...desktop.remotes,
-			list: async () => {
-				const result = await desktop.remotes.list();
-				if (Array.isArray(result)) return result;
-				throw new AoError(result.code, "Error invoking remote method 'remotes:list': " + result.message);
-			},
-		},
-	} :
+export const aoBridge: AoBridge =
+	window.ao ??
 	({
 		triage: {
 			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
@@ -538,4 +521,4 @@ export const aoBridge: RendererBridge =
 			onStreamEvent: () => () => undefined,
 			agentBrowserUrl: async () => "",
 		},
-	} satisfies RendererBridge);
+	} satisfies AoBridge);

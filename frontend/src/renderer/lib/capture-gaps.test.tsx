@@ -1,3 +1,4 @@
+import { sentryErrorCode } from "../../../../packages/shared/telemetry/ao-error";
 import { StrictMode } from "react";
 import { render, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, notFound, redirect, RouterProvider } from "@tanstack/react-router";
@@ -47,6 +48,11 @@ it.each([false, true])("does not duplicate raw or wrapped API errors (wrapped=%s
 	await waitFor(() => expect(capture).toHaveBeenCalled());
 	expect(capture).toHaveBeenCalledOnce();
 	expect(capture.mock.calls[0][0]).toMatchObject({ kind: "message" });
+});
+
+it("retains the daemon error code through API exception wrapping", () => {
+	const error = apiErrorException({ code: "WORKSPACE_NO_READY_REPOS", message: "Workspace has no resolved repositories" });
+	expect(sentryErrorCode(error)).toBe("WORKSPACE_NO_READY_REPOS");
 });
 
 it("still reports missing data without an API error and ignores caller cancellation", async () => {
