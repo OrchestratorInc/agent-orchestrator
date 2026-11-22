@@ -180,7 +180,7 @@ func (p *Provider) EnsureReady(ctx context.Context) error {
 		return err
 	}
 	p.stopStaleHub(hubTool.entryPath(root))
-	hub, err := p.startHub(nodePath, hubTool.entryPath(root))
+	hub, err := p.startHub(ctx, nodePath, hubTool.entryPath(root))
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,9 @@ func (p *Provider) retune(streams []tunedStream) {
 	}
 }
 
-func (p *Provider) startHub(nodePath, entry string) (*hubProcess, error) {
+// startHub starts the hub and waits for it to answer. ctx bounds only that
+// wait (with hubReadyTimeout); the hub itself runs until Close.
+func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubProcess, error) {
 	port, err := freeLoopbackPort()
 	if err != nil {
 		return nil, fmt.Errorf("pick a device hub port: %w", err)
@@ -228,8 +230,8 @@ func (p *Provider) startHub(nodePath, entry string) (*hubProcess, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open device hub log: %w", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := process.CommandContext(ctx, nodePath, entry, "--port", strconv.Itoa(port), "--host", "127.0.0.1")
+	hubCtx, cancel := context.WithCancel(context.Background())
+	cmd := process.CommandContext(hubCtx, nodePath, entry, "--port", strconv.Itoa(port), "--host", "127.0.0.1")
 	process.ConfigureTreeCancellation(cmd)
 	cmd.Env = append(os.Environ(),
 		"EXPO_DEVICE_HUB_SESSION_TOKEN="+token,
@@ -253,28 +255,45 @@ func (p *Provider) startHub(nodePath, entry string) (*hubProcess, error) {
 		p.forgetHubPID(pid)
 		_ = logFile.Close()
 		close(hub.done)
-		if ctx.Err() == nil {
+		if hubCtx.Err() == nil {
 			p.log.Warn("device hub exited; restarting it", "err", err)
 			go p.reviveHub()
 		}
 	}()
-	deadline := time.Now().Add(hubReadyTimeout)
-	for time.Now().Before(deadline) {
+	// Each probe carries the deadline: a hub that accepts the connection but
+	// never answers would otherwise hold this wait, and p.mu with it, forever.
+	probeCtx, stopProbing := context.WithTimeout(ctx, hubReadyTimeout)
+	defer stopProbing()
+	for {
 		select {
 		case <-hub.done:
 			return nil, errors.New("device hub exited during startup; see " + filepath.Join(p.stateRoot(), "hub.log"))
 		default:
 		}
-		if res, err := http.Get(hub.origin + "/readyz"); err == nil { //nolint:noctx // Short loopback readiness probe.
-			_ = res.Body.Close()
-			if res.StatusCode == http.StatusOK {
-				return hub, nil
-			}
+		if ready(probeCtx, hub.origin+"/readyz") {
+			return hub, nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-probeCtx.Done():
+			cancel()
+			return nil, errors.New("device hub did not become ready in time")
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-	cancel()
-	return nil, errors.New("device hub did not become ready in time")
+}
+
+// ready reports whether one readiness probe answered 200 before ctx ended.
+func ready(ctx context.Context, probe string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probe, http.NoBody)
+	if err != nil {
+		return false
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	_ = res.Body.Close()
+	return res.StatusCode == http.StatusOK
 }
 
 // Stream presets. Android's encoder takes a size cap, a bitrate and a frame
