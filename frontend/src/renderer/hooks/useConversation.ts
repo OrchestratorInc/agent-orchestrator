@@ -2213,15 +2213,6 @@ export function emptySkillsSettled(firstEmptyAt: number | undefined, updatedAt: 
 	return firstEmptyAt !== undefined && updatedAt - firstEmptyAt >= EMPTY_SKILLS_GRACE_MS;
 }
 
-/**
- * Every path in the session worktree, for @-mention completion.
- *
- * The daemon already serves this list — tracked and untracked, non-ignored — so the
- * whole set is fetched once and filtered in the composer. That keeps a keystroke
- * from costing a round trip, which is what makes the menu feel like part of typing.
- * The endpoint caps itself, and `truncated` is respected rather than presented as a
- * complete list.
- */
 export async function fetchWorkspaceFilePaths(sessionId: string, hostId?: string, signal?: AbortSignal) {
 	const client = clientForSessionHost(hostId);
 	const result = await client.GET("/api/v1/sessions/{sessionId}/workspace/paths", { params: { path: { sessionId } }, signal });
@@ -2237,6 +2228,15 @@ export async function fetchWorkspaceFilePaths(sessionId: string, hostId?: string
 	};
 }
 
+/**
+ * Every path in the session worktree, for @-mention completion.
+ *
+ * The daemon already serves this list — tracked and untracked, non-ignored — so the
+ * whole set is fetched once and filtered in the composer. That keeps a keystroke
+ * from costing a round trip, which is what makes the menu feel like part of typing.
+ * The endpoint caps itself, and `truncated` is respected rather than presented as a
+ * complete list.
+ */
 export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const query = useQuery({

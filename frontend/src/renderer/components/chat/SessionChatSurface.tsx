@@ -434,7 +434,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const [fileMenuAsked, setFileMenuAsked] = useState(false);
 	const askFileMenu = useCallback(() => setFileMenuAsked(true), []);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, fileMenuAsked && Boolean(snapshot) && !session.needsResume, hostId);
+	const { paths, truncated, isLoading: filePathsLoading } = useWorkspaceFilePaths(session.id, fileMenuAsked && Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
@@ -925,6 +925,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				skillsLoading={skillsLoading}
 				filePaths={paths}
 				filePathsTruncated={truncated}
+				filePathsLoading={filePathsLoading}
 				onFileQuery={askFileMenu}
 				localEchos={localEchos}
 				onStageAttachments={stageAttachments}
