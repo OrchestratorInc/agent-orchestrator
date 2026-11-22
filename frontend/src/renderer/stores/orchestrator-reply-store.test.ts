@@ -45,9 +45,9 @@ describe("useOrchestratorReplyState", () => {
 	});
 
 	it("marks a reply unread when a working orchestrator settles", () => {
-		const hook = setup(orchestrator("active", "2026-11-08T10:00:00Z"));
+		const hook = setup(orchestrator("active", "2026-11-08T10:00:00Z", "orch-1", "tui"));
 		expect(hook.result.current).toBe("working");
-		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:00:05Z"), viewing: false, projectId: "project-a" });
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:00:05Z", "orch-1", "tui"), viewing: false, projectId: "project-a" });
 		expect(hook.result.current).toBe("unread");
 	});
 
@@ -64,8 +64,8 @@ describe("useOrchestratorReplyState", () => {
 	});
 
 	it("clears when viewed and stays cleared afterwards", () => {
-		const hook = setup(orchestrator("active", "2026-11-08T10:00:00Z"));
-		const settled = orchestrator("idle", "2026-11-08T10:00:05Z");
+		const hook = setup(orchestrator("active", "2026-11-08T10:00:00Z", "orch-1", "tui"));
+		const settled = orchestrator("idle", "2026-11-08T10:00:05Z", "orch-1", "tui");
 		hook.rerender({ orchestrator: settled, viewing: false, projectId: "project-a" });
 		hook.rerender({ orchestrator: settled, viewing: true, projectId: "project-a" });
 		hook.rerender({ orchestrator: settled, viewing: false, projectId: "project-a" });
@@ -81,9 +81,9 @@ describe("useOrchestratorReplyState", () => {
 	});
 
 	it("keeps unread state per project", () => {
-		const hook = setup(orchestrator("active", "2026-11-08T10:00:00Z"));
-		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:00:05Z"), viewing: false, projectId: "project-a" });
-		const other = setup(orchestrator("idle", "2026-11-08T10:00:05Z"), false, "project-b");
+		const hook = setup(orchestrator("active", "2026-11-08T10:00:00Z", "orch-1", "tui"));
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:00:05Z", "orch-1", "tui"), viewing: false, projectId: "project-a" });
+		const other = setup(orchestrator("idle", "2026-11-08T10:00:05Z", "orch-1", "tui"), false, "project-b");
 		expect(hook.result.current).toBe("unread");
 		expect(other.result.current).toBeNull();
 	});
@@ -108,6 +108,53 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalledWith("orch-1", undefined));
 		await act(async () => {});
 		expect(hook.result.current).toBeNull();
+	});
+
+	it("stays quiet for background work after the user cancels a queued message", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({
+			...quiet,
+			turns: [...quiet.turns, { id: "t2", state: "completed", requestedAt: "2026-11-08T10:06:00Z", completedAt: "2026-11-08T10:06:30Z" }],
+			items: [...quiet.items, ...quiet.items.map((item, i) => ({ ...item, id: `${item.id}-2`, turnId: "t2", sequence: 3 + i }))],
+		});
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
+		const wrote = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:05:10Z" }) as WorkspaceSession;
+		const hook = setup(orchestrator("active", "2026-11-08T10:05:00Z"));
+		hook.rerender({ orchestrator: wrote("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalledTimes(1));
+		await act(async () => {});
+		hook.rerender({ orchestrator: wrote("active", "2026-11-08T10:06:00Z"), viewing: false, projectId: "project-a" });
+		hook.rerender({ orchestrator: wrote("idle", "2026-11-08T10:06:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalledTimes(2));
+		await act(async () => {});
+		expect(hook.result.current).toBeNull();
+	});
+
+	it("checks the turn a button first sees running instead of counting it as the user's answer", async () => {
+		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
+		const missed = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:01:00Z" }) as WorkspaceSession;
+		const hook = setup(missed("active", "2026-11-08T10:05:00Z"));
+		hook.rerender({ orchestrator: missed("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await act(async () => {});
+		expect(hook.result.current).toBeNull();
+		hook.rerender({ orchestrator: missed("active", "2026-11-08T10:06:00Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBeNull();
+	});
+
+	it("lights up when the user's own turn settles", async () => {
+		fetchRecentConversation.mockResolvedValue({
+			...chatFixtureEmpty,
+			turns: [{ id: "t0", state: "completed", hasHumanPrompt: true, requestedAt: "2026-11-08T09:59:00Z", completedAt: "2026-11-08T10:00:05Z" }],
+			items: [
+				{ kind: "message", id: "u0", turnId: "t0", sequence: 1, revision: 0, role: "user", origin: "human", streaming: false, createdAt: "2026-11-08T09:59:00Z", text: "Merge it?" },
+				{ kind: "message", id: "a0", turnId: "t0", sequence: 2, revision: 0, role: "assistant", origin: "provider", streaming: false, createdAt: "2026-11-08T10:00:05Z", text: "Merged." },
+			],
+		});
+		const hook = setup(orchestrator("active", "2026-11-08T10:00:00Z"));
+		expect(hook.result.current).toBe("working");
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:00:05Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
 	it("lights up when worker traffic leaves a question for the user", async () => {

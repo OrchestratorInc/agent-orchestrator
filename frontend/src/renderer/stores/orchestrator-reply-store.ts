@@ -122,10 +122,8 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 		previous.current = { id: orchestrator?.id, working, since: prev?.working && prev.id === orchestrator?.id ? prev.since : at };
 		if (!key || !orchestrator || prev?.id !== orchestrator.id || !prev.working) return;
 		if (activityState !== "idle" && activityState !== "waiting_input") return;
-		const store = useOrchestratorReplyStore.getState();
-		const answered = lastUserAt > Math.max(store.replyAt[key] ?? 0, handledAt.current) && lastUserAt <= prev.since;
-		if (!quiet || viewing || activityState === "waiting_input" || answered) {
-			store.recordReply(key, at);
+		if (!quiet || viewing || activityState === "waiting_input") {
+			useOrchestratorReplyStore.getState().recordReply(key, at);
 			return;
 		}
 		const checkedFrom = Date.now();
@@ -135,7 +133,10 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 				now.since = Math.min(now.since, prev.since);
 				return;
 			}
-			if (!standsOut) return;
+			if (!standsOut) {
+				if (lastUserAt <= prev.since) handledAt.current = Math.max(handledAt.current, lastUserAt);
+				return;
+			}
 			const replies = useOrchestratorReplyStore.getState();
 			replies.recordReply(key, at);
 			if (viewedAt.current >= checkedFrom) replies.markSeen(key, at);
