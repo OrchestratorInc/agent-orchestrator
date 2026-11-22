@@ -1871,7 +1871,7 @@ func (s *Service) PrepareChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	if err := controller.BeginHandoff(ctx, policy); err != nil {
+	if err := controller.BeginHandoff(ctx, policy, s.accountHandoffHoldsQueue(id)); err != nil {
 		return err
 	}
 	s.mu.Lock()
