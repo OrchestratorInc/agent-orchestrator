@@ -502,7 +502,7 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			pkg := packageWithoutLatest(plan.Package)
 			plan.Command = []string{"npm", "install", "-g", "--prefix", plan.PackagePrefix, pkg + "@latest"}
 		case "winget":
-			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
+			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 		case "uv":
 			plan.Command = []string{"uv", "tool", "upgrade", plan.Package}
 		case "pipx":
