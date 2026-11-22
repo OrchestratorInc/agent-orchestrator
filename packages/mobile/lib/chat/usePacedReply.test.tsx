@@ -110,3 +110,16 @@ it("keeps history immediate: a settled reply's revision is not played", async ()
 	await act(async () => renderer!.update(tree(livePacing(), { text: "Short. And a revision.", streaming: false })));
 	expect(shown).toBe("Short. And a revision.");
 });
+
+it("stops asking for frames once a final snapshot replaces text it was revealing", async () => {
+	const pacing = livePacing();
+	await act(async () => { renderer = create(tree(pacing, { text: REPLY, streaming: true })); });
+	await play(50);
+	expect(shown.length).toBeGreaterThan(0);
+	expect(shown.length).toBeLessThan(REPLY.length);
+	// Not a continuation of what was shown: drawn whole, nothing left to reveal.
+	await act(async () => renderer!.update(tree(pacing, { text: "A different final answer.", streaming: false })));
+	await play(100);
+	expect(shown).toBe("A different final answer.");
+	expect(fixture.frames.size).toBe(0);
+});

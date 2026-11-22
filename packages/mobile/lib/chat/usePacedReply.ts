@@ -67,13 +67,19 @@ export function usePacedReply(id: string, text: string, streaming: boolean): str
 		}
 		remember();
 		if (replyVisibleText(pacer) !== before) redraw();
-		if (!replyPending(pacer) || frame.current !== undefined) return;
+		// Nothing left to reveal (a final snapshot can replace the text whole): no frames.
+		if (!replyPending(pacer)) {
+			cancel();
+			return;
+		}
+		if (frame.current !== undefined) return;
 		const tick = () => {
 			frame.current = undefined;
 			// Frames stop while the app is away; what arrived meanwhile is shown, not replayed.
 			if (AppState.currentState !== "active") showWholeReply(pacer, pacer.target);
 			else if (!stepReplyPacer(pacer, performance.now())) {
-				frame.current = requestAnimationFrame(tick);
+				// A frame between paced updates; only while text is left to reveal.
+				if (replyPending(pacer)) frame.current = requestAnimationFrame(tick);
 				return;
 			}
 			remember();
