@@ -63,9 +63,13 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 			const index = indexWorkerUpdates(snapshot.items);
 			const { under } = placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items);
 			const settled = snapshot.turns.filter((turn) => Date.parse(turn.completedAt ?? "") >= since);
-			const standsOut = settled.some((turn) => {
+			const ids = new Set(settled.map((turn) => turn.id));
+			const drained = (snapshot.batchedDeliveries ?? []).filter((delivery) => ids.has(delivery.deliveredWithTurnId));
+			const standsOut = [...settled, ...drained.map((delivery) => ({ id: delivery.turnId, state: "completed", hasHumanPrompt: false }))].some((turn) => {
 				if (turn.hasHumanPrompt) return true;
-				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index, under);
+				const items = snapshot.items.filter((item) => item.turnId === turn.id);
+				if (items.length === 0 && !ids.has(turn.id)) return false;
+				const standing = turnStanding(items, turn.state, index, under);
 				return standing !== "background" && standing !== "replaced";
 			});
 			const started = snapshot.turns.some((turn) => {

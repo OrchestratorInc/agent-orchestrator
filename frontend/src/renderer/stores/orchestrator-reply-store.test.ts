@@ -231,6 +231,22 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
+	it("lights up when a report drained with a worker turn still needs the user", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({
+			...quiet,
+			items: [
+				quiet.items[0]!,
+				{ ...quiet.items[0]!, id: "drained", turnId: "t-report", sequence: 2, text: "Reports since your previous turn:\n\n[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?" },
+				{ ...quiet.items[1]!, sequence: 3 },
+			],
+			batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "t1" }],
+		});
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+	});
+
 	it("treats the user's last message as handled when a button first sees the orchestrator idle", async () => {
 		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
 		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
