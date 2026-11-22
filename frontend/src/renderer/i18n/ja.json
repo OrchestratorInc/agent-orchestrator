@@ -3780,6 +3780,7 @@
 	"automations.runs.title": "Run history",
 	"automations.runs.loading": "Loading runs…",
 	"automations.runs.openSession": "Open session",
+	"automations.runs.showMore": "さらに表示",
 	"automations.runs.empty": "No runs yet.",
 	"automations.details.show": "{{name}} の詳細を表示",
 	"automations.details.edit": "編集",

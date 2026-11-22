@@ -3757,6 +3757,7 @@
 	"automations.runs.title": "Run history",
 	"automations.runs.loading": "Loading runs…",
 	"automations.runs.openSession": "Open session",
+	"automations.runs.showMore": "Show more",
 	"automations.runs.empty": "No runs yet.",
 	"automations.details.show": "Show details for {{name}}",
 	"automations.details.edit": "Edit",

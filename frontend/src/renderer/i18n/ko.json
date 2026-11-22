@@ -3780,6 +3780,7 @@
 	"automations.runs.title": "Run history",
 	"automations.runs.loading": "Loading runs…",
 	"automations.runs.openSession": "Open session",
+	"automations.runs.showMore": "더 보기",
 	"automations.runs.empty": "No runs yet.",
 	"automations.details.show": "{{name}} 세부 정보 보기",
 	"automations.details.edit": "편집",

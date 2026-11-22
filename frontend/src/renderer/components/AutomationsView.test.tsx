@@ -924,8 +924,27 @@ describe("AutomationsView", () => {
 		await openDetails(user, "Daily triage");
 		const details = screen.getByRole("complementary", { name: "Daily triage" });
 		expect(within(details).getByText("4m 5s")).toBeInTheDocument();
-		expect(within(details).getByText("agent crashed")).toBeInTheDocument();
+		// The row says only Failed; the error waits behind it for a hover or focus.
+		const failure = within(details).getByRole("button", { name: "Failed: agent crashed" });
+		await user.hover(failure);
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("agent crashed");
 		expect(within(details).getAllByRole("button", { name: "Open session" })).toHaveLength(1);
+	});
+
+	it("shows five runs at first and five more on each Show more", async () => {
+		const user = userEvent.setup();
+		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Minutely check", prompt: "Check", kind: "worker", harness: "codex", rrule: "FREQ=MINUTELY", timezone: "UTC", enabled: true }];
+		mocks.runs = Array.from({ length: 7 }, (_, index) => ({
+			automationId: "a1", attemptCount: 1, createdAt: "2026-11-13T09:00:00Z", updatedAt: "2026-11-13T09:00:00Z",
+			id: `r${index}`, status: "completed", scheduledFor: `2026-11-13T09:0${index}:00Z`, startedAt: `2026-11-13T09:0${index}:00Z`, finishedAt: `2026-11-13T09:0${index}:30Z`,
+		}));
+		renderView();
+		await openDetails(user, "Minutely check");
+		const details = screen.getByRole("complementary", { name: "Minutely check" });
+		expect(within(details).getAllByRole("listitem")).toHaveLength(5);
+		await user.click(within(details).getByRole("button", { name: "Show more" }));
+		expect(within(details).getAllByRole("listitem")).toHaveLength(7);
+		expect(within(details).queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
 	});
 
 	it("surfaces run-history fetch failures instead of an empty list", async () => {

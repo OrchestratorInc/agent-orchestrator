@@ -3873,6 +3873,7 @@
 	"automations.runs.title": "Run history",
 	"automations.runs.loading": "Loading runs…",
 	"automations.runs.openSession": "Open session",
+	"automations.runs.showMore": "Mostrar más",
 	"automations.runs.empty": "No runs yet.",
 	"automations.details.show": "Mostrar detalles de {{name}}",
 	"automations.details.edit": "Editar",

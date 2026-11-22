@@ -3951,6 +3951,7 @@
 	"automations.runs.title": "История запусков",
 	"automations.runs.loading": "Загрузка запусков…",
 	"automations.runs.openSession": "Открыть сессию",
+	"automations.runs.showMore": "Показать ещё",
 	"automations.runs.empty": "Запусков пока нет.",
 	"automations.details.show": "Показать сведения о {{name}}",
 	"automations.details.edit": "Изменить",

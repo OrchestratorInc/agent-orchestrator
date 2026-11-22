@@ -1,12 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ArrowDownUp, ArrowUpRight, CalendarClock, CircleAlert, Folder, ChevronDown, Clock, GitPullRequest, ListChecks, FileText, Filter, Pause, Pencil, Plus, Repeat, Trash2, TriangleAlert, type AppIcon } from "@/components/app-icons";
-import { Button } from "./ui/button";
+import { Button, GHOST_PILL_CLASS } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
+import { ResizeHandle } from "./ResizeHandle";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { FilterChip, ToolbarSearch } from "./PageToolbar";
 import {
@@ -40,6 +41,7 @@ import { TRIGGER_CLASS } from "./chat/TurnSettingsBar";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
+import { useResizable } from "../hooks/useResizable";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { CLOUD_PROJECT_KIND } from "../types/workspace";
 import { agentLabel } from "../lib/agent-options";
@@ -396,9 +398,14 @@ function TemplateTile({ id, rrule, onSelect }: { id: StarterTemplateID; rrule: s
 function StatusMark({ state }: { state: "failed" | "paused" | "ran" | "waiting" }) {
 	if (state === "failed") return <CircleAlert aria-hidden="true" className="size-icon-sm shrink-0 text-destructive" />;
 	if (state === "paused") return <Pause aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />;
+	return <StatusDot state={state} />;
+}
+
+/** A run's state as a dot: red when it failed, filled when it ran, hollow while it waits. */
+function StatusDot({ state }: { state: "failed" | "ran" | "waiting" }) {
 	return (
 		<span aria-hidden="true" className="flex size-icon-sm shrink-0 items-center justify-center">
-			<span className={cn("size-1.5 rounded-full", state === "ran" ? "bg-muted-foreground" : "border border-muted-foreground")} />
+			<span className={cn("size-1.5 rounded-full", state === "failed" ? "bg-destructive" : state === "ran" ? "bg-muted-foreground" : "border border-muted-foreground")} />
 		</span>
 	);
 }
@@ -433,6 +440,14 @@ function AutomationRow({ item, projectName, selected, onSelect }: { item: Automa
 }
 
 const AUTOMATION_DETAILS_ID = "automation-details";
+const DETAILS_WIDTH_VAR = "--automation-details-w";
+const DETAILS_DEFAULT_WIDTH_PX = 400;
+const DETAILS_MIN_WIDTH_PX = 340;
+const DETAILS_MAX_WIDTH_PX = 640;
+/** Room the list keeps beside the details: its whole toolbar, project filter included. The aside's max-w repeats it. */
+const DETAILS_LIST_MIN_WIDTH_PX = 480;
+/** Runs shown at first, and how many more each Show more adds. */
+const RUNS_PAGE_SIZE = 5;
 
 /** The selected automation beside the list: its actions, schedule, runs and prompt. */
 function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
@@ -441,6 +456,25 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 	const { t, i18n } = useTranslation();
 	const locale = i18n.resolvedLanguage;
 	const scheduleLabel = useScheduleLabel();
+	const asideRef = useRef<HTMLElement>(null);
+	const getResizeTargets = useCallback(() => [asideRef.current], []);
+	// At most DETAILS_MAX_WIDTH_PX, and never so wide that the list loses its minimum.
+	const maxWidth = useCallback(() => {
+		const page = asideRef.current?.parentElement;
+		if (!page || page.clientWidth <= 0) return DETAILS_MAX_WIDTH_PX;
+		return Math.max(DETAILS_MIN_WIDTH_PX, Math.min(DETAILS_MAX_WIDTH_PX, page.clientWidth - DETAILS_LIST_MIN_WIDTH_PX));
+	}, []);
+	const { onPointerDown, onDoubleClick } = useResizable({
+		cssVar: DETAILS_WIDTH_VAR,
+		getCssTargets: getResizeTargets,
+		storageKey: "ao.automations.detailsWidthPx",
+		defaultWidth: DETAILS_DEFAULT_WIDTH_PX,
+		min: DETAILS_MIN_WIDTH_PX,
+		max: maxWidth,
+		edge: "left",
+		reclampOnWindowResize: true,
+	});
+	const [visibleRuns, setVisibleRuns] = useState(RUNS_PAGE_SIZE);
 	const promptRef = useRef<HTMLParagraphElement>(null);
 	const [promptOpen, setPromptOpen] = useState(false);
 	const [promptClipped, setPromptClipped] = useState(false);
@@ -450,8 +484,10 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 		if (prompt && !promptOpen) setPromptClipped(prompt.scrollHeight > prompt.clientHeight);
 	}, [item.prompt, promptOpen]);
 	return (
-		// Beside the list when there is room; in its place in a narrow window, closed with its X.
-		<aside id={AUTOMATION_DETAILS_ID} aria-label={item.displayName} className="min-h-0 flex-1 overflow-y-auto @3xl/automations:w-[400px] @3xl/automations:flex-none @3xl/automations:border-s @3xl/automations:border-border">
+		// Beside the list when there is room, at the width its handle sets; in its place in a narrow window, closed with its X.
+		<aside ref={asideRef} id={AUTOMATION_DETAILS_ID} aria-label={item.displayName}
+			className="relative flex min-h-0 flex-1 flex-col @3xl/automations:w-(--automation-details-w) @3xl/automations:max-w-[calc(100%-480px)] @3xl/automations:flex-none @3xl/automations:border-s @3xl/automations:border-border">
+			<div className="min-h-0 flex-1 overflow-y-auto">
 			<div className="flex flex-col gap-6 p-4">
 				<header className="flex flex-col gap-3">
 					<div className="flex items-start gap-2">
@@ -492,29 +528,46 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 					) : runs.error ? (
 						<p role="alert" className="py-2 text-xs text-destructive">{runs.error.message}</p>
 					) : runs.data?.length ? (
-						<ul className="divide-y divide-border">
-							{runs.data.map((run) => {
-								const failed = run.status === "failed";
-								const duration = run.status === "completed" && run.startedAt && run.finishedAt ? formatDuration(Date.parse(run.finishedAt) - Date.parse(run.startedAt)) : null;
-								return (
-									<li key={run.id} className="flex min-h-9 items-center gap-2.5 py-1.5">
-										<StatusMark state={failed ? "failed" : run.status === "completed" ? "ran" : "waiting"} />
-										<div className="min-w-0 flex-1">
-											<p className="truncate text-sm tabular-nums text-foreground">{displayRelativeTime(new Date(run.scheduledFor), t, locale)}</p>
-											{run.errorMessage ? <p className="text-xs text-destructive">{run.errorMessage}</p> : null}
-										</div>
-										<span className={cn("shrink-0 text-xs tabular-nums", failed ? "text-destructive" : "text-muted-foreground")}>
-											{duration ?? t(`automations.runStatus.${run.status}`, { defaultValue: run.status })}
-										</span>
-										{run.sessionId ? (
-											<Button type="button" size="icon-xs" variant="quiet" aria-label={t("automations.runs.openSession")} onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>
-												<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
-											</Button>
-										) : null}
-									</li>
-								);
-							})}
-						</ul>
+						<>
+							<ul className="divide-y divide-border">
+								{runs.data.slice(0, visibleRuns).map((run) => {
+									const failed = run.status === "failed";
+									const duration = run.status === "completed" && run.startedAt && run.finishedAt ? formatDuration(Date.parse(run.finishedAt) - Date.parse(run.startedAt)) : null;
+									const status = duration ?? t(`automations.runStatus.${run.status}`, { defaultValue: run.status });
+									const statusClass = cn("shrink-0 text-xs tabular-nums", failed ? "text-destructive" : "text-muted-foreground");
+									return (
+										<li key={run.id} className="flex min-h-9 items-center gap-2.5 py-1.5">
+											<StatusDot state={failed ? "failed" : run.status === "completed" ? "ran" : "waiting"} />
+											<p className="min-w-0 flex-1 truncate text-sm tabular-nums text-foreground">{displayRelativeTime(new Date(run.scheduledFor), t, locale)}</p>
+											{run.errorMessage ? (
+												// The error stays one hover or focus away, so a long message never stretches the row.
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<button type="button" aria-label={`${status}: ${run.errorMessage}`} className={cn(GHOST_PILL_CLASS, statusClass, "-mx-1.5 inline-flex h-control-sm items-center gap-1 rounded-md px-1.5 outline-none")}>
+															<CircleAlert aria-hidden="true" className="size-icon-sm text-destructive" />
+															{status}
+														</button>
+													</TooltipTrigger>
+													<TooltipContent side="left" className="max-w-72">{run.errorMessage}</TooltipContent>
+												</Tooltip>
+											) : (
+												<span className={statusClass}>{status}</span>
+											)}
+											{run.sessionId ? (
+												<Button type="button" size="icon-xs" variant="quiet" aria-label={t("automations.runs.openSession")} onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>
+													<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+												</Button>
+											) : null}
+										</li>
+									);
+								})}
+							</ul>
+							{runs.data.length > visibleRuns ? (
+								<Button type="button" size="sm" variant="quiet" className="-ms-2.5 self-start" onClick={() => setVisibleRuns(visibleRuns + RUNS_PAGE_SIZE)}>
+									{t("automations.runs.showMore")}
+								</Button>
+							) : null}
+						</>
 					) : (
 						<p className="py-2 text-xs text-muted-foreground">{t("automations.runs.empty")}</p>
 					)}
@@ -529,6 +582,9 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 					) : null}
 				</section>
 			</div>
+			</div>
+			{/* Outside the scroller so it spans the panel's full height; a narrow window has nothing beside it to resize against. */}
+			<ResizeHandle side="left" className="hidden @3xl/automations:block" data-testid="automation-details-resize-handle" onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} />
 		</aside>
 	);
 }

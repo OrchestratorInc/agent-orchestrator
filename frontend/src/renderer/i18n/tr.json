@@ -3757,6 +3757,7 @@
 	"automations.runs.title": "Çalıştırma geçmişi",
 	"automations.runs.loading": "Çalıştırmalar yükleniyor…",
 	"automations.runs.openSession": "Oturumu aç",
+	"automations.runs.showMore": "Daha fazla göster",
 	"automations.runs.empty": "Henüz çalıştırma yok.",
 	"automations.details.show": "{{name}} için ayrıntıları göster",
 	"automations.details.edit": "Düzenle",
