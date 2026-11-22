@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +13,27 @@ describe("icon imports", () => {
 		expect(names.length).toBeGreaterThan(50);
 		const missing = names.filter((name) => !existsSync(fileURLToPath(new URL(`../node_modules/lucide-react-native/dist/cjs/icons/${name}.js`, import.meta.url))));
 		expect(missing).toEqual([]);
+	});
+
+	// `name` also takes a plain string (for names carried in data), so a glyph
+	// dropped from the map still typechecks and the icon silently draws nothing:
+	// #7839 pruned chevrons, `info`, `x-circle` and `user` that screens still used.
+	it("has a glyph for every icon name the app writes literally", () => {
+		const root = fileURLToPath(new URL("..", import.meta.url));
+		const glyphs = new Set([...readFileSync(join(root, "lib/icons.tsx"), "utf8").matchAll(/^\t"([a-z0-9-]+)":/gm)].map((match) => match[1]));
+		const files = ["app", "lib"].flatMap((dir) => readdirSync(join(root, dir), { recursive: true, encoding: "utf8" }).map((file) => join(dir, file)))
+			.filter((file) => file.endsWith(".tsx") && !file.includes(".test."));
+		const unknown: string[] = [];
+		for (const file of files) {
+			for (const [, literal, expression] of readFileSync(join(root, file), "utf8").matchAll(/<Feather\b[^>]*?\bname=(?:"([^"]+)"|\{([^}]*)\})/g)) {
+				// In an expression, the names are the ternary's arms, not what the condition compares.
+				const names = literal ? [literal] : [...expression!.matchAll(/[?:]\s*"([^"]+)"/g)].map((match) => match[1]);
+				for (const name of names) if (!glyphs.has(name!)) unknown.push(`${file}: ${name}`);
+			}
+		}
+		expect(glyphs.size).toBeGreaterThan(50);
+		expect(files.length).toBeGreaterThan(100);
+		expect(unknown).toEqual([]);
 	});
 });
 

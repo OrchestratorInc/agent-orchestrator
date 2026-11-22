@@ -79,6 +79,9 @@ import Shuffle from "lucide-react-native/icons/shuffle";
 import Smartphone from "lucide-react-native/icons/smartphone";
 import Terminal from "lucide-react-native/icons/terminal";
 import Wrench from "lucide-react-native/icons/wrench";
+import Info from "lucide-react-native/icons/info";
+import CircleX from "lucide-react-native/icons/circle-x";
+import User from "lucide-react-native/icons/user";
 import WifiOff from "lucide-react-native/icons/wifi-off";
 import X from "lucide-react-native/icons/x";
 import Bell from "lucide-react-native/icons/bell";
@@ -87,9 +90,6 @@ import ChevronDown from "lucide-react-native/icons/chevron-down";
 import ChevronUp from "lucide-react-native/icons/chevron-up";
 import Tag from "lucide-react-native/icons/tag";
 import Package from "lucide-react-native/icons/package";
-import User from "lucide-react-native/icons/user";
-import CircleX from "lucide-react-native/icons/circle-x";
-import Info from "lucide-react-native/icons/info";
 import Cloud from "lucide-react-native/icons/cloud";
 import EllipsisVertical from "lucide-react-native/icons/ellipsis-vertical";
 import FolderOpen from "lucide-react-native/icons/folder-open";
@@ -150,6 +150,7 @@ export const glyphs = {
 	"git-pull-request-draft": GitPullRequestDraft,
 	"globe": Globe,
 	"image": Image,
+	"info": Info,
 	"key": KeyRound,
 	"layers": Layers,
 	"layout-grid": LayoutGrid,
@@ -179,9 +180,6 @@ export const glyphs = {
 	"plus": Plus,
 	"tag": Tag,
 	"package": Package,
-	"user": User,
-	"x-circle": CircleX,
-	"info": Info,
 	"power": Power,
 	"radio": Radio,
 	"refresh-cw": RefreshCw,
@@ -202,9 +200,11 @@ export const glyphs = {
 	"tool": Wrench,
 	"trash-2": Trash,
 	"unplug": Unplug,
+	"user": User,
 	"video": Video,
 	"wifi-off": WifiOff,
 	"x": X,
+	"x-circle": CircleX,
 } as const;
 
 export type FeatherIconName = keyof typeof glyphs;

@@ -377,6 +377,10 @@ async function sideImagePayloads(sessionId: string, staged: ChatDraftAttachment[
 	return images.filter((image): image is OutgoingAttachment => image !== undefined);
 }
 
+function sameSides(previous: Side[], next: Side[]) {
+	return previous.length === next.length && previous.every((side, index) => side === next[index] || JSON.stringify(side) === JSON.stringify(next[index]));
+}
+
 export function useIndependentSideChats(
 	sessionId: string,
 	models: ChatModel[],
@@ -468,6 +472,7 @@ export function useIndependentSideChats(
 		return { ...current, [error.id]: { ...owned, [kind]: error.message } };
 	}), []);
 	const clearSideError = useCallback((id: string, kind?: string) => setSideErrors(current => {
+		if (!current[id] || (kind && !(kind in current[id]))) return current;
 		const next = { ...current };
 		if (!kind) delete next[id];
 		else { next[id] = { ...next[id] }; delete next[id][kind]; }
@@ -784,7 +789,8 @@ export function useIndependentSideChats(
 			for (const side of sidesRef.current) {
 				if (closingSidesRef.current.has(side.id) && !closedSidesRef.current.has(side.id) && !nextSides.some(current => current.id === side.id)) nextSides.push(side);
 			}
-			setSides(nextSides);
+			// The 2 s poll returns a fresh array; an unchanged list must not re-render the chat surface.
+			if (!sameSides(sidesRef.current, nextSides)) setSides(nextSides);
 			setLoaded(true);
 		} catch (cause) {
 			if (current()) { appliedListRequest.current = request; if (reportErrors) setListError(apiErrorMessage(cause)); }

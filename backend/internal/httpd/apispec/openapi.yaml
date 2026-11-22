@@ -6023,6 +6023,63 @@ paths:
       summary: Post a pull request conversation comment or review-thread reply
       tags:
       - prs
+  /api/v1/prs/{id}/dequeue:
+    post:
+      operationId: dequeuePR
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DequeuePRRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DequeuePRResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove a pull request from its base branch's merge queue
+      tags:
+      - prs
   /api/v1/prs/{id}/details:
     post:
       operationId: loadPRDetails
@@ -20773,6 +20830,28 @@ components:
       - ok
       - sessionId
       type: object
+    DequeuePRRequest:
+      properties:
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      type: object
+    DequeuePRResponse:
+      properties:
+        changedAt:
+          format: date-time
+          type: string
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+      required:
+      - ok
+      - prNumber
+      - changedAt
+      type: object
     DesktopArtifactLocationResponse:
       properties:
         artifactDir:
@@ -22096,9 +22175,12 @@ components:
           type: boolean
         prNumber:
           type: integer
+        queue:
+          $ref: '#/components/schemas/SessionPRMergeQueueEntry'
         state:
           enum:
           - merged
+          - open
           type: string
         stateChangedAt:
           format: date-time
@@ -22524,6 +22606,8 @@ components:
       type: object
     PRStackLayerResponse:
       properties:
+        behindParent:
+          type: integer
         ci:
           type: string
         headBranch:
@@ -24366,6 +24450,29 @@ components:
       required:
       - name
       type: object
+    SessionPRMergeQueueEntry:
+      properties:
+        enqueuedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        estimatedSecondsToMerge:
+          type: integer
+        position:
+          type: integer
+        state:
+          enum:
+          - queued
+          - awaiting_checks
+          - mergeable
+          - unmergeable
+          - locked
+          type: string
+      required:
+      - state
+      - position
+      type: object
     SessionPRMergeabilitySummary:
       properties:
         conflictFiles:
@@ -24550,6 +24657,10 @@ components:
           items:
             $ref: '#/components/schemas/SessionPRLabel'
           type: array
+        mergeQueue:
+          $ref: '#/components/schemas/SessionPRMergeQueueEntry'
+        mergeQueueRequired:
+          type: boolean
         mergeability:
           $ref: '#/components/schemas/SessionPRMergeabilitySummary'
         number:

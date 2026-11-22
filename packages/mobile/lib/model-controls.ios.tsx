@@ -7,6 +7,7 @@ import {
 	clipShape,
 	contentShape,
 	disabled as disabledModifier,
+	dynamicTypeSize,
 	font,
 	fixedSize,
 	frame,
@@ -31,6 +32,15 @@ import { space, touchTarget } from "./tokens";
  * Each caller fills the capsule's menu with what it can change: the new task
  * every agent and its models, the chat the models of the agent it runs.
  */
+
+/**
+ * The controls row's own Dynamic Type ceiling, set on the row. The
+ * capsule keeps the composer's discs' height and the row its touch target's:
+ * past the first accessibility size the name grew taller than the capsule and
+ * was cut off, and the approval symbol than the row. Up to that size the row
+ * follows the user's setting; the field above it keeps the full one.
+ */
+export const controlsRowTypeSize = () => dynamicTypeSize({ max: "accessibility1" });
 
 /**
  * One option in a menu. A Toggle is the system's checkable menu item: it draws

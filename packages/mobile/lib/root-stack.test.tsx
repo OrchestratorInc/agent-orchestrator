@@ -38,6 +38,8 @@ vi.mock("./files/reviewPersistence", () => ({ startReviewPersistence: async () =
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
+vi.mock("./UpdateScreen", () => ({ UpdateScreen: () => null }));
+vi.mock("./UpdateRouteKeeper", () => ({ UpdateRouteKeeper: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
 // The side bar draws with Reanimated; the stack under it is what these tests read.
 vi.mock("./sidebar/Sidebar", () => ({ Sidebar: () => null }));

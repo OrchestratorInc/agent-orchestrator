@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import Animated, { cancelAnimation, Easing, interpolate, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming, type SharedValue } from "react-native-reanimated";
 import { SvgXml } from "react-native-svg";
 import { ensemblePhrase, PLAYERS, type Ease, type Track } from "./ensemblePhrase";
-import { RUTO_BODY_XML, RUTO_VIEWBOX as VB } from "./rutoArt";
+import { RUTO_BODY, RUTO_DEFS } from "./rutoArt";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { font, fontScaleCap, space } from "./tokens";
@@ -22,6 +22,11 @@ const HEADROOM = 30;
 
 /** Ruto's eye socket, the colour a closed eye shows (assets/brand/ruto.svg). */
 const RUTO_LID = "#2A9FE0";
+
+/** The crop the players are drawn in, in the brand file's 1024 units: Ruto without the baton. */
+const VB = { x: 200, y: 318, width: 616, height: 452 } as const;
+/** Ruto's body, eyes and arms, from the brand file's parts (rutoArt.ts), without the baton. */
+const RUTO_BODY_XML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${VB.x} ${VB.y} ${VB.width} ${VB.height}">${RUTO_DEFS}${RUTO_BODY}</svg>`;
 /** The two pupils, in the brand file's 1024 units. */
 const EYES = [{ x: 381, y: 437 }, { x: 568, y: 437 }] as const;
 const EYE = { width: 43, height: 48 };

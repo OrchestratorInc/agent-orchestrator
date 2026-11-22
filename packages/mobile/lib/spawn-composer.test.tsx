@@ -5,6 +5,7 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
 	dismiss: vi.fn(),
 	platform: "ios",
+	fontScale: 1,
 	listeners: new Map<string, (event: { data: { closing: boolean } }) => void>(),
 	pasteLayout: () => {},
 	useImagePaste: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("react-native", () => ({
 	Platform: { get OS() { return fixtures.platform; } },
 	ActivityIndicator: "ActivityIndicator", Keyboard: { dismiss: fixtures.dismiss }, Pressable: "Pressable", TextInput: "TextInput", View: "View",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: {} },
+	useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: fixtures.fontScale }),
 }));
 vi.mock("react-native-reanimated", () => ({
 	default: { View: "AnimatedView" },
@@ -54,6 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	fixtures.fontScale = 1;
 	if (renderer) await act(async () => renderer?.unmount());
 	renderer = undefined;
 	vi.restoreAllMocks();
@@ -99,6 +102,17 @@ describe("SpawnComposer", () => {
 	});
 
 	// Pasting an image is a way to attach, as in a conversation's composer.
+	it("grows the field with the text size up to the composer's cap, so the placeholder is never cut", async () => {
+		const flat = (style: unknown): Record<string, unknown> => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+		const field = (await render(baseProps())).findByType("TextInput" as never);
+		expect(field.props.maxFontSizeMultiplier).toBe(1.6);
+		expect(flat(field.props.style).minHeight).toBe(44);
+		fixtures.fontScale = 3.1;
+		const large = (await render(baseProps())).findByType("TextInput" as never);
+		// Capped at 1.6, as the text is: 44pt grows to 70pt.
+		expect(flat(large.props.style).minHeight).toBe(70);
+	});
+
 	it("takes pasted images into the field, and stops while they can't be attached", async () => {
 		const onPasteImages = vi.fn();
 		const root = await render(baseProps({ onPasteImages }));

@@ -1610,6 +1610,12 @@ type SessionPRSummary struct {
 	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
 	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
 
+	// MergeQueueRequired says the PR's base branch merges through a merge
+	// queue, so Merge adds the PR to the queue. MergeQueue is its place there,
+	// absent while it isn't queued.
+	MergeQueueRequired bool                      `json:"mergeQueueRequired,omitempty"`
+	MergeQueue         *SessionPRMergeQueueEntry `json:"mergeQueue,omitempty"`
+
 	// Description is the PR body as markdown. It is untrusted provider content
 	// and must be sanitized when rendered.
 	Description          string `json:"description,omitempty"`
@@ -1765,6 +1771,40 @@ type ListSessionPRsResponse struct {
 	LinkedPRs []SessionPRReference `json:"linkedPrs"`
 }
 
+// SessionPRMergeQueueEntry is a pull request's place in its base branch's merge
+// queue. Position counts from 1 at the front; EstimatedSecondsToMerge is the
+// provider's estimate, absent when it gives none.
+type SessionPRMergeQueueEntry struct {
+	State                   string     `json:"state" enum:"queued,awaiting_checks,mergeable,unmergeable,locked"`
+	Position                int        `json:"position"`
+	EstimatedSecondsToMerge int        `json:"estimatedSecondsToMerge,omitempty"`
+	EnqueuedAt              *time.Time `json:"enqueuedAt,omitempty"`
+}
+
+func newSessionPRMergeQueueEntry(in *contract.PullRequestMergeQueueEntry) *SessionPRMergeQueueEntry {
+	if in == nil {
+		return nil
+	}
+	return &SessionPRMergeQueueEntry{
+		State:                   in.State,
+		Position:                in.Position,
+		EstimatedSecondsToMerge: in.EstimatedSecondsToMerge,
+		EnqueuedAt:              optionalTime(in.EnqueuedAt),
+	}
+}
+
+func newSessionPRMergeQueueEntryFromDomain(in *domain.MergeQueueEntry) *SessionPRMergeQueueEntry {
+	if in == nil {
+		return nil
+	}
+	return &SessionPRMergeQueueEntry{
+		State:                   string(in.State),
+		Position:                in.Position,
+		EstimatedSecondsToMerge: in.EstimatedSecondsToMerge,
+		EnqueuedAt:              optionalTime(in.EnqueuedAt),
+	}
+}
+
 // NewSessionPRSummary maps the service PR summary model to its HTTP DTO.
 func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 	return SessionPRSummary{
@@ -1792,6 +1832,9 @@ func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 		ObservedAt:       in.ObservedAt,
 		CIObservedAt:     in.CIObservedAt,
 		ReviewObservedAt: in.ReviewObservedAt,
+
+		MergeQueueRequired: in.MergeQueueRequired,
+		MergeQueue:         newSessionPRMergeQueueEntry(in.MergeQueue),
 
 		Description:          in.Description,
 		DescriptionTruncated: in.DescriptionTruncated,
@@ -3014,13 +3057,28 @@ type MergePRRequest struct {
 	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
 }
 
-// MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
+// MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200). Where the
+// base branch requires a merge queue the PR joins it instead of merging: State
+// stays open and Queue is its place in the queue.
 type MergePRResponse struct {
-	OK             bool           `json:"ok"`
-	PRNumber       int            `json:"prNumber"`
-	Method         string         `json:"method"`
-	State          domain.PRState `json:"state" enum:"merged"`
-	StateChangedAt time.Time      `json:"stateChangedAt"`
+	OK             bool                      `json:"ok"`
+	PRNumber       int                       `json:"prNumber"`
+	Method         string                    `json:"method"`
+	State          domain.PRState            `json:"state" enum:"merged,open"`
+	StateChangedAt time.Time                 `json:"stateChangedAt"`
+	Queue          *SessionPRMergeQueueEntry `json:"queue,omitempty"`
+}
+
+// DequeuePRRequest is the body of POST /api/v1/prs/{id}/dequeue.
+type DequeuePRRequest struct {
+	PRURL string `json:"prUrl" minLength:"1"`
+}
+
+// DequeuePRResponse is the body of POST /api/v1/prs/{id}/dequeue (200).
+type DequeuePRResponse struct {
+	OK        bool      `json:"ok"`
+	PRNumber  int       `json:"prNumber"`
+	ChangedAt time.Time `json:"changedAt"`
 }
 
 // ChangePRStateRequest is the body of POST /api/v1/prs/{id}/state.
@@ -3053,6 +3111,9 @@ type PRStackLayerResponse struct {
 	NoChecks bool `json:"noChecks,omitempty"`
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
+	// BehindParent counts the commits of the open layer below that this layer
+	// lacks: above zero, it needs rebasing onto that layer.
+	BehindParent int `json:"behindParent,omitempty"`
 }
 
 // LoadPRDetailsRequest names the tracked PR whose details to read.

@@ -81,7 +81,7 @@ describe("spawn composer", () => {
 		expect(finish).toContain('if (current !== "recording") return;');
 		expect(finish).toContain("device.stop();");
 		expect(finish.slice(finish.indexOf('if (current !== "recording") return;'))).not.toContain('setPhase("idle")');
-		expect(spawn).toContain('disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}');
+		expect(spawn).toContain('disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}');
 	});
 
 	// The machine's catalog loads before a project is chosen, so a project is
@@ -236,7 +236,7 @@ describe("spawn draft", () => {
 	// Start stops rather than send a task whose draft has no id on the phone.
 	it("stops a Start whose draft save was dropped, and clears only its own draft once started", () => {
 		const send = spawn.slice(spawn.indexOf("const saved = await saveBeforeStart("), spawn.indexOf("if (projectId === STANDALONE_PROJECT)"));
-		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\thaptics.error();\n\t\t\t\tsetError(START_DROPPED_NOTICE);\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}", "await spawn({ ...request, clientRequestId: sent.id });");
+		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\thaptics.error();\n\t\t\t\tsetError(START_DROPPED_NOTICE);\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}", "await spawn({ ...request, model: sent.model, clientRequestId: sent.id });");
 		expect(send).toContain("void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});");
 		expect(spawn).not.toContain("then(clearSpawnDraft)");
 	});
@@ -253,7 +253,7 @@ describe("spawn draft", () => {
 			expect(dropped).not.toContain("spawn(");
 			// The only request a Start sends comes after the dropped check.
 			expect(onSpawn.match(/await spawn\(/g)).toHaveLength(1);
-			expectBefore(onSpawn, "if (saved === \"dropped\") {", "await spawn({ ...request, clientRequestId: sent.id });");
+			expectBefore(onSpawn, "if (saved === \"dropped\") {", "await spawn({ ...request, model: sent.model, clientRequestId: sent.id });");
 			expect(spawn).toContain("{error ? <Text accessibilityRole=\"alert\" style={styles.error}>{error}</Text> : null}");
 		});
 
@@ -294,7 +294,7 @@ describe("spawn draft", () => {
 
 		it("leaves a Start that saved its draft to send the task as before", () => {
 			const sent = onSpawn.slice(onSpawn.indexOf("if (saved === \"dropped\") {"));
-			expectBefore(sent, "return;\n\t\t\t}\n\t\t\tconst session = await spawn({ ...request, clientRequestId: sent.id });", "router.replace({");
+			expectBefore(sent, "return;\n\t\t\t}\n\t\t\tconst session = await spawn({ ...request, model: sent.model, clientRequestId: sent.id });", "router.replace({");
 			expect(sent.slice(sent.indexOf("const session = await spawn(")).includes("START_DROPPED_NOTICE")).toBe(false);
 		});
 	});
@@ -322,11 +322,11 @@ describe("spawn draft", () => {
 	// Closed after the daemon took the task but before the draft was cleared,
 	// the restored draft's Start reuses the id and the daemon answers with that task.
 	it("keeps the request id with the draft before the request leaves, and reuses it once restored", () => {
-		const send = spawn.slice(spawn.indexOf("const payload = JSON.stringify(requestFields);"), spawn.indexOf("startedDraft.current = { prompt"));
+		const send = spawn.slice(spawn.indexOf("const payload = JSON.stringify({ ...requestFields, model: modelOverride(displayedModel, modelTouched) });"), spawn.indexOf("startedDraft.current = { prompt"));
 		expect(send).toContain("requestMatches(requestRef.current, payload, attachmentsRef.current)");
 		expect(send).toContain("attachments: attachmentsKey(attachmentsRef.current)");
 		expect(send.indexOf("const saved = await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });")).toBeGreaterThan(0);
-		expect(send.indexOf("await saveBeforeStart(")).toBeLessThan(send.indexOf("await spawn({ ...request, clientRequestId: sent.id });"));
+		expect(send.indexOf("await saveBeforeStart(")).toBeLessThan(send.indexOf("await spawn({ ...request, model: sent.model, clientRequestId: sent.id });"));
 		expect(spawn).toContain("if (draft.request) requestRef.current = draft.request;");
 		// Compared by content: never by the attachments array object.
 		expect(spawn).not.toContain("requestRef.current?.attachments !== attachmentsRef.current");
@@ -372,5 +372,25 @@ describe("spawn draft", () => {
 			expect(change.indexOf(reset)).toBeGreaterThan(0);
 			expect(change.indexOf(reset)).toBeLessThan(change.indexOf("restoreDraft();"));
 		}
+	});
+});
+
+// A paired machine's model catalog is the machine's: its default never reflects
+// the project's pinned model. While the project's details load (getProject and
+// the catalog load at once), or after that load failed, the pin is unknown, and
+// sending the catalog default then ran a project pinned to opus on sonnet.
+describe("spawn model default and the project's pin", () => {
+	it("sends the default row's model only once the project's details are this project's", () => {
+		expect(spawn).toContain("const projectPinKnown = !projectId || projectId === STANDALONE_PROJECT || (projectDetailLoadedFor === projectId && projectDetail?.id === projectId);");
+		expect(spawn).toContain("defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode, pinKnown: projectPinKnown })");
+	});
+
+	it("keeps Start off on a paired machine while the project's details load", () => {
+		expect(spawn).toContain("const projectDetailsPending = !cloudSelected && Boolean(projectId) && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId;");
+		expect(between(spawn, "<SpawnComposerControls", "/>\n\t\t\t</Animated.View>")).toMatch(/disabled=\{[^}]*\bprojectDetailsPending\b/);
+	});
+
+	it("drops the request a server refused, so the next Start is a new one", () => {
+		expectBefore(between(spawn, "} catch (e) {", "setBusy(false);"), "if (startRefused(e)) requestRef.current = undefined;", "setError(spawnErrorCopy(e));");
 	});
 });

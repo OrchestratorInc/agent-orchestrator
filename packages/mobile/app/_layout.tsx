@@ -19,6 +19,8 @@ import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
+import { UpdateScreen } from "../lib/UpdateScreen";
+import { UpdateRouteKeeper } from "../lib/UpdateRouteKeeper";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { SYSTEM_BACK_OPTIONS } from "../lib/headerBack";
@@ -186,6 +188,8 @@ function Shell() {
 			<TelemetryManager />
 			<PushManager />
 			<UpdatesManager />
+			<UpdateScreen />
+			<UpdateRouteKeeper />
 			<StoreUpdateManager />
 			<OnboardingGate />
 			{/* Reopens the last screen after the phone closed the app in the background. */}

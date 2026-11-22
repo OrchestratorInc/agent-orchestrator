@@ -4,7 +4,7 @@ import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
-import { Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
+import { Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
@@ -66,7 +66,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 			{/* Who runs the turn and its effort at the row's start beside attach,
 			    approvals at its end beside the round button; the space between
 			    them gives way first. */}
-			<HStack spacing={space.none}>
+			<HStack spacing={space.none} modifiers={[controlsRowTypeSize()]}>
 				<Menu
 					key={`model-${generation}`}
 					label={pending

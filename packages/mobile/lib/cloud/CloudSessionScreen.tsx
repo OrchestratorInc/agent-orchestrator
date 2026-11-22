@@ -141,7 +141,11 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	// A switch of interface (from here or the desktop) shows the new one's own view.
 	useEffect(() => { setView(null); }, [tui]);
 	const terminated = Boolean(session?.isTerminated);
-	const project = session ? projects.find((item) => item.id === session.projectId) : undefined;
+	const sessionProject = session ? projects.find((item) => item.id === session.projectId) : undefined;
+	// A standalone agent's project is its own and hidden: the session reads as
+	// standalone, with no project to open.
+	const standaloneAgent = sessionProject?.standaloneAgent === true;
+	const project = standaloneAgent ? undefined : sessionProject;
 	const harness = session?.harness ?? "";
 	const title = session?.displayName?.trim() || (session?.kind === "orchestrator" ? "Orchestrator" : cloudAgentLabel(harness));
 	const headerState = snapshot?.controller.state ?? (terminated ? "stopped" : undefined);
@@ -327,14 +331,14 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					title={title || "Cloud session"}
 					// The project and the agent, as a local chat's bar reads; the state
 					// is the dot's alone (the sandbox's own steps are banners below).
-					subtitle={[project?.displayName ?? "Cloud", harness ? cloudAgentLabel(harness) : ""].filter(Boolean).join(" · ")}
+					subtitle={[standaloneAgent ? "Standalone" : project?.displayName ?? "Cloud", harness ? cloudAgentLabel(harness) : ""].filter(Boolean).join(" · ")}
 					harness={harness || undefined}
 					state={headerState}
 					barButtons={topbarActions.length}
 				/>
 			),
 		});
-	}, [harness, headerState, navigation, project?.displayName, title, topbarActions.length]);
+	}, [harness, headerState, navigation, project?.displayName, standaloneAgent, title, topbarActions.length]);
 	// The conversation scrolls up under a clear bar, as a local chat's does.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;

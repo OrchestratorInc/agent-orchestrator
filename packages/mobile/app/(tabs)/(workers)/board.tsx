@@ -240,7 +240,9 @@ export default function FleetScreen() {
 		: <FreshnessLine hostId={boardEmpty ? undefined : lineHostId} onRetry={retry} />;
 	// The title's accessory: under the large title on iOS, pinned under the bar
 	// on Android, where the bar's frost washed out a line placed in the page.
-	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine });
+	// The Android bar is solid rather than frosted (upstream #8775): the frost's
+	// tail lay over the machine chips and dimmed them at rest.
+	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine, backdrop: "solid", resetKey: boardIdentityKey });
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
