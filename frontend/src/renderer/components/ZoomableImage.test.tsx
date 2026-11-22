@@ -1,6 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ArtifactZoomController } from "../lib/artifact-zoom";
+import { resetSwipeClaim, swipeClaimed } from "../lib/swipe-ownership";
 import { ZoomableImage } from "./ZoomableImage";
 
 function size(element: HTMLElement, values: Record<string, number>) {
@@ -19,10 +20,13 @@ describe("ZoomableImage", () => {
 		box.getBoundingClientRect = () => ({ bottom: 100, height: 100, left: 0, right: 100, top: 0, width: 100, x: 0, y: 0, toJSON: () => ({}) });
 		act(() => controller.setZoom(3));
 
+		resetSwipeClaim();
 		box.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: -500, deltaY: 500 }));
 
 		// Horizontally it may move until its edge meets the pane's; vertically it still fits, so stays centered.
 		expect(image.style.transform).toMatch(/^translate3d\(100px, 0px, 0(px)?\) scale\(3\)$/);
+		// The pan keeps the swipe from also going back.
+		expect(swipeClaimed()).toBe(true);
 	});
 });
 

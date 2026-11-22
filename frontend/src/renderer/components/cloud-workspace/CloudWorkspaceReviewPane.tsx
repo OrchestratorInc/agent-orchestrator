@@ -22,7 +22,7 @@ const statusLabel: Record<CloudCpWorkspaceReviewFileSummary["status"], string> =
 };
 const statusTone: Record<CloudCpWorkspaceReviewFileSummary["status"], string> = {
 	unmodified: "text-passive", modified: "text-warning", added: "text-success", deleted: "text-error",
-	renamed: "text-logo-accent", copied: "text-logo-accent", untracked: "text-success",
+	renamed: "text-logo-accent-text", copied: "text-logo-accent-text", untracked: "text-success",
 };
 
 function chunk<T>(items: readonly T[]): T[][] {

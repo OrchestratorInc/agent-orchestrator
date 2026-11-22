@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversation";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
+import { CHAT_SWITCH_TARGETS } from "../lib/agent-switch-targets";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -56,7 +57,7 @@ import {
 	unknownAgentReadiness,
 	type AgentInfo,
 } from "../lib/agent-select-options";
-import { cloudSessionsQueryKey, seedCreatedFreestyleSession, seedCreatedStandaloneAgent, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, seedCreatedFreestyleSession, seedCreatedStandaloneAgent, useCachedProjectListed, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
@@ -125,6 +126,53 @@ function cancelTaskPreparation(token: string, hostId?: string): void {
 	} catch {
 		// A disconnected host will reclaim this preparation on its own TTL.
 	}
+}
+
+// A host deletes a preparation five minutes after it was made or last used
+// (the daemon's defaultTaskPreparationTTL; reading or staging its files counts
+// as use). A kept one is offered again for a minute less, so a send does not
+// race its expiry; a send that does only falls back to making its own worktree.
+const KEPT_PREPARATION_REUSE_MS = 4 * 60_000;
+
+// aliveAt: when the host last restarted this preparation's expiry, as far as
+// the page knows: its request, or the page's last successful read of its files.
+type KeptPreparation = { token: string; aliveAt: number };
+
+// The preparation a page left behind, per host and project, so the next visit
+// to that project starts from a worktree that already exists.
+const keptPreparations = new Map<string, KeptPreparation>();
+
+function keptPreparationKey(projectId: string, hostId?: string): string {
+	return `${hostId ?? ""}\u0000${projectId}`;
+}
+
+function keepPreparation(key: string, preparation: KeptPreparation, hostId?: string): void {
+	const previous = keptPreparations.get(key);
+	if (previous && previous.token !== preparation.token) {
+		// A late answer to an older request must not replace a newer kept one,
+		// which has longer left before the host deletes it.
+		if (previous.aliveAt > preparation.aliveAt) {
+			cancelTaskPreparation(preparation.token, hostId);
+			return;
+		}
+		cancelTaskPreparation(previous.token, hostId);
+	}
+	keptPreparations.set(key, preparation);
+}
+
+/** Hands a page the kept preparation for its project, unless it is too old to offer. */
+function takeKeptPreparation(key: string, hostId?: string): KeptPreparation | undefined {
+	const kept = keptPreparations.get(key);
+	if (!kept) return undefined;
+	keptPreparations.delete(key);
+	if (Date.now() - kept.aliveAt < KEPT_PREPARATION_REUSE_MS) return kept;
+	cancelTaskPreparation(kept.token, hostId);
+	return undefined;
+}
+
+/** Test seam: forget every kept preparation. */
+export function resetKeptTaskPreparationsForTests(): void {
+	keptPreparations.clear();
 }
 
 class TaskCreateError extends Error {
@@ -222,6 +270,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}, [projectId, hostId]);
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
+	// When the host last restarted the held preparation's expiry, so a kept one
+	// is not reused past it: its request, then each use the page reports.
+	const taskPreparationAliveAtRef = useRef(0);
+	/** Reports that the host just restarted this preparation's expiry (its files were read). */
+	const notePreparationUsed = useCallback((token: string, at: number) => {
+		if (!token || token !== taskPreparationRef.current) return;
+		taskPreparationAliveAtRef.current = Math.max(taskPreparationAliveAtRef.current, at);
+	}, []);
 	// The preparation a send in flight will claim. Leaving the page or project does not
 	// cancel it; the send does, once answered.
 	const launchingPreparationRef = useRef("");
@@ -478,8 +534,16 @@ export function useTaskLaunch({ projectId, hostId }: {
 			return data.project as Project;
 		},
 	});
+	// A project the host's loaded project list already has is prepared at once,
+	// without waiting for the project read above: that read can wait on GitHub
+	// for the repo's canonical name, and the preparation's git work is the long
+	// part. Any other project still waits for the read.
+	const projectListed = useCachedProjectListed(projectId, hostId);
+	const prepareProjectId = isCloudProject || isStandalone
+		? undefined
+		: projectListed ? projectId : projectQuery.data?.id;
 	useEffect(() => {
-		const id = projectQuery.data?.id;
+		const id = prepareProjectId;
 		if (!id) return;
 		let client;
 		try {
@@ -488,31 +552,47 @@ export function useTaskLaunch({ projectId, hostId }: {
 			return;
 		}
 		let disposed = false;
-		taskPreparationRef.current = "";
-		setPreparedSessionId("");
-		void client.POST("/api/v1/projects/{id}/tasks/prepare", {
-			params: { path: { id } },
-		}).then(
-			({ data }) => {
-				const token = data?.taskPreparation ?? "";
-				if (!token) return;
-				if (disposed) {
-					cancelTaskPreparation(token, hostId);
-					return;
-				}
-				taskPreparationRef.current = token;
-				setPreparedSessionId(token);
-			},
-			() => undefined,
-		);
+		const key = keptPreparationKey(id, hostId);
+		const hold = (token: string, aliveAt: number) => {
+			taskPreparationRef.current = token;
+			taskPreparationAliveAtRef.current = aliveAt;
+			setPreparedSessionId(token);
+		};
+		const kept = takeKeptPreparation(key, hostId);
+		if (kept) {
+			hold(kept.token, kept.aliveAt);
+		} else {
+			taskPreparationRef.current = "";
+			setPreparedSessionId("");
+			const requestedAt = Date.now();
+			void client.POST("/api/v1/projects/{id}/tasks/prepare", {
+				params: { path: { id } },
+			}).then(
+				({ data }) => {
+					const token = data?.taskPreparation ?? "";
+					if (!token) return;
+					// A page that has gone keeps it for the next visit to this project.
+					if (disposed) {
+						keepPreparation(key, { token, aliveAt: requestedAt }, hostId);
+						return;
+					}
+					hold(token, requestedAt);
+				},
+				() => undefined,
+			);
+		}
 		return () => {
 			disposed = true;
 			const token = taskPreparationRef.current;
 			taskPreparationRef.current = "";
 			setPreparedSessionId("");
-			if (token !== launchingPreparationRef.current) cancelTaskPreparation(token, hostId);
+			// A send in flight claims its preparation; any other is kept for the
+			// next visit to this project rather than thrown away.
+			if (token && token !== launchingPreparationRef.current) {
+				keepPreparation(key, { token, aliveAt: taskPreparationAliveAtRef.current }, hostId);
+			}
 		};
-	}, [hostId, projectQuery.data?.id]);
+	}, [hostId, prepareProjectId]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	const { settings, error: settingsError } = useSettings(hostId);
 	// The composer preselects the agent and model a spawn would actually use
@@ -1328,15 +1408,28 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// installed agents whose sign-in is known to be usable: an "Auth unknown" agent may
 	// not start, so it stays in Harness settings. A remote host's readiness can be
 	// unknown without anything being wrong, so there definite failures alone are left out.
-	const agentChoices = useMemo(() => {
+	// The chat agents, and any installed agent that is not signed in, are still offered
+	// dimmed with the reason, so the picker opens their setup instead of hiding them.
+	const agentChoices = useMemo((): Array<{ id: string; label: string; unavailable?: string }> => {
 		const agents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 		const ranked = buildRankedAgentOptions({
 			agents,
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
 		});
-		return (agents ? ranked.filter(hostId ? isLaunchableAgent : startsLocally) : ranked).map(({ id, label }) => ({ id, label }));
-	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject]);
+		if (!agents) return ranked.map(({ id, label }) => ({ id, label }));
+		const runs = hostId ? isLaunchableAgent : startsLocally;
+		const offeredForSetup = (agent: AgentInfo) => !isCloudProject
+			&& ((CHAT_SWITCH_TARGETS as readonly string[]).includes(agent.id) || agent.authentication.state === "unauthorized");
+		return ranked.flatMap((agent) => {
+			if (runs(agent)) return [{ id: agent.id, label: agent.label }];
+			if (!offeredForSetup(agent)) return [];
+			const unavailable = agent.installation.state === "not_installed" ? t("agentSwitch.notInstalled")
+				: agent.authentication.state === "unauthorized" ? t("agentSwitch.notSignedIn")
+				: t("agentSelector.needsSetup");
+			return [{ id: agent.id, label: agent.label, unavailable }];
+		});
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, t]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.
@@ -1422,6 +1515,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
 		refreshModels: refreshSelectedModels,
 		preparedSessionId,
+		notePreparationUsed,
 		submitMode,
 		isCloudProject,
 		isCoderCloudProject,
@@ -1449,6 +1543,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 			},
 		} : undefined,
 		remoteLoadError,
+		// "Set one up in Settings" gets the way there. A remote host's agents are set up on that host.
+		remoteLoadErrorAction: !hostId && remoteLoadError === t("newTask.noReadyAgent") ? {
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			onClick: () => openGlobalSettings("harness", { harnessView: isCloudProject ? "cloud" : "local", preserveProject: true }),
+		} : undefined,
 		modelWarning,
 		modelWarningRetries,
 		fallbackAction,
@@ -1627,7 +1726,7 @@ export function TaskComposer({
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
 				status: task.status,
-				errorAction: task.errorAction,
+				errorAction: task.error ? task.errorAction : task.remoteLoadErrorAction,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,
 				onFallbackAction: (brief) => settle(task.launchFallback(brief)),

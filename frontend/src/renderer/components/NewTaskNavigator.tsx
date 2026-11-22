@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -23,7 +23,7 @@ export const CLOUD_CLASSIFY_WAIT_MS = 4000;
 // their own start-up.
 export function NewTaskNavigator() {
 	const navigate = useNavigate();
-	const matchRoute = useMatchRoute();
+	const router = useRouter();
 	const queryClient = useQueryClient();
 	const newTaskRequest = useUiStore((state) => state.newTaskRequest);
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
@@ -96,9 +96,9 @@ export function NewTaskNavigator() {
 				report,
 			},
 			// A new task from the new chat page replaces it rather than stacking history.
-			replace: Boolean(matchRoute({ to: "/new" })),
+			replace: Boolean(router.matchRoute({ to: "/new" })),
 		});
-	}, [classifying, cloudOffering, cloudProjects, matchRoute, navigate, newTaskRequest, queryClient, sharedWorkspaces, waitExpired]);
+	}, [classifying, cloudOffering, cloudProjects, router, navigate, newTaskRequest, queryClient, sharedWorkspaces, waitExpired]);
 
 	const handleCreated = async (sessionId: string) => {
 		if (!dialog.projectId) return;

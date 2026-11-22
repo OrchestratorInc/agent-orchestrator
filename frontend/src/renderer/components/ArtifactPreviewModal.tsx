@@ -17,6 +17,7 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ShareArtifactButton, useArtifactShareFile } from "./ShareArtifactPopover";
 import { ArtifactFileView } from "./ArtifactFileView";
+import { ArtifactPageFrame } from "./ArtifactPageFrame";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { SharedArtifactFrame } from "./SharedArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
@@ -155,7 +156,7 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 		return <CloudArtifactFrame key={`${artifact.rawUrl}:${artifact.updatedAt}`} source="host" title={artifact.name} url={artifact.rawUrl} />;
 	}
 	if (page) {
-		return <iframe className="h-full w-full border-0 bg-background" key={`${page}:${artifact.updatedAt}`} sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
+		return <ArtifactPageFrame className="h-full w-full border-0 bg-background" key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />;
 	}
 	if (!contentUrl) return <PanelMessage>{t("artifactLink.noPreview")}</PanelMessage>;
 	return <ArtifactFileView artifactName={artifact.name} hostId={artifact.hostId} path={artifact.path} rawUrl={artifact.rawUrl} noFeedback={artifact.archived} readOnly sessionId={artifact.sessionId} />;

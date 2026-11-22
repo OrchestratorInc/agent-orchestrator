@@ -48,7 +48,7 @@ import {
 } from "../lib/terminal-mouse";
 import { LoaderCircle, TriangleAlert } from "@/components/app-icons";
 import { isMacPlatform } from "../lib/platform";
-import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
+import { applyDocumentTheme, applyDocumentThemeStyle, isThemeStylePreviewActive, onThemeStylePreviewEnd } from "../lib/theme";
 import {
 	buildCursorColorSchemeNotification,
 	cursorColorSchemeReplyForOutput,
@@ -83,6 +83,9 @@ type DropNotice = { kind: "placing"; names: string[] } | { kind: "failed"; failu
 const LOCAL_DROP_NOTICE_DELAY_MS = 400;
 /** How long a drop failure stays unless dismissed first. */
 const DROP_FAILURE_NOTICE_MS = 10_000;
+
+const WHEEL_ZOOM_THRESHOLD = 80;
+const WHEEL_ZOOM_RESET_MS = 250;
 
 export type XtermTerminalProps = {
 	ariaLabel?: string;
@@ -770,14 +773,23 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		// run after child effects, so sync both independent theme axes here before
 		// reading. Retained terminals subscribe to themeStyle directly and update
 		// their live palette without being torn down or losing scrollback.
+		// A theme preview owns data-style-theme while it lasts: re-applying the
+		// saved theme here would end it, so the palette is rebuilt once it ends.
 		applyDocumentTheme(props.theme);
-		applyDocumentThemeStyle(themeStyle);
-		const term = termRef.current;
-		if (!term) return;
-		const { dark, light } = buildTerminalThemes(translucent);
-		term.options.theme = props.theme === "dark" ? dark : light;
-		webglLeaseRef.current?.setEnabled(!translucent);
-		colorSchemeReporterRef.current?.(props.theme, themeStyle);
+		const previewing = isThemeStylePreviewActive();
+		if (!previewing) applyDocumentThemeStyle(themeStyle);
+		const syncPalette = () => {
+			const term = termRef.current;
+			if (!term) return;
+			const { dark, light } = buildTerminalThemes(translucent);
+			term.options.theme = props.theme === "dark" ? dark : light;
+		};
+		syncPalette();
+		if (termRef.current) {
+			webglLeaseRef.current?.setEnabled(!translucent);
+			colorSchemeReporterRef.current?.(props.theme, themeStyle);
+		}
+		return previewing ? onThemeStylePreviewEnd(syncPalette) : undefined;
 	}, [props.theme, themeStyle, translucent]);
 
 	useEffect(() => {
@@ -1783,6 +1795,34 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		});
 		const keyInput = term.onKey(({ key }) => emitUserInput(key, "keyboard"));
 
+		// Handle zoom on the terminal's DOM so it follows cached xterms as they
+		// move between panes. Capture the gesture before xterm handles scrolling.
+		let lastWheelZoomAt = 0;
+		let wheelZoomRemainder = 0;
+		const handleFontSizeWheel = (event: WheelEvent) => {
+			const { isVisible, onChangeFontSize } = callbacksRef.current;
+			if ((!event.ctrlKey && !event.metaKey) || !onChangeFontSize || isVisible === false) return;
+			event.preventDefault();
+			event.stopPropagation();
+
+			// Line and page deltas are scroll units. Each event is one zoom step.
+			if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
+				const direction = Math.sign(event.deltaY);
+				if (direction !== 0) onChangeFontSize(-direction);
+				return;
+			}
+
+			if (event.timeStamp - lastWheelZoomAt > WHEEL_ZOOM_RESET_MS) wheelZoomRemainder = 0;
+			lastWheelZoomAt = event.timeStamp;
+			wheelZoomRemainder += event.deltaY;
+
+			const steps = Math.trunc(wheelZoomRemainder / WHEEL_ZOOM_THRESHOLD);
+			if (steps === 0) return;
+			wheelZoomRemainder -= steps * WHEEL_ZOOM_THRESHOLD;
+			onChangeFontSize(-steps);
+		};
+		shell.addEventListener("wheel", handleFontSizeWheel, { capture: true, passive: false });
+
 		// Translate wheel motion into SGR wheel reports for the pane (see
 		// sgrWheelReport), one report per scrolled line. WheelEvent.deltaMode
 		// varies by platform/device: trackpads and normalized wheels report
@@ -1790,8 +1830,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		// report whole lines (mode 1) or pages (mode 2). Mirror xterm's native
 		// getLinesScrolled across all three so scroll works everywhere; pixel
 		// deltas accumulate so a full cell-height emits one line. Returning false
-		// suppresses xterm's arrow-key wheel fallback. Ctrl/Cmd wheel is the
-		// font-size zoom (CenterPane), so leave it for that handler.
+		// suppresses xterm's arrow-key wheel fallback. Modified wheel events that
+		// reach xterm still skip PTY scrolling.
 		let wheelAccumPx = 0;
 		term.attachCustomWheelEventHandler((event) => {
 			if (event.ctrlKey || event.metaKey) return false;
@@ -2091,6 +2131,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			synchronizedFrames.dispose();
 			synchronizedCapability.dispose();
 			paintedResizeFrame.dispose();
+			shell.removeEventListener("wheel", handleFontSizeWheel, true);
 			host.removeEventListener("wheel", cancelResizeCover);
 			host.removeEventListener("keydown", cancelResizeCover);
 			host.removeEventListener("pointerdown", cancelResizeCover);

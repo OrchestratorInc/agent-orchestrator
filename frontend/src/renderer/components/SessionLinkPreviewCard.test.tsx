@@ -7,17 +7,13 @@ import type { SessionLinkSource } from "../lib/use-session-link-navigation";
 import type { PullRequestFacts, SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, artifactExcerpt, markdownPreviewSource } from "./SessionLinkPreviewCard";
 
-const mocks = vi.hoisted(() => ({ restore: vi.fn(), source: vi.fn(), artifactFile: vi.fn(), dismiss: vi.fn() }));
+const mocks = vi.hoisted(() => ({ source: vi.fn(), artifactFile: vi.fn(), dismiss: vi.fn() }));
 
 vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	sessionArtifactFileQueryOptions: (sessionId: string, path: string, rawUrl: string) => ({
 		queryKey: ["session-artifact-file", rawUrl, sessionId, path],
 		queryFn: () => mocks.artifactFile(path),
 	}),
-}));
-
-vi.mock("../hooks/useRestoreSession", () => ({
-	useRestoreSession: () => mocks.restore,
 }));
 
 vi.mock("../lib/use-session-link-navigation", () => ({
@@ -74,8 +70,6 @@ function source(overrides: Partial<SessionLinkSource> = {}): SessionLinkSource {
 
 describe("SessionLinkPreviewCard", () => {
 	beforeEach(() => {
-		mocks.restore.mockReset();
-		mocks.restore.mockResolvedValue({ status: "success" });
 		mocks.source.mockReset();
 		mocks.dismiss.mockReset();
 		mocks.source.mockReturnValue(source());
@@ -137,28 +131,17 @@ describe("SessionLinkPreviewCard", () => {
 		expect(container.innerHTML).not.toContain("text-[");
 	});
 
-	it("replaces terminated session details with a remote aware resume action", async () => {
-		const terminated = session({ isTerminated: true, status: "terminated", prs: [pr(1)] });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(terminated)] }));
+	it("shows a terminated session like any other session, with no resume button", async () => {
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ isTerminated: true, status: "terminated", prs: [pr(1)] }))] }));
+		const onOpen = vi.fn();
 
-		render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" sourceHostId="box-a" />);
+		const { container } = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
 
-		expect(screen.getByRole("status", { name: "Agent terminated" })).toBeInTheDocument();
-		expect(screen.queryByText("Implement worker link previews")).not.toBeInTheDocument();
-		expect(screen.queryByText("1 PR")).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
-		expect(mocks.restore).toHaveBeenCalledWith("worker-367", "box-a");
-	});
-
-	it("shows restore failures inside the terminated card", async () => {
-		const terminated = session({ isTerminated: true, status: "terminated" });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(terminated)] }));
-		mocks.restore.mockResolvedValue({ status: "not_resumable", message: "No saved session is available." });
-
-		render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
-		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
-
-		expect(await screen.findByRole("alert")).toHaveTextContent("No saved session is available.");
+		expect(screen.getByText("Implement worker link previews")).toBeInTheDocument();
+		expect(screen.getByText("PR #1")).toBeInTheDocument();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		await userEvent.click(container.firstElementChild as HTMLElement);
+		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
 
 	it("closes itself and opens the session when a live card is clicked", async () => {
@@ -177,19 +160,10 @@ describe("SessionLinkPreviewCard", () => {
 		expect(mocks.dismiss.mock.invocationCallOrder[0]).toBeLessThan(onOpen.mock.invocationCallOrder[0]!);
 	});
 
-	it("keeps the card inert without a handler and keeps a terminated card's Resume button separate", async () => {
-		const worker = session();
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
-		const view = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
-		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
-
-		const onOpen = vi.fn();
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ isTerminated: true, status: "terminated" }))] }));
-		view.rerender(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
-		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
-		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
-		expect(onOpen).not.toHaveBeenCalled();
-		expect(mocks.dismiss).not.toHaveBeenCalled();
+	it("keeps the card inert without a handler", () => {
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session())] }));
+		const { container } = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
+		expect(container.firstElementChild).not.toHaveClass("cursor-pointer");
 	});
 
 	it("localizes the PR count instead of adding an English suffix", () => {

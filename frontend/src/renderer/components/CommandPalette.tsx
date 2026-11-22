@@ -170,8 +170,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
-	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
-	const setThemePreference = useUiStore((s) => s.setThemePreference);
+	const toggleThemePreference = useUiStore((s) => s.toggleThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
@@ -456,7 +455,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const renderMath = useUiStore((s) => s.renderMath);
 	const navigationGestures = useUiStore((s) => s.navigationGestures);
 	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
-	const sideChats = useUiStore((s) => s.sideChats);
 	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
 	// Stay Awake, as the sidebar's switch: polled only while the palette is open.
 	const stayAwake = useStayAwake(isOpen && isMac);
@@ -494,10 +492,9 @@ export const CommandPalette = memo(function CommandPalette() {
 			"copy-on-select": terminalCopyOnSelect,
 			sound: soundNotifications,
 			"developer-mode": developerMode,
-			"side-chats": sideChats,
 			"split-panes": splitPanes,
 		},
-	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, sideChats, splitPanes]);
+	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, splitPanes]);
 
 	const rootItems = useMemo(
 		() => [
@@ -884,9 +881,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		}
 	}, [view, scoped, t]);
 
-	const toggleTheme = useCallback(() => {
-		setThemePreference(resolvedTheme === "dark" ? "light" : "dark");
-	}, [resolvedTheme, setThemePreference]);
+	const toggleTheme = useCallback(() => toggleThemePreference(), [toggleThemePreference]);
 
 	const navigateToTarget = useCallback(
 		(target: NavigateTarget) => {
