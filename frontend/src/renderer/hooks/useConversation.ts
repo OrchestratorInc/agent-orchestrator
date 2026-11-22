@@ -29,6 +29,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { isDiskCopy } from "../lib/remote-chat-cache";
 import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -200,6 +201,7 @@ type ConversationLocalEchosBySession = Record<string, ConversationLocalEcho[]>;
 
 function newestCachedSequence(queryClient: QueryClient, sessionId: string, hostId?: string): number {
 	const cached = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId));
+	if (isDiskCopy(cached?.pages[0])) return 0;
 	return Math.max(0, ...(cached?.pages.map((page) => page.latestSequence) ?? []));
 }
 
@@ -812,8 +814,8 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
  * every change through events; one still starting up or waking does not.
  */
 export function conversationSettled(queryClient: QueryClient, sessionId: string, hostId?: string): boolean {
-	const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId))?.pages[0]?.controller.state;
-	return state === "ready" || state === "busy";
+	const page = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId))?.pages[0];
+	return !isDiskCopy(page) && (page?.controller.state === "ready" || page?.controller.state === "busy");
 }
 
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
@@ -1023,9 +1025,10 @@ export function useConversationCommands(
 
 	const send = useMutation({
 		onMutate: (variables: ConversationSendMutationInput) => {
-			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
+			const cached = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
 				conversationQueryKey(variables.targetSessionId, hostId),
 			);
+			const current = isDiskCopy(cached?.pages[0]) ? undefined : cached;
 			const backgroundWake = current?.pages.some((page) => page.controller.state === "hibernated") ?? false;
 			const turnActive = current?.pages.some((page) =>
 				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),

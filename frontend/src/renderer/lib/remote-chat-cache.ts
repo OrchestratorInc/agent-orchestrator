@@ -48,6 +48,9 @@ const keyHost = (key: string) => cachedHost(JSON.parse(key) as QueryKey);
 
 // Data read from disk or already written is not written again.
 const saved = new WeakSet<object>();
+const fromDisk = new WeakSet<object>();
+
+export const isDiskCopy = (page: object | undefined): boolean => page !== undefined && fromDisk.has(page);
 
 let loaded = false;
 
@@ -117,13 +120,18 @@ export function persistRemoteCache(queryClient: QueryClient): () => void {
 		const hostId = cachedHost(queryKey);
 		if (hostId === undefined) return;
 		const key = JSON.stringify(queryKey);
+		if (hostId === "" && event.action.type === "error" && isDiskCopy((event.query.state.data as InfiniteData<ConversationSnapshot> | undefined)?.pages[0])) {
+			event.query.setState({ data: undefined });
+		}
 		if (hostId === "" && event.action.type === "fetch" && event.query.state.data === undefined) {
 			void openDatabase()
 				.then((db) => done(db.transaction(STORE, "readonly").objectStore(STORE).get(key)))
 				.then((entry: Entry | undefined) => {
 					const { state } = event.query;
 					if (!entry || state.data !== undefined || state.fetchStatus !== "fetching") return;
+					if (queryClient.getQueryCache().find({ queryKey, exact: true }) !== event.query) return;
 					saved.add(entry.data as object);
+					fromDisk.add(entry.data as object);
 					queryClient.setQueryData(queryKey, { pages: [entry.data], pageParams: [undefined] }, { updatedAt: entry.savedAt });
 				})
 				.catch(() => undefined);
