@@ -110,7 +110,7 @@ function collisionSafePath(directory: string, fileName: string, unavailable: Set
 		const stemBytes = Buffer.byteLength([...parsed.name][0] ?? "", "utf8");
 		const extension = truncateToBytes(parsed.ext, MAX_FILENAME_BYTES - Buffer.byteLength(suffix) - stemBytes);
 		const stem = truncateToBytes(parsed.name, MAX_FILENAME_BYTES - Buffer.byteLength(suffix) - Buffer.byteLength(extension));
-		return `${stem}${suffix}${extension}`;
+		return `${stem}${suffix}${extension}`.replace(/[. ]+$/u, "");
 	};
 	let candidate = path.join(directory, candidateName(""));
 	let suffix = 1;

@@ -159,6 +159,21 @@ describe("browser download manager", () => {
 		expect(Buffer.byteLength(result)).toBe(255);
 	});
 
+	it("removes a trailing space exposed by extension truncation", () => {
+		const test = setup();
+		const fileName = `a.${"x".repeat(248)} yyyy`;
+		const first = new FakeDownloadItem();
+		first.getFilename = () => fileName;
+		test.start(first);
+		writeFileSync(first.setSavePath.mock.calls[0][0] as string, "first download");
+		const second = new FakeDownloadItem();
+		second.getFilename = () => fileName;
+		test.start(second);
+		const result = path.basename(second.setSavePath.mock.calls[0][0] as string);
+		expect(result).toBe(`a (1).${"x".repeat(248)}`);
+		expect(Buffer.byteLength(result)).toBeLessThanOrEqual(255);
+	});
+
 	it.each(["active", "completed", "cancelled"] as const)("preserves a newer %s download when removing older completed history", async (status) => {
 		for (const reload of [false, true]) {
 			const test = setup();
