@@ -5278,6 +5278,12 @@
 	"backgroundTasks.failedCount_other": "{{count}}개 실패",
 	"backgroundTasks.stop": "{{name}} 중지",
 	"backgroundTasks.stopFailed": "중지하지 못했습니다",
+	"backgroundTasks.label.devServer": "개발 서버",
+	"backgroundTasks.label.devServerPort": "개발 서버(포트 {{port}})",
+	"backgroundTasks.label.tests": "테스트",
+	"backgroundTasks.label.build": "빌드",
+	"backgroundTasks.label.lint": "린트",
+	"backgroundTasks.label.install": "종속성 설치",
 	"backgroundTasks.shells_one": "셸 1개가 아직 실행 중",
 	"backgroundTasks.shells_other": "셸 {{count}}개가 아직 실행 중",
 	"backgroundTasks.agents_one": "백그라운드 에이전트 1개 실행 중",
@@ -5288,5 +5294,6 @@
 	"backgroundTasks.kind.shell": "셸",
 	"backgroundTasks.kind.other": "백그라운드 작업",
 	"backgroundTasks.state.running": "실행 중",
+	"backgroundTasks.state.paused": "일시 중지됨",
 	"backgroundTasks.state.failed": "실패"
 }

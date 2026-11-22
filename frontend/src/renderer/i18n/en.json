@@ -5258,6 +5258,12 @@
 	"backgroundTasks.failedCount_other": "{{count}} failed",
 	"backgroundTasks.stop": "Stop {{name}}",
 	"backgroundTasks.stopFailed": "Couldn't stop",
+	"backgroundTasks.label.devServer": "Dev server",
+	"backgroundTasks.label.devServerPort": "Dev server on port {{port}}",
+	"backgroundTasks.label.tests": "Tests",
+	"backgroundTasks.label.build": "Build",
+	"backgroundTasks.label.lint": "Lint",
+	"backgroundTasks.label.install": "Dependency install",
 	"backgroundTasks.shells_one": "1 shell still running",
 	"backgroundTasks.shells_other": "{{count}} shells still running",
 	"backgroundTasks.agents_one": "1 background agent running",
@@ -5268,5 +5274,6 @@
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Background task",
 	"backgroundTasks.state.running": "Running",
+	"backgroundTasks.state.paused": "Paused",
 	"backgroundTasks.state.failed": "Failed"
 }

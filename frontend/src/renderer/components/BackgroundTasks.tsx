@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ChevronRight, Circle, ListTodo, SquareTerminal } from "@/components/app-icons";
+import { ChevronRight, ListTodo, SquareTerminal } from "@/components/app-icons";
 import {
 	useBackgroundTasks,
 	useStopBackgroundTask,
 	type BackgroundTask,
 	type BackgroundTaskReading,
 } from "../hooks/useBackgroundTasks";
+import { shellTaskLabel } from "../lib/shell-task-label";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
@@ -41,6 +42,54 @@ export function BackgroundTasksBadge({ session, reading, stale = false }: {
 			<span className="truncate">{summary}{stale ? ` · ${t("backgroundTasks.stale")}` : ""}</span>
 		</span>
 	);
+}
+
+type TaskName = { name: string; dir?: string };
+
+/** A shell task by what it does ("Dev server on port 3000"), not the command line its provider ran. */
+function taskName(task: BackgroundTask, t: TFunction): TaskName {
+	const description = task.description?.trim();
+	if (!description) return { name: t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other") };
+	if (task.kind !== "shell") return { name: description };
+	const label = shellTaskLabel(description);
+	const named = (name: string) => ({ name, dir: label.dir });
+	switch (label.kind) {
+		case "devServer": return named(label.port ? t("backgroundTasks.label.devServerPort", { port: label.port }) : t("backgroundTasks.label.devServer"));
+		case "tests": return named(t("backgroundTasks.label.tests"));
+		case "build": return named(t("backgroundTasks.label.build"));
+		case "lint": return named(t("backgroundTasks.label.lint"));
+		case "install": return named(t("backgroundTasks.label.install"));
+		case "command": return named(label.text);
+	}
+}
+
+/** How a row was told apart from a like one: by its folder, or by its command. */
+export type TaskNameSuffixes = Map<string, "dir" | "command">;
+
+const rowKey = (task: BackgroundTask) => `${task.id}:${task.runId ?? ""}`;
+
+/**
+ * Each task's name, told apart from the others: two "Dev server" rows become
+ * "Dev server · frontend" and "Dev server · backend", or their commands when
+ * no folder separates them. A row keeps the name it was given in `suffixes`
+ * for as long as it shows, so stopping one server doesn't rename the other.
+ */
+export function backgroundTaskNames(tasks: BackgroundTask[], t: TFunction, suffixes: TaskNameSuffixes = new Map()): Map<BackgroundTask, string> {
+	const named = tasks.map((task) => ({ task, ...taskName(task, t) }));
+	const count = (key: string, keys: string[]) => keys.filter((other) => other === key).length;
+	const names = named.map(({ name }) => name);
+	const withDirs = named.map(({ name, dir }) => (dir ? `${name} · ${dir}` : name));
+	const shown = new Set(tasks.map(rowKey));
+	for (const key of [...suffixes.keys()]) if (!shown.has(key)) suffixes.delete(key);
+	return new Map(named.map(({ task, name, dir }, i) => {
+		const key = rowKey(task);
+		let suffix = suffixes.get(key);
+		if (!suffix && count(name, names) > 1) suffix = dir && count(withDirs[i], withDirs) < 2 ? "dir" : "command";
+		if (!suffix) return [task, name];
+		suffixes.set(key, suffix);
+		if (suffix === "dir" && dir) return [task, withDirs[i]];
+		return [task, task.description?.trim() || name];
+	}));
 }
 
 const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
@@ -143,6 +192,9 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	const { t } = useTranslation();
 	const listId = useId();
 	const tasks = useMemo(() => composerBackgroundTasks(reading), [reading]);
+	// Parsed once per reading, not on every elapsed-time tick.
+	const suffixes = useRef<TaskNameSuffixes>(new Map());
+	const names = useMemo(() => backgroundTaskNames(tasks, t, suffixes.current), [tasks, t]);
 	const live = tasks.filter(isLive);
 	const failedCount = tasks.length - live.length;
 	const now = useNow(tasks);
@@ -185,15 +237,7 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	}, [tasks]);
 	if (!tasks.length) return null;
 
-	const name = (task: BackgroundTask) => task.description || t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other");
-	const status = (task: BackgroundTask) =>
-		isLive(task) ? (
-			<span role="img" aria-label={t("backgroundTasks.state.running")} className="grid size-3 shrink-0 place-items-center">
-				<Circle aria-hidden="true" className="size-2 fill-status-working text-status-working" />
-			</span>
-		) : (
-			<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 shrink-0 rounded-full bg-destructive" />
-		);
+	const name = (task: BackgroundTask) => names.get(task) ?? "";
 	const time = (task: BackgroundTask) => {
 		if (failed === task.id) {
 			return (
@@ -205,9 +249,19 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 		const text = elapsed(task, now);
 		return text ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{text}</span> : null;
 	};
-	// Only a live task its provider can stop gets the square; the rest end flush.
-	const stopButton = (task: BackgroundTask) =>
-		isLive(task) && task.stoppable ? (
+	// The end of a row: a failure's red dot sits where the stop square would, so
+	// times line up. Background work is meant to keep running (a dev server never
+	// finishes), so a live task shows no mark; one its provider can't stop ends flush.
+	const trailing = (task: BackgroundTask) => {
+		if (!isLive(task)) {
+			return (
+				<span className="grid size-control-sm shrink-0 place-items-center">
+					<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 rounded-full bg-destructive" />
+				</span>
+			);
+		}
+		if (!task.stoppable) return null;
+		return (
 			<Button
 				type="button"
 				variant="quiet"
@@ -219,7 +273,8 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 			>
 				<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
 			</Button>
-		) : null;
+		);
+	};
 
 	return (
 		<section
@@ -266,17 +321,16 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 				{!several || open
 					? tasks.map((task) => (
 							<li key={`${task.id}:${task.runId ?? ""}`} data-task-id={task.id} className="flex h-8 min-w-0 items-center gap-2">
-								{!several ? (
-									<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-								) : (
-									<span className="grid size-4 shrink-0 place-items-center">{status(task)}</span>
-								)}
-								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>
+								{!several ? <SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : null}
+								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={task.description?.trim() || name(task)}>
 									{name(task)}
 								</span>
-								{!several ? status(task) : null}
+								{/* A live task shows no mark; say its state to screen readers, as failures say theirs. */}
+								{task.state === "running" || task.state === "paused" ? (
+									<span className="sr-only">{t(task.state === "paused" ? "backgroundTasks.state.paused" : "backgroundTasks.state.running")}</span>
+								) : null}
 								{time(task)}
-								{stopButton(task)}
+								{trailing(task)}
 							</li>
 						))
 					: null}

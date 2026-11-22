@@ -56,11 +56,75 @@ describe("composer tab", () => {
 		const tab = screen.getByRole("region", { name: "Background tasks" });
 		expect(within(tab).getByText("Dev server")).toBeVisible();
 		expect(within(tab).getByText("12m")).toBeVisible();
-		expect(within(tab).getByRole("img", { name: "Running" })).toBeVisible();
+		// A dev server is meant to keep running: no spinner or dot, but screen readers hear its state.
+		const row = within(tab).getByText("Dev server").closest("li")!;
+		expect(within(row).queryByRole("img")).toBeNull();
+		expect(row).toHaveTextContent("Running");
 		await userEvent.click(within(tab).getByRole("button", { name: "Stop Dev server" }));
 		expect(mutateMock).toHaveBeenCalledWith("shell");
 		// One request at a time: the square waits for the task to leave.
 		expect(within(tab).getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
+	});
+
+	it("names a raw shell command by what it does", async () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("dev", "PORT=3000 npm run dev > /tmp/dev.log 2>&1")]) });
+		render(<SessionBackgroundTasks session={session} />);
+		const tab = screen.getByRole("region", { name: "Background tasks" });
+		expect(within(tab).getByText("Dev server on port 3000")).toBeVisible();
+		expect(tab).not.toHaveTextContent("/tmp/dev.log");
+		expect(within(tab).getByRole("button", { name: "Stop Dev server on port 3000" })).toBeVisible();
+		// The label is the summary; the tooltip keeps the command.
+		expect(within(tab).getByText("Dev server on port 3000")).toHaveAttribute("title", "PORT=3000 npm run dev > /tmp/dev.log 2>&1");
+	});
+
+	it("tells like tasks apart by folder, then by command", async () => {
+		render(<ComposerBackgroundTasks sessionId="s" reading={readingOf([
+			shell("web", "cd frontend && npm run dev"),
+			shell("api", "cd backend && npm run dev"),
+			shell("a", "npm run test -- a"),
+			shell("b", "npm run test -- b"),
+		])} />);
+		await userEvent.click(screen.getByRole("button", { name: /4 running/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Stop Dev server · backend" }));
+		expect(mutateMock).toHaveBeenCalledWith("api");
+		expect(screen.getByRole("button", { name: "Stop Dev server · frontend" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Stop npm run test -- a" })).toBeVisible();
+	});
+
+	it("keeps a row's folder once it has shown, after its twin stops", async () => {
+		const web = shell("web", "cd frontend && npm run dev");
+		const api = shell("api", "cd backend && npm run dev");
+		const tests = shell("t", "npm run test");
+		const view = render(<ComposerBackgroundTasks sessionId="s" reading={readingOf([web, api, tests])} />);
+		await userEvent.click(screen.getByRole("button", { name: /3 running/ }));
+		expect(screen.getByText("Dev server · frontend")).toBeVisible();
+		view.rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf([web, tests])} />);
+		expect(screen.getByText("Dev server · frontend")).toBeVisible();
+		// A new run of the same task starts plain.
+		view.rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf([{ ...web, runId: "2" }, tests])} />);
+		expect(screen.getByText("Dev server")).toBeVisible();
+	});
+
+	it("tells screen readers a live row is paused", () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("p", "npm run dev", { state: "paused" })]) });
+		render(<SessionBackgroundTasks session={session} />);
+		const row = screen.getByText("Dev server").closest("li")!;
+		expect(row).toHaveTextContent("Paused");
+		expect(row).not.toHaveTextContent("Running");
+	});
+
+	it("shows nothing but the kind for a blank description", () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("blank", "   ")]) });
+		render(<SessionBackgroundTasks session={session} />);
+		expect(screen.getByRole("button", { name: "Stop Shell" })).toBeVisible();
+	});
+
+	it("names a failed task without saying it is still going", () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("t", "npm run test", { state: "failed", endedAt: ago(1_000) })]) });
+		render(<SessionBackgroundTasks session={session} />);
+		const row = screen.getByText("Tests").closest("li")!;
+		expect(within(row).getByRole("img", { name: "Failed" })).toBeVisible();
+		expect(row).not.toHaveTextContent("Running");
 	});
 
 	it("offers no stop where the provider cannot stop the task", () => {
@@ -107,8 +171,9 @@ describe("composer tab", () => {
 		expect(toggle).toHaveAttribute("aria-expanded", "true");
 		const rows = within(screen.getByRole("list")).getAllByRole("listitem");
 		// Failures stay above the five-row cap, without a stop.
-		expect(rows.map((row) => row.textContent)).toEqual(["Run the Go linter2m", "Start the renderer dev server12m", "Watch the composer tests9m"]);
-		expect(within(rows[0]).getByRole("img", { name: "Failed" })).toBeVisible();
+		expect(rows.map((row) => row.textContent)).toEqual(["Run the Go linter2m", "Start the renderer dev serverRunning12m", "Watch the composer testsRunning9m"]);
+		// The red dot ends the row, in the stop square's place, after the time.
+		expect(rows[0].lastElementChild).toContainElement(within(rows[0]).getByRole("img", { name: "Failed" }));
 		expect(within(rows[0]).queryByRole("button")).toBeNull();
 		await userEvent.click(within(rows[2]).getByRole("button", { name: "Stop Watch the composer tests" }));
 		expect(mutateMock).toHaveBeenCalledWith("watch");
@@ -177,10 +242,9 @@ it("hides cached controls after a reading fails", () => {
 	view.rerender(<SessionBackgroundTasks session={session} />);
 	expect(screen.queryByRole("region", { name: "Background tasks" })).toBeNull();
 });
-it("uses a static working glyph even without reduced motion", () => {
+it("shows no spinner on a live task", () => {
 	const { container } = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
 	expect(container.querySelector(".animate-spin")).toBeNull();
-	expect(container.querySelector(".text-status-working")).toBeTruthy();
 });
 it("keeps the remaining Stop node and focus when two tasks become one", async () => {
 	const a = shell("a", "Server"),

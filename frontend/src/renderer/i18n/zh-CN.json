@@ -5260,6 +5260,12 @@
 	"backgroundTasks.failedCount_other": "{{count}} 个失败",
 	"backgroundTasks.stop": "停止 {{name}}",
 	"backgroundTasks.stopFailed": "无法停止",
+	"backgroundTasks.label.devServer": "开发服务器",
+	"backgroundTasks.label.devServerPort": "开发服务器（端口 {{port}}）",
+	"backgroundTasks.label.tests": "测试",
+	"backgroundTasks.label.build": "构建",
+	"backgroundTasks.label.lint": "代码检查",
+	"backgroundTasks.label.install": "依赖安装",
 	"backgroundTasks.shells_one": "仍有 1 个 shell 在运行",
 	"backgroundTasks.shells_other": "仍有 {{count}} 个 shell 在运行",
 	"backgroundTasks.agents_one": "1 个后台代理正在运行",
@@ -5270,5 +5276,6 @@
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "后台任务",
 	"backgroundTasks.state.running": "运行中",
+	"backgroundTasks.state.paused": "已暂停",
 	"backgroundTasks.state.failed": "失败"
 }
