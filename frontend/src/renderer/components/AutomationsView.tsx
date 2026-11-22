@@ -544,8 +544,8 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 												<Tooltip>
 													<TooltipTrigger asChild>
 														<button type="button" aria-label={`${status}: ${run.errorMessage}`} className={cn(GHOST_PILL_CLASS, statusClass, "-mx-1.5 inline-flex h-control-sm items-center gap-1 rounded-md px-1.5 outline-none")}>
-															<CircleAlert aria-hidden="true" className="size-icon-sm text-destructive" />
 															{status}
+															<CircleAlert aria-hidden="true" className="size-icon-sm text-destructive" />
 														</button>
 													</TooltipTrigger>
 													<TooltipContent side="left" className="max-w-72">{run.errorMessage}</TooltipContent>
