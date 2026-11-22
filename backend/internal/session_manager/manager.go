@@ -3299,14 +3299,11 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 		if err := m.store.DeleteSessionWorktrees(ctx, rec.ID); err != nil {
 			return fmt.Errorf("retire replacement %s: clear restore markers: %w", id, err)
 		}
-		handle := runtimeHandle(rec.Metadata)
 		if err := m.terminateNativeSession(ctx, rec); err != nil {
 			return fmt.Errorf("retire replacement %s: native session: %w", id, err)
 		}
-		if handle.ID != "" {
-			if err := m.destroySessionRuntime(ctx, handle); err != nil {
-				return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
-			}
+		if err := m.stopRetiringController(ctx, rec); err != nil {
+			return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
 		}
 		if err := m.lcm.MarkTerminated(ctx, id); err != nil {
 			return fmt.Errorf("retire replacement %s: mark terminated: %w", id, err)
@@ -3348,11 +3345,8 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 		staleWorkspace = true
 		m.logger.Warn("retire replacement: stale workspace; skipping preserve", "sessionID", id, "path", ws.Path, "error", err)
 	}
-	handle := runtimeHandle(rec.Metadata)
-	if handle.ID != "" {
-		if err := m.destroySessionRuntime(ctx, handle); err != nil {
-			return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
-		}
+	if err := m.stopRetiringController(ctx, rec); err != nil {
+		return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
 	}
 	if err := m.recordTermination(ctx, rec.ID, true); err != nil {
 		return err
@@ -3368,6 +3362,23 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	}
 	m.cleanupAgentWorkspace(ctx, rec, ws.Path)
 	return nil
+}
+
+// stopRetiringController stops the single controller a retiring orchestrator
+// owns, mirroring kill. A chat session has no runtime handle: its controller
+// owns the app-server child process directly, so skipping it would leave the
+// agent running with its cwd inside the worktree the retirement is about to
+// force-remove (on Windows that removal then fails with "file in use").
+func (m *Manager) stopRetiringController(ctx context.Context, rec domain.SessionRecord) error {
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		m.stopChatBestEffort(ctx, rec.ID)
+		return nil
+	}
+	handle := runtimeHandle(rec.Metadata)
+	if handle.ID == "" {
+		return nil
+	}
+	return m.destroySessionRuntime(ctx, handle)
 }
 
 func (m *Manager) stopPreviewBestEffort(ctx context.Context, id domain.SessionID) {
@@ -3426,11 +3437,8 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 			m.logger.Warn("retire replacement: stale workspace repo; skipping preserve", "sessionID", rec.ID, "repo", row.RepoName, "path", row.Path, "error", err)
 		}
 	}
-	handle := runtimeHandle(rec.Metadata)
-	if handle.ID != "" {
-		if err := m.destroySessionRuntime(ctx, handle); err != nil {
-			return fmt.Errorf("retire replacement %s: runtime: %w", rec.ID, err)
-		}
+	if err := m.stopRetiringController(ctx, rec); err != nil {
+		return fmt.Errorf("retire replacement %s: runtime: %w", rec.ID, err)
 	}
 	if err := m.recordTermination(ctx, rec.ID, false); err != nil {
 		return err

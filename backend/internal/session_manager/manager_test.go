@@ -9840,6 +9840,109 @@ func TestRetireForReplacementWorkspaceProjectCapturesAndReleasesEveryRepo(t *tes
 	}
 }
 
+// orderedStopLauncher records StopChat into the shared call log so a test can
+// assert the chat controller stopped before the worktree was force-removed.
+type orderedStopLauncher struct {
+	*recordingLauncher
+	log *[]string
+}
+
+func (l orderedStopLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
+	*l.log = append(*l.log, "StopChat:"+string(id))
+	return l.recordingLauncher.StopChat(ctx, id)
+}
+
+func assertStopBeforeForceDestroy(t *testing.T, log []string, stop, destroy string) {
+	t.Helper()
+	stopIdx, destroyIdx := -1, -1
+	for i, call := range log {
+		switch call {
+		case stop:
+			if stopIdx == -1 {
+				stopIdx = i
+			}
+		case destroy:
+			if destroyIdx == -1 {
+				destroyIdx = i
+			}
+		}
+	}
+	if stopIdx == -1 || destroyIdx == -1 || stopIdx > destroyIdx {
+		t.Fatalf("chat controller must stop before %s; log=%v", destroy, log)
+	}
+}
+
+// Regression for #4317: a chat orchestrator has no runtime handle, so
+// retirement used to skip stopping its controller entirely. The orphaned
+// app-server kept its cwd inside the worktree and, on Windows, made the
+// force-remove fail with "file in use".
+func TestRetireForReplacementStopsChatControllerBeforeForceDestroy(t *testing.T) {
+	m, st, rt, ws := newLifecycleManager()
+	var sharedLog []string
+	st.sharedLog = &sharedLog
+	ws.sharedLog = &sharedLog
+	launcher := &recordingLauncher{}
+	m.chat = orderedStopLauncher{recordingLauncher: launcher, log: &sharedLog}
+	st.sessions["mer-orch"] = domain.SessionRecord{
+		ID:        "mer-orch",
+		ProjectID: "mer",
+		Kind:      domain.KindOrchestrator,
+		Mode:      domain.SessionModeChat,
+		Metadata:  domain.SessionMetadata{WorkspacePath: "/ws/mer-orch", Branch: "ao/mer-orchestrator"},
+		Activity:  domain.Activity{State: domain.ActivityActive},
+	}
+
+	if err := m.RetireForReplacement(ctx, "mer-orch"); err != nil {
+		t.Fatalf("RetireForReplacement err = %v", err)
+	}
+
+	if len(launcher.stopped) != 1 || launcher.stopped[0] != "mer-orch" {
+		t.Fatalf("chat controllers stopped = %v, want mer-orch", launcher.stopped)
+	}
+	if rt.destroyed != 0 {
+		t.Fatalf("retire destroyed %d runtimes for a chat session that never had one", rt.destroyed)
+	}
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("retired orchestrator must be marked terminated")
+	}
+	assertStopBeforeForceDestroy(t, sharedLog, "StopChat:mer-orch", "ForceDestroy:mer-orch")
+}
+
+func TestRetireForReplacementWorkspaceProjectStopsChatControllerBeforeForceDestroy(t *testing.T) {
+	m, st, rt, ws := newLifecycleManager()
+	var sharedLog []string
+	st.sharedLog = &sharedLog
+	ws.sharedLog = &sharedLog
+	launcher := &recordingLauncher{}
+	m.chat = orderedStopLauncher{recordingLauncher: launcher, log: &sharedLog}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repos/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{ProjectID: "mer", Name: "api", RelativePath: "api"}}
+	st.sessions["mer-orch"] = domain.SessionRecord{
+		ID:        "mer-orch",
+		ProjectID: "mer",
+		Kind:      domain.KindOrchestrator,
+		Mode:      domain.SessionModeChat,
+		Metadata:  domain.SessionMetadata{WorkspacePath: "/ws/mer-orch", Branch: "ao/mer-orchestrator"},
+		Activity:  domain.Activity{State: domain.ActivityActive},
+	}
+	st.worktrees["mer-orch"] = []domain.SessionWorktreeRecord{
+		{SessionID: "mer-orch", RepoName: domain.RootWorkspaceRepoName, Branch: "ao/mer-orchestrator", WorktreePath: "/ws/mer-orch", State: "active"},
+		{SessionID: "mer-orch", RepoName: "api", Branch: "ao/mer-orchestrator", WorktreePath: "/ws/mer-orch/api", State: "active"},
+	}
+
+	if err := m.RetireForReplacement(ctx, "mer-orch"); err != nil {
+		t.Fatalf("RetireForReplacement err = %v", err)
+	}
+
+	if len(launcher.stopped) != 1 || launcher.stopped[0] != "mer-orch" {
+		t.Fatalf("chat controllers stopped = %v, want mer-orch", launcher.stopped)
+	}
+	if rt.destroyed != 0 {
+		t.Fatalf("retire destroyed %d runtimes for a chat session that never had one", rt.destroyed)
+	}
+	assertStopBeforeForceDestroy(t, sharedLog, "StopChat:mer-orch", "ForceDestroy:api")
+}
+
 func TestRetireForReplacementWorkspaceProjectRuntimeDestroyFailureKeepsRepoInventory(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	rt.destroyErr = errors.New("tmux transient")
