@@ -153,6 +153,10 @@ func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, t
 // be read without one, or that the provider failed to return, is unavailable.
 func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID, taskID string) (ports.ChatBackgroundTaskOutput, error) {
 	controller, err := s.attachedChatController(ctx, id)
+	if err != nil && ctx.Err() != nil {
+		// The panel cancelled its poll; that is not a server failure.
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
 	if err != nil {
 		return ports.ChatBackgroundTaskOutput{}, err
 	}
@@ -165,8 +169,9 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 		output, err = reader.BackgroundTaskOutput(readCtx, taskID)
 		cancel()
 	}
-	if err := ctx.Err(); err != nil {
-		return ports.ChatBackgroundTaskOutput{}, err
+	if ctx.Err() != nil {
+		// The panel cancelled its poll: a moment without output, not a server failure.
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
 	// readFailed: the provider was asked and failed, rather than not reporting
 	// this task's output at all.

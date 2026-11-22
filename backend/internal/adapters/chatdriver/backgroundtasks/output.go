@@ -19,11 +19,17 @@ const (
 )
 
 // Cursor-forward (CSI n C). Windows ConPTY draws blanks this way, often next
-// to a color change, so it becomes spaces instead of being stripped.
+// to a color change, so it becomes blanks instead of being stripped. After a
+// carriage return it skips cells a partial repaint left unchanged.
 var cursorForward = regexp.MustCompile(`(?:\x1b\[|\x{9b})(\d*)C`)
 
-// maxCursorForward bounds the spaces one cursor-forward can add.
+// maxCursorForward bounds the blanks one cursor-forward can add; one read
+// adds at most MaxOutputBytes in all.
 const maxCursorForward = 256
+
+// skipCell stands for a cursor-forward cell until lines are resolved. Raw NULs
+// are removed first, so it never comes from the output itself.
+const skipCell = '\x00'
 
 // Terminal escapes, 7-bit and 8-bit: CSI (colors, cursor moves); OSC, DCS
 // and the other string controls, ending at their terminator or the line end
@@ -56,19 +62,18 @@ func TailOutput(raw string, dropped bool) ports.ChatBackgroundTaskOutput {
 	if !utf8.ValidString(raw) {
 		raw = strings.ToValidUTF8(raw, "�")
 	}
-	text := cursorForward.ReplaceAllStringFunc(raw, func(seq string) string {
+	budget := MaxOutputBytes
+	text := cursorForward.ReplaceAllStringFunc(strings.ReplaceAll(raw, "\x00", ""), func(seq string) string {
 		n, _ := strconv.Atoi(cursorForward.FindStringSubmatch(seq)[1])
-		return strings.Repeat(" ", min(max(n, 1), maxCursorForward))
+		n = min(max(n, 1), maxCursorForward, budget)
+		budget -= n
+		return strings.Repeat(string(skipCell), n)
 	})
 	text = terminalEscape.ReplaceAllString(text, "")
 	text = strings.TrimRight(text, "\r\n")
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		line = strings.TrimRight(line, "\r")
-		// A progress bar rewrites its line with \r; keep the last drawing.
-		if at := strings.LastIndexByte(line, '\r'); at >= 0 {
-			line = line[at+1:]
-		}
+		line = strings.ReplaceAll(redraw(strings.TrimRight(line, "\r")), string(skipCell), " ")
 		lines[i] = strings.Map(dropInvisible, domain.SanitizeControlChars(line))
 	}
 	if len(lines) > MaxOutputLines {
@@ -99,11 +104,38 @@ func TailOutput(raw string, dropped bool) ports.ChatBackgroundTaskOutput {
 	return ports.ChatBackgroundTaskOutput{Text: strings.Join(lines, "\n"), Truncated: dropped}
 }
 
-// dropInvisible removes bidi controls and zero-width spaces, which make text
-// display differently from what it is. Joiners stay, since emoji and some
-// scripts need them.
+// redraw reduces a line rewritten with \r to what the terminal finally showed.
+// A progress bar redraws it whole, so the last drawing wins. A drawing that
+// starts by moving the cursor forward is a partial repaint: it writes over
+// the cells it reaches and leaves the skipped ones as they were.
+func redraw(line string) string {
+	if !strings.ContainsRune(line, '\r') {
+		return line
+	}
+	var cells []rune
+	for _, drawing := range strings.Split(line, "\r") {
+		if !strings.HasPrefix(drawing, string(skipCell)) {
+			cells = []rune(drawing)
+			continue
+		}
+		for at, r := range []rune(drawing) {
+			switch {
+			case at >= len(cells):
+				cells = append(cells, r)
+			case r != skipCell:
+				cells[at] = r
+			}
+		}
+	}
+	return string(cells)
+}
+
+// dropInvisible removes format characters (bidi controls, zero-width spaces,
+// tag characters and the like), which make text display differently from what
+// it is, as the command line does. Joiners stay, since emoji and some scripts
+// need them.
 func dropInvisible(r rune) rune {
-	if r == '\u200b' || unicode.Is(unicode.Bidi_Control, r) {
+	if r != '\u200c' && r != '\u200d' && unicode.Is(unicode.Cf, r) {
 		return -1
 	}
 	return r
@@ -124,6 +156,9 @@ const evictedKeys = 64
 type OutputBuffer struct {
 	// MaxDeltas, when set, is how many deltas the provider streams for one
 	// command before it stops. A command that reaches it reads as stale.
+	// Best effort: deltas are counted from when this buffer first saw the
+	// command, so a late attach or an evicted command may never read stale,
+	// and one that ends at exactly MaxDeltas without a final output may.
 	MaxDeltas int
 
 	mu      sync.Mutex
@@ -180,10 +215,12 @@ func (b *OutputBuffer) Replace(key, output string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	entry := b.entry(key)
-	entry.data, entry.dropped, entry.midLine, entry.deltas = []byte(output), false, false, 0
-	if len(entry.data) > MaxOutputBytes {
-		entry.data, entry.dropped, entry.midLine = entry.data[len(entry.data)-MaxOutputBytes:], true, true
+	entry.dropped, entry.midLine, entry.deltas = false, false, 0
+	if len(output) > MaxOutputBytes {
+		// Copy only the tail, so the whole aggregated output is not kept alive.
+		output, entry.dropped, entry.midLine = output[len(output)-MaxOutputBytes:], true, true
 	}
+	entry.data = []byte(output)
 }
 
 // Pin keeps these items' output however many other commands write, and

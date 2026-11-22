@@ -162,6 +162,10 @@ const codexMaxOutputDeltas = 10_000
 // listing, so a failed task's last lines stay readable while buffered.
 const backgroundRunsKept = 64
 
+// backgroundStartsKept bounds the command starts remembered. Foreground
+// commands start exec items too, so it is larger than the output buffer.
+const backgroundStartsKept = 512
+
 // BackgroundTaskOutput returns what a background terminal has printed since
 // this controller attached. The app-server keeps streaming a backgrounded
 // command's output on its exec item after the turn ends (codex-cli 0.158.0),
@@ -181,8 +185,12 @@ func (c *conversation) BackgroundTaskOutput(_ context.Context, taskID string) (p
 		if output, ok := c.backgroundOutput.Read(task.RunID); ok {
 			return output, nil
 		}
-		// A known terminal that has printed nothing yet.
-		return ports.ChatBackgroundTaskOutput{}, nil
+		// A terminal started before this controller attached may have printed
+		// before then; only one whose start it saw has printed nothing yet.
+		c.mu.Lock()
+		started := c.backgroundStarted[task.RunID]
+		c.mu.Unlock()
+		return ports.ChatBackgroundTaskOutput{Truncated: !started}, nil
 	}
 	// A terminal that ended, or left the listing, stays readable while its
 	// output is still buffered.
@@ -212,6 +220,23 @@ func (c *conversation) rememberBackgroundRun(processID, runID string) {
 	for len(c.backgroundRunOrder) > backgroundRunsKept {
 		delete(c.backgroundRuns, c.backgroundRunOrder[0])
 		c.backgroundRunOrder = c.backgroundRunOrder[1:]
+	}
+}
+
+// rememberBackgroundStartLocked records that this controller saw an exec
+// item start. Caller holds mu.
+func (c *conversation) rememberBackgroundStartLocked(runID string) {
+	if runID == "" || c.backgroundStarted[runID] {
+		return
+	}
+	if c.backgroundStarted == nil {
+		c.backgroundStarted = make(map[string]bool)
+	}
+	c.backgroundStarted[runID] = true
+	c.backgroundStartOrder = append(c.backgroundStartOrder, runID)
+	for len(c.backgroundStartOrder) > backgroundStartsKept {
+		delete(c.backgroundStarted, c.backgroundStartOrder[0])
+		c.backgroundStartOrder = c.backgroundStartOrder[1:]
 	}
 }
 
@@ -261,6 +286,7 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			if _, exists := c.backgroundCommands[params.Item.ID]; !exists {
 				c.backgroundCommands[params.Item.ID] = ports.ChatBackgroundTask{StartedAt: &now, Description: params.Item.Command}
 			}
+			c.rememberBackgroundStartLocked(params.Item.ID)
 			c.mu.Unlock()
 			return
 		}
