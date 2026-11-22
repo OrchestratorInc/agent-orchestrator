@@ -41,13 +41,14 @@ Files from an older turn come from the snapshot AO saves before each turn. A tur
 
 ## Standalone agents
 
-A standalone agent works in a plain folder with no git repository. Its forks work like any other session's, from any finished turn for Claude Code and Codex and from the latest turn for other agents:
+A standalone agent works in a plain folder with no git repository. Its forks work like any other session's, from any finished turn for Claude Code and Codex and from the latest turn for other agents, with the exceptions below:
 
 - The fork gets its own folder instead of a new branch. Forked at the latest turn, it holds everything in the original's folder, copied with copy-on-write where the disk supports it. Forked at an older turn, it holds the files as that turn left them.
 - AO saves the folder's files before each turn in a store of its own under the data folder, so nothing is written into the folder itself. The same snapshots let **Roll back** restore a standalone agent's files.
-- `node_modules` and `.venv` are left out of those snapshots, as a git project ignores them, and cloned into the fork from the original.
+- `node_modules` and `.venv` are always left out of those snapshots, whatever the folder's `.gitignore` says, as a git project ignores them. A fork of an older turn gets them cloned from the original where the disk supports copy-on-write, and starts without them elsewhere.
 - Symlinks stay links; what they point to isn't copied.
-- A folder with too many or too large files to snapshot before every turn (more than 5,000 files or 200 MiB, dependency folders aside) keeps no snapshots: its older turns can't be forked and **Roll back** leaves its files alone, but its latest turn can still be forked.
+- An older turn whose files include a git repository the agent cloned into the folder can't be forked, and once the agent makes the folder itself a repository, no older turn can. A snapshot holds a repository only as the commit it had checked out, not its files or history. The latest turn still forks with everything.
+- AO skips the snapshot for a turn that starts while the folder holds more than 5,000 files or 200 MiB, dependency folders aside. Rolling that turn back then leaves the files alone, and the turn before it can't be forked. Snapshots saved while the folder was smaller stay usable for forks. **Roll back** also needs the folder to be back under the limits when you roll back, because it compares the snapshot with the folder as it is then.
 - Archiving or deleting the fork keeps its folder while it has files in it, as for any standalone agent. Deleting a session removes its snapshots.
 
 ## The original's pull requests
