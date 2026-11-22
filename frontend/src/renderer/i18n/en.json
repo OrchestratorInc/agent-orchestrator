@@ -3689,6 +3689,7 @@
 	"artifacts.share.upgradeTitle": "Upgrade to publish more",
 	"artifacts.share.limitReached": "Free plan: up to {{limit}} active links. Upgrade to publish more.",
 	"artifacts.share.upgrade": "Upgrade",
+	"artifacts.share.videoFormat": "This video format can't be played in a browser. Use MP4, MOV or WebM.",
 	"artifacts.share.videoSoon": "Publishing videos is coming soon.",
 	"artifacts.share.notOwner": "Only the person who started this session can publish its files.",
 	"artifacts.share.copyLink": "Copy link",
