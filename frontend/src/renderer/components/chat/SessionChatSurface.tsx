@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
 import { useImportedAgentBlock } from "../../lib/session-import";
+import { useQuietReveal } from "../../lib/quiet-reveal";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats";
@@ -384,6 +385,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
+	// An archived chat has no agent until a message restores it; meanwhile its bar
+	// shows the saved settings too, as a sleeping one does.
+	const archivedAgent = !sessionIsActive(session) && snapshot?.harness === session.provider && snapshot.controller?.state === "stopped";
+	const savedSettingsOnly = waking || archivedAgent;
 	const controllerCatalogsEnabled = !hostUnreachable && targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
 	const configOptions = useConversationConfigOptions(
 		session.id,
@@ -609,7 +614,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		const word = reveal.text.trim();
 		if (word && reveal.find) openFind({ id: crypto.randomUUID(), query: word, messageId: reveal.messageId });
 	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, uiSessionId]);
-	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
+	const settingsLoading = savedSettingsOnly || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
 	// The model the running agent reports, kept so this chat names it at once the next time it loads.
 	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
 		: providerOptions.find((option) => option.category === "model" || option.id === "model")?.currentValue ?? snapshot?.settings?.model;
@@ -640,7 +645,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
 	// none saved yet it waits, so defaults never pass for the chat's own.
-	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
+	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming || savedSettingsOnly) &&
 		(!settingsLoading || Boolean(renderSnapshot?.settings?.model || renderSnapshot?.settings?.approvalMode));
 	// The session's own settings have taken over; a later restart must not bring the launch chips back.
 	useEffect(() => {
@@ -652,6 +657,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useEffect(() => {
 		if (openingStartedAt && openingSettled) forgetOpeningStart(queryClient, session.id, hostId);
 	}, [hostId, openingSettled, openingStartedAt, queryClient, session.id]);
+	// A kept chat shown again must not replay its entrances, CSS or Motion (the
+	// last prompt sent, rows that arrived while watched, open folds, the arrival
+	// fade): they played when it was on screen.
+	const surfaceRef = useRef<HTMLDivElement>(null);
+	useQuietReveal(surfaceRef);
 
 	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
@@ -696,7 +706,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}
 
 	return (
-		<div className="relative h-full min-h-0">
+		<div ref={surfaceRef} className="relative h-full min-h-0">
 			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			{accountSwitch.dialog}
@@ -927,7 +937,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsTruncated={truncated}
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
-				onStageAttachments={stageAttachments}
+				// An archived session's worktree is gone until the restore its first message
+				// runs, so files are taken once it is back, as an archived Cloud chat does.
+				onStageAttachments={sessionIsActive(session) ? stageAttachments : undefined}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it

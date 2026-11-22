@@ -54,7 +54,7 @@ import {
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
+import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, usePresence, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
@@ -243,6 +243,7 @@ import {
 	type ChatEditOutcome,
 	type ConversationActivity,
 	type ConversationBranchPoint,
+	type ConversationContentSummary,
 	type ConversationItem,
 	type ConversationMessage,
 	type ConversationTurn,
@@ -368,6 +369,22 @@ const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
 type MessageEditDraft = ChatDraftInlineEdit;
+
+/** The excerpts and file references a local echo carries, as its message's content. */
+export function localEchoContent(echo: Pick<ConversationLocalEcho, "excerpts" | "fileReferences">): ConversationContentSummary[] {
+	return [
+		...(echo.excerpts ?? []).map((excerpt) => ({
+			annotationId: excerpt.id, annotationOrder: excerpt.order,
+			type: "excerpt",
+			text: excerpt.text,
+			comment: excerpt.comment,
+			sourceConversationId: excerpt.conversationId,
+			sourceMessageId: excerpt.messageId,
+			sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
+		})),
+		...(echo.fileReferences ?? []).map((fileReference) => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order })),
+	];
+}
 
 /**
  * A stream refresh replaces the complete snapshot object. Queue prompts do not
@@ -731,6 +748,14 @@ export interface ChatWorkspaceProps {
 	 * settles the chat reads as working from that moment, with no connecting banner.
 	 */
 	openingStartedAt?: string;
+	/**
+	 * The composer stays open while the opening brief creates the session, as
+	 * its "queue a follow-up" placeholder says: what is typed, and Enter pressed
+	 * on it, waits in the box for the surface to hand over (composerRef).
+	 */
+	followUpWhileOpening?: boolean;
+	/** The composer, for a surface that hands its draft on (the new chat page). */
+	composerRef?: MutableRefObject<ChatComposerHandle | null>;
 	/** A tray tucked under the composer while the chat is empty, e.g. the new chat page's project picker. */
 	composerTray?: ReactNode;
 	/** Off where another flow owns an unanswered send, such as the new chat page's pending launch. */
@@ -977,6 +1002,8 @@ function ChatWorkspaceContent({
 	draftSettings,
 	draftNotice,
 	openingStartedAt,
+	followUpWhileOpening = false,
+	composerRef,
 	composerTray,
 	parkUnsentSends = true,
 	centerInWindow = false,
@@ -1034,6 +1061,13 @@ function ChatWorkspaceContent({
 	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
 	// A terminated session has no agent to resume: only a restore brings it back.
 	const terminated = Boolean(session && !sessionIsActive(session));
+	// A message sent to an archived chat restores it first. The restore reads as one
+	// step until the agent is back, though the session turns live partway through it.
+	// Kept by session id: the Cloud surface shows several sessions in one workspace.
+	const restoringArchived = useRef<string | undefined>(undefined);
+	if (terminated) restoringArchived.current = session?.id;
+	else if (!resumingAgent) restoringArchived.current = undefined;
+	const restoring = Boolean(resumingAgent) && restoringArchived.current !== undefined && restoringArchived.current === session?.id;
 	// After a restart the daemon is still verifying this session and reconnects
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
@@ -1278,6 +1312,7 @@ function ChatWorkspaceContent({
 					origin: "human",
 					text: echo.text,
 				continuation: echo.continuation,
+					content: localEchoContent(echo),
 					streaming: false,
 					delivery: "queued",
 					clientMessageId: echo.clientMessageId,
@@ -1624,7 +1659,8 @@ function ChatWorkspaceContent({
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const previewRollback = useStableCallback(onPreviewRollback);
 	const surfaceRef = useRef<HTMLElement | null>(null);
-	const composerFocusRef = useRef<ChatComposerHandle>(null);
+	const ownComposerRef = useRef<ChatComposerHandle>(null);
+	const composerFocusRef = composerRef ?? ownComposerRef;
 	const artifactSession = session?.requestedOutput === "artifact";
 	// The sample prompts show only while the composer is empty: picking one hides
 	// them, and clearing the draft brings them back. A saved draft hides them from
@@ -2279,7 +2315,9 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock ? null : (
+					{/* An archived chat reads as an ordinary one: sending to it restores it, and the
+					    composer, not a banner, says so until the agent is back. */}
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock || terminated || restoring ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -2288,7 +2326,6 @@ function ChatWorkspaceContent({
 							transitioning={controllerTransitioning || agentResuming}
 							automaticWakePending={suppressStopped}
 							reconnecting={startupReconnecting}
-							terminated={terminated}
 							onResume={newWorkDisabled ? undefined : onResumeAgent}
 							resuming={resumingAgent}
 							resumeError={resumeError}
@@ -2486,9 +2523,10 @@ function ChatWorkspaceContent({
 											{/* Normally right of the model control; with no settings bar, beside the ring. */}
 											{composerSettings ? null : quotaSign}
 											<QuotaStatus quota={runningQuota} />
-											{composerSettings}
+											{/* Shown so the chat reads as itself, but nothing runs its picks until it is restored. */}
+											{terminated && composerSettings ? <div inert className="contents">{composerSettings}</div> : composerSettings}
 										</>}
-										addMenuItems={agentSwitch ? (
+										addMenuItems={agentSwitch && !terminated ? (
 											<ComposerModeItems
 												configOptions={configOptions ?? []}
 												settings={stableSettings}
@@ -2506,8 +2544,8 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
 										// keeps its look; the agent and model can still be changed.
@@ -2526,8 +2564,10 @@ function ChatWorkspaceContent({
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
-												: terminated && snapshot.controller.state === "stopped"
-												? t(resumingAgent ? "shell.restoringSession" : "chat.archived.placeholder")
+												: restoring
+												? t("shell.restoringSession")
+												: terminated
+												? t("chat.archived.placeholder")
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting
@@ -2569,6 +2609,8 @@ function ChatWorkspaceContent({
 										compactBlocked={Boolean(durableTurn)}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
+										// Kept when drafts cannot be saved, so a follow-up from the new chat page still arrives.
+										handoffSessionId={queueEdit ? undefined : draftScope.sessionId}
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
@@ -3106,7 +3148,6 @@ function ControllerBanner({
 	transitioning,
 	automaticWakePending,
 	reconnecting,
-	terminated = false,
 	onResume,
 	resuming,
 	resumeError,
@@ -3127,8 +3168,6 @@ function ControllerBanner({
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
 	reconnecting?: boolean;
-	/** The session is archived, so `onResume` restores it instead of resuming its agent. */
-	terminated?: boolean;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -3141,8 +3180,7 @@ function ControllerBanner({
 }) {
 	const { t } = useTranslation();
 	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
-	// An archived session is restored, never resumed, so it is not "open elsewhere".
-	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped" && !terminated;
+	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped";
 	const resumeRef = useRef(onResume);
 	resumeRef.current = onResume;
 	// The other app releases the chat without telling AO (Codex can hold a closed
@@ -3184,29 +3222,27 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: terminated
-				? t(waking ? "shell.restoringSession" : "terminal.sessionTerminated")
-				: waking
-					? "Waking agent…"
-					: restarting
-						? "Reconnecting to the agent…"
-						: openElsewhere
-							? t("chat.controller.openElsewhere")
-							: needsResume
-								? t("chat.controller.couldNotConnect")
-								: "The agent controller stopped",
-			tone: terminated || waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
+			title: waking
+				? "Waking agent…"
+				: restarting
+					? "Reconnecting to the agent…"
+					: openElsewhere
+						? t("chat.controller.openElsewhere")
+						: needsResume
+							? t("chat.controller.couldNotConnect")
+							: "The agent controller stopped",
+			tone: waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
 	if (!shown) return null;
 	const loading = controller.state === "connecting" || waking || restarting;
 	const actionable = controller.state === "stopped" && !waking && !restarting;
-	if (actionable && !terminated && signInRequired) return null;
+	if (actionable && signInRequired) return null;
 
 	return (
 		<div
-			role={actionable && !terminated ? "alert" : "status"}
+			role={actionable ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
@@ -3215,14 +3251,12 @@ function ControllerBanner({
 					aria-hidden="true"
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
 				/>
-			) : terminated ? (
-				<Archive aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0", shown.tone)} />
 			) : (
 				<TriangleAlert aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0", shown.tone)} />
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{controller.state === "stopped" && waking && !terminated ? (
+				{controller.state === "stopped" && waking ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
 				) : restarting ? (
 					<span className="text-xs leading-snug text-muted-foreground">Orchestrator restarted. History is kept.</span>
@@ -3232,15 +3266,13 @@ function ControllerBanner({
 				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							{terminated
-								? t("chat.archived.body")
-								: openElsewhere
-									? [
-										t("chat.controller.openElsewhereBody"),
-										harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
-										t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
-									].filter(Boolean).join(" ")
-									: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
+							{openElsewhere
+								? [
+									t("chat.controller.openElsewhereBody"),
+									harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
+									t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
+								].filter(Boolean).join(" ")
+								: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
 						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
@@ -3256,11 +3288,11 @@ function ControllerBanner({
 									onClick={resumeClick}
 									disabled={resuming}
 								>
-									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : needsResume || openElsewhere ? t("chat.controller.retry") : "Resume agent"}
+									{resuming ? "Resuming…" : needsResume || openElsewhere ? t("chat.controller.retry") : "Resume agent"}
 								</Button>
 							) : null}
 							{/* Once the worktree is gone a shell would open in the project root. */}
-							{onOpenShell && !needsResume && !terminated ? (
+							{onOpenShell && !needsResume ? (
 								<Button
 									type="button"
 									size="sm"
@@ -3513,7 +3545,21 @@ export function Timeline({
 	const [entranceGate] = useState(createChatEntranceGate);
 	// Shown again after a terminal or reviewer tab covered it: the reader watches from then.
 	if (shownAt !== undefined && shownAt > entranceGate.watchingSince) entranceGate.watchingSince = shownAt;
-	admitArrivals(entranceGate, sourceSnapshot);
+	// Kept hidden by KeepRecentAlive while another session was on screen. Hiding
+	// cleans up layout effects and showing runs them again, so this is set through
+	// any render while hidden and through the render that shows the chat again:
+	// rows it holds by then were not watched arriving. From the frame it shows,
+	// the reader watches again. The open read of what changed meanwhile lands just
+	// after, so rows written before this frame are catch-up (the gate's returnedAt).
+	const keptHidden = useRef(false);
+	useLayoutEffect(() => {
+		if (keptHidden.current) entranceGate.watchingSince = entranceGate.returnedAt = Date.now();
+		keptHidden.current = false;
+		return () => {
+			keptHidden.current = true;
+		};
+	}, [entranceGate]);
+	admitArrivals(entranceGate, sourceSnapshot, keptHidden.current);
 	useEffect(() => {
 		entranceGate.settled = true;
 	}, [entranceGate]);
@@ -4403,15 +4449,7 @@ export function Timeline({
 				origin: "human",
 				text: echo.text,
 				continuation: echo.continuation,
-				content: [...(echo.excerpts?.map((excerpt) => ({
-					annotationId: excerpt.id, annotationOrder: excerpt.order,
-					type: "excerpt",
-					text: excerpt.text,
-					comment: excerpt.comment,
-					sourceConversationId: excerpt.conversationId,
-					sourceMessageId: excerpt.messageId,
-					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
-				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
+				content: localEchoContent(echo),
 				streaming: false,
 				delivery: echo.delivery ?? (echo.backgroundWake || echo.turnId ? "accepted" : "sending"),
 				createdAt: echo.createdAt,
@@ -5355,7 +5393,7 @@ export function Timeline({
 	// Read through a ref so streamed chunks (new layout callbacks) never re-register it.
 	const onPageShown = useRef(() => {});
 	onPageShown.current = () => {
-		entranceGate.watchingSince = Date.now();
+		entranceGate.watchingSince = entranceGate.returnedAt = Date.now();
 		entranceGate.catchUpAt = performance.now();
 		if (isFlying()) cancelScrollFollow();
 		const node = scroller.current;
@@ -6734,6 +6772,7 @@ function TimelineItem({
 					apiBaseUrl={apiBaseUrl}
 					queued={queued}
 					animateIn={newHumanMessageIds.has(itemKey(item))}
+					entranceKey={itemKey(item)}
 					onEdit={editAvailable ? (_turnID, text) => onSubmitMessageEdit(text) : undefined}
 					editing={editing}
 					editText={editing ? messageEdit?.text : undefined}

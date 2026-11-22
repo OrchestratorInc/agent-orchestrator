@@ -211,6 +211,25 @@ function switchEcho(
 	return display && targetHarness ? { ...display, targetHarness, afterSequence } : undefined;
 }
 
+/** The message as the transcript shows it while its send is on the way. */
+function sendLocalEcho(clientMessageId: string, input: ConversationSendInput): ConversationLocalEcho {
+	return {
+		clientMessageId,
+		text: input.text,
+		continuation: input.continuation,
+		fileReferences: input.fileReferences,
+		excerpts: input.excerpts?.map((excerpt) => ({
+			id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
+			conversationId: excerpt.conversationId,
+			text: excerpt.text,
+			comment: excerpt.comment,
+			messageId: excerpt.messageId,
+			revision: excerpt.revision,
+		})),
+		createdAt: new Date().toISOString(),
+	};
+}
+
 function addConversationLocalEcho(
 	queryClient: QueryClient,
 	targetSessionId: string,
@@ -933,6 +952,9 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	});
 }
 
+/** Restoring an archived session before its message failed, so the message never left. ChatComposer treats this code as a definitive refusal. */
+const SESSION_RESTORE_FAILED = "SESSION_RESTORE_FAILED";
+
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
  * `turnActive` and `activeTurnId` come from the caller's snapshot: reading the
@@ -1009,19 +1031,7 @@ export function useConversationCommands(
 				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
 			) ?? false;
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
-				clientMessageId: variables.clientMessageId,
-				text: variables.input.text,
-				continuation: variables.input.continuation,
-				fileReferences: variables.input.fileReferences,
-			excerpts: variables.input.excerpts?.map((excerpt) => ({
-				id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
-					conversationId: excerpt.conversationId,
-					text: excerpt.text,
-					comment: excerpt.comment,
-					messageId: excerpt.messageId,
-					revision: excerpt.revision,
-				})),
-				createdAt: new Date().toISOString(),
+				...sendLocalEcho(variables.clientMessageId, variables.input),
 				backgroundWake,
 				queued: turnActive && !backgroundWake,
 				providerSwitch: switchEcho(variables.input.switchDisplay, variables.input.providerSwitch?.targetHarness, newestCachedSequence(queryClient, variables.targetSessionId, hostId)),
@@ -1221,10 +1231,14 @@ export function useConversationCommands(
 			// also brings its worktree back, can start it again.
 			if (terminated) {
 				const restored = await restoreSession(sessionId as string, hostId);
-				if (restored.status !== "success") throw new Error(restored.message);
+				// Restored meanwhile from another window or device: it is live, as asked.
+				const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
+				if (restored.status !== "success" && !alreadyLive) {
+					throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
+				}
 				// Stay pending until the chat reads the live agent: its cached snapshot
-				// still says stopped, which would flash as a crash. The composer stays
-				// locked meanwhile, so nothing here can strand a send.
+				// still says stopped, which would flash as a crash. A send that restored
+				// the session waits on this too, so it reaches the live agent.
 				await invalidateSession(sessionId as string).catch(() => {});
 				return undefined;
 			}
@@ -1657,11 +1671,21 @@ export function useConversationCommands(
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
-			return send.mutateAsync({
-				targetSessionId: sessionId,
-				clientMessageId,
-				input: normalizedInput,
-			});
+			const variables = { targetSessionId: sessionId, clientMessageId, input: normalizedInput };
+			if (!terminated) return send.mutateAsync(variables);
+			// An archived chat is restored by sending to it. The message shows at once,
+			// as any send's does, and goes out only after the restore succeeded, so it
+			// lands after it. A failed restore sent nothing: the composer gets the draft
+			// back with the reason, and the session stays archived.
+			addConversationLocalEcho(queryClient, stateKey(sessionId), sendLocalEcho(clientMessageId, normalizedInput));
+			return resume.mutateAsync().then(
+				() => send.mutateAsync(variables),
+				(error: unknown) => {
+					releaseConversationDispatch(queryClient, stateKey(sessionId), clientMessageId);
+					releaseConversationLocalEcho(queryClient, stateKey(sessionId), clientMessageId);
+					throw error;
+				},
+			);
 		},
 		pendingAcceptedTurnId:
 			trackedDispatch?.state === "accepted" ? trackedDispatch.turnId : undefined,

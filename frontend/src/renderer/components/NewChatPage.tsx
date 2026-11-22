@@ -23,6 +23,9 @@ import type { ApprovalMode, ChatConfigOption, ChatConfigOptionValue, ChatModel, 
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
 import { ChatWorkspace } from "./chat/ChatWorkspace";
+import type { ChatComposerHandle } from "./chat/ChatComposer";
+import { handOffComposerDraft } from "../lib/chat-context-bus";
+import { sessionUiKey } from "../lib/hosts";
 import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
 import { LaunchSettingsBar, rememberLaunchSettings, rememberOpeningStart, type LaunchSettings } from "./chat/LaunchSettingsBar";
 import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar } from "./chat/TurnSettingsBar";
@@ -86,6 +89,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const draftRevision = useUiStore((state) => state.newChatDraftRevision);
 	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
+	// A follow-up typed while the session is created goes on to the session's composer.
+	const composerRef = useRef<ChatComposerHandle | null>(null);
 	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();
 	// A failed fallback start has no composer send to report it, so the page does.
@@ -98,6 +103,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
 	const fallbackInFlight = useRef(false);
+	// The fallback starts the brief the box still shows, so the box stays shut meanwhile.
+	const [fallbackStarting, setFallbackStarting] = useState(false);
 	const [heldAttachments, setHeldAttachments] = useState<FileAttachmentPayload[]>([]);
 	const [attachmentsPreparing, setAttachmentsPreparing] = useState(false);
 	const onHeldAttachmentsChange = useCallback((attachments: FileAttachmentPayload[], preparing: boolean) => {
@@ -287,7 +294,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	) => {
 		// The session's chat shows the brief from its first frame; cloud and
 		// terminal sessions open on their own surfaces and need none of it.
-		if (!taskRef.current.isCloudProject && interfaceMode === "chat") {
+		const sessionChat = !taskRef.current.isCloudProject && interfaceMode === "chat";
+		if (sessionChat) {
 			seedOpeningLocalEcho(queryClient, sessionId, target.hostId, brief);
 			rememberLaunchSettings(queryClient, sessionId, target.hostId, settings);
 			rememberOpeningStart(queryClient, sessionId, target.hostId, brief.createdAt);
@@ -302,6 +310,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			if (!mounted.current) return;
 			const here = targetRef.current;
 			if (here.projectId === target.projectId && here.hostId === target.hostId) {
+				// What was typed meanwhile, sent or not, waits in the session's composer.
+				const followUp = sessionChat ? composerRef.current?.takeDraft() : undefined;
+				if (followUp) handOffComposerDraft(sessionUiKey(sessionId, target.hostId), followUp);
 				void navigate({ ...sessionNavigateTarget(sessionProjectId, sessionId, target.hostId), replace: true });
 				return;
 			}
@@ -354,8 +365,23 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
 			if (sendIsUncertain(error) || saved) throw error;
 			resolveLaunch(clientMessageId);
+			keepFollowUpBelowBrief();
 			throw Object.assign(apiErrorException(error, t("newTask.unableToStart")), { code: "TASK_CREATE_FAILED" });
 		}
+	};
+
+	// A refused brief comes back to the box only while the box is empty; a follow-up
+	// typed as it started would keep the brief out of sight. The follow-up leaves the
+	// box, and once the composer has put the brief back (as this send rejects), it
+	// returns below it.
+	const keepFollowUpBelowBrief = () => {
+		const followUp = composerRef.current?.takeDraft();
+		if (!followUp) return;
+		setTimeout(() => {
+			if (!mounted.current) return;
+			const brief = readChatSessionDraft(draftScope).composer.text.replace(/\s+$/, "");
+			composerRef.current?.setDraft(brief ? `${brief}\n\n${followUp.text}` : followUp.text);
+		}, 0);
 	};
 
 	// The fallback starts what the composer holds now; a brief the user cleared stays cleared.
@@ -374,6 +400,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			? barFor({ ...task.turnSettings, approvalMode: "bypass-permissions" })
 			: barSettings;
 		setFallbackFailed(false);
+		setFallbackStarting(true);
 		setEcho(brief);
 		setLaunched(settings);
 		try {
@@ -390,6 +417,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			setEcho(undefined);
 		} finally {
 			fallbackInFlight.current = false;
+			setFallbackStarting(false);
 		}
 	};
 
@@ -478,6 +506,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				welcomeHeading={report ? t("report.heading") : undefined}
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
+				// A local chat's session composer takes over what is typed while it starts.
+				followUpWhileOpening={!task.isCloudProject && task.effectiveInterface === "chat" && !fallbackStarting}
+				composerRef={composerRef}
 				// A Cloud task whose control plane takes no files offers none. A send
 				// whose answer was lost keeps the files it went with until its outcome
 				// is known: its retry carries them under the same request, and only a
