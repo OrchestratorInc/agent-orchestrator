@@ -170,7 +170,8 @@ function VideoControls({ player, ready }: { player: VideoPlayer; ready: boolean 
 				onFullscreenExit={() => setFullscreen(false)}
 				style={StyleSheet.absoluteFill}
 			/>
-			<Pressable accessible={false} onPress={() => setShown((value) => !value)} style={StyleSheet.absoluteFill} />
+			{/* Only playback hides the controls: a tap on a paused picture leaves them up. */}
+			<Pressable accessible={false} onPress={() => { if (isPlaying) setShown((value) => !value); }} style={StyleSheet.absoluteFill} />
 			{(shown || screenReader) && !fullscreen ? (
 				<View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
 					<View pointerEvents="box-none" style={styles.videoCenter}>

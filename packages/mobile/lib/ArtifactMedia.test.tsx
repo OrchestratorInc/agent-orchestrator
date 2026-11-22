@@ -103,6 +103,15 @@ describe("ArtifactMedia", () => {
 		expect(labels).toEqual(expect.arrayContaining(["Play", "Position", "Full screen"]));
 	});
 
+	it("keeps the controls up when the picture of a paused video is tapped", () => {
+		player.status = "readyToPlay";
+		const root = render({ active: true });
+		const picture = root.root.find((node) => (node.type as unknown) === "Pressable" && node.props.accessible === false);
+		act(() => picture.props.onPress());
+		expect(root.root.findAll((node) => node.props.accessibilityLabel === "Play")).toHaveLength(1);
+		expect(root.root.findAll((node) => node.props.accessibilityLabel === "Full screen")).toHaveLength(1);
+	});
+
 	it("keeps the platform's controls on Android", () => {
 		platform.OS = "android";
 		player.status = "readyToPlay";
