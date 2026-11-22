@@ -146,7 +146,9 @@ export function useArchivedSessions(
 			// offline. One the board already calls unreachable says so at once.
 			let config = configForHost(source.hostId);
 			if (!config && readFleetFreshness(appRef.current, Date.now()).get(source.hostId) !== "unreachable") {
-				config = await waitForConfig(() => configForHost(source.hostId), HELD_WAIT_MS, controller.signal);
+				// Through the latest lookup: one kept from before another machine was
+				// selected would answer this machine with that one's connection.
+				config = await waitForConfig(() => appRef.current.configForHost(source.hostId), HELD_WAIT_MS, controller.signal);
 				if (run !== generation.current || controller.signal.aborted) return;
 			}
 			if (!config) {
