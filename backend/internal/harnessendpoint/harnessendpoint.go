@@ -44,6 +44,11 @@ type Spec struct {
 	DefaultAuthStyle AuthStyle
 	// ModelEnv optionally receives a model override; empty means unsupported.
 	ModelEnv string
+	// ClearEnv are variables blanked while the endpoint is in use: competing
+	// credentials the harness would prefer over KeyEnv, and switches that route
+	// it away from BaseURLEnv. Without this a subscription token from a bound
+	// account or the daemon's environment could reach the custom endpoint.
+	ClearEnv []string
 }
 
 // AuthStyles returns the spec's supported auth styles in stable order.
@@ -65,6 +70,12 @@ var specs = map[string]Spec{
 		KeyEnv: map[AuthStyle]string{ //nolint:gosec // G101: environment variable names, not credentials.
 			AuthBearer: "ANTHROPIC_AUTH_TOKEN",
 			AuthAPIKey: "ANTHROPIC_API_KEY",
+		},
+		ClearEnv: []string{ //nolint:gosec // G101: environment variable names, not credentials.
+			"CLAUDE_CODE_OAUTH_TOKEN",
+			"CLAUDE_CODE_USE_BEDROCK",
+			"CLAUDE_CODE_USE_VERTEX",
+			"CLAUDE_CODE_USE_FOUNDRY",
 		},
 		DefaultAuthStyle: AuthBearer,
 		ModelEnv:         "ANTHROPIC_MODEL",
@@ -291,8 +302,9 @@ func (s *Store) Configured(agentID string) (bool, error) {
 
 // Env returns the variables a session of agentID should receive for its
 // configured endpoint, or nil when none is configured. The key variable of
-// every other auth style maps to "" so a credential inherited from the
-// daemon's environment is not sent alongside the configured one. Callers
+// every other auth style and each ClearEnv variable map to "" so a credential
+// from the daemon's environment or a bound account is not used instead of, or
+// sent alongside, the configured one. Callers
 // decide precedence: project configuration should still win.
 func (s *Store) Env(agentID string) (map[string]string, error) {
 	spec, ok := specs[agentID]
@@ -318,6 +330,9 @@ func (s *Store) Env(agentID string) (map[string]string, error) {
 		if other != style {
 			env[name] = ""
 		}
+	}
+	for _, name := range spec.ClearEnv {
+		env[name] = ""
 	}
 	if spec.ModelEnv != "" && cfg.Model != "" {
 		env[spec.ModelEnv] = cfg.Model

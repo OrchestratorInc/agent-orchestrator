@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -135,5 +136,53 @@ func TestRuntimeEnvKeepsCaseVariantProjectEndpointKey(t *testing.T) {
 	}
 	if len(values) != 1 || values[0] != "https://project.example.com" {
 		t.Fatalf("base URL entries = %q, want only the project value", values)
+	}
+}
+
+// setupTokenAccount is a session bound to a real Claude setup-token account:
+// its launch env comes from the production adapter.
+type setupTokenAccount struct {
+	ports.AgentAccountLaunchEnv
+	home string
+}
+
+func (a setupTokenAccount) SessionLaunchEnv(context.Context, domain.SessionID) (map[string]string, error) {
+	return (&agentaccount.Claude{}).LaunchEnv(a.home), nil
+}
+
+func (a setupTokenAccount) SessionLaunchEnvWith(ctx context.Context, id domain.SessionID, _ string) (map[string]string, error) {
+	return a.SessionLaunchEnv(ctx, id)
+}
+
+// Claude Code prefers CLAUDE_CODE_OAUTH_TOKEN over both API-key variables, so
+// a setup-token account's subscription token must be cleared, not merely
+// outranked, when the harness uses a custom endpoint.
+func TestRuntimeEnvClearsSetupTokenForCustomEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	if err := (&agentaccount.Claude{}).SaveSetupToken(home, "sk-ant-oat01-setuptokenvalue"); err != nil {
+		t.Fatal(err)
+	}
+	if got := (&agentaccount.Claude{}).LaunchEnv(home)["CLAUDE_CODE_OAUTH_TOKEN"]; got == "" {
+		t.Fatal("precondition: the setup-token account must supply CLAUDE_CODE_OAUTH_TOKEN")
+	}
+	if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:       dir,
+		executable:    func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentAccounts: setupTokenAccount{home: home},
+	}
+	env, err := manager.runtimeEnvChecked("session", "project", "", nil, "", "claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-endpoint" {
+		t.Fatalf("custom endpoint not applied: %v", env)
+	}
+	if value, ok := env["CLAUDE_CODE_OAUTH_TOKEN"]; !ok || value != "" {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN = %q (set=%v), want the setup token cleared", value, ok)
 	}
 }
