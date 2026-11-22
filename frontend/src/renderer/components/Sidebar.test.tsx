@@ -647,6 +647,33 @@ describe("Sidebar", () => {
 		}
 	});
 
+	it("reads a chat's history once the pointer rests on its row, not while it sweeps past", async () => {
+		vi.useFakeTimers();
+		try {
+			trustedApi.current = true;
+			renderSidebar({ workspaces: [{ ...workspace, sessions: [{ ...session, mode: "chat" }] }] });
+			const row = screen.getByLabelText("Open fix login");
+			const conversationReads = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation").length;
+			fireEvent.mouseEnter(row);
+			// A slow sweep: well past the rest time on the row, but never still for it.
+			for (let i = 0; i < 6; i++) {
+				await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+				fireEvent.mouseMove(row);
+			}
+			expect(conversationReads()).toBe(0);
+			fireEvent.mouseLeave(row);
+			await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+			expect(conversationReads()).toBe(0);
+
+			fireEvent.mouseEnter(row);
+			fireEvent.mouseMove(row);
+			await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+			expect(conversationReads()).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({

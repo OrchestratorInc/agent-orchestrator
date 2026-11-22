@@ -185,6 +185,8 @@ const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperti
 const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
 /** Long enough that sweeping the pointer across the list starts no agents. */
 const AGENT_WARM_UP_HOVER_MS = 300;
+/** How long the pointer rests on a chat row before its history is read. */
+const CHAT_PREFETCH_REST_MS = 100;
 const ROW_ACTION_BUTTON_CLASS = "sidebar-icon-action [&_svg]:size-icon-md";
 const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
@@ -2847,6 +2849,12 @@ const SessionRow = memo(function SessionRow({
 		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
 	};
+	// Reads the chat once the pointer rests on the row, not as it passes over: every
+	// move restarts the wait, so sweeping down the list, however slowly, reads nothing.
+	const prefetchWhenResting = () => {
+		clearTimeout(hoverTimerRef.current);
+		hoverTimerRef.current = setTimeout(prefetchConversation, CHAT_PREFETCH_REST_MS);
+	};
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
 	const warmUpAgent = () => {
@@ -2959,9 +2967,10 @@ const SessionRow = memo(function SessionRow({
 							{...(reorder?.listeners ?? {})}
 							onMouseEnter={() => {
 								if (!canPrefetchChat) return;
-								hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+								prefetchWhenResting();
 								if (canPrefetch) resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
 							}}
+							onMouseMove={canPrefetchChat ? prefetchWhenResting : undefined}
 							onMouseLeave={() => {
 								clearTimeout(hoverTimerRef.current);
 								clearTimeout(resumeTimerRef.current);
