@@ -2886,6 +2886,90 @@ func TestACPInterruptCancelsQuestionTheProviderKeepsOpen(t *testing.T) {
 	}
 }
 
+// A question that reaches AO after Stop already closed the turn's questions is
+// cancelled at once instead of waiting with no deadline.
+func TestACPQuestionAfterStopIsCancelled(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cancelErr error
+		wantPark  bool
+	}{
+		{name: "cancel sent", wantPark: false},
+		{name: "cancel failed", cancelErr: errors.New("closed pipe"), wantPark: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			done := make(chan struct{})
+			close(done)
+			c := &conversation{
+				log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+				pendingInputs: make(map[string]*parkedInput),
+				events:        make(chan ports.ChatEvent, 16),
+				activeTurn:    "turn-1",
+				interrupt:     &interruptAttempt{turnID: "turn-1", done: done, err: tc.cancelErr},
+			}
+			result := make(chan ports.ChatInputResponse, 1)
+			go func() {
+				response, _ := c.RequestInput(context.Background(), ports.ChatInputRequest{
+					Mode: ports.ChatInputModeForm, Message: "Which approach?",
+				})
+				result <- response
+			}()
+			if !tc.wantPark {
+				select {
+				case response := <-result:
+					if response.Action != ports.ChatInputActionCancel {
+						t.Fatalf("response = %#v, want cancel", response)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("question after Stop is still waiting")
+				}
+				select {
+				case event := <-c.Events():
+					t.Fatalf("unexpected event %s for a question Stop already closed", event.Kind)
+				default:
+				}
+				return
+			}
+			if event := nextEvent(t, c.Events()); event.Kind != ports.ChatEventInputRequested {
+				t.Fatalf("event = %s, want the question", event.Kind)
+			}
+			c.failPendingInputs()
+			<-result
+		})
+	}
+}
+
+// Stop never reports a question resolved before it was reported requested.
+func TestACPStopResolvesQuestionAfterItIsRequested(t *testing.T) {
+	c := &conversation{
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		pendingInputs: make(map[string]*parkedInput),
+		events:        make(chan ports.ChatEvent, 16),
+	}
+	parked := &parkedInput{
+		turnID: "turn-1", result: make(chan ports.ChatInputResponse, 1), ready: make(chan struct{}),
+	}
+	c.pendingInputs["q1"] = parked
+	finished := make(chan struct{})
+	go func() {
+		c.cancelTurnInputs("turn-1")
+		close(finished)
+	}()
+	select {
+	case event := <-c.Events():
+		t.Fatalf("%s emitted before the question was requested", event.Kind)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(parked.ready)
+	if event := nextEvent(t, c.Events()); event.Kind != ports.ChatEventInputResolved || event.RequestID != "q1" {
+		t.Fatalf("event = %#v, want q1 resolved", event)
+	}
+	<-finished
+	if response := <-parked.result; response.Action != ports.ChatInputActionCancel {
+		t.Fatalf("response = %#v, want cancel", response)
+	}
+}
+
 // A question has no deadline: answers given after the approval deadline still
 // reach the agent, instead of an empty form that reads as "no answers".
 func TestACPQuestionWaitsPastTheApprovalDeadline(t *testing.T) {

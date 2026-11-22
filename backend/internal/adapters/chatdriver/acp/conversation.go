@@ -1203,6 +1203,21 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	return nil
 }
 
+// turnInterruptedLocked reports whether session/cancel was sent for turnID.
+// The caller must hold c.mu.
+func (c *conversation) turnInterruptedLocked(turnID string) bool {
+	attempt := c.interrupt
+	if attempt == nil || attempt.turnID != turnID {
+		return false
+	}
+	select {
+	case <-attempt.done:
+		return attempt.err == nil
+	default:
+		return false
+	}
+}
+
 func (c *conversation) ResolveRequest(
 	ctx context.Context,
 	requestID string,
@@ -1505,6 +1520,9 @@ func (c *conversation) cancelTurnInputs(turnID string) {
 	}
 	c.mu.Unlock()
 	for id, input := range cancelled {
+		// requestInput emits InputRequested after it registers the question;
+		// wait for that so the resolution never comes first.
+		<-input.ready
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: id})
 		select {
 		case input.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:

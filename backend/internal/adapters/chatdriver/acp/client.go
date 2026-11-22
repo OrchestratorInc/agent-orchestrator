@@ -262,6 +262,11 @@ func (c *conversation) requestInput(
 	parked.turnID = turnID
 	if hasAccepted && accepted.Kind == persistentInteractionInput {
 		delete(c.accepted, requestID)
+	} else if c.turnInterruptedLocked(turnID) {
+		// Stop already closed this turn's questions; one that arrives after
+		// that scan would otherwise wait with no deadline.
+		c.mu.Unlock()
+		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	} else {
 		c.pendingInputs[requestID] = parked
 	}
@@ -345,10 +350,20 @@ func (c *conversation) ResolveInput(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		if !c.closed {
+		stopped := !c.closed && c.turnInterruptedLocked(request.turnID)
+		if !c.closed && !stopped {
 			c.pendingInputs[requestID] = request
 		}
 		c.mu.Unlock()
+		if stopped {
+			// Stop's scan ran while the answer was being recorded and could not
+			// see this question, so close it the way Stop would have.
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
+			select {
+			case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
+			default:
+			}
+		}
 		return err
 	}
 	command.EventID = eventID
