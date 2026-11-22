@@ -52,6 +52,7 @@ type fakeStore struct {
 	cleanupMu                          sync.Mutex
 	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
 	sessions                           map[domain.SessionID]domain.SessionRecord
+	createdRows                        []domain.SessionRecord
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
@@ -154,6 +155,7 @@ func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (
 		prefix = "standalone"
 	}
 	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, f.num))
+	f.createdRows = append(f.createdRows, rec)
 	f.sessions[rec.ID] = rec
 	return rec, nil
 }
@@ -2330,6 +2332,9 @@ func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	if rec.Metadata.Model != "high" {
 		t.Fatalf("persisted metadata model = %q, want high (project default mode should be reported)", rec.Metadata.Model)
 	}
+	if len(st.createdRows) != 1 || st.createdRows[0].Metadata.Model != "high" {
+		t.Fatalf("initial rows = %+v, want one row with model high", st.createdRows)
+	}
 }
 
 // TestSpawnModelPersisted asserts the resolved model is stored on the session
@@ -2358,6 +2363,9 @@ func TestSpawnModelPersisted(t *testing.T) {
 	}
 	if rec.Metadata.Effort != "high" || agent.lastConfig.Effort != "high" {
 		t.Fatalf("spawn effort = %q, launch effort = %q; want high", rec.Metadata.Effort, agent.lastConfig.Effort)
+	}
+	if len(st.createdRows) != 1 || st.createdRows[0].Metadata.Model != "spawn-model" || st.createdRows[0].Metadata.Effort != "high" {
+		t.Fatalf("initial rows = %+v, want one row with spawn-model/high", st.createdRows)
 	}
 
 	stored, ok, err := st.GetSession(ctx, rec.ID)

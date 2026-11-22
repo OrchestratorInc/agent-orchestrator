@@ -1382,6 +1382,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	resolvedSelection := agentConfig
 	if mode == domain.SessionModeChat {
 		resolvedSelection = cfg.AgentConfig
+	} else {
+		resolvedSelection.Model = resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig)
 	}
 
 	var prep *taskPreparation
