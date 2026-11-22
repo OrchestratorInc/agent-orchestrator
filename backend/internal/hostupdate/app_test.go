@@ -125,6 +125,26 @@ func TestAppUpdateInstallRefusedClearsResult(t *testing.T) {
 	}
 }
 
+func TestAppUpdateKeepsResultWhenTheAppQuitsMidInstall(t *testing.T) {
+	installed := make(chan struct{})
+	app := &fakeApp{prepare: ready("0.16.0"), install: func() (browserruntime.Result, error) {
+		close(installed)
+		return browserruntime.Result{}, browserruntime.CommandError{Code: "BROWSER_COMMAND_CANCELED", Message: "Browser runtime link closed"}
+	}}
+	u := appUpdater(t, app, time.Hour)
+	if err := u.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-installed
+	time.Sleep(20 * time.Millisecond)
+	if got := u.Status(context.Background()); got.State != StateUpdating {
+		t.Fatalf("status = %+v", got)
+	}
+	if _, err := os.Stat(u.resultPath); err != nil {
+		t.Fatalf("result removed: %v", err)
+	}
+}
+
 func TestAppUpdateFailsWhenTheAppDoesNotRestart(t *testing.T) {
 	app := &fakeApp{prepare: ready("0.16.0"), install: ready("0.16.0")}
 	u := appUpdater(t, app, 0)

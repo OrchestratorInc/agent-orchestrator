@@ -17,6 +17,7 @@ const (
 	appAction      = "__app-update"
 	appSession     = domain.SessionID("__app-update")
 	appUpdateLimit = 25 * time.Minute
+	linkClosed     = "BROWSER_COMMAND_CANCELED"
 )
 
 // AppControl is the desktop app's command link. The action used here is
@@ -72,7 +73,7 @@ func (u *Updater) runApp(notApplied string) {
 	}
 	_, err = u.app.Execute(ctx, appSession, appAction, map[string]interface{}{"step": "install", "version": version})
 	var refused browserruntime.CommandError
-	if errors.As(err, &refused) {
+	if errors.As(err, &refused) && refused.Code != linkClosed {
 		_ = os.Remove(u.resultPath)
 		u.finishApp(refused.Message)
 		return
