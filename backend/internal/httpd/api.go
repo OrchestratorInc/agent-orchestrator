@@ -84,7 +84,9 @@ type APIDeps struct {
 	// Panes relays split-pane requests from agents to the desktop window.
 	Panes controllers.PaneService
 	// PaneTerminals lets an agent type into and read its session's shell terminals.
-	PaneTerminals            controllers.PaneTerminalService
+	PaneTerminals controllers.PaneTerminalService
+	// Devices serves simulators and emulators to sessions; nil answers 501.
+	Devices                  controllers.DeviceService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -179,6 +181,7 @@ type API struct {
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
+	devices       *controllers.DevicesController
 	browser       *controllers.BrowserController
 	panes         *controllers.PanesController
 	system        *controllers.SystemController
@@ -250,6 +253,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
+		devices:       &controllers.DevicesController{Svc: deps.Devices, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
 		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
@@ -371,7 +375,9 @@ func (a *API) Register(root chi.Router) {
 					// long as its bytes keep coming; the handler ends one that stalls.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
 						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" ||
-						pattern == "/api/v1/attachment-uploads" {
+						pattern == "/api/v1/attachment-uploads" ||
+						pattern == "/api/v1/sessions/{sessionId}/device/hub/*" ||
+						pattern == "/api/v1/sessions/{sessionId}/device/open" {
 						next.ServeHTTP(w, req)
 						return
 					}
@@ -403,6 +409,7 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			a.devices.Register(r)
 			a.panes.Register(r)
 			a.system.Register(r)
 			a.identity.Register(r)

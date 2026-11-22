@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/devices"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -6889,6 +6890,16 @@ func (m *Manager) aoSkillPointer(chat bool) string {
 	pointer := "\n\n" + "## Using the ao CLI\n\n" +
 		"When using `ao`, read `" + skillFile + "` and only the relevant file under `" + commandsGlob + "`. To report Orchestrator bugs, read `" + bugTriageFile + "`.\n\n" +
 		browserSection
+	// Device tools are described only once the user turned device support
+	// on: describing tools that answer DEVICES_DISABLED would steer the agent
+	// away from the simctl/adb it still has.
+	if devices.Enabled(m.dataDir) {
+		deviceFile := filepath.ToSlash(filepath.Join(dir, "commands", "device.md"))
+		pointer += "\n\n## AO Device panel\n\n" +
+			"For mobile app work, read `" + deviceFile + "` and use `ao device open` to get an iOS Simulator or Android Emulator for this session; the user watches and taps it in the Device tab. " +
+			"Build with the project's own tools, then drive the device with the agent-device command `ao device open` prints; it is already bound to this session's device, so run it with a subcommand and nothing else. " +
+			"Do not boot simulators or emulators directly with `xcrun simctl boot` or `emulator`: a device opened outside `ao device` is invisible to the user and may belong to another session."
+	}
 	if !chat {
 		return pointer
 	}
