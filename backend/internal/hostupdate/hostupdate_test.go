@@ -51,7 +51,7 @@ func (f *fakeSystemd) run(_ context.Context, name string, args ...string) ([]byt
 }
 
 func updater(f *fakeSystemd, version string, env map[string]string) *Updater {
-	return &Updater{version: version, root: "/home/u/.ao/host", run: f.run, getenv: func(name string) string { return env[name] }}
+	return &Updater{version: version, kind: kindSystemd, root: "/home/u/.ao/host", run: f.run, getenv: func(name string) string { return env[name] }}
 }
 
 func TestStatus(t *testing.T) {
@@ -62,7 +62,7 @@ func TestStatus(t *testing.T) {
 	for state, want := range map[string]State{"active": StateUpdating, "activating": StateUpdating, "inactive": StateIdle, "": StateIdle, "failed": StateFailed} {
 		f := &fakeSystemd{state: state, log: "Downloading Orchestrator release: v0.15.1\nRelease SHA-256 mismatch.\n"}
 		got := updater(f, "0.15.0", nil).Status(ctx)
-		if !got.Supported || got.State != want {
+		if !got.Supported || got.Method != MethodService || got.State != want {
 			t.Errorf("state %q: got %+v, want %s", state, got, want)
 		}
 		if want == StateFailed && got.Error != "Release SHA-256 mismatch." {
@@ -104,7 +104,7 @@ func TestStart(t *testing.T) {
 	}
 
 	stable := &fakeSystemd{}
-	if err := (&Updater{version: "0.15.0", root: "/opt/ao", run: stable.run, getenv: func(name string) string { return env[name] }}).Start(ctx); err != nil {
+	if err := (&Updater{version: "0.15.0", kind: kindSystemd, root: "/opt/ao", run: stable.run, getenv: func(name string) string { return env[name] }}).Start(ctx); err != nil {
 		t.Fatal(err)
 	}
 	run = stable.calls[len(stable.calls)-1]

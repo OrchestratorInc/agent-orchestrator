@@ -42,6 +42,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const [busy, setBusy] = useState(false);
 	const [formError, setFormError] = useState("");
 	const [confirmingRemoval, setConfirmingRemoval] = useState<SavedHost | null>(null);
+	const [confirmingUpdate, setConfirmingUpdate] = useState<SavedHost | null>(null);
 	const [removeBusy, setRemoveBusy] = useState(false);
 	const [removeError, setRemoveError] = useState("");
 	const formRef = useRef<HTMLFormElement>(null);
@@ -181,7 +182,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 					<div className="flex items-center gap-1">
 						{update?.kind === "updating" ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("shell.updating")}</span> : null}
 						{update?.kind === "update" || update?.kind === "failed" ? (
-							<Button aria-label={t("shell.updateMachine", { name: host.label })} onClick={() => void startHostUpdate(host.url)} size="sm" type="button" variant="quiet">
+							<Button aria-label={t("shell.updateMachine", { name: host.label })} onClick={() => { if (hostUpdates[host.url]?.view?.method === "app") setConfirmingUpdate(host); else void startHostUpdate(host.url); }} size="sm" type="button" variant="quiet">
 								{update.kind === "failed" ? t("notify.retry") : t("shell.update")}
 							</Button>
 						) : null}
@@ -224,6 +225,17 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			</SettingsSection>
 		</form>
 
+		<ConfirmDialog
+			confirmLabel={t("shell.update")}
+			description={t("remote.updateAppDescription")}
+			onConfirm={() => {
+				if (confirmingUpdate) void startHostUpdate(confirmingUpdate.url);
+				setConfirmingUpdate(null);
+			}}
+			onOpenChange={(open) => { if (!open) setConfirmingUpdate(null); }}
+			open={confirmingUpdate !== null}
+			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label })}
+		/>
 		<ConfirmDialog
 			busy={removeBusy}
 			confirmLabel={t("shell.remove")}

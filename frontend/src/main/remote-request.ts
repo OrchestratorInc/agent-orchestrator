@@ -162,12 +162,18 @@ export async function readAuthErrorCode(entry: RemoteEntry, fetchImpl: FetchImpl
 	}
 }
 
-export type HostUpdateView = { version: string; supported: boolean; state: "idle" | "updating" | "failed"; error?: string };
+export type HostUpdateView = { version: string; supported: boolean; method?: "service" | "app"; state: "idle" | "updating" | "failed"; error?: string };
 
 function parseHostUpdate(body: unknown): HostUpdateView | null {
 	const value = body as Partial<HostUpdateView> | null;
 	if (typeof value?.version !== "string" || typeof value.supported !== "boolean" || !["idle", "updating", "failed"].includes(value.state ?? "")) return null;
-	return { version: value.version, supported: value.supported, state: value.state!, ...(typeof value.error === "string" && value.error ? { error: value.error } : {}) };
+	return {
+		version: value.version,
+		supported: value.supported,
+		...(value.method === "service" || value.method === "app" ? { method: value.method } : {}),
+		state: value.state!,
+		...(typeof value.error === "string" && value.error ? { error: value.error } : {}),
+	};
 }
 
 export async function readHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 5_000): Promise<HostUpdateView | null> {

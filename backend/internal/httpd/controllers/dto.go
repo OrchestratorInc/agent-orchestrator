@@ -3202,11 +3202,14 @@ type IdentityResponse struct {
 }
 
 // RemoteHostUpdateResponse is the body of GET and POST /api/v1/remote-host/update.
-// Supported is false for a host that is not a self-hosted service, such as a
-// computer running the desktop app. Version is empty for an unversioned build.
+// Supported is false for a host that cannot be updated from another computer.
+// Method says how a supported host updates: its self-hosted service, or the
+// desktop app on it, which closes and relaunches. Version is empty for an
+// unversioned build.
 type RemoteHostUpdateResponse struct {
 	Version   string `json:"version"`
 	Supported bool   `json:"supported"`
+	Method    string `json:"method,omitempty" enum:"service,app"`
 	State     string `json:"state" enum:"idle,updating,failed"`
 	Error     string `json:"error,omitempty"`
 }

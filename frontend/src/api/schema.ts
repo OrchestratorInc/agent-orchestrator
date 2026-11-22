@@ -8009,6 +8009,8 @@ export interface components {
         RemoteHostUpdateResponse: {
             error?: string;
             /** @enum {string} */
+            method?: "service" | "app";
+            /** @enum {string} */
             state: "idle" | "updating" | "failed";
             supported: boolean;
             version: string;

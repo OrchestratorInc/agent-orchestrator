@@ -38,7 +38,7 @@ func hostUpdateServer(t *testing.T, updater *fakeHostUpdater) *httptest.Server {
 }
 
 func TestRemoteHostUpdateStatusAndStart(t *testing.T) {
-	updater := &fakeHostUpdater{status: hostupdate.Status{Version: "0.15.0", Supported: true, State: hostupdate.StateIdle}}
+	updater := &fakeHostUpdater{status: hostupdate.Status{Version: "0.15.0", Supported: true, Method: hostupdate.MethodApp, State: hostupdate.StateIdle}}
 	srv := hostUpdateServer(t, updater)
 
 	res, err := http.Get(srv.URL + "/api/v1/remote-host/update")
@@ -48,13 +48,14 @@ func TestRemoteHostUpdateStatusAndStart(t *testing.T) {
 	var body struct {
 		Version   string `json:"version"`
 		Supported bool   `json:"supported"`
+		Method    string `json:"method"`
 		State     string `json:"state"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
 	_ = res.Body.Close()
-	if res.StatusCode != http.StatusOK || body.Version != "0.15.0" || !body.Supported || body.State != "idle" {
+	if res.StatusCode != http.StatusOK || body.Version != "0.15.0" || !body.Supported || body.Method != "app" || body.State != "idle" {
 		t.Fatalf("GET = %d %+v", res.StatusCode, body)
 	}
 

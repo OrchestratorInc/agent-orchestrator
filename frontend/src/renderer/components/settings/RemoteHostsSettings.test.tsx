@@ -15,6 +15,7 @@ const remotes = vi.hoisted(() => ({
 	connect: vi.fn(async (url: string) => ({ hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" })),
 	disconnect: vi.fn(async () => undefined),
 	remove: vi.fn(async () => undefined),
+	startHostUpdate: vi.fn(async () => ({ version: "0.14.10", supported: true, method: "app" as const, state: "updating" as const })),
 	update: vi.fn(async (_oldUrl: string, changes: { label?: string; url?: string }) => {
 		saved.entries = saved.entries.map((host) => ({ ...host, label: changes.label ?? host.label, url: changes.url ?? host.url }));
 		return "online" as const;
@@ -152,5 +153,18 @@ it("shows each saved host's version with its update button and the auto-update s
 	fireEvent.click(autoUpdate);
 	expect(useUiStore.getState().autoUpdateRemoteHosts).toBe(true);
 	expect(localStorage.getItem("ao.autoUpdateRemoteHosts")).toBe("true");
+	useHostUpdateStore.setState({ byUrl: {} });
+});
+
+it("asks before updating a computer running the desktop app", async () => {
+	saved.entries = [{ hostId: "studio", label: "Studio Mac", url: "http://studio:3011" }];
+	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
+	renderSettings();
+	fireEvent.click(await screen.findByRole("button", { name: "Update Studio Mac" }));
+	expect(remotes.startHostUpdate).not.toHaveBeenCalled();
+	expect(screen.getByText("Update Orchestrator on Studio Mac?")).toBeVisible();
+	expect(screen.getByText("The app closes and relaunches on that computer. Its agents keep running.")).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "Update" }));
+	await waitFor(() => expect(remotes.startHostUpdate).toHaveBeenCalledWith("http://studio:3011"));
 	useHostUpdateStore.setState({ byUrl: {} });
 });

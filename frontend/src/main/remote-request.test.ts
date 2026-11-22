@@ -78,6 +78,8 @@ describe("host update", () => {
 		expect(new Headers(init.headers).get("Authorization")).toMatch(/^Bearer /);
 		await expect(readHostUpdate(entry, fakeFetch(404, { code: "NOT_FOUND" }))).resolves.toBeNull();
 		await expect(readHostUpdate(entry, fakeFetch(200, { status: "ok" }))).resolves.toBeNull();
+		await expect(readHostUpdate(entry, fakeFetch(200, { version: "0.16.0", supported: true, method: "app", state: "idle" }))).resolves.toEqual({ version: "0.16.0", supported: true, method: "app", state: "idle" });
+		await expect(readHostUpdate(entry, fakeFetch(200, { version: "0.16.0", supported: true, method: "ssh", state: "idle" }))).resolves.toEqual({ version: "0.16.0", supported: true, state: "idle" });
 	});
 	it("starts an update and surfaces the host's refusal", async () => {
 		await expect(startHostUpdate(entry, fakeFetch(202, { version: "0.14.10", supported: true, state: "updating" }))).resolves.toMatchObject({ state: "updating" });

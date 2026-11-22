@@ -22981,6 +22981,11 @@ components:
       properties:
         error:
           type: string
+        method:
+          enum:
+          - service
+          - app
+          type: string
         state:
           enum:
           - idle

@@ -55,5 +55,5 @@ func (c *HostUpdateController) start(w http.ResponseWriter, r *http.Request) {
 }
 
 func hostUpdateResponse(status hostupdate.Status) RemoteHostUpdateResponse {
-	return RemoteHostUpdateResponse{Version: status.Version, Supported: status.Supported, State: string(status.State), Error: status.Error}
+	return RemoteHostUpdateResponse{Version: status.Version, Supported: status.Supported, Method: status.Method, State: string(status.State), Error: status.Error}
 }

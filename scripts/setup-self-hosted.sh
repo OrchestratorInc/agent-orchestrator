@@ -6,7 +6,7 @@ usage() {
 	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only | --upgrade]'
 	printf '%s\n' 'Installs Orchestrator under ~/.ao/host, starts a user service, and links it to your Orchestrator account (or prints pairing details).'
 	printf '%s\n' 'Downloads stable by default; --nightly downloads the newest published nightly.'
-	printf '%s\n' '--upgrade replaces the release of an installed systemd host and restarts it, keeping its service, access and pairing.'
+	printf '%s\n' '--upgrade replaces the release of an installed systemd or launchd host and restarts it, keeping its service, access and pairing.'
 }
 
 bundle=""
@@ -92,8 +92,10 @@ case "$platform:$arch" in
 	*) printf 'Unsupported host platform: %s/%s\n' "$platform" "$arch" >&2; exit 1 ;;
 esac
 command -v git >/dev/null || { printf '%s\n' 'git is required for Orchestrator projects and worktrees.' >&2; exit 1; }
-if "$upgrade" && { [[ "$platform" != Linux || ! -L "$host_root/current" || ! -x "$host_root/run-daemon.sh" ]] || [[ ! -f "$HOME/.config/systemd/user/ao-self-hosted.service" ]]; }; then
-	printf '%s\n' '--upgrade needs a host installed as a systemd service by this script.' >&2; exit 1
+service_file="$HOME/.config/systemd/user/ao-self-hosted.service"
+[[ "$platform" == Darwin ]] && service_file="$HOME/Library/LaunchAgents/dev.aoagents.self-hosted.plist"
+if "$upgrade" && [[ ! -L "$host_root/current" || ! -x "$host_root/run-daemon.sh" || ! -f "$service_file" ]]; then
+	printf '%s\n' '--upgrade needs a host installed as a service by this script.' >&2; exit 1
 fi
 
 if [[ -n "$bundle" ]]; then

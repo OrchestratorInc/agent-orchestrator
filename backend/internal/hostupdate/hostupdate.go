@@ -1,17 +1,22 @@
-// Package hostupdate updates a self-hosted (systemd) Orchestrator host in place.
+// Package hostupdate updates an Orchestrator host in place: a self-hosted
+// service (systemd or launchd), or the desktop app that owns this daemon.
 package hostupdate
 
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -19,12 +24,16 @@ import (
 const (
 	updateUnit   = "ao-self-hosted-update.service"
 	serviceUnit  = "ao-self-hosted.service"
+	launchAgent  = "dev.aoagents.self-hosted"
+	updateLabel  = "dev.aoagents.self-hosted-update"
 	installerRun = `set -euo pipefail
 installer="$(mktemp)"
 trap 'rm -f -- "$installer"' EXIT
 curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 "$1" -o "$installer"
 shift
 bash "$installer" "$@"`
+	launchdRun = `( sleep 1800; echo "The update took longer than 30 minutes." >&2; kill $$ ) &
+` + installerRun
 )
 
 var installerURL = "https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/setup-self-hosted.sh"
@@ -35,7 +44,7 @@ var (
 	ErrInProgress  = errors.New("an update is already running on this host")
 )
 
-// State is the last update's progress as systemd reports it.
+// State is the last update's progress.
 type State string
 
 // States of the last update.
@@ -45,10 +54,25 @@ const (
 	StateFailed   State = "failed"
 )
 
+// Methods a host updates by.
+const (
+	MethodService = "service"
+	MethodApp     = "app"
+)
+
+type kind string
+
+const (
+	kindSystemd kind = "systemd"
+	kindLaunchd kind = "launchd"
+	kindApp     kind = "app"
+)
+
 // Status is this host's version and its last update.
 type Status struct {
 	Version   string
 	Supported bool
+	Method    string
 	State     State
 	Error     string
 }
@@ -59,15 +83,26 @@ type runner func(ctx context.Context, name string, args ...string) ([]byte, erro
 type Updater struct {
 	mu      sync.Mutex
 	version string
+	kind    kind
 	root    string
 	run     runner
 	getenv  func(string) string
+
+	app         AppControl
+	resultPath  string
+	restartWait time.Duration
+	appRunning  bool
+	appErr      string
+	notApplied  string
 }
 
-// New returns an updater that supports only a systemd host installed by setup-self-hosted.sh.
-func New(version string) *Updater {
+// New picks how this host updates: through the desktop app that owns this
+// daemon on macOS, or through the service setup-self-hosted.sh installed.
+func New(version, dataDir string, app AppControl) *Updater {
 	u := &Updater{version: version, run: runCommand, getenv: os.Getenv}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+	if runtime.GOOS == "darwin" && os.Getenv("AO_OWNER") == "app" && app != nil {
+		u.kind, u.app, u.resultPath, u.restartWait = kindApp, app, filepath.Join(dataDir, resultFile), 2*time.Minute
+		u.loadAppResult()
 		return u
 	}
 	exe, err := os.Executable()
@@ -78,10 +113,16 @@ func New(version string) *Updater {
 		return u
 	}
 	root := installRoot(exe)
-	if root == "" || !serviceInstalled() {
+	home, err := os.UserHomeDir()
+	if root == "" || err != nil {
 		return u
 	}
-	if _, err := exec.LookPath("systemd-run"); err != nil {
+	switch {
+	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64" && exists(filepath.Join(home, ".config", "systemd", "user", serviceUnit)) && onPath("systemd-run"):
+		u.kind = kindSystemd
+	case runtime.GOOS == "darwin" && exists(filepath.Join(home, "Library", "LaunchAgents", launchAgent+".plist")) && onPath("launchctl"):
+		u.kind = kindLaunchd
+	default:
 		return u
 	}
 	u.root = root
@@ -99,12 +140,13 @@ func installRoot(exe string) string {
 	return filepath.Dir(releases)
 }
 
-func serviceInstalled() bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(filepath.Join(home, ".config", "systemd", "user", serviceUnit))
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func onPath(name string) bool {
+	_, err := exec.LookPath(name)
 	return err == nil
 }
 
@@ -117,18 +159,35 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 	return out, err
 }
 
-// Status reads the update unit's state from systemd.
+// Status reads the last update's state.
 func (u *Updater) Status(ctx context.Context) Status {
-	status := Status{Version: u.version, Supported: u.root != "", State: StateIdle}
-	if !status.Supported {
-		return status
-	}
-	switch u.activeState(ctx) {
-	case "active", "activating", "reloading", "deactivating":
-		status.State = StateUpdating
-	case "failed":
-		status.State = StateFailed
-		status.Error = u.lastLine(ctx)
+	status := Status{Version: u.version, Supported: u.kind != "", State: StateIdle}
+	switch u.kind {
+	case kindSystemd:
+		status.Method = MethodService
+		switch u.activeState(ctx) {
+		case "active", "activating", "reloading", "deactivating":
+			status.State = StateUpdating
+		case "failed":
+			status.State = StateFailed
+			status.Error = u.lastLine(ctx)
+		}
+	case kindLaunchd:
+		status.Method = MethodService
+		status.State = u.launchdState(ctx)
+		if status.State == StateFailed {
+			status.Error = lastLogLine(u.logPath())
+		}
+	case kindApp:
+		status.Method = MethodApp
+		u.mu.Lock()
+		switch {
+		case u.appRunning:
+			status.State = StateUpdating
+		case u.appErr != "":
+			status.State, status.Error = StateFailed, u.appErr
+		}
+		u.mu.Unlock()
 	}
 	return status
 }
@@ -154,19 +213,101 @@ func (u *Updater) lastLine(ctx context.Context) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
-// Start runs the installer in a transient unit and returns once it is running.
+func launchdDomain() string { return "gui/" + strconv.Itoa(os.Getuid()) }
+
+func (u *Updater) launchdState(ctx context.Context) State {
+	out, err := u.run(ctx, "launchctl", "print", launchdDomain()+"/"+updateLabel)
+	if err != nil {
+		return StateIdle
+	}
+	state := StateIdle
+	for _, line := range strings.Split(string(out), "\n") {
+		key, value, ok := strings.Cut(strings.TrimPrefix(line, "\t"), " = ")
+		if !ok || strings.HasPrefix(key, "\t") {
+			continue
+		}
+		switch {
+		case key == "state" && value == "running":
+			return StateUpdating
+		case key == "last exit code" && value != "0" && value != "(never exited)", key == "last terminating signal":
+			state = StateFailed
+		}
+	}
+	return state
+}
+
+func (u *Updater) logPath() string { return filepath.Join(u.root, "logs", "update.log") }
+
+func lastLogLine(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// Start begins the update and returns once it is running.
 func (u *Updater) Start(ctx context.Context) error {
-	if u.root == "" {
+	switch u.kind {
+	case "":
 		return ErrUnsupported
+	case kindApp:
+		return u.startApp()
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.Status(ctx).State == StateUpdating {
 		return ErrInProgress
 	}
+	if u.kind == kindLaunchd {
+		return u.startLaunchd(ctx)
+	}
 	_, _ = u.run(ctx, "systemctl", "--user", "reset-failed", updateUnit)
 	_, err := u.run(ctx, "systemd-run", u.startArgs()...)
 	return err
+}
+
+func (u *Updater) startLaunchd(ctx context.Context) error {
+	if err := os.MkdirAll(filepath.Dir(u.logPath()), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(u.logPath(), nil, 0o600); err != nil {
+		return err
+	}
+	plist := filepath.Join(u.root, "update.plist")
+	if err := os.WriteFile(plist, u.launchdPlist(), 0o600); err != nil {
+		return err
+	}
+	_, _ = u.run(ctx, "launchctl", "bootout", launchdDomain()+"/"+updateLabel)
+	_, err := u.run(ctx, "launchctl", "bootstrap", launchdDomain(), plist)
+	return err
+}
+
+func (u *Updater) launchdPlist() []byte {
+	var b bytes.Buffer
+	text := func(s string) string {
+		var escaped bytes.Buffer
+		_ = xml.EscapeText(&escaped, []byte(s))
+		return escaped.String()
+	}
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>` + updateLabel + `</string>
+<key>ProgramArguments</key><array>`)
+	for _, arg := range append([]string{"/bin/bash", "-c", launchdRun}, u.installerArgs()...) {
+		b.WriteString("<string>" + text(arg) + "</string>")
+	}
+	b.WriteString("</array>\n<key>EnvironmentVariables</key><dict>")
+	for _, pair := range u.installerEnv() {
+		name, value, _ := strings.Cut(pair, "=")
+		b.WriteString("<key>" + text(name) + "</key><string>" + text(value) + "</string>")
+	}
+	b.WriteString("</dict>\n<key>RunAtLoad</key><true/>\n")
+	b.WriteString("<key>StandardOutPath</key><string>" + text(u.logPath()) + "</string>\n")
+	b.WriteString("<key>StandardErrorPath</key><string>" + text(u.logPath()) + "</string>\n</dict></plist>\n")
+	return b.Bytes()
 }
 
 func (u *Updater) defaultRoot() bool {
@@ -181,19 +322,31 @@ func (u *Updater) defaultRoot() bool {
 	return want == u.root
 }
 
-func (u *Updater) startArgs() []string {
-	args := []string{"--user", "--unit=" + updateUnit, "--description=Orchestrator self-hosted update", "--property=RuntimeMaxSec=30min"}
-	for _, name := range []string{"PATH", "AO_DATA_DIR", "AO_RUN_FILE", "AO_PORT"} {
+func (u *Updater) installerEnv() []string {
+	var env []string
+	for _, name := range []string{"PATH", "HOME", "AO_DATA_DIR", "AO_RUN_FILE", "AO_PORT"} {
 		if value := u.getenv(name); value != "" {
-			args = append(args, "--setenv="+name+"="+value)
+			env = append(env, name+"="+value)
 		}
 	}
 	if !u.defaultRoot() {
-		args = append(args, "--setenv=AO_HOST_INSTALL_DIR="+u.root)
+		env = append(env, "AO_HOST_INSTALL_DIR="+u.root)
 	}
-	args = append(args, "/bin/bash", "-c", installerRun, "ao-host-update", installerURL, "--upgrade")
+	return env
+}
+
+func (u *Updater) installerArgs() []string {
+	args := []string{"ao-host-update", installerURL, "--upgrade"}
 	if strings.Contains(u.version, "-nightly.") {
 		args = append(args, "--nightly")
 	}
 	return args
+}
+
+func (u *Updater) startArgs() []string {
+	args := []string{"--user", "--unit=" + updateUnit, "--description=Orchestrator self-hosted update", "--property=RuntimeMaxSec=30min"}
+	for _, pair := range u.installerEnv() {
+		args = append(args, "--setenv="+pair)
+	}
+	return slices.Concat(args, []string{"/bin/bash", "-c", installerRun}, u.installerArgs())
 }

@@ -3880,6 +3880,8 @@
 	"remote.autoUpdateHosts": "Remote-Hosts automatisch aktualisieren",
 	"remote.autoUpdateHostsDescription": "Gespeicherte Hosts aktualisieren sich selbst, wenn sie eine ältere Version als dieser Computer ausführen.",
 	"remote.updateUnconfirmed": "Der Start des Updates konnte nicht bestätigt werden. Versuche es erneut.",
+	"remote.updateAppTitle": "Orchestrator auf {{label}} aktualisieren?",
+	"remote.updateAppDescription": "Die App wird auf diesem Computer geschlossen und neu gestartet. Seine Agenten laufen weiter.",
 	"remote.hostUnauthorized": "Der Host hat dieses Gerät abgelehnt. Koppeln Sie es mit einem neuen Kopplungscode vom Host erneut.",
 	"remote.hostNotDaemon": "Diese Adresse gehört nicht zu einem Orchestrator-Host. Prüfen Sie Adresse und Passwort.",
 	"remote.addHostFailed": "Host konnte nicht hinzugefügt werden.",

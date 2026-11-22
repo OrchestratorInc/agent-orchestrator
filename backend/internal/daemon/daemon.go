@@ -1285,7 +1285,7 @@ func Run(buildVersion string) (retErr error) {
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
-		HostUpdate:         hostupdate.New(cfg.Telemetry.AppVersion),
+		HostUpdate:         hostupdate.New(cfg.Telemetry.AppVersion, cfg.DataDir, browserBroker),
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
