@@ -2296,6 +2296,8 @@
 	"shell.couldNotRemoveProjectNamed": "Não foi possível remover {{name}}",
 	"shell.removeProjectRetry": "Tentar novamente",
 	"shell.renameSession": "Renomear {{title}}",
+	"shell.stackBase": "Base de uma pilha de PRs",
+	"shell.stackedOn": "Empilhado sobre #{{number}}",
 	"shell.rename": "Renomear",
 	"shell.openDashboard": "Abrir painel",
 	"shell.copied": "Copiado para a área de transferência",

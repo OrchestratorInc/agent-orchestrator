@@ -2262,6 +2262,8 @@
 	"shell.couldNotRemoveProjectNamed": "{{name}}을(를) 제거할 수 없습니다",
 	"shell.removeProjectRetry": "다시 시도",
 	"shell.renameSession": "{{title}} 이름 바꾸기",
+	"shell.stackBase": "PR 스택의 맨 아래",
+	"shell.stackedOn": "#{{number}} 위에 쌓임",
 	"shell.rename": "이름 바꾸기",
 	"shell.openDashboard": "대시보드 열기",
 	"shell.copied": "클립보드에 복사됨",

@@ -30,6 +30,7 @@ import {
 	LogIn,
 	LogOut,
 	MoreVertical,
+	Layers,
 	PanelLeft,
 	Pin,
 	PinOff,
@@ -83,6 +84,7 @@ import {
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
 import { dropdownMenuKit, MenuEntries, MenuKitContext, type MenuEntry } from "./menu-model";
 import { isArchivedSession } from "../lib/standalone-archive";
+import { nestStackedSessions, type SidebarStackPlacement } from "../lib/sidebar-stack";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useEdgeFade } from "../hooks/useEdgeFade";
@@ -1668,10 +1670,12 @@ const ProjectItem = memo(function ProjectItem({
 			: null;
 	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
-	const sessions = useMemo(
+	// A session whose PR is stacked on another listed session's PR sits right
+	// under that session, indented.
+	const { ordered: sessions, placement: stackPlacement } = useMemo(
 		() => {
 			const ordered = applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start");
-			return floatAttention(ordered, sessionOrder.length > 0);
+			return nestStackedSessions(floatAttention(ordered, sessionOrder.length > 0));
 		},
 		[sessionOrder, visibleSessions],
 	);
@@ -2301,6 +2305,7 @@ const ProjectItem = memo(function ProjectItem({
 												onReorder={commitSessionOrder}
 												onKilled={handleSessionKilled}
 												onOpen={openSession}
+												stackPlacement={stackPlacement}
 											/>
 											{hiddenSessionCount > 0 ? (
 												// Indented to the session list so its label starts on the status-dot column.
@@ -2598,6 +2603,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	cloud,
 	onKilled,
 	onOpen,
+	stack,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
@@ -2609,6 +2615,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
+	stack?: SidebarStackPlacement;
 }) {
 	const { isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
 		id: session.id,
@@ -2630,6 +2637,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			indented={indented}
 			onKilled={onKilled}
 			onOpen={open}
+			stack={stack}
 			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={reorder}
@@ -2653,6 +2661,7 @@ function SessionReorderList({
 	onReorder,
 	onKilled,
 	onOpen,
+	stackPlacement,
 }: {
 	dndId: string;
 	testId: string;
@@ -2670,6 +2679,8 @@ function SessionReorderList({
 	onReorder: (next: string[] | null) => void;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
+	/** Where each session sits in a stack of PRs, for sessions in one. */
+	stackPlacement?: ReadonlyMap<string, SidebarStackPlacement>;
 }) {
 	// Suppress the vertical glide for the first 500ms after the list mounts, so the
 	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
@@ -2724,6 +2735,7 @@ function SessionReorderList({
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
+						stack={stackPlacement?.get(session.id)}
 					/>
 				))}
 			</SidebarMenuSub>
@@ -2755,6 +2767,7 @@ function SessionReorderList({
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
 							onKilled={onKilled}
 							onOpen={onOpen}
+							stack={stackPlacement?.get(session.id)}
 						/>
 					))}
 				</SidebarMenuSub>
@@ -2781,6 +2794,7 @@ const SessionRow = memo(function SessionRow({
 	onKilled,
 	onOpen,
 	reorder,
+	stack,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
@@ -2797,8 +2811,12 @@ const SessionRow = memo(function SessionRow({
 	onOpen: () => void;
 	/** Present only for rows inside a reorderable project list. */
 	reorder?: SessionReorder;
+	/** Where the session sits in a stack of PRs, when it is part of one listed here. */
+	stack?: SidebarStackPlacement;
 }) {
 	const { t } = useTranslation();
+	// The button's aria-label replaces its content, so the stack wording goes in the label.
+	const stackLabel = stack?.base ? t("shell.stackBase") : stack?.onNumber ? t("shell.stackedOn", { number: stack.onNumber }) : undefined;
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	// The open row keeps a full-contrast title, so it gets the spinner without
@@ -2880,6 +2898,8 @@ const SessionRow = memo(function SessionRow({
 						active && "text-foreground",
 					)}
 					data-session-row=""
+					// Keep a nested row's indent while its name is edited.
+					style={stack && stack.depth > 0 ? { paddingLeft: `${Math.min(stack.depth, 3) * 14 + 6}px` } : undefined}
 				>
 					<NavRowHighlight active={active} />
 					<SessionStatusDot indicator={indicator} session={session} />
@@ -2942,12 +2962,23 @@ const SessionRow = memo(function SessionRow({
 					data-preview-open={preview.open ? "" : undefined}
 				>
 					<NavRowHighlight active={active} disabled={Boolean(reorder?.isDragging)} />
-					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>
+					{stack && stack.depth > 0 ? (
+						<span
+							aria-hidden="true"
+							className="pointer-events-none absolute top-0 z-[1] h-4 w-2.5 rounded-bl-sm border-b border-l border-border"
+							data-testid="sidebar-stack-elbow"
+							style={{ left: `${(Math.min(stack.depth, 3) - 1) * 14 + 9}px` }}
+						/>
+					) : null}
+					<div
+						className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}
+						style={stack && stack.depth > 0 ? { paddingLeft: `${Math.min(stack.depth, 3) * 14}px` } : undefined}
+					>
 						<Pressable
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
-							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
+							aria-label={t("shell.openSession", { title: [session.title, stackLabel, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
@@ -3015,6 +3046,11 @@ const SessionRow = memo(function SessionRow({
 									{session.title}
 									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span>{session.title}</span></span></span> : null}
 								</span>
+								{stack?.base ? (
+									<span className="flex shrink-0 text-muted-foreground" title={t("shell.stackBase")}>
+										<Layers aria-hidden="true" className="size-3" />
+									</span>
+								) : null}
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 								{cloud ? <CloudMark /> : null}
 							</span>

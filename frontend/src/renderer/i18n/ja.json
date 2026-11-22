@@ -2262,6 +2262,8 @@
 	"shell.couldNotRemoveProjectNamed": "{{name}} を削除できませんでした",
 	"shell.removeProjectRetry": "再試行",
 	"shell.renameSession": "{{title}} の名前を変更",
+	"shell.stackBase": "PR スタックの一番下",
+	"shell.stackedOn": "#{{number}} の上に積み重ね",
 	"shell.rename": "名前を変更",
 	"shell.openDashboard": "ダッシュボードを開く",
 	"shell.copied": "クリップボードにコピーしました",
