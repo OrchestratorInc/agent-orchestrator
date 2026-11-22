@@ -80,9 +80,12 @@
 	--color-brand-logo: #338ad3;
 	--color-brand-logo-bright: #66a4de;
 	--color-brand-logo-foreground: #ffffff;
-	--color-text-markdown-code: var(--color-brand-logo);
-	--color-text-markdown-link: var(--color-brand-logo); /* underline distinguishes links */
-	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
+	/* The accent as small text: a lighter shade of the fill so links and labels
+	 * stay above 4.5:1 on canvas, cards and bubbles. */
+	--color-brand-logo-text: #66a4de;
+	--color-text-markdown-code: var(--color-brand-logo-text);
+	--color-text-markdown-link: var(--color-brand-logo-text); /* underline distinguishes links */
+	--color-text-markdown-link-hover: #88b8e5;
 	--color-text-terminal: #d6d6d6;
 	--color-text-terminal-dim: #8e8e8e;
 
@@ -731,9 +734,10 @@
 	--color-brand-logo: #338ad3;
 	--color-brand-logo-bright: #2f6da4;
 	--color-brand-logo-foreground: #ffffff;
-	--color-text-markdown-code: var(--color-brand-logo);
-	--color-text-markdown-link: var(--color-brand-logo);
-	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
+	--color-brand-logo-text: #2f6da4;
+	--color-text-markdown-code: var(--color-brand-logo-text);
+	--color-text-markdown-link: var(--color-brand-logo-text);
+	--color-text-markdown-link-hover: #295984;
 	--color-text-terminal: #3d3d3d;
 	--color-text-terminal-dim: #757575;
 

@@ -287,6 +287,7 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	--color-logo-accent: var(--color-brand-logo);
 	--color-logo-accent-bright: var(--color-brand-logo-bright);
 	--color-logo-accent-foreground: var(--color-brand-logo-foreground);
+	--color-logo-accent-text: var(--color-brand-logo-text);
 	--color-markdown-code: var(--color-text-markdown-code);
 	--color-markdown-link: var(--color-text-markdown-link);
 	--color-markdown-link-hover: var(--color-text-markdown-link-hover);

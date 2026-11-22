@@ -1424,7 +1424,7 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 		<Pressable
 			onClick={onClick}
 			aria-expanded={expanded}
-			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
+			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent-text transition-colors hover:text-markdown-link-hover"
 		>
 			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
 			{expanded ? "Hide report" : "Show full report"}
