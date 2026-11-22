@@ -21,6 +21,7 @@ import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
+import { onCloudPlan, useCloudBilling } from "../hooks/useCloudBilling";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
@@ -683,6 +684,8 @@ function SharePanel({
 	const { org } = useCloudOrg(signedIn);
 	const teamWorkspace = teamsBuild && org && !isPersonalWorkspace(org) ? org : undefined;
 	const workspaceName = workspaceDisplayName(teamWorkspace?.displayName) ?? t("artifacts.share.access.yourWorkspace");
+	const billing = useCloudBilling();
+	const cloudPlan = onCloudPlan(billing.offering.billingMode, billing.data);
 	const shareFile = { ...file, baseUrl };
 	const key = pendingKey(baseUrl, file);
 	// A cloud session's file is already in the bucket: the click publishes it.
@@ -1107,7 +1110,12 @@ function SharePanel({
 	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 	const spinner = <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />;
 	const ownerIdentity = { name: owner?.displayName, email: owner?.email };
-	const workspaceChoice = teamWorkspace ? { name: workspaceName } : undefined;
+	// Everyone at a workspace is offered only on a Cloud plan (paid, exempt or
+	// contract): a free account in a team org is not offered it. A link
+	// already shared with its workspace still shows that choice, as the one it
+	// has, and choosing another access stops it.
+	const workspaceChoice = (audience: ArtifactAudience) =>
+		teamWorkspace && (cloudPlan || audience === "workspace") ? { name: workspaceName } : undefined;
 
 	switch (phase.kind) {
 		case "loading":
@@ -1195,7 +1203,7 @@ function SharePanel({
 									setStagedWorkspace(next === "workspace");
 									setStagedAccess(next === "workspace" ? "restricted" : next);
 								}}
-								workspace={workspaceChoice}
+								workspace={workspaceChoice(stagedAudience)}
 							/>
 						</div>
 					) : null}
@@ -1319,7 +1327,7 @@ function SharePanel({
 							disabled={changingAccess}
 							invited={invited}
 							onChange={(next) => void changeAudience(phase, next)}
-							workspace={privateLinks ? workspaceChoice : undefined}
+							workspace={privateLinks ? workspaceChoice(audience) : undefined}
 						/>
 						{phase.narrowed && access === "restricted" ? note(t("artifacts.share.access.narrowed")) : null}
 					</div>

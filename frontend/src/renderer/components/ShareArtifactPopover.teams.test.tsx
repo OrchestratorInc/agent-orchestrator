@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
 	org: undefined as { id: string; displayName: string; kind?: string } | undefined,
 	candidates: [] as CloudCpShareCandidate[],
 	createTeam: vi.fn(),
+	// The org's billing: a paid self-serve plan unless a test says otherwise.
+	billingMode: "self_serve" as "self_serve" | "contract" | "off" | undefined,
+	billing: { enabled: true, entitled: true, exempt: false, plan: "pro" } as { enabled: boolean; entitled: boolean; exempt: boolean; plan: string } | undefined,
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -31,6 +34,10 @@ vi.mock("../stores/ui-store", () => ({
 	useUiStore: (select: (state: { openGlobalSettings: () => void }) => unknown) => select({ openGlobalSettings: () => undefined }),
 }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => mocks.teams }));
+vi.mock("../hooks/useCloudBilling", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useCloudBilling")>(),
+	useCloudBilling: () => ({ data: mocks.billing, offering: { billingMode: mocks.billingMode } }),
+}));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: mocks.org, isLoading: false, error: null, ready: true, refetch: async () => ({}) }) }));
 vi.mock("../hooks/useCloudCp", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useCloudCp")>(),
@@ -66,6 +73,8 @@ beforeEach(() => {
 	vi.restoreAllMocks();
 	resetShareCachesForTests();
 	mocks.teams = true;
+	mocks.billingMode = "self_serve";
+	mocks.billing = { enabled: true, entitled: true, exempt: false, plan: "pro" };
 	mocks.org = { id: ORG_ID, displayName: "Acme", kind: "team" };
 	mocks.candidates = [{ kind: "team", teamId: TEAM_ID, name: "Design", memberCount: 3 }];
 	mocks.createTeam.mockReset();
@@ -134,6 +143,48 @@ describe("ShareArtifactButton on a team workspace", () => {
 		expect(publish.mock.calls[0]![0]).not.toHaveProperty("teamIds");
 		await waitFor(() => expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID], workspace: true }));
 		expect(await screen.findByText("3 members")).toBeTruthy();
+	});
+
+	it("does not offer Everyone at the workspace on the Free plan", async () => {
+		mocks.billing = { enabled: true, entitled: true, exempt: false, plan: "free" };
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		await userEvent.click(await screen.findByRole("button", { name: /Only you/ }));
+		expect(screen.getByRole("menuitemradio", { name: /Only people invited/ })).toBeTruthy();
+		expect(screen.queryByRole("menuitemradio", { name: /Everyone at/ })).toBeNull();
+	});
+
+	it("offers Everyone at the workspace on a contract", async () => {
+		mocks.billingMode = "contract";
+		mocks.billing = undefined;
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		await userEvent.click(await screen.findByRole("button", { name: /Only you/ }));
+		expect(screen.getByRole("menuitemradio", { name: /Everyone at Acme/ })).toBeTruthy();
+	});
+
+	it("on the Free plan, still shows a link already shared with the workspace, and another choice stops it", async () => {
+		mocks.billing = { enabled: true, entitled: true, exempt: false, plan: "free" };
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue({ ...none, workspaces: [everyone] });
+		const remove = vi.spyOn(aoBridge.cloudShare, "removeGrant").mockResolvedValue();
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		expect(await screen.findByText("Everyone at Acme can open it after signing in, and finds it under Shared with you.")).toBeTruthy();
+		await userEvent.click(screen.getByRole("button", { name: /Everyone at Acme/ }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: /Only people invited/ }));
+		expect(remove).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, everyone.id);
+		expect(await screen.findByText("Only you")).toBeTruthy();
+		// Once stopped, it is not offered again.
+		await userEvent.click(screen.getByRole("button", { name: /Only you/ }));
+		expect(screen.queryByRole("menuitemradio", { name: /Everyone at/ })).toBeNull();
 	});
 
 	it("shares with a typed email on Enter", async () => {

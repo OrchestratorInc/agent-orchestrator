@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { CloudCpBillingSummary } from "../lib/cloud-cp/types";
+import type { CloudCpBillingMode, CloudCpBillingSummary } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useCloudCp } from "./useCloudCp";
 import { cloudBillingQueryKey, useCloudOffering } from "./useCloudOffering";
@@ -28,6 +28,19 @@ export function useCloudBilling(options: { pollUntil?: number } = {}) {
 			offering.selfServeBilling && options.pollUntil && Date.now() < options.pollUntil ? 5_000 : false,
 	});
 	return { ...query, orgId, offering };
+}
+
+/**
+ * Whether the org is on a Cloud plan: a contract, or self-serve billing with
+ * a paid plan (or exempt from paying). Free, billing off, or not read yet is
+ * not. Features meant for paying Cloud customers ask this.
+ */
+export function onCloudPlan(billingMode: CloudCpBillingMode | undefined, summary: CloudCpBillingSummary | undefined): boolean {
+	if (billingMode === "contract") return true;
+	if (billingMode !== "self_serve" || !summary?.enabled || !summary.entitled) return false;
+	if (summary.exempt) return true;
+	const plan = summary.limits?.plan ?? summary.plan;
+	return Boolean(plan) && plan !== "free";
 }
 
 /** The paid plan to show beside the user's name, or null for none. */
