@@ -35,8 +35,17 @@ type fakeProvider struct {
 	releaseGate chan struct{}
 	installed   []string
 	released    []string
-	// bound records each agent command written, as session=device.
-	bound []string
+	// bound records each agent command written, as session=device; revoked
+	// each session whose command was turned off.
+	bound   []string
+	revoked []string
+}
+
+func (f *fakeProvider) RevokeControl(session string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revoked = append(f.revoked, session)
+	return nil
 }
 
 func (f *fakeProvider) Name() string { return "local" }
@@ -920,5 +929,33 @@ func TestStaleReopenDoesNotRebindTheAgentCommand(t *testing.T) {
 	defer p.mu.Unlock()
 	if len(p.bound) != before {
 		t.Fatalf("the stale reopen rebound the command: %v", p.bound[before:])
+	}
+}
+
+// A session whose lease ended loses its agent command; one that moved to
+// another device keeps the new device's command.
+func TestEndingALeaseRevokesTheAgentCommand(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newTestService(t, p, 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "C"}); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	moved := len(p.revoked)
+	p.mu.Unlock()
+	if moved != 0 {
+		t.Fatalf("moving to another device revoked the new command: %v", p.revoked)
+	}
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.revoked) != 1 || p.revoked[0] != "s-1" {
+		t.Fatalf("revoked = %v, want s-1 once its lease ended", p.revoked)
 	}
 }

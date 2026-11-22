@@ -109,6 +109,16 @@ func lastLines(s string, n int) string {
 // writeLeaseWrapper writes the command one lease's agent runs: the pinned
 // agent-device with the lease's platform, device and session flags appended
 // after the agent's own arguments (agent-device takes flags in any position).
+// writeRevokedWrapper turns a lease's command into one that only says the
+// session holds no device any more.
+func writeRevokedWrapper(path string) error {
+	script := "#!/bin/sh\n" +
+		"# Written by AO: this session's device lease has ended.\n" +
+		"echo 'This session has no device lease; run `ao device open` for a new one.' >&2\n" +
+		"exit 1\n"
+	return os.WriteFile(path, []byte(script), 0o755) //nolint:gosec // The wrapper must stay executable so it can say why it refuses.
+}
+
 func writeLeaseWrapper(path, shim string, flags []string) error {
 	for _, part := range append([]string{shim}, flags...) {
 		if strings.ContainsAny(part, "'\n") {
