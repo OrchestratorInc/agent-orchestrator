@@ -507,6 +507,29 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getAllByTestId("background-turn")).toHaveLength(2);
 	});
 
+	it("keeps a background line's key as turns join it at either end", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		const view = (items: ConversationItem[]) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ChatWorkspace snapshot={snapshot(items)} sessionRole="orchestrator" />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const turn = (id: string, minute: number) => [report(id, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`), reply(id, minute + 1, "Noted.")];
+		const you = [human("t9", 9, "Status?"), reply("t9", 10, "All good.")];
+		const lineKey = () => screen.getByTestId("background-updates").closest("[data-chat-turn]")!.getAttribute("data-chat-turn");
+		const { rerender } = render(view([...turn("t3", 3), ...you]));
+		const key = lineKey();
+		rerender(view([...turn("t1", 1), ...turn("t3", 3), ...you]));
+		expect(screen.getByRole("button", { name: /^2 background updates/ })).toBeInTheDocument();
+		expect(lineKey()).toBe(key);
+		rerender(view([...turn("t1", 1), ...turn("t3", 3), ...turn("t5", 5), ...you]));
+		expect(screen.getByRole("button", { name: /^3 background updates/ })).toBeInTheDocument();
+		expect(lineKey()).toBe(key);
+	});
+
 	it("keeps failures apart when the field after a timestamp differs", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider error: {"time":"2026-11-22T10:0${index}:00Z","status":${index ? 500 : 429}}` })) });

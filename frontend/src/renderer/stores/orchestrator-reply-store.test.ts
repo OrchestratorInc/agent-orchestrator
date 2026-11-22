@@ -198,6 +198,22 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
+	it("checks each start time a button saw, so one mounted late does not narrow the window", async () => {
+		const asked = workerTurn("Tunnel or loopback?");
+		const quiet = workerTurn("Noted.").items.map((item, index) => ({ ...item, id: `quiet-${index}`, turnId: "t2", sequence: 3 + index, createdAt: "2026-11-08T10:05:30Z" }));
+		fetchRecentConversation.mockResolvedValue({
+			...asked,
+			turns: [{ ...asked.turns[0]!, completedAt: "2026-11-08T10:05:10Z" }, { id: "t2", state: "completed", requestedAt: "2026-11-08T10:05:30Z", completedAt: "2026-11-08T10:05:40Z" }],
+			items: [...asked.items, ...quiet],
+		});
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
+		const early = setup(orchestrator("active", "2026-11-08T10:05:00Z"));
+		const late = setup(orchestrator("active", "2026-11-08T10:05:20Z"));
+		late.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:50Z"), viewing: false, projectId: "project-a" });
+		early.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:50Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(early.result.current).toBe("unread"));
+	});
+
 	it("lights up when the settled turns cannot be read", async () => {
 		fetchRecentConversation.mockRejectedValue(new Error("offline"));
 		const hook = afterYourReply();

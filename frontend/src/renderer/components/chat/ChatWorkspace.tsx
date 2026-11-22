@@ -4519,6 +4519,7 @@ export function Timeline({
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4543,7 +4544,9 @@ export function Timeline({
 		const cleaned = spawnedIds.size === 0 ? placed : placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-		return foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)));
+		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current);
+		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
+		return folded;
 	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
@@ -7007,16 +7010,21 @@ function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boo
 	return [group.folded!.kind === "replaced" ? `${group.key}:open` : `${member.key}:line`, `${member.key}:open`, `${member.key}:worked`];
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
+	const used = new Set<string>();
 	let run: { kind: "background" | "failed"; key: string; members: TimelineGroup[] } | undefined;
 	const close = () => {
 		if (!run) return;
 		const { kind, members } = run;
 		const first = members[0]!;
+		const fallback = `${kind}:${members.at(-1)!.key}`;
+		const key = members.map((member) => prior.get(member.key)).find((carried) => carried?.startsWith(`${kind}:`) && !used.has(carried))
+			?? (used.has(fallback) ? `${fallback}:${first.key}` : fallback);
+		if (kind !== "failed" || members.length > 1) used.add(key);
 		out.push(kind === "failed" && members.length === 1
 			? first
-			: { key: `${kind}:${members.at(-1)!.key}`, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
+			: { key, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
 		run = undefined;
 	};
 	const segments = new Map<string, number>();

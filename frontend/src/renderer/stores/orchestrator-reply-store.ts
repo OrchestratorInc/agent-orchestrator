@@ -123,7 +123,7 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 			return;
 		}
 		const checkedFrom = Date.now();
-		void settledTurnsStandOut(`${key}:${at}`, orchestrator.id, hostId, prev.since, at).then((standsOut) => {
+		void settledTurnsStandOut(`${key}:${at}:${prev.since}`, orchestrator.id, hostId, prev.since, at).then((standsOut) => {
 			const now = previous.current;
 			if (standsOut === "unsure" && now?.id === orchestrator.id && now.working) {
 				now.since = Math.min(now.since, prev.since);
