@@ -341,8 +341,10 @@ func (u *Updater) installerArgs() []string {
 }
 
 func (u *Updater) startArgs() []string {
-	args := []string{"--user", "--unit=" + updateUnit, "--description=Orchestrator self-hosted update", "--property=RuntimeMaxSec=30min"}
-	for _, pair := range u.installerEnv() {
+	env := u.installerEnv()
+	args := make([]string, 0, 4+len(env))
+	args = append(args, "--user", "--unit="+updateUnit, "--description=Orchestrator self-hosted update", "--property=RuntimeMaxSec=30min")
+	for _, pair := range env {
 		args = append(args, "--setenv="+pair)
 	}
 	return slices.Concat(args, []string{"/bin/bash", "-c", installerRun}, u.installerArgs())
