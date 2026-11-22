@@ -3077,6 +3077,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/background-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect native background work without waking the session */
+        get: operations["getBackgroundTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop one native background task without waking the session */
+        post: operations["stopBackgroundTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/chat-view": {
         parameters: {
             query?: never;
@@ -4761,6 +4795,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/background-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List native background work for attached session controllers */
+        get: operations["listBackgroundTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/cleanup": {
         parameters: {
             query?: never;
@@ -5897,6 +5948,33 @@ export interface components {
             settings: components["schemas"]["AwakeSettings"];
             /** Format: date-time */
             startedAt?: null | string;
+        };
+        BackgroundTaskResponse: {
+            description: string;
+            /** Format: date-time */
+            endedAt?: null | string;
+            id: string;
+            /** @enum {string} */
+            kind: "shell" | "agent" | "other";
+            runId?: string;
+            /**
+             * Format: date-time
+             * @description When the provider started the task, or else when the daemon first observed it.
+             */
+            startedAt?: null | string;
+            /** @enum {string} */
+            state: "running" | "paused" | "completed" | "failed" | "stopped";
+            /** @description True when this provider can stop this running task. */
+            stoppable?: boolean;
+        };
+        BackgroundTasksResponse: {
+            /** @enum {string} */
+            availability: "ready" | "partial" | "unavailable";
+            controllerGeneration: string;
+            /** Format: date-time */
+            observedAt?: null | string;
+            sessionId: string;
+            tasks: components["schemas"]["BackgroundTaskResponse"][];
         };
         BrowserCommandRequest: {
             action: string;
@@ -7540,6 +7618,9 @@ export interface components {
         ListAutomationsResponse: {
             automations: components["schemas"]["AutomationResponse"][];
             nextCursor?: string;
+        };
+        ListBackgroundTasksResponse: {
+            sessions: components["schemas"]["BackgroundTasksResponse"][];
         };
         ListCatalogModelsResponse: {
             models: string[];
@@ -20823,6 +20904,79 @@ export interface operations {
             };
         };
     };
+    getBackgroundTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundTasksResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    stopBackgroundTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Provider-scoped background task identifier. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     setSessionChatView: {
         parameters: {
             query?: never;
@@ -27813,6 +27967,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listBackgroundTasks: {
+        parameters: {
+            query?: {
+                /** @description Optional project id filter for dashboard cards. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListBackgroundTasksResponse"];
                 };
             };
         };
