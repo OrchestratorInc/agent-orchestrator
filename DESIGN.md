@@ -244,7 +244,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - Borders are exceptional structure, never default decoration. Start with spacing, alignment, type, and a restrained surface shift.
 - A hairline is 1px and may separate durable regions: shell panes, a modal from its backdrop, a shared list's adjacent rows, a board lane boundary, or an input's hit area when contrast needs it.
 - Do not give every card, row, input group, and nested region its own outline. Never add a border simply because a component is rectangular.
-- `--radius-xs` and `--radius-sm` suit tiny controls; `--radius-md` suits buttons and inputs; `--radius-lg` is the maximum routine component radius.
+- `--radius-xs` suits tiny controls; `--radius-sm` (6px) suits buttons; `--radius-md` suits inputs; `--radius-lg` is the maximum routine component radius.
 - `--radius-panel` is reserved for route-level framed surfaces and larger dialogs.
 - `--radius-full` is only for avatars, dots, and intentional pills.
 - Shadows are elevation cues for transient layers only: dialogs, menus, and tooltips. Filled buttons use inset shading only. No permanent card shadows, glow, or decorative drop shadow.
@@ -266,7 +266,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - Pick the variant for what the action means, not for a look: `primary` (the one main action), `accent` (brand-blue decision the turn waits on: approve, open link), `secondary` (quiet surface), `ghost`, `quiet` (muted toolbar/row actions), `destructive` (danger fill), `destructive-ghost` (remove/delete/kill), `link` (inline text), `outline` (contrast fallback only). Sizes: `xs` 24, `sm` 28, `default` 32, plus `icon-xs`/`icon-sm`/`icon`; `shape="pill"` only for chips. A `className` adjusts layout, never the variant's color, height or hover.
 - Ghost-family buttons (`ghost`, `quiet`, `destructive-ghost`) hover with the sidebar's growing pill. On-states come from `aria-pressed`, `data-state="open"` or `data-active="true"`, not from swapping variants. Tabs keep `role="tab"` + `aria-selected` and add `data-active` for the look.
 - Topbars, settings, and modal footers use the same `Button` variants as the rest of the app. Topbar icons use `quiet` with `size="icon-sm"`; there is no separate topbar button family.
-- Filled buttons adapt daisyUI's inset highlight and shaded edge, with no outer shadow or glow. Pressing deepens the background without moving the button. Toggle/open states keep that pressed surface. Buttons, rows, and other controls never scale or shift on press.
+- Filled buttons adapt daisyUI's inset highlight (12%) and bottom shade (8%) over an edge 13% darker than the fill, with a barely-there 1% outer shadow and no glow. Pressing deepens the background without moving the button. Toggle/open states keep that pressed surface. Buttons, rows, and other controls never scale or shift on press.
 
 ### Tooltips and iconography
 

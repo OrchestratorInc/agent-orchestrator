@@ -856,7 +856,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 .session-inspector__tab-button[aria-selected="true"],
 :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	inset: 0;
-	border-color: color-mix(in oklab, var(--secondary), #000 5%);
+	border-color: color-mix(in oklab, var(--secondary), #000 13%);
 	background-color: var(--secondary);
 	box-shadow: var(--shadow-control-inset);
 }
