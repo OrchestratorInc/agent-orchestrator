@@ -110,6 +110,8 @@ describe("optimistic message delivery", () => {
 		const pending = pendingSend();
 		renderComposer(sessionId, pending.onSend, true);
 		const field = await startSend(pending.onSend, "first message");
+		// Picking files follows the same rule as pasting them.
+		expect(screen.getByRole("button", { name: "Attach a file" })).toBeEnabled();
 		fireEvent.paste(field, {
 			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], "next.png", { type: "image/png" })], items: [], getData: () => "", setData: () => undefined },
 		});

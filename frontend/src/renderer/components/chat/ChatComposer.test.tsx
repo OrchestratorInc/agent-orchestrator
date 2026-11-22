@@ -948,6 +948,9 @@ describe("send keys", () => {
 		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
 		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
 		["CHAT_OPEN_ELSEWHERE", "open in another process", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again."],
+		// A staged image the daemon cannot read by path fails the same way on every retry.
+		["ATTACHMENT_NOT_FOUND", "staged attachment not found"],
+		["ATTACHMENT_PATH_UNSUPPORTED", "this conversation does not accept staged image paths"],
 	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message, shown = message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()

@@ -156,6 +156,10 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"INVALID_RESOURCE",
 	"UNSUPPORTED_ATTACHMENT_TYPE",
 	"INVALID_ATTACHMENT_DATA",
+	// A staged image the daemon cannot read by path fails the same way on every retry.
+	"INVALID_ATTACHMENT_PATH",
+	"ATTACHMENT_NOT_FOUND",
+	"ATTACHMENT_PATH_UNSUPPORTED",
 	"ATTACHMENT_TOO_LARGE",
 	"TOO_MANY_ATTACHMENTS",
 	"ATTACHMENTS_TOO_LARGE",
@@ -2881,7 +2885,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={controlsDisabled}
+									disabled={Boolean(disabled) || attachBlocked()}
 									onChange={(event) => {
 										if (!disabled && !attachBlocked()) {
 											attachFiles(Array.from(event.target.files ?? []));
@@ -2924,7 +2928,7 @@ export const ChatComposer = memo(function ChatComposer({
 												icon={Paperclip}
 												title="Files"
 												description="Attach files to this message"
-												disabled={queuedEditRecovery || draftMutationPending}
+												disabled={queuedEditRecovery || attachBlocked()}
 												onSelect={() => filePicker.current?.click()}
 											/>
 											{addMenuItems}
@@ -2937,7 +2941,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="quiet"
 										size="icon-sm"
 										shape="pill"
-										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
+										disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked()}
 										onClick={() => filePicker.current?.click()}
 										aria-label="Attach a file"
 										className="shrink-0"

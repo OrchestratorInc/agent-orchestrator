@@ -1171,14 +1171,27 @@ func (c *ConversationsController) stagedImages(ctx context.Context, sessionID st
 	return out, nil
 }
 
-// inlineImageBytes is the decoded size of an inline base64 image. Malformed
-// data counts at its encoded length; conversationContent refuses it anyway.
+// inlineImageBytes is the decoded size of an inline base64 image, counted the
+// way the decoder reads it: CR and LF anywhere are skipped, and trailing "="
+// is padding. Malformed data gets a rough size; conversationContent refuses it.
 func inlineImageBytes(data string) int {
 	data = strings.TrimSpace(data)
-	if len(data)%4 != 0 {
-		return len(data)
+	chars, padding := 0, 0
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '\r', '\n':
+		case '=':
+			chars++
+			padding++
+		default:
+			chars++
+			padding = 0
+		}
 	}
-	return len(data)/4*3 - (len(data) - len(strings.TrimRight(data, "=")))
+	if chars%4 != 0 {
+		return chars / 4 * 3
+	}
+	return chars/4*3 - padding
 }
 
 // readStagedImage reads one staged image, refusing it by its size on disk

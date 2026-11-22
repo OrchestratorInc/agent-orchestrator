@@ -234,3 +234,28 @@ func TestStagedImagePathsAreBoundedBeforeTheyAreRead(t *testing.T) {
 		t.Fatalf("content = %d blocks, want 2", len(stub.sent.Content))
 	}
 }
+
+// The decoder skips CR and LF in inline base64, so the budget does too: a valid
+// mixed request keeps the whole 25 MiB.
+func TestStagedImageBudgetCountsInlineBytesAsDecoded(t *testing.T) {
+	const eightMiB = 8 << 20
+	staged := "attachment-0123abd0.png"
+	encoded := base64.StdEncoding.EncodeToString(make([]byte, eightMiB))
+	wrapped := encoded[:1000] + "\r\n" + encoded[1000:]
+	stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{}}
+	server := stagedImagesServerWith(t, stub, map[string][]byte{staged: make([]byte, eightMiB)})
+	status, body := postStagedImageJSON(t, server, "/api/v1/sessions/p1-1/conversation/messages", map[string]any{
+		"text": "inspect",
+		"attachments": []map[string]string{
+			{"mimeType": "image/png", "data": wrapped},
+			stagedImage(".ao/attachments/" + staged),
+			stagedImage(".ao/attachments/" + staged),
+		},
+	})
+	if status != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %.200s; want 24 MiB of images accepted", status, body)
+	}
+	if len(stub.sent.Content) != 3 {
+		t.Fatalf("content = %d blocks, want 3", len(stub.sent.Content))
+	}
+}
