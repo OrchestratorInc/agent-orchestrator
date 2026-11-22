@@ -135,7 +135,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		const changed = fields.some((field) => draft[field] !== savedValues[field]);
 		return <div data-testid={`setting-${id}`}>
 			{content}
-			{changed && <p className="px-(--settings-row-inset) pb-2 text-xs text-warning" role="status">
+			{changed && <p className="px-(--settings-row-inset) pb-2 text-xs text-warning" aria-live="polite">
 				{t("settings.project.unsavedChanges")}{error ? ` · ${error}` : ""}
 			</p>}
 		</div>;
@@ -146,7 +146,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const nameLimit = capabilities.nameLimit ?? MAX_PROJECT_DISPLAY_NAME_LEN;
 	const validate = () => {
 		if (capabilities.requiredAgents &&
-			(draft.workerAgent !== savedValues.workerAgent || draft.orchestratorAgent !== savedValues.orchestratorAgent) &&
+			(section === "agents" || draft.workerAgent !== savedValues.workerAgent || draft.orchestratorAgent !== savedValues.orchestratorAgent) &&
 			(!draft.workerAgent || !draft.orchestratorAgent)) return t("settings.project.agentsRequired");
 		if (!draft.displayName.trim()) return t("settings.project.nameRequired");
 		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return t("settings.project.nameTooLong", { max: nameLimit });

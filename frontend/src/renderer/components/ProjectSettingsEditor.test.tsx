@@ -15,11 +15,11 @@ const initialValues: ProjectSettingsDraft = {
 	autoReview: true, intakeEnabled: false, intakeRepo: "", intakeAssignee: "",
 };
 
-function setup(cloud: boolean, save = vi.fn().mockResolvedValue({}), values = initialValues) {
+function setup(cloud: boolean, save = vi.fn().mockResolvedValue({}), values = initialValues, section: "general" | "agents" = "general", saveUnchanged = false) {
 	const onSaveState = vi.fn();
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	const view = render(<QueryClientProvider client={client}><TooltipProvider>
-		<ProjectSettingsEditor initialValues={values} section="general"
+		<ProjectSettingsEditor initialValues={values} section={section} saveUnchanged={saveUnchanged}
 			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredAgents: !cloud, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud }}
 			details={[]} modelScope={() => ""} renderAgent={() => null} save={save} onSaveState={onSaveState} />
 	</TooltipProvider></QueryClientProvider>);
@@ -41,7 +41,7 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		fireEvent.submit(document.getElementById("project-settings-form")!);
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Save rejected" })));
 		expect(within(screen.getByTestId("setting-displayName")).getByText(/Unsaved changes.*Save rejected/)).toBeInTheDocument();
-		expect(within(screen.getByTestId("setting-autoReview")).getByText(/Unsaved changes.*Save rejected/)).toBeInTheDocument();
+		expect(within(screen.getByTestId("setting-autoReview")).getByText(/Unsaved changes.*Save rejected/)).toHaveAttribute("aria-live", "polite");
 		fireEvent.submit(document.getElementById("project-settings-form")!);
 		await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", dirty: false, error: undefined })));
@@ -75,6 +75,16 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", dirty: false })));
 	});
+
+	it("still requires missing agents on an explicit Agents-page save", async () => {
+		if (cloud) return;
+		const save = vi.fn().mockResolvedValue({});
+		const { onSaveState } = setup(cloud, save, { ...initialValues, orchestratorAgent: "" }, "agents", true);
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Worker and orchestrator agents are required." })));
+		expect(save).not.toHaveBeenCalled();
+	});
+
 	it("uses the same inline fields and autosave, with supported workflow fields", async () => {
 		const { save } = setup(cloud);
 		expect(screen.getByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
