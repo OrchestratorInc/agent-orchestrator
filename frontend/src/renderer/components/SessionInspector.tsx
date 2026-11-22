@@ -52,7 +52,7 @@ import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
-import { useBackgroundTasks } from "../hooks/useBackgroundTasks";
+import { useBackgroundTasks, useReleaseTaskOutputs } from "../hooks/useBackgroundTasks";
 import { BackgroundTasksPanel } from "./BackgroundTaskPanel";
 import { supportsLocalBackgroundTasks } from "./BackgroundTasks";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
@@ -235,6 +235,7 @@ export const SessionInspector = memo(function SessionInspector({
 	// The Background tasks tab: every task this chat ran, and one at a time when opened.
 	const uiKey = session ? sessionUiKey(session.id, hostId) : "";
 	const taskTabs = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.taskTabs : undefined));
+	useReleaseTaskOutputs(session?.id ?? "", taskTabs);
 	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
 	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
 	const tasksWatchable = Boolean(session && supportsLocalBackgroundTasks(session));

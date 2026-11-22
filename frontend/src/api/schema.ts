@@ -5900,6 +5900,8 @@ export interface components {
              * @enum {string}
              */
             availability: "ready" | "unavailable";
+            /** @description True when the task's command writes a log that another writer has taken over since the task ended, so output holds only what the task printed itself. */
+            logOmitted?: boolean;
             /** @description True when the task's command writes its output to a log file outside the session's workspace, which is not read. */
             logOutsideWorkspace?: boolean;
             /** @description The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed. */

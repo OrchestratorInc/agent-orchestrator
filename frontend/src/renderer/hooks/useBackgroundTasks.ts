@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
@@ -80,7 +81,12 @@ export function useStopBackgroundTask(sessionId: string) {
 }
 
 /** `lastRead`: the daemon no longer has this output, so it is the last one read. */
-export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"] & { lastRead?: boolean };
+/**
+ * `lastRead`: the daemon no longer has this output, so it is the last one read.
+ * `keptLog`: the log read before the daemon left it out (`logOmitted`), which
+ * `output` still leads with.
+ */
+export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"] & { lastRead?: boolean; keptLog?: string };
 
 /** One run's output: a rerun under the same task id never shows the previous run's. */
 export const backgroundTaskOutputQueryKey = (sessionId: string, taskId: string, runId?: string) =>
@@ -120,10 +126,34 @@ export function useBackgroundTaskOutput(
 				if (!over) throw new Error("Background task output unavailable");
 				return previous.lastRead ? previous : { ...previous, lastRead: true };
 			}
+			// The daemon left out a log another writer took over: keep the log read
+			// before, followed by whatever the task printed itself since.
+			const log = previous?.availability === "ready" ? previous.keptLog ?? (previous.logOmitted ? "" : previous.output) : "";
+			if (data.availability === "ready" && data.logOmitted && log) {
+				const own = data.output.replace(/^\n+|\n+$/g, "");
+				const output = !own || log.endsWith(own) ? log : `${log}\n${own}`;
+				return { ...data, output, keptLog: log, truncated: Boolean(previous?.truncated || data.truncated) };
+			}
 			return data as BackgroundTaskOutput;
 		},
 		refetchInterval: live ? 1_000 : false,
 		gcTime: Infinity,
 		retry: false,
 	});
+}
+
+/**
+ * Drops the cached output of task runs the side panel no longer lists, so a
+ * pruned row frees its log; output queries are otherwise never collected.
+ */
+export function useReleaseTaskOutputs(sessionId: string, tabs: readonly { task: { id: string; runId?: string } }[] | undefined) {
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		if (!sessionId || !tabs) return;
+		const kept = new Set(tabs.map(({ task }) => `${task.id}\n${task.runId ?? ""}`));
+		queryClient.removeQueries({
+			queryKey: ["background-task-output", sessionId],
+			predicate: (query) => !kept.has(`${String(query.queryKey[2])}\n${String(query.queryKey[3] ?? "")}`),
+		});
+	}, [queryClient, sessionId, tabs]);
 }

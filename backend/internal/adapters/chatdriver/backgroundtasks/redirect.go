@@ -30,6 +30,17 @@ const logClockSlack = 5 * time.Second
 // from an earlier run, or an existing file the command opened without writing
 // to, is not shown.
 func RedirectedOutput(command, dir string, startedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
+	return redirectedOutput(command, dir, startedAt, nil)
+}
+
+// RedirectedOutputUntil is RedirectedOutput for a run that ended at endedAt.
+// A log written after that, beyond the clock slack, holds another writer's
+// output now: it is not read, and the result says so with LogOmitted.
+func RedirectedOutputUntil(command, dir string, startedAt, endedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
+	return redirectedOutput(command, dir, startedAt, endedAt)
+}
+
+func redirectedOutput(command, dir string, startedAt, endedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
 	if startedAt == nil || !filepath.IsAbs(dir) {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
@@ -42,9 +53,13 @@ func RedirectedOutput(command, dir string, startedAt *time.Time) (ports.ChatBack
 	if err != nil || !filepath.IsLocal(rel) {
 		return ports.ChatBackgroundTaskOutput{LogOutsideWorkspace: true}, false
 	}
-	raw, dropped, ok := readLogTail(dir, rel, startedAt.Add(-logClockSlack))
+	var notAfter time.Time
+	if endedAt != nil {
+		notAfter = endedAt.Add(logClockSlack)
+	}
+	raw, dropped, ok, newer := readLogTail(dir, rel, startedAt.Add(-logClockSlack), notAfter)
 	if !ok {
-		return ports.ChatBackgroundTaskOutput{}, false
+		return ports.ChatBackgroundTaskOutput{LogOmitted: newer}, false
 	}
 	return TailOutput(raw, dropped), true
 }
@@ -64,31 +79,36 @@ func RedirectTarget(command, dir string) string {
 // readLogTail reads at most MaxOutputBytes from the end of the log at rel
 // inside dir, starting on a whole line. dropped says older output was left out.
 // os.Root keeps every step of rel, symlinked parents included, inside dir.
-func readLogTail(dir, rel string, notBefore time.Time) (raw string, dropped, ok bool) {
+// A non-zero notAfter refuses a log last written after it, and says so with
+// newer.
+func readLogTail(dir, rel string, notBefore, notAfter time.Time) (raw string, dropped, ok, newer bool) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return "", false, false
+		return "", false, false, false
 	}
 	defer func() { _ = root.Close() }()
 	info, err := root.Lstat(rel)
 	if err != nil || !info.Mode().IsRegular() || info.ModTime().Before(notBefore) {
-		return "", false, false
+		return "", false, false, false
+	}
+	if !notAfter.IsZero() && info.ModTime().After(notAfter) {
+		return "", false, false, true
 	}
 	file, err := root.Open(rel)
 	if err != nil {
-		return "", false, false
+		return "", false, false, false
 	}
 	defer func() { _ = file.Close() }()
 	// The path must still name the file checked above, not one swapped in since.
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return "", false, false
+		return "", false, false, false
 	}
 	start := max(0, opened.Size()-MaxOutputBytes)
 	buffer := make([]byte, opened.Size()-start)
 	n, err := file.ReadAt(buffer, start)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", false, false
+		return "", false, false, false
 	}
 	raw = string(buffer[:n])
 	if start > 0 {
@@ -99,7 +119,7 @@ func readLogTail(dir, rel string, notBefore time.Time) (raw string, dropped, ok 
 			raw = ""
 		}
 	}
-	return raw, start > 0, true
+	return raw, start > 0, true, false
 }
 
 // stdoutFile finds the log file a shell command line sends its standard
@@ -286,9 +306,10 @@ func resolveShellPath(word shellToken, cwd string, known bool, home string) (str
 			return "", false
 		}
 	}
-	// On Windows a path rooted without a drive, as Git Bash writes /tmp/dev.log,
-	// is not under any workspace; it must not be joined onto one.
-	if filepath.IsAbs(text) || (hostWindows && strings.HasPrefix(text, "/")) {
+	// On Windows a path rooted without a drive, as Git Bash writes /tmp/dev.log
+	// or cmd.exe \logs\dev.log (the current drive's root), is not under the
+	// workspace; it must not be joined onto it.
+	if filepath.IsAbs(text) || (hostWindows && (strings.HasPrefix(text, "/") || strings.HasPrefix(text, `\`))) {
 		return filepath.Clean(text), true
 	}
 	if !known {

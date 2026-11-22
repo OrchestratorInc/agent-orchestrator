@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useBackgroundTaskOutput, useBackgroundTaskReadings, useBackgroundTasks, useStopBackgroundTask } from "./useBackgroundTasks";
+import { useBackgroundTaskOutput, useBackgroundTaskReadings, useBackgroundTasks, useReleaseTaskOutputs, useStopBackgroundTask } from "./useBackgroundTasks";
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: getMock, POST: postMock } }));
@@ -140,6 +140,47 @@ describe("a background task's output", () => {
 		// A rerun under the same task id starts with nothing read.
 		render(<QueryClientProvider client={client}><Output runId="r2" /></QueryClientProvider>);
 		await screen.findByText("unavailable::live");
+		client.clear();
+	});
+
+	it("keeps the log read before when the daemon leaves it out, followed by what the task printed", async () => {
+		getMock.mockResolvedValueOnce(reply("ready", "first run ready"));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
+		await screen.findByText("ready:first run ready:live");
+		// A restart took the log over: the final read holds only the task's own marker.
+		getMock.mockResolvedValue({ data: { ...reply("ready", "\n[killed]").data, logOmitted: true } });
+		await client.refetchQueries();
+		// The matcher collapses the line break to a space.
+		await screen.findByText("ready:first run ready [killed]:live");
+		// Later reads keep it, without repeating the marker.
+		await client.refetchQueries();
+		await screen.findByText("ready:first run ready [killed]:live");
+		// An empty provider tail keeps the log rather than "No output yet".
+		getMock.mockResolvedValue({ data: { ...reply("ready", "").data, logOmitted: true } });
+		await client.refetchQueries();
+		await screen.findByText("ready:first run ready:live");
+		client.clear();
+	});
+});
+
+describe("releasing pruned task output", () => {
+	function Release({ tabs }: { tabs: { task: { id: string; runId?: string } }[] }) {
+		useReleaseTaskOutputs("s", tabs);
+		return null;
+	}
+
+	it("frees the output of runs the side panel no longer lists, and keeps the rest", () => {
+		const client = new QueryClient();
+		for (const [taskId, runId] of [["kept", "r1"], ["pruned", "r1"], ["kept", "r0"]]) {
+			client.setQueryData(["background-task-output", "s", taskId, runId], { output: `${taskId} ${runId}` });
+		}
+		client.setQueryData(["background-task-output", "other", "pruned", "r1"], { output: "another session" });
+		render(<QueryClientProvider client={client}><Release tabs={[{ task: { id: "kept", runId: "r1" } }]} /></QueryClientProvider>);
+		expect(client.getQueryData(["background-task-output", "s", "kept", "r1"])).toEqual({ output: "kept r1" });
+		expect(client.getQueryData(["background-task-output", "s", "pruned", "r1"])).toBeUndefined();
+		expect(client.getQueryData(["background-task-output", "s", "kept", "r0"])).toBeUndefined();
+		expect(client.getQueryData(["background-task-output", "other", "pruned", "r1"])).toEqual({ output: "another session" });
 		client.clear();
 	});
 });

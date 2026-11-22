@@ -207,6 +207,13 @@ func TestStdoutFileOnWindowsKeepsRootedAndBackslashPathsOutOfTheWorkspace(t *tes
 	if got, ok := stdoutFile(`cd app & npm run dev > C:\logs\dev.log`, dir, ""); !ok || got != `C:\logs\dev.log` {
 		t.Errorf("drive path = %q, %v", got, ok)
 	}
+	// cmd.exe's \logs\dev.log starts at the drive's root, not the workspace.
+	if got, ok := stdoutFile(`npm run dev > \logs\dev.log 2>&1`, dir, ""); !ok || got != `\logs\dev.log` {
+		t.Errorf("backslash-rooted path = %q, %v", got, ok)
+	}
+	if got, ok := RedirectedOutput(`npm run dev > \logs\dev.log 2>&1`, t.TempDir(), &started); ok || !got.LogOutsideWorkspace {
+		t.Errorf("backslash-rooted log = %+v, %v", got, ok)
+	}
 	// A POSIX line still reads a backslash as an escape, so it is not followed.
 	if got, ok := stdoutFile(`npm run dev > logs\dev.log 2>&1 & echo $! > dev.pid`, dir, ""); ok {
 		t.Errorf("escaped path in a POSIX line = %q", got)

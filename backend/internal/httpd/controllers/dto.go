@@ -2467,6 +2467,8 @@ type BackgroundTaskOutputResponse struct {
 	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
 	// LogOutsideWorkspace explains an output without the task's log.
 	LogOutsideWorkspace bool `json:"logOutsideWorkspace,omitempty" description:"True when the task's command writes its output to a log file outside the session's workspace, which is not read."`
+	// LogOmitted marks output without the task's log, which another writer took over.
+	LogOmitted bool `json:"logOmitted,omitempty" description:"True when the task's command writes a log that another writer has taken over since the task ended, so output holds only what the task printed itself."`
 }
 
 // BackgroundTaskIDParam names one provider-owned background task.
