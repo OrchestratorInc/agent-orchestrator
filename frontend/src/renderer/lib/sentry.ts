@@ -2,6 +2,7 @@
 // the latest main-owned generation before forwarding to Electron main.
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
+import { scrubSentryMessage } from "../../../../packages/shared/telemetry/sentry-message";
 import { aoBridge } from "./bridge";
 import type { RendererTelemetryCaptureInput } from "../../shared/telemetry-policy";
 
@@ -32,7 +33,7 @@ function debugIdsByAsset(): Map<string, string> {
 	const ids = (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
 	const byAsset = new Map<string, string>();
 	for (const [stack, id] of Object.entries(ids ?? {})) {
-		const asset = /app:\/\/renderer\/(assets\/[^\s:)]+)/.exec(stack)?.[1];
+		const asset = /app:\/\/renderer\/(assets\/[^\s:)?#]+)/.exec(stack)?.[1];
 		if (asset && SAFE_APP_ASSET.test(asset)) byAsset.set(asset, id);
 	}
 	return byAsset;
@@ -42,17 +43,17 @@ function debugIdsByAsset(): Map<string, string> {
 // kept when the location is an app asset. Function text crosses only when it is
 // an allowlisted name; anything else becomes "renderer_frame", and Electron
 // main titles the event by bundle file and line instead.
-function safeRendererFrames(error: unknown): RendererFrame[] {
-	if (!(error instanceof Error) || !error.stack) return [];
+function safeRendererFrames(error: unknown, event?: ErrorEvent): RendererFrame[] {
 	const frames: RendererFrame[] = [];
 	const debugIds = debugIdsByAsset();
-	for (const line of error.stack.split("\n")) {
-		const match = /^\s*at\s+(?:(.+?)\s+\((\S+)\)|(\S+))\s*$/.exec(line);
+	const stack = (error instanceof Error || error instanceof DOMException) && typeof error.stack === "string" ? error.stack : "";
+	for (const line of stack.split("\n")) {
+		const match = /^\s*at\s+(?:(.+?)\s+\((\S+)\)|((?:async )?\S+))\s*$/.exec(line);
 		if (!match) continue;
 		const name = match[1]?.replace(/^(?:async|new)\s+/, "");
-		const location = match[2] ?? match[3];
+		const location = (match[2] ?? match[3]).replace(/^async\s+/, "");
 		if (!location.startsWith("app://renderer/") && !/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\//.test(location)) continue;
-		const source = location.replace(/:\d+:\d+$/, "");
+		const source = location.replace(/:\d+:\d+$/, "").split(/[?#]/, 1)[0];
 		const appPath = source.startsWith("app://renderer/") ? source.slice("app://renderer/".length) : undefined;
 		const filename = appPath && SAFE_APP_ASSET.test(appPath) ? appPath : undefined;
 		const debugId = filename ? debugIds.get(filename) : undefined;
@@ -63,17 +64,31 @@ function safeRendererFrames(error: unknown): RendererFrame[] {
 		frames.push({ function: fn, ...(filename ? { filename } : {}), ...(lineno && Number.isSafeInteger(lineno) && lineno <= 1_000_000 ? { lineno } : {}), ...(colno && Number.isSafeInteger(colno) && colno <= 10_000_000 ? { colno } : {}), ...(debugId ? { debug_id: debugId } : {}) });
 		if (frames.length === 8) break;
 	}
+	if (!frames.length && event?.filename?.startsWith("app://renderer/")) {
+		const filename = event.filename.slice("app://renderer/".length).split(/[?#]/, 1)[0];
+		if (SAFE_APP_ASSET.test(filename)) {
+			const debugId = debugIds.get(filename);
+			frames.push({ function: "renderer_frame", filename,
+				...(Number.isSafeInteger(event.lineno) && event.lineno > 0 && event.lineno <= 1_000_000 ? { lineno: event.lineno } : {}),
+				...(Number.isSafeInteger(event.colno) && event.colno > 0 && event.colno <= 10_000_000 ? { colno: event.colno } : {}),
+				...(debugId ? { debug_id: debugId } : {}),
+			});
+		}
+	}
 	return frames.reverse();
 }
 
-export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}): void {
+export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}, event?: ErrorEvent): void {
 	const triage = classifyError(meta);
+	const isError = error instanceof Error || error instanceof DOMException;
+	const message = isError ? error.message : event?.message ?? error;
+	const type = isError ? error.name : typeof message === "string" ? /^(?:Uncaught(?: \(in promise\))? )?(\w+): /.exec(message)?.[1] : undefined;
 	forwardCapture({
 		kind: triage.report ? "exception" : "breadcrumb",
-		message: "Renderer error",
+		message: scrubSentryMessage(message) || "Renderer error",
 		level: triage.level,
 		tags: tagsFor(meta, triage),
-		...(triage.report ? { exception: { type: safeSentryExceptionType((error as Error)?.name), frames: safeRendererFrames(error) } } : {}),
+		...(triage.report ? { exception: { type: safeSentryExceptionType(type), frames: safeRendererFrames(error, event) } } : {}),
 	});
 }
 export function captureApiErrorToSentry(operation: string, category: string, status?: number, code?: string, requestId?: string): void {
