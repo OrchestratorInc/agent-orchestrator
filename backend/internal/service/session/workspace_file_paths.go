@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// WorkspaceFilePaths is a session workspace's file paths, without file details.
 type WorkspaceFilePaths struct {
 	SessionID domain.SessionID
 	Paths     []string
@@ -26,6 +28,7 @@ type workspacePathSource struct {
 	resolve func(context.Context) workspaceCompareTarget
 }
 
+// ListWorkspaceFilePaths lists the session workspace's file paths.
 func (s *Service) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (WorkspaceFilePaths, error) {
 	rec, sources, scratch, err := s.workspacePathSources(ctx, id)
 	if err != nil {
@@ -124,7 +127,7 @@ func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID,
 		inventories[i] = parts
 		total += len(parts)
 	}
-	var changed, unchanged []string
+	changed, unchanged := make([]string, 0), make([]string, 0, total)
 	seen := map[string]struct{}{}
 	for i, source := range sources {
 		var changes workspaceChangeSet
@@ -160,7 +163,7 @@ func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID,
 		}
 	}
 	sort.Strings(changed)
-	paths := append(changed, unchanged...)
+	paths := slices.Concat(changed, unchanged)
 	truncated := len(paths) > limit
 	if truncated {
 		paths = paths[:limit]
