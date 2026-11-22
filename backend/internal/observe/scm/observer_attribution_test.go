@@ -61,6 +61,7 @@ func TestPoll_IdentityRecoveryRetriesMissedDiscoveries(t *testing.T) {
 			if err := obs.Poll(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			waitForTerminalReaction(t, obs, "p-1")
 			if len(store.writes) == 0 || !store.writes[0].pr.Merged {
 				t.Fatal("existing PR did not refresh during identity outage")
 			}
