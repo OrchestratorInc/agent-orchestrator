@@ -58,15 +58,18 @@ export function ApprovalNoticeCard({
 		? t("approvals.credentialLabel")
 		: t(`approvals.category.${request.category}` as "approvals.category.payment", { defaultValue: request.category });
 	const hasPreview = Boolean(request.image || request.reason || request.url);
+	// Someone else decides it (a cloud session only its creator may approve).
+	const waitingFor = request.waitingFor;
 
 	useEffect(() => {
 		const node = ref.current;
 		// Take focus only when nothing else has it, so typing elsewhere continues.
+		if (waitingFor) return;
 		if (node && (document.activeElement === document.body || !document.activeElement)) node.focus();
-	}, [request.id]);
+	}, [request.id, waitingFor]);
 
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-		if (busy || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+		if (waitingFor || busy || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
 		if (event.key === "Escape") {
 			event.preventDefault();
 			onDecide("deny");
@@ -80,7 +83,7 @@ export function ApprovalNoticeCard({
 	return (
 		<div
 			ref={ref}
-			role="alertdialog"
+			role={waitingFor ? "status" : "alertdialog"}
 			tabIndex={-1}
 			aria-label={t("approvals.region")}
 			aria-describedby={`${id}-help`}
@@ -134,7 +137,7 @@ export function ApprovalNoticeCard({
 				</div>
 			) : null}
 
-			{request.site ? (
+			{request.site && !waitingFor ? (
 				<label className="mt-2 flex items-center gap-2 text-caption text-muted-foreground">
 					<Checkbox checked={always} disabled={busy} onCheckedChange={(value) => setAlways(value === true)} />
 					{t("approvals.allowSite", { site: host })}
@@ -148,16 +151,22 @@ export function ApprovalNoticeCard({
 			) : null}
 
 			<div className="mt-2 flex items-center gap-2">
-				<Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onDecide("deny")}>
-					{t("approvals.deny")}
-				</Button>
+				{waitingFor ? (
+					<p className="text-caption text-muted-foreground" data-testid="approval-waiting">
+						{waitingFor.name ? t("approvals.waitingFor", { name: waitingFor.name }) : t("approvals.waitingForOwner")}
+					</p>
+				) : (
+					<Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onDecide("deny")}>
+						{t("approvals.deny")}
+					</Button>
+				)}
 				<span className="flex-1" />
 				{hasPreview ? (
 					<Button type="button" variant="ghost" size="sm" aria-expanded={preview} onClick={() => setPreview((open) => !open)}>
 						{t("approvals.preview")}
 					</Button>
 				) : null}
-				<Button
+				{waitingFor ? null : <Button
 					type="button"
 					size="sm"
 					className="min-w-20"
@@ -166,7 +175,7 @@ export function ApprovalNoticeCard({
 					onClick={() => onDecide(always ? "allow-site" : "allow-once")}
 				>
 					{always ? t("approvals.allow") : t("approvals.allowOnce")}
-				</Button>
+				</Button>}
 			</div>
 		</div>
 	);

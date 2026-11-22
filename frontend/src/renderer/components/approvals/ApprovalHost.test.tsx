@@ -156,7 +156,7 @@ describe("approval hosts", () => {
 		renderWith(<GlobalApprovalCard />);
 		fireEvent.click(screen.getByRole("checkbox", { name: "Always allow on shop.example" }));
 		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
-		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-site", expect.anything(), undefined));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-site", expect.anything(), undefined, undefined));
 	});
 
 	it("previews why the action was flagged", () => {
@@ -193,6 +193,17 @@ describe("approval hosts", () => {
 		state.routedSessionId = "ao-1";
 		renderWith(<GlobalApprovalCard />);
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(c)");
+	});
+
+	it("shows another session's cloud request read-only app-wide when someone else decides it", () => {
+		state.cloud = [{ ...request("w", "cloud-2"), cloud: { baseUrl: "https://cp.test", orgId: "org-1" }, waitingFor: { name: "Priya Shah" } }];
+		state.routedSessionId = "ao-1";
+		renderWith(<GlobalApprovalCard />);
+		expect(screen.getByTestId("approval-waiting")).toHaveTextContent("Waiting for Priya Shah to approve");
+		expect(screen.queryByRole("button", { name: /Deny|Allow/ })).toBeNull();
+		expect(screen.queryByRole("checkbox")).toBeNull();
+		fireEvent.keyDown(screen.getByTestId("approval-prompt"), { key: "Escape" });
+		expect(state.decide).not.toHaveBeenCalled();
 	});
 
 	it("does not watch a remote host's session in the cloud", () => {
