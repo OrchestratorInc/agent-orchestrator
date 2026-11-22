@@ -3430,6 +3430,8 @@
 	"shell.signInToAOCloud": "Orchestrator Cloud에 로그인",
 	"shell.signedInAs": "{{email}}(으)로 로그인됨",
 	"shell.signOut": "로그아웃",
+	"shell.signOutConfirmTitle": "Orchestrator Cloud에서 로그아웃할까요?",
+	"shell.signOutConfirmDescription": "다시 로그인해야 합니다. 이 컴퓨터에 캐시된 Cloud 미리보기는 삭제됩니다. Cloud 프로젝트와 세션은 계정에 그대로 남습니다.",
 	"chat.branch.previous": "이전 대화 분기",
 	"chat.branch.next": "다음 대화 분기",
 	"chat.branch.position": "대화 분기 {{position}} / {{total}}",

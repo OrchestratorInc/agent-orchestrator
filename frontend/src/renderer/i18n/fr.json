@@ -3498,6 +3498,8 @@
 	"shell.signInToAOCloud": "Se connecter à Orchestrator Cloud",
 	"shell.signedInAs": "Connecté en tant que {{email}}",
 	"shell.signOut": "Se déconnecter",
+	"shell.signOutConfirmTitle": "Se déconnecter d’Orchestrator Cloud ?",
+	"shell.signOutConfirmDescription": "Vous devrez vous reconnecter. Les aperçus Cloud en cache sur cet ordinateur seront effacés. Vos projets et sessions Cloud restent dans votre compte.",
 	"chat.branch.previous": "Branche de conversation précédente",
 	"chat.branch.next": "Branche de conversation suivante",
 	"chat.branch.position": "Branche de conversation {{position}} sur {{total}}",

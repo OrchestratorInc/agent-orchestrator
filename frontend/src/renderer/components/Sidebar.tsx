@@ -3382,9 +3382,9 @@ function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () =
  * The header carries the full name, email and plan, which the one-line footer
  * row leaves out so nothing there has to truncate.
  */
-function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
+function CloudAccountMenuContent({ side, onSignOut }: { side: "top" | "right"; onSignOut: () => void }) {
 	const { t } = useTranslation();
-	const { session, signOut } = useCloudSession();
+	const { session } = useCloudSession();
 	// The plan badge is self-serve billing only; a contract org has no plan to show.
 	const billing = useCloudBilling();
 	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
@@ -3409,12 +3409,49 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 				</div>
 			</div>
 			<DropdownMenuSeparator />
-			<DropdownMenuItem onSelect={() => void signOut()} variant="destructive">
+			<DropdownMenuItem onSelect={onSignOut} variant="destructive">
 				<LogOut aria-hidden="true" />
 				{t("shell.signOut")}
 			</DropdownMenuItem>
 		</DropdownMenuContent>
 	);
+}
+
+/**
+ * Sign out of Orchestrator Cloud after a confirmation, as logging out of an
+ * agent asks first. The dialog sits in the account menu's root, not its
+ * content: the content unmounts as soon as the menu closes.
+ */
+function useConfirmedCloudSignOut() {
+	const { t } = useTranslation();
+	const { signOut } = useCloudSession();
+	const [open, setOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const confirm = () => {
+		setBusy(true);
+		setError(null);
+		void signOut()
+			.then(() => setOpen(false), (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)))
+			.finally(() => setBusy(false));
+	};
+	const dialog = (
+		<ConfirmDialog
+			open={open}
+			title={t("shell.signOutConfirmTitle")}
+			description={t("shell.signOutConfirmDescription")}
+			confirmLabel={t("shell.signOut")}
+			destructive
+			busy={busy}
+			error={error}
+			onConfirm={confirm}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) setError(null);
+			}}
+		/>
+	);
+	return { requestSignOut: () => setOpen(true), signOutDialog: dialog };
 }
 
 // CloudAccountRow: avatar and name for an existing cloud session (the
@@ -3424,6 +3461,7 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
+	const { requestSignOut, signOutDialog } = useConfirmedCloudSignOut();
 	if (!configured || status !== "authenticated") return null;
 	const email = session?.user.email;
 
@@ -3448,7 +3486,8 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					</span>
 				</Pressable>
 			</DropdownMenuTrigger>
-			<CloudAccountMenuContent side="top" />
+			<CloudAccountMenuContent side="top" onSignOut={requestSignOut} />
+			{signOutDialog}
 		</DropdownMenu>
 	);
 }
@@ -3512,6 +3551,7 @@ function AccountAvatar({
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
+	const { requestSignOut, signOutDialog } = useConfirmedCloudSignOut();
 	if (!configured || status !== "authenticated") return null;
 	const label = t("shell.signedInAs", {
 		email: session?.user.email ?? "Orchestrator Cloud",
@@ -3537,7 +3577,8 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 				</TooltipTrigger>
 				<TooltipContent side="right">{label}</TooltipContent>
 			</Tooltip>
-			<CloudAccountMenuContent side="right" />
+			<CloudAccountMenuContent side="right" onSignOut={requestSignOut} />
+			{signOutDialog}
 		</DropdownMenu>
 	);
 }
