@@ -25,10 +25,14 @@ func TestSaveLoadEnvBearer(t *testing.T) {
 		t.Fatalf("Env: %v", err)
 	}
 	want := map[string]string{
-		"ANTHROPIC_BASE_URL":   "https://gateway.example.com",
-		"ANTHROPIC_AUTH_TOKEN": "sk-test",
-		"ANTHROPIC_API_KEY":    "",
-		"ANTHROPIC_MODEL":      "glm-4.6",
+		"ANTHROPIC_BASE_URL":      "https://gateway.example.com",
+		"ANTHROPIC_AUTH_TOKEN":    "sk-test",
+		"ANTHROPIC_API_KEY":       "",
+		"ANTHROPIC_MODEL":         "glm-4.6",
+		"CLAUDE_CODE_OAUTH_TOKEN": "",
+		"CLAUDE_CODE_USE_BEDROCK": "",
+		"CLAUDE_CODE_USE_VERTEX":  "",
+		"CLAUDE_CODE_USE_FOUNDRY": "",
 	}
 	if len(env) != len(want) {
 		t.Fatalf("env = %v, want %v", env, want)
