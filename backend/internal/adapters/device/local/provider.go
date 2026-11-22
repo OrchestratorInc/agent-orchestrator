@@ -294,8 +294,9 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 	}
 }
 
-// hubPortLine is the hub's startup line naming its address.
-var hubPortLine = regexp.MustCompile(`Local:\s+http://(?:localhost|127\.0\.0\.1):(\d+)`)
+// hubPortLine is the hub's startup line naming its address. The port counts
+// only once something follows it: output can split a write mid-number.
+var hubPortLine = regexp.MustCompile(`Local:\s+http://(?:localhost|127\.0\.0\.1):(\d+)[/\s]`)
 
 // portWatcher reads the hub's stdout for the port it bound and passes the
 // first one on; the rest of the output only goes to the log.
