@@ -99,6 +99,12 @@ function RowIcon({ icon, color }: { icon: SettingsIconName; color?: string }) {
 }
 
 const glyphSlot = { width: 22, alignItems: "center", justifyContent: "center" } as const;
+/**
+ * A leading element in place of the glyph (an avatar, an agent's logo, a
+ * theme's swatch): at least the glyph's column, and as wide as it needs, so a
+ * wider one keeps the row's gap before the label rather than running into it.
+ */
+const leadingSlot = { minWidth: 22, alignItems: "center", justifyContent: "center" } as const;
 
 /** The disclosure chevron of a row that opens a page. */
 function Disclosure() {
@@ -127,7 +133,7 @@ function Row({ icon, leading, label, labelColor, detail, trailing, onPress, disa
 	const styles = useThemedStyles(makeStyles);
 	const body = (
 		<>
-			{leading ? <View style={glyphSlot}>{leading}</View> : icon ? <RowIcon icon={icon} color={labelColor} /> : null}
+			{leading ? <View style={leadingSlot}>{leading}</View> : icon ? <RowIcon icon={icon} color={labelColor} /> : null}
 			<View style={styles.labelColumn}>
 				<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.label, labelColor ? { color: labelColor } : null]} numberOfLines={1}>{label}</Text>
 				{detail}
