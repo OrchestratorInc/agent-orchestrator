@@ -191,6 +191,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 	root.AddCommand(newRemoteHostPairCommand(ctx))
 	root.AddCommand(newRemoteHostDevicesCommand(ctx))
 	root.AddCommand(newRemoteHostRequireDeviceCredentialsCommand(ctx))
+	root.AddCommand(newRemoteHostUpdateCommand(ctx))
 	return root
 }
 

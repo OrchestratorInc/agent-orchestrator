@@ -27,7 +27,7 @@ ao
 ├── review                         ls, trigger, cancel, submit
 ├── preview                        select/clear a target; start, status, stop a server
 ├── browser                        Control the selected session browser
-├── remote-host                    status, enable, disable, link
+├── remote-host                    status, enable, disable, link, update
 ├── import                         Import projects from legacy product data
 ├── completion                     Generate shell completions
 └── version                        Print build information
@@ -244,6 +244,7 @@ Lets your other devices use this machine through its authenticated remote listen
 | `ao remote-host require-device-credentials on\|off` | Stop accepting the pairing password, so each device needs its own token or the linked account's. |
 | `ao remote-host enable` | Turn on remote access. `--tunnel-only` serves it only through a Cloudflare tunnel; `--tunnel` keeps the LAN listener too. |
 | `ao remote-host disable` | Turn off remote access. Sessions keep running. |
+| `ao remote-host update` | Install the newest release of this machine's channel, restart it, and wait until it reports the new version or why the update failed. Sessions keep running. |
 | `ao remote-host link` | Add this machine to your AO account: it prints a sign-in link and a QR code, and waits up to 5 minutes for you to sign in from any device. The machine then gets a fixed address and appears on every device signed in to the account. `--label` sets its name (default: the name the account already has for it, else the hostname); `--no-qr` prints only the link. On a LAN-only listener it adds a Cloudflare tunnel, as `--tunnel` does. |
 
 `link` is how a VM or other machine without the desktop app joins your account. See [Connect a VM or other headless machine](/configuration/remote-access#connect-a-vm-or-other-headless-machine).

@@ -58,9 +58,10 @@ with nightly. Updating your laptop alone does not update the VM, but the
 desktop shows each host's version and flags a host that runs an older build of
 its channel. Click **Update** next to the host in **Settings → Remote hosts**
 to install the newest release of the VM's channel and restart its service;
-sessions keep running. Turn on **Auto update remote hosts** there to have the
-desktop start that update by itself whenever a saved host runs an older version
-than this computer. On the VM this runs
+sessions keep running. On the VM itself, `~/.local/bin/ao remote-host update`
+does the same and waits for the result. Turn on **Auto update remote hosts**
+there to have the desktop start that update by itself whenever a saved host
+runs an older version than this computer. On the VM this runs
 `setup-self-hosted.sh --upgrade` in the `ao-self-hosted-update` user unit;
 read its output with
 `journalctl --user -u ao-self-hosted-update.service --no-pager`. On a Mac
