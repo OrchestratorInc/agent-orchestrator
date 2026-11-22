@@ -92,10 +92,21 @@ describe("app i18next instance", () => {
 			expect(catalog["settings.agents"], locale).toBe(catalog["settings.codexAccounts.title"]);
 			expect(catalog["settings.cloudAgents.connect"], locale).not.toContain("Harness");
 			expect(catalog["settings.cloudAgents.description"], locale).not.toContain("Harness");
+			for (const key of ["settings.harness.viewLabel", "agentSelector.manageCloud"]) {
+				expect(catalog[key], `${locale}: ${key}`).not.toMatch(/harness|ハーネス|하네스/i);
+			}
 		}
 		expect(enMessages["settings.agents"]).toBe("Accounts");
+		expect(enMessages["settings.harness.viewLabel"]).toBe("Agent logins");
+		expect(enMessages["agentSelector.manageCloud"]).toBe("Manage agent connections…");
 		expect(enMessages["newTask.openHarnessSettings"]).toBe("Open Agents settings");
 		expect(enMessages["createProject.openHarnessSettings"]).toBe("Go to Agents settings");
+		const turkish = allCatalogs.tr as unknown as Record<string, string>;
+		const chinese = allCatalogs["zh-CN"] as unknown as Record<string, string>;
+		for (const key of ["settings.harness.viewLabel", "agentSelector.manage", "agentSelector.manageCloud", "newTask.openHarnessSettings", "createProject.openHarnessSettings", "usage.limits.emptyBody", "usage.limits.openSettings", "artifacts.noAgent.action", "inspector.resumeAuthRequired", "newTask.agentNotInstalled"]) {
+			expect(turkish[key], `tr: ${key}`).toMatch(/ajan/i);
+			expect(chinese[key], `zh-CN: ${key}`).toContain("智能体");
+		}
 	});
 
 	it("uses English by default and Chinese when selected", () => {
