@@ -4908,6 +4908,7 @@
 	"automations.clearFilters": "Filtreleri temizleyin",
 	"automations.nextRunAt": "Sonraki çalışma: {{time}}",
 	"automations.lastRun": "Son çalışma: {{status}}",
+	"automations.waitingForRun": "{{time}} çalışmasının bitmesi bekleniyor",
 	"automations.runStatus.pending": "Bekliyor",
 	"automations.runStatus.spawning": "Başlatılıyor",
 	"automations.runStatus.running": "Çalışıyor",

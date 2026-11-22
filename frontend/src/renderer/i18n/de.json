@@ -4847,6 +4847,7 @@
 	"automations.clearFilters": "Filter zurücksetzen",
 	"automations.nextRunAt": "Nächste Ausführung {{time}}",
 	"automations.lastRun": "Letzte Ausführung: {{status}}",
+	"automations.waitingForRun": "Wartet auf das Ende der Ausführung vom {{time}}",
 	"automations.runStatus.pending": "Ausstehend",
 	"automations.runStatus.spawning": "Wird gestartet",
 	"automations.runStatus.running": "Läuft",

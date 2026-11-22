@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 	workerTuning: {} as { model?: string; mode?: string; effort?: string },
 	baseTuning: {} as { model?: string; mode?: string; effort?: string },
 	workspaces: [] as Array<Record<string, unknown>>,
+	navigate: vi.fn(),
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -33,7 +34,7 @@ vi.mock("../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/platform")>(),
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "authorized", freshness: "fresh" }, effectiveReadiness: "ready", usageCount: 3, lastUsedAt: null };
 const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
@@ -805,6 +806,28 @@ describe("AutomationsView", () => {
 		await userEvent.click(screen.getByRole("switch", { name: "Disable Morning triage" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "active", body: { enabled: false } });
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not pause");
+	});
+
+	it("names the run a due occurrence waits behind and opens its session", async () => {
+		const base = { projectId: "demo", prompt: "Review", kind: "worker", harness: "codex", rrule: "FREQ=DAILY", timezone: "UTC", latestRun: { id: "today", status: "pending", scheduledFor: "2026-11-08T09:00:00Z" } };
+		const activeRun = { id: "yesterday", status: "running", scheduledFor: "2026-11-07T09:00:00Z", sessionId: "worker-7" };
+		mocks.automations = [
+			{ ...base, id: "blocked", displayName: "Blocked triage", enabled: true, activeRun },
+			{ ...base, id: "paused", displayName: "Paused triage", enabled: false, activeRun },
+			{ ...base, id: "running", displayName: "Running triage", enabled: true, latestRun: activeRun, activeRun },
+		];
+		renderView();
+		const [blocked, paused, running] = ["Blocked triage", "Paused triage", "Running triage"].map((name) => {
+			const row = screen.getAllByRole("article").find((article) => within(article).queryByRole("heading", { name }));
+			if (!row) throw new Error(`missing ${name}`);
+			return row;
+		});
+		const scheduledFor = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(activeRun.scheduledFor));
+		expect(within(blocked).getByText(`Waiting for the ${scheduledFor} run to finish`)).toBeInTheDocument();
+		expect(within(paused).queryByText(/Waiting for/)).not.toBeInTheDocument();
+		expect(within(running).queryByText(/Waiting for/)).not.toBeInTheDocument();
+		await userEvent.click(within(blocked).getByRole("button", { name: "Open session" }));
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "worker-7" } });
 	});
 
 	it("surfaces run-history fetch failures instead of an empty list", async () => {

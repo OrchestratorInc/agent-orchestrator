@@ -4847,6 +4847,7 @@
 	"automations.clearFilters": "필터 지우기",
 	"automations.nextRunAt": "다음 실행 {{time}}",
 	"automations.lastRun": "마지막 실행: {{status}}",
+	"automations.waitingForRun": "{{time}} 실행이 끝나기를 기다리는 중",
 	"automations.runStatus.pending": "대기 중",
 	"automations.runStatus.spawning": "시작 중",
 	"automations.runStatus.running": "실행 중",

@@ -4908,6 +4908,7 @@
 	"automations.clearFilters": "Clear filters",
 	"automations.nextRunAt": "Next run {{time}}",
 	"automations.lastRun": "Last run {{status}}",
+	"automations.waitingForRun": "Waiting for the {{time}} run to finish",
 	"automations.runStatus.pending": "Pending",
 	"automations.runStatus.spawning": "Starting",
 	"automations.runStatus.running": "Running",

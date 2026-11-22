@@ -368,6 +368,9 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
 	const reduceMotion = useReducedMotion();
 	const scheduleLabel = useScheduleLabel();
 	const historyId = `automation-history-${item.id}`;
+	// Runs of one automation never overlap, so a due occurrence waits for the active one.
+	const blockingRun = item.enabled && item.latestRun?.status === "pending" ? item.activeRun : undefined;
+	const blockingSessionId = blockingRun?.sessionId;
 	return <article className="group">
 		<div className={cn("flex items-center gap-3 rounded-md px-2 py-2.5", expanded ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
 			<Pressable className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
@@ -394,6 +397,10 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
 				<Switch checked={item.enabled} disabled={busy} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void onToggle(checked)} />
 			</div>
 		</div>
+		{blockingRun ? <div className="flex min-w-0 items-center gap-2 pr-2 pb-2 pl-8 text-caption leading-5 text-muted-foreground">
+			<span className="truncate tabular-nums">{t("automations.waitingForRun", { time: displayTime(blockingRun.scheduledFor, i18n.resolvedLanguage) })}</span>
+			{blockingSessionId ? <Button variant="quiet" size="xs" className="shrink-0" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: blockingSessionId } })}>{t("automations.runs.openSession")}</Button> : null}
+		</div> : null}
 		{item.latestRun?.errorMessage ? <p role="alert" className="mx-2 mb-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{item.latestRun.errorMessage}</p> : null}
 		<AnimatePresence initial={false}>
 			{expanded ? <motion.div id={historyId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
