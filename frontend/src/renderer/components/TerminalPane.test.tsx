@@ -411,6 +411,7 @@ function renderCachedPane({
 	terminalTarget,
 	focusRequested = false,
 	createMux,
+	onLinkOpen,
 }: {
 	session?: WorkspaceSession;
 	sessions: WorkspaceSession[];
@@ -418,8 +419,10 @@ function renderCachedPane({
 	terminalTarget?: TerminalTarget;
 	focusRequested?: boolean;
 	createMux?: () => TerminalMux;
+	onLinkOpen?: (uri: string) => void;
 }) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryDefaults(shellTerminalsQueryKey, { staleTime: Infinity });
 	queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions(sessions));
 	queryClient.setQueryData(shellTerminalsQueryKey, shellTerminals);
 	const previousAO = window.ao;
@@ -438,6 +441,7 @@ function renderCachedPane({
 							theme="dark"
 							focusRequested={focusRequested}
 							createMux={createMux}
+							onLinkOpen={onLinkOpen}
 						/>
 					) : (
 						<div data-testid="away" />
@@ -911,6 +915,22 @@ describe("TerminalPane replay cover", () => {
 describe("TerminalCacheProvider", () => {
 	const sessionA = { ...worker, id: "sess-a", title: "session A", terminalHandleId: "handle-a" };
 	const sessionB = { ...worker, id: "sess-b", title: "session B", terminalHandleId: "handle-b" };
+	it("opens a standalone Cline link from the cached terminal", async () => {
+		const shell = { handleId: "cline-login", title: "Cline login", workingDir: "/repo", createdAt: "2026-11-22T00:00:00Z" } satisfies ShellTerminal;
+		const onLinkOpen = vi.fn();
+		const view = renderCachedPane({
+			sessions: [], shellTerminals: [shell], onLinkOpen,
+			terminalTarget: { kind: "shell", handleId: shell.handleId, generation: shell.createdAt, title: shell.title },
+		});
+		try {
+			await waitFor(() => expect(activeXterm()).toBeInTheDocument(), { timeout: 10_000 });
+			act(() => terminalLinkHandler?.("https://app.cline.bot/auth/device"));
+			expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://app.cline.bot/auth/device");
+			expect(postMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
 
 	it("uses a caller-provided mux without retaining a remote shell in the local cache", async () => {
 		const shell = { handleId: "auth-a", title: "Log in", workingDir: "/host-a", createdAt: "2026-09-29T00:00:00Z" } satisfies ShellTerminal;

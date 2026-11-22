@@ -926,6 +926,7 @@ export function TerminalPane({
 		switchingLabel,
 		focusRequested,
 		onTerminalStateChange,
+		onLinkOpen,
 		onTerminalContentReadyChange,
 		inputRequest,
 		onInputRequestResult,
