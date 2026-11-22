@@ -426,13 +426,16 @@ function Composer({
 			if (!listeners.size) failedSendListeners.delete(draftKey);
 		};
 	}, [draftKey]);
+	// Whether the field has held anything since a send emptied it (or since it opened).
+	const heldSinceSend = useRef(false);
 	useEffect(() => {
+		if (text || quotes.length) heldSinceSend.current = true;
 		if (!draftKey || !draftLoaded) return;
 		// The field emptied by a send in flight is not a draft: saving it would
 		// drop the stored message, and a send that then fails with the
 		// conversation closed would leave nothing to restore. The send removes it
-		// once it lands.
-		if (sendsInFlight.has(draftKey) && !text && quotes.length === 0) return;
+		// once it lands. A draft typed since and cleared again is saved as cleared.
+		if (sendsInFlight.has(draftKey) && !text && quotes.length === 0 && !heldSinceSend.current) return;
 		draftTimer.current = setTimeout(() => {
 			const value = encodeResponseDraft(text, quotes);
 			void afterDraftWrites(draftKey, () => value ? AsyncStorage.setItem(draftKey, value) : AsyncStorage.removeItem(draftKey)).catch(() => {});
@@ -489,6 +492,7 @@ function Composer({
 		const clearedAtSend = attachments.length === 0 && quotes.length === 0;
 		if (clearedAtSend) {
 			if (draftKey) sendsInFlight.set(draftKey, text);
+			heldSinceSend.current = false;
 			latestText.current = "";
 			setText("");
 			setCursor(undefined);

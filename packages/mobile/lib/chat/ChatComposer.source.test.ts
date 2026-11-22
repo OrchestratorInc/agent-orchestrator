@@ -81,7 +81,9 @@ describe("chat composer pill", () => {
 	it("empties the field at send for a plain message and restores it if the send fails", () => {
 		expect(composer).toContain("const clearedAtSend = attachments.length === 0 && quotes.length === 0;");
 		// The emptied field is not saved as the draft while the send is in flight.
-		expect(composer).toContain("if (sendsInFlight.has(draftKey) && !text && quotes.length === 0) return;");
+		expect(composer).toContain("if (sendsInFlight.has(draftKey) && !text && quotes.length === 0 && !heldSinceSend.current) return;");
+		// A draft typed after the send and then cleared is saved as cleared.
+		expect(composer).toContain("heldSinceSend.current = false;");
 	});
 
 	// A composer opened while a send is in flight (the person left and came back)
