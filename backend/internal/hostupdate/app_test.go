@@ -97,7 +97,7 @@ func TestAppUpdateInstallsAndWaitsForRestart(t *testing.T) {
 
 func TestAppUpdateReportsTheAppsRefusal(t *testing.T) {
 	cases := map[string]error{
-		"Orchestrator on that computer has an unsent draft. Update it there.":              browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Orchestrator on that computer has an unsent draft. Update it there."},
+		"Orchestrator on that computer has a draft that isn't saved yet. Update it there.": browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Orchestrator on that computer has a draft that isn't saved yet. Update it there."},
 		"Orchestrator's window is closed on that computer. Open it there, then try again.": browserruntime.ErrUnavailable,
 	}
 	for want, refusal := range cases {
@@ -114,7 +114,7 @@ func TestAppUpdateReportsTheAppsRefusal(t *testing.T) {
 
 func TestAppUpdateInstallNotSentClearsResult(t *testing.T) {
 	cases := map[string]error{
-		"Orchestrator on that computer has an unsent draft. Update it there.":              browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Orchestrator on that computer has an unsent draft. Update it there."},
+		"Orchestrator on that computer has a draft that isn't saved yet. Update it there.": browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Orchestrator on that computer has a draft that isn't saved yet. Update it there."},
 		"Orchestrator's window is closed on that computer. Open it there, then try again.": fmt.Errorf("%w: %w", browserruntime.ErrReconnecting, browserruntime.ErrUnavailable),
 	}
 	for want, refusal := range cases {

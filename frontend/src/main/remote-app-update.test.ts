@@ -7,7 +7,7 @@ function deps(overrides: Partial<RemoteAppUpdateDeps> & { statuses?: UpdateStatu
 	let index = 0;
 	return {
 		packaged: true,
-		hasUnsentDrafts: () => false,
+		hasUnsavedDrafts: () => false,
 		installBlocker: () => undefined,
 		check: vi.fn(async () => undefined),
 		download: vi.fn(async () => {
@@ -49,7 +49,7 @@ describe("runRemoteAppUpdate", () => {
 	});
 
 	it.each([
-		["an unsent draft", { hasUnsentDrafts: () => true }, "Orchestrator on that computer has an unsent draft. Update it there."],
+		["a draft that isn't saved", { hasUnsavedDrafts: () => true }, "Orchestrator on that computer has a draft that isn't saved yet. Update it there."],
 		["a location it can't install from", { installBlocker: () => "Orchestrator's location isn't writable." }, "Orchestrator's location isn't writable."],
 		["a development build", { packaged: false }, "Updates are only available in the installed app."],
 	])("refuses with %s before quitting", async (_label, override, message) => {
@@ -61,11 +61,11 @@ describe("runRemoteAppUpdate", () => {
 	it("refuses when a draft appears while the update downloads", async () => {
 		let drafts = false;
 		const d = deps({
-			hasUnsentDrafts: () => drafts,
+			hasUnsavedDrafts: () => drafts,
 			download: vi.fn(async () => { drafts = true; }),
 			status: () => (drafts ? { state: "downloaded", version: "0.16.0" } : { state: "available", version: "0.16.0" }),
 		});
-		await expect(runRemoteAppUpdate(d, { step: "prepare" })).rejects.toThrow("unsent draft");
+		await expect(runRemoteAppUpdate(d, { step: "prepare" })).rejects.toThrow("isn't saved yet");
 	});
 
 	it.each([

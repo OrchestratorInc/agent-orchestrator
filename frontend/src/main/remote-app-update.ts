@@ -4,7 +4,7 @@ export const REMOTE_APP_UPDATE_ACTION = "__app-update";
 
 export interface RemoteAppUpdateDeps {
 	packaged: boolean;
-	hasUnsentDrafts: () => boolean;
+	hasUnsavedDrafts: () => boolean;
 	installBlocker: () => string | undefined;
 	check: () => Promise<void>;
 	download: () => Promise<void>;
@@ -14,7 +14,7 @@ export interface RemoteAppUpdateDeps {
 
 function refuseUnsafe(deps: RemoteAppUpdateDeps): void {
 	if (!deps.packaged) throw new Error("Updates are only available in the installed app.");
-	if (deps.hasUnsentDrafts()) throw new Error("Orchestrator on that computer has an unsent draft. Update it there.");
+	if (deps.hasUnsavedDrafts()) throw new Error("Orchestrator on that computer has a draft that isn't saved yet. Update it there.");
 	const blocker = deps.installBlocker();
 	if (blocker) throw new Error(blocker);
 }

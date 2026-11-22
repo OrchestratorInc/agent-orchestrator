@@ -2022,7 +2022,7 @@ function establishBrowserRuntimeLink(): void {
 			if (command.action === REMOTE_APP_UPDATE_ACTION) {
 				return runRemoteAppUpdate({
 					packaged: app.isPackaged,
-					hasUnsentDrafts: () => chatDraftRisks.length > 0,
+					hasUnsavedDrafts: () => chatDraftRisks.length > 0,
 					installBlocker: getMacInstallBlocker,
 					check: () => checkForUpdatesNow(path.dirname(rfp)),
 					download: () => downloadUpdateNow(),
