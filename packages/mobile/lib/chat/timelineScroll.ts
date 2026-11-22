@@ -45,3 +45,49 @@ export function followsAfterRest(release: Release | undefined, offset: number, a
 export function openingRow(count: number, window: number): number {
 	return Math.max(0, count - window);
 }
+
+/** How quickly a follow glide closes on the end: the gap left decays with this time constant. */
+export const GLIDE_TAU_MS = 140;
+/** The fastest a glide moves, in points per millisecond, so a long one starts gently. */
+export const GLIDE_MAX_SPEED = 3;
+/** The slowest, so its last few points do not crawl. */
+const GLIDE_MIN_SPEED = 0.2;
+
+/**
+ * One frame of a follow glide from `from` toward `to` (see useFollowGlide).
+ * Further than `reach` away, it first jumps to within `reach` of `to`: no
+ * glide covers more than a screen. Returns `to` once there.
+ */
+export function glideStep(from: number, to: number, elapsedMs: number, reach = 0): number {
+	"worklet";
+	let start = from;
+	if (reach > 0 && Math.abs(to - start) > reach) start = to - Math.sign(to - start) * reach;
+	const gap = to - start;
+	if (Math.abs(gap) < 0.5) return to;
+	const elapsed = Math.min(Math.max(elapsedMs, 1), 48);
+	const eased = Math.abs(gap) * (1 - Math.exp(-elapsed / GLIDE_TAU_MS));
+	const distance = Math.min(Math.max(eased, GLIDE_MIN_SPEED * elapsed), GLIDE_MAX_SPEED * elapsed, Math.abs(gap));
+	return start + Math.sign(gap) * distance;
+}
+
+/** Where a send's new message will be found: after the newest item the conversation had. */
+export function newestSequence(items: readonly { sequence: number }[]): number {
+	let newest = 0;
+	for (const item of items) if (item.sequence > newest) newest = item.sequence;
+	return newest;
+}
+
+/**
+ * The room a just-sent message's turn holds open below it, so that at the end
+ * of the list the message sits at the top of what can be seen (under the
+ * header and the banners) while the reply grows into the space beneath it.
+ * `keyboard` is the room the keyboard took when the message appeared: the
+ * keyboard usually stays up through a send, and the turn is laid out for the
+ * part of the screen above it.
+ */
+export function sentTurnRoom({ listHeight, keyboard, topClear, endPad }: { listHeight: number; keyboard: number; topClear: number; endPad: number }): number {
+	return Math.max(0, Math.round(listHeight - keyboard - topClear - endPad));
+}
+
+/** A send under way: its message is the first human message after `after` in conversation `conversationId`. */
+export type SendAnchor = { conversationId: string; after: number; at: number };

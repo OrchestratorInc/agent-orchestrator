@@ -17,7 +17,7 @@ import {
 	type NativeSyntheticEvent,
 	type ScrollViewProps,
 } from "react-native";
-import { KeyboardChatScrollView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { AppSymbol } from "../AppSymbol";
@@ -66,8 +66,11 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, sentTurnRoom, type Release, type SendAnchor } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
+import { ReplyPacingContext, usePacedReply, type ReplyPacing } from "./usePacedReply";
+import { FollowScrollView, glideStyles, useFollowGlide } from "./followGlide";
+import { useReducedMotion } from "../useReducedMotion";
 
 /** The jump back to the newest message fades in and out rather than popping. */
 const JUMP_FADE_MS = 160;
@@ -79,6 +82,12 @@ const OPENING_SETTLE_MS = 90;
 const OPENING_REVEAL_CAP_MS = 600;
 /** The longest a focused request field waits for the keyboard to open (none comes with a hardware keyboard). */
 const FIELD_REVEAL_WAIT_MS = 600;
+/**
+ * How long after a send its message is still brought to the top though the
+ * person had scrolled away: they just sent it. A send that waited in the queue
+ * and shows up later only moves a list that is following.
+ */
+const SEND_INTENT_MS = 5000;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -184,6 +193,7 @@ function Timeline({
 	keyboardOffset,
 	composerGrowth,
 	jumpHidden,
+	sendAnchor,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -230,6 +240,11 @@ function Timeline({
 	composerGrowth?: SharedValue<number>;
 	/** Hides the jump to the newest message (while the composer is open); a flag, so only the jump re-renders. */
 	jumpHidden?: Flag;
+	/**
+	 * A send the person just made. Its message is brought to the top of the
+	 * list once, with room left below it for the reply (see `sentTurnRoom`).
+	 */
+	sendAnchor?: SendAnchor;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -245,17 +260,26 @@ function Timeline({
 	const contentHeight = useRef(0);
 	// The room the list has made below its content for the keyboard (see `keyboardOffset`).
 	const keyboardInset = useRef(0);
+	// A follow to the end from JS while the keyboard scrolls the list jumped it;
+	// it waits for the keyboard to stop.
+	const { moving: keyboardMoving, onEnd: onKeyboardEnd } = useKeyboardMotion();
+	const followAfterKeyboard = useRef(false);
+	// Following new output glides on the UI thread (see useFollowGlide).
+	const glide = useFollowGlide(keyboardMoving, () => { followAfterKeyboard.current = true; });
+	const followRef = glide.scrollRef;
+	const reduceMotion = useReducedMotion();
 	// keyboard-controller's chat scroll view moves the content with the keyboard
 	// on the UI thread; a list that shrank and chased its end from JS jittered.
 	// "always": "whenAtEnd" read a cached content size that could be stale.
 	const renderScrollComponent = useMemo(() => keyboardOffset === undefined ? undefined : (props: ScrollViewProps) => (
-		<KeyboardChatScrollView
+		<FollowScrollView
 			{...props}
+			followRef={followRef}
 			keyboardLiftBehavior="always"
 			offset={keyboardOffset}
 			onContentInsetChange={(insets) => { keyboardInset.current = insets.bottom; }}
 		/>
-	), [keyboardOffset]);
+	), [followRef, keyboardOffset]);
 	// The conversation rises with lines typed (see `composerGrowth`). On Android
 	// it is also held to the composer through the keyboard's stretch behind the
 	// navigation bar, where the composer has already come to rest (ChatComposer's
@@ -281,10 +305,6 @@ function Timeline({
 		return { transform: [{ translateY: hold - growth }] };
 	}, [composerGrowth, keyboardOffset, keyboardRest]);
 	const measureFill = () => { fillsList.value = viewportHeight.current > 0 && contentHeight.current >= viewportHeight.current; };
-	// A follow to the end from JS while the keyboard scrolls the list jumped it;
-	// it waits for the keyboard to stop.
-	const { moving: keyboardMoving, onEnd: onKeyboardEnd } = useKeyboardMotion();
-	const followAfterKeyboard = useRef(false);
 	const latestFollow = useRef<() => void>(() => {});
 	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
@@ -336,9 +356,30 @@ function Timeline({
 	// reply's action row ended flush against the pill. Never less: ending the
 	// list inside the composer's height hid a last activity row under the dock.
 	// The keyboard takes back a little of the gap (see `keyboardOffset`).
+	const endPad = bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl;
 	const contentStyle = useMemo(() => headerPad || topInset || bottomInset
-		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl }]
-		: styles.content, [bottomInset, headerPad, styles.content, topInset]);
+		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: endPad }]
+		: styles.content, [bottomInset, endPad, headerPad, styles.content, topInset]);
+	// The list's height as state, for the room a sent message's turn holds open.
+	const [listHeight, setListHeight] = useState(0);
+	// The send's message, once the conversation has it: the first human message
+	// after the send began. Its turn holds the rest of the screen open below it
+	// (`sentTurnRoom`), so at the end of the list the message rests at the top
+	// and Thinking, Working, tool rows and the reply fill in beneath it without
+	// moving anything; only a reply that outgrows the room scrolls the list.
+	const anchor = sendAnchor?.conversationId === snapshot.conversationId ? sendAnchor : undefined;
+	const anchorIndex = useMemo(() => anchor
+		? groups.findIndex((group) => group.items.some((item) => item.kind === "message" && item.role === "user" && item.origin === "human" && item.sequence > anchor.after))
+		: -1, [anchor, groups]);
+	const anchorFound = anchorIndex >= 0 ? anchor : undefined;
+	// The keyboard's room as the message appeared, kept for the turn (see `sentTurnRoom`).
+	const anchorKeyboard = useRef<{ anchor: SendAnchor; keyboard: number } | undefined>(undefined);
+	if (anchorFound && anchorKeyboard.current?.anchor !== anchorFound) anchorKeyboard.current = { anchor: anchorFound, keyboard: keyboardInset.current };
+	// Only while the turn is the newest row: room above a later row would be a gap.
+	const roomKey = anchorFound && anchorIndex === groups.length - 1 ? groups[anchorIndex].key : undefined;
+	const room = roomKey && listHeight
+		? sentTurnRoom({ listHeight, keyboard: anchorKeyboard.current?.keyboard ?? 0, topClear: underHeader + topInset + space.md, endPad })
+		: 0;
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
 	const nextEdits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
@@ -352,8 +393,15 @@ function Timeline({
 	// leaving the conversation with the draft. A JS back listener never hears
 	// predictive back on Android, so this guards the screen's removal instead.
 	usePreventRemove(editing, cancelEdit);
-	const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);
+	const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room }), [editDraft, edits, openWorked, room, roomKey]);
 	const jumpViewPosition = 0.18;
+	// Where the native scrollToEnd lands: its content inset is the keyboard's room.
+	const endOffset = () => {
+		const overflow = contentHeight.current - (viewportHeight.current - keyboardInset.current);
+		return Platform.OS === "ios" && underHeader > 0 ? Math.max(overflow, -underHeader) : Math.max(overflow, 0);
+	};
+	// A glide needs the chat's own scroll view, a list that has opened and measured, and motion.
+	const glides = () => keyboardOffset !== undefined && opened && !reduceMotion && viewportHeight.current > 0;
 	// The ScrollView's own end, not FlatList's: FlatList measures to the last row
 	// and footer and leaves out the content's bottom padding, so it stopped short
 	// of the newest message by the composer's height.
@@ -365,7 +413,13 @@ function Timeline({
 	// scrolls to its true end here instead, which is never above the header,
 	// and nothing scrolls until the list has measured itself (the content can
 	// report its size first; `onLayout` then makes the scroll).
-	const scrollToLatest = (animated: boolean) => {
+	const scrollToLatest = (requestedAnimated: boolean) => {
+		const animated = requestedAnimated && !reduceMotion;
+		if (animated && glides()) {
+			glide.glideTo(endOffset(), viewportHeight.current);
+			return;
+		}
+		glide.stop();
 		const scroll = listRef.current?.getNativeScrollRef() as { scrollToEnd?(options: { animated: boolean }): void } | null | undefined;
 		const clampsUnderHeader = Platform.OS === "ios" && underHeader > 0;
 		if (clampsUnderHeader && !viewportHeight.current) return;
@@ -377,6 +431,14 @@ function Timeline({
 		if (clampsUnderHeader && overflow < 0) listRef.current?.scrollToOffset({ offset: Math.max(overflow, -underHeader), animated });
 		else if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
 		else listRef.current?.scrollToEnd({ animated });
+		// A scroll of ours may report no event (iOS throttles them): the next glide starts here.
+		if (viewportHeight.current) glide.place(endOffset());
+	};
+	// Output that outgrows the list while it follows is glided along, one motion
+	// however often the end moves; the opening list, still measuring, snaps.
+	const followToLatest = () => {
+		if (glides()) glide.glideTo(endOffset(), viewportHeight.current);
+		else scrollToLatest(false);
 	};
 	// The follow to the newest message that output and measuring rows ask for.
 	// It runs a frame after it was asked for, so it checks again: a drag that
@@ -388,7 +450,7 @@ function Timeline({
 			followAfterKeyboard.current = true;
 			return;
 		}
-		scrollToLatest(false);
+		followToLatest();
 	};
 	latestFollow.current = () => {
 		if (!followAfterKeyboard.current) return;
@@ -396,6 +458,35 @@ function Timeline({
 		if (followsTail.current) scrollToLatest(false);
 	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
+
+	// The send's message arrived: bring it to the top once, unless the person has
+	// their finger on the list. The room below it is already in this layout, so
+	// the follow glides to an end that holds the message at the top.
+	const broughtUp = useRef<SendAnchor | undefined>(undefined);
+	useEffect(() => {
+		if (!anchorFound || broughtUp.current === anchorFound) return;
+		broughtUp.current = anchorFound;
+		if (dragging.current || (!followsTail.current && Date.now() - anchorFound.at > SEND_INTENT_MS)) return;
+		followsTail.current = true;
+		setShowJump(false);
+		requestAnimationFrame(followTail);
+		// Once per send; `followTail` is this render's.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [anchorFound]);
+
+	// Live replies' pacing, kept per conversation: a switch to another session
+	// starts clean, and its replies already streaming are not replayed.
+	const [pacing] = useState<ReplyPacing>(() => ({ progress: new Map(), live: { current: false } }));
+	const conversationId = snapshot.conversationId;
+	const stopGlide = useRef(glide.stop);
+	stopGlide.current = glide.stop;
+	useEffect(() => {
+		pacing.progress.clear();
+		pacing.live.current = false;
+		stopGlide.current();
+		const live = setTimeout(() => { pacing.live.current = true; }, OPENING_REVEAL_CAP_MS);
+		return () => clearTimeout(live);
+	}, [conversationId, pacing]);
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -525,6 +616,7 @@ function Timeline({
 		}
 		dragging.current = false;
 		const offset = event.nativeEvent.contentOffset.y;
+		glide.place(offset);
 		const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
 		followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);
 		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
@@ -555,6 +647,7 @@ function Timeline({
 		<WorkerSessionsProvider>
 			<ConversationHarness.Provider value={snapshot.harness}>
 				<LatestWorkerUpdates.Provider value={latestUpdates}>
+				<ReplyPacingContext.Provider value={pacing}>
 					<Animated.View style={[styles.timelineWrap, growthLift]}>
 						<RevealFocusedField.Provider value={revealField}>
 						<FlatList<ConversationGroup>
@@ -583,7 +676,7 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); }}
 							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
@@ -603,6 +696,7 @@ function Timeline({
 								const previous = viewportHeight.current;
 								const measured = !previous;
 								viewportHeight.current = event.nativeEvent.layout.height;
+								setListHeight(Math.round(viewportHeight.current));
 								measureFill();
 								// The keyboard shrinks the list from below while the composer rides
 								// up over it, so a list at its end would leave the newest message
@@ -651,6 +745,7 @@ function Timeline({
 								workedOpen={openWorked.has(group.key)}
 								onToggleWorked={rowHandlers.toggleWorked}
 								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
+								room={group.key === roomKey ? room : undefined}
 							/>}
 						/>
 						</RevealFocusedField.Provider>
@@ -662,7 +757,9 @@ function Timeline({
 						{/* Floating above whatever sits over the list's end, so it never moves
 						    the composer or the conversation; it fades rather than pops. */}
 						{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}
+						{renderScrollComponent ? <Animated.View pointerEvents="none" style={[glideStyles.commit, glide.commitStyle]} /> : null}
 					</Animated.View>
+				</ReplyPacingContext.Provider>
 				</LatestWorkerUpdates.Provider>
 			</ConversationHarness.Provider>
 		</WorkerSessionsProvider>
@@ -674,7 +771,7 @@ function Timeline({
  * useStableGroups) and its handlers stable, so a streamed word re-renders the
  * turn it lands in and leaves every other turn on screen alone.
  */
-const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
+const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup, room }: {
 	group: ConversationGroup;
 	sessionId: string;
 	conversationId: string;
@@ -696,7 +793,11 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	workedOpen: boolean;
 	onToggleWorked(key: string): void;
 	startup?: TimelineStartup;
+	/** The room a just-sent message's turn holds open below it (see `sentTurnRoom`). */
+	room?: number;
 }) {
+	// Laid out with the turn, so what fills it in moves nothing below or above.
+	const roomStyle = room ? { minHeight: room } : undefined;
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
@@ -718,7 +819,7 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 		const leading = firstWork < 0 ? items.length : firstWork;
 		// The checklist explains the wait, so the brief drops its "Queued" note.
 		const brief = items.slice(0, leading).map((item) => item.kind === "message" && item.delivery === "queued" ? { ...item, delivery: undefined } : item);
-		return <View>
+		return <View style={roomStyle}>
 			{renderRows(brief)}
 			<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
 			{renderRows(items.slice(leading))}
@@ -726,13 +827,13 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	}
 	const partition = partitionTurnItems(items, group.turn);
 	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
-	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
+	if (!partition || !group.turn) return <View style={roomStyle}>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
 	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} />;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
-	return <View>
+	return <View style={roomStyle}>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
 		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
@@ -746,6 +847,17 @@ function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: numbe
 	return composerOpen ? null : <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom }]}>
 		<JumpToLatest onPress={onPress} />
 	</Animated.View>;
+}
+
+/**
+ * An agent's reply. While it streams, its text is paced (usePacedReply), so
+ * the bursts the phone reads arrive as a steady stream; it stays a streaming
+ * render, and unselectable, until the paced text has caught up.
+ */
+function AssistantReply({ message, conversationId, completed }: { message: ConversationMessage; conversationId: string; completed: boolean }) {
+	const text = usePacedReply(message.id, message.text, message.streaming);
+	const revealing = text.length < message.text.length;
+	return <ChatMarkdown text={text} streaming={message.streaming || revealing} continuousSelection selectionSource={completed && !message.streaming && !revealing ? { conversationId, messageId: message.id, revision: message.revision } : undefined} />;
 }
 
 const TimelineItem = memo(function TimelineItem({
@@ -820,7 +932,7 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				<AssistantReply message={item} conversationId={conversationId} completed={completed} />
 			</View>
 		);
 	}

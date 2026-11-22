@@ -36,7 +36,7 @@ describe("chat turn summary styling", () => {
 
 	it("folds a settled turn's work behind the Worked for row and keeps its state above the list", () => {
 		expect(source).toContain("partitionTurnItems(items, group.turn)");
-		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room }), [editDraft, edits, openWorked, room, roomKey]);");
 		expect(source).toContain("extraData={rowState}");
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
@@ -67,6 +67,54 @@ describe("streaming response layout", () => {
 		expect(source).not.toContain("▍");
 		expect(source).not.toContain("showCursor");
 		expect(source).not.toContain("styles.streamingDot");
+	});
+
+	// Snapshots land in bursts; the reply's text is paced (replyPacer) and stays
+	// a streaming, unselectable render until the paced text has caught up.
+	it("paces a live reply and treats it as streaming until it has caught up", () => {
+		const reply = source.slice(source.indexOf("function AssistantReply"), source.indexOf("const TimelineItem"));
+		expect(reply).toContain("const text = usePacedReply(message.id, message.text, message.streaming);");
+		expect(reply).toContain("streaming={message.streaming || revealing}");
+		expect(reply).toContain("completed && !message.streaming && !revealing ?");
+		expect(source).toContain("<AssistantReply message={item} conversationId={conversationId} completed={completed} />");
+	});
+
+	// A session switch reuses the timeline: the new conversation's pacing starts clean.
+	it("keeps reply pacing per conversation", () => {
+		expect(source).toContain("<ReplyPacingContext.Provider value={pacing}>");
+		expect(source).toContain("}, [conversationId, pacing]);");
+		expect(source).toContain("pacing.progress.clear();");
+	});
+});
+
+describe("a sent message", () => {
+	// Its turn holds the rest of the screen open below it, in the same layout,
+	// so what fills it in (Thinking, Working, tools, the reply, its fold) moves
+	// nothing; only a reply that outgrows the room scrolls the list.
+	it("holds room below its turn while it is the newest row", () => {
+		expect(source).toContain("const roomKey = anchorFound && anchorIndex === groups.length - 1 ? groups[anchorIndex].key : undefined;");
+		expect(source).toContain("room={group.key === roomKey ? room : undefined}");
+		expect(source).toContain("const roomStyle = room ? { minHeight: room } : undefined;");
+		expect(source.match(/<View style=\{roomStyle\}>/g)).toHaveLength(3);
+	});
+
+	it("is brought to the top once, never out from under the person's finger", () => {
+		expect(source).toContain("if (!anchorFound || broughtUp.current === anchorFound) return;");
+		expect(source).toContain("if (dragging.current || (!followsTail.current && Date.now() - anchorFound.at > SEND_INTENT_MS)) return;");
+	});
+});
+
+describe("following a growing reply", () => {
+	// One glide on the UI thread, retargeted as the end moves, rather than a
+	// jump per update; the opening list and reduced motion snap instead.
+	it("glides to the end while following, and snaps while opening or with reduced motion", () => {
+		expect(source).toContain("const glides = () => keyboardOffset !== undefined && opened && !reduceMotion && viewportHeight.current > 0;");
+		expect(source).toContain("if (glides()) glide.glideTo(endOffset(), viewportHeight.current);");
+		expect(source).toContain("const animated = requestedAnimated && !reduceMotion;");
+	});
+
+	it("starts the next glide where a drag left the list", () => {
+		expect(source).toContain("const offset = event.nativeEvent.contentOffset.y;\n\t\tglide.place(offset);");
 	});
 });
 
@@ -109,7 +157,8 @@ describe("sent human message actions", () => {
 // a little in step with its own animation (the list's keyboard offset).
 describe("the conversation's end over the composer", () => {
 	it("ends a comfortable gap above the composer's height", () => {
-		expect(source).toContain("paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl");
+		expect(source).toContain("const endPad = bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl;");
+		expect(source).toContain("paddingTop: space.md + headerPad + topInset, paddingBottom: endPad }");
 	});
 	it("gives up only part of that gap while the keyboard is up", async () => {
 		const inset = await import("../session/keyboardInset");
@@ -173,7 +222,7 @@ describe("jump to latest", () => {
 	// followed. It must not count against coming to rest at the end, and a
 	// follow that resumes catches up on it.
 	it("keeps the release's verdict through Android's still momentum and catches up when the follow resumes", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);");
 		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
@@ -390,7 +439,7 @@ describe("state in words", () => {
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");
-		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room }), [editDraft, edits, openWorked, room, roomKey]);");
 	});
 });
 
@@ -412,7 +461,7 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
 		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");

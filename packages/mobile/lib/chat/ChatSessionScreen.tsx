@@ -57,6 +57,7 @@ import { clientMessageId, useMobileConversation } from "./useConversation";
 import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
+import { newestSequence, type SendAnchor } from "./timelineScroll";
 import { sessionStartupView, startupVisible } from "../session/sessionStartup";
 import { startSerialPoll } from "../session/serialPoll";
 import { STARTUP_POLL_MS } from "../session/startupPoll";
@@ -241,11 +242,26 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	);
 	const agentSwitchSending = conversation.pendingSends.some((item) => item.state === "sending" && Boolean(item.providerSwitch));
 	const sendConversation = conversation.send;
+	// The send under way, for the timeline to bring its message to the top once
+	// the conversation has it (ChatTimeline's `sendAnchor`). The message appears
+	// only once the daemon has taken it; a send that fails clears it.
+	const [sendAnchor, setSendAnchor] = useState<SendAnchor | undefined>(undefined);
+	useEffect(() => { setSendAnchor(undefined); }, [session.id]);
 	const send = useCallback(
-		(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => sendConversation(
-			text, attachments, resources, excerpts,
-			pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
-		),
+		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => {
+			const current = latestSnapshot.current;
+			const anchor = current ? { conversationId: current.conversationId, after: newestSequence(current.items), at: Date.now() } : undefined;
+			if (anchor) setSendAnchor(anchor);
+			try {
+				return await sendConversation(
+					text, attachments, resources, excerpts,
+					pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
+				);
+			} catch (cause) {
+				if (anchor) setSendAnchor((shown) => shown === anchor ? undefined : shown);
+				throw cause;
+			}
+		},
 		[pendingSwitch, sendConversation],
 	);
 	// A new agent brings its own models and options: reload them uncached, so
@@ -989,6 +1005,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					keyboardOffset={chatKeyboard.listKeyboardOffset}
 					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
+					sendAnchor={sendAnchor}
 				/> : null}
 				</TurnRecoveryContext.Provider>
 				</TurnArtifactsContext.Provider>
