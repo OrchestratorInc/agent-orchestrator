@@ -82,7 +82,7 @@ describe("TurnChangedFiles", () => {
 		expectCardPath(path);
 		expect(row.getByText("packages/")).toHaveClass("shrink-0");
 		expect(row.getByText("product-ui/src/components/forms/")).toHaveClass("shrink-[100]", "truncate");
-		expect(row.getByText("Button.tsx")).toHaveClass("flex-1", "truncate");
+		expect(row.getByText("Button.tsx")).toHaveClass("flex-auto", "truncate");
 		await userEvent.hover(row.getByText("Button.tsx"));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent(path);
 	});

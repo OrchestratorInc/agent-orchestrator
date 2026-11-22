@@ -12,7 +12,7 @@ describe("ChangedFilesList", () => {
 		const rows = screen.getAllByRole("listitem");
 		expect(rows.map((row) => row.textContent)).toEqual(["README.md+4A, added", "src/b.ts+2−1M, modified", "View all changes"]);
 		expect(screen.getByText("src/")).toHaveClass("shrink-0");
-		expect(screen.getByText("b.ts")).toHaveClass("truncate");
+		expect(screen.getByText("b.ts")).toHaveClass("flex-auto", "truncate");
 		await userEvent.click(screen.getByRole("button", { name: /b\.ts/ }));
 		expect(onOpenFile).toHaveBeenCalledWith("src/b.ts");
 	});

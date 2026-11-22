@@ -35,7 +35,7 @@ export function WorkspacePathSegments({ path, nameClassName }: { path: string; n
 	return <>
 		{prefix ? <span className="shrink-0 text-passive">{prefix}</span> : null}
 		{dir ? <span className="min-w-0 shrink-[100] truncate text-passive">{dir}</span> : null}
-		<span className={cn("min-w-0 flex-1 truncate text-foreground", nameClassName)}>{name}</span>
+		<span className={cn("min-w-0 flex-auto truncate text-foreground", nameClassName)}>{name}</span>
 	</>;
 }
 
