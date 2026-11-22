@@ -116,7 +116,6 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 	}, [viewing]);
 	useEffect(() => {
 		const prev = previous.current;
-		if (prev?.id !== orchestrator?.id && !working) handledAt.current = lastUserAt;
 		const parsed = Date.parse(lastActivityAt ?? "");
 		const at = Number.isFinite(parsed) ? parsed : Date.now();
 		previous.current = { id: orchestrator?.id, working, since: prev?.working && prev.id === orchestrator?.id ? prev.since : at };

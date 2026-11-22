@@ -307,17 +307,12 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
-	it("treats the user's last message as handled when a button first sees the orchestrator idle", async () => {
-		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
+	it("shows working for a message the user sent just before a button mounted", () => {
 		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
-		const missed = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:01:00Z" }) as WorkspaceSession;
-		const hook = setup(missed("idle", "2026-11-08T10:02:00Z"));
-		hook.rerender({ orchestrator: missed("active", "2026-11-08T10:05:00Z"), viewing: false, projectId: "project-a" });
-		expect(hook.result.current).toBeNull();
-		hook.rerender({ orchestrator: missed("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
-		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
-		await act(async () => {});
-		expect(hook.result.current).toBeNull();
+		const sent = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:01:00Z" }) as WorkspaceSession;
+		const hook = setup(sent("idle", "2026-11-08T10:00:30Z"));
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:01:02Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("working");
 	});
 
 	it("lights up when the settled turns cannot be read", async () => {
