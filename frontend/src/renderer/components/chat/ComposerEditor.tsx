@@ -104,10 +104,9 @@ export type ComposerEditorHandle = {
 	/**
 	 * Hold the caret's place for images still being staged. Returns a reservation
 	 * for fillImages, so the chips land where the user pasted, not wherever the
-	 * caret has moved by the time staging finishes. `src` is a local picture of
-	 * the image for the reservation to show while it uploads.
+	 * caret has moved by the time staging finishes.
 	 */
-	reserveImages(src?: string): string | undefined;
+	reserveImages(): string | undefined;
 	/** Replace a reservation with one chip per staged image path (none removes it). */
 	fillImages(reservation: string, paths: string[]): void;
 	/** Drop every inline chip for an image that left the attachment list. */
@@ -126,32 +125,21 @@ export type ComposerEditorHandle = {
 export type ComposerImage = { path: string; name: string; src?: string };
 
 const ComposerImages = createContext<ComposerImage[]>([]);
-/** A local picture for each reservation still uploading, by its node key. */
-const ComposerPendingImages = createContext<Readonly<Record<NodeKey, string>>>({});
 
 /** An empty path is a reservation whose image is still being staged. */
-function ComposerImageChip({ path, nodeKey }: { path: string; nodeKey: NodeKey }) {
+function ComposerImageChip({ path }: { path: string }) {
 	const { t } = useTranslation();
 	const images = useContext(ComposerImages);
-	const pendingSrc = useContext(ComposerPendingImages)[nodeKey];
 	const index = images.findIndex((candidate) => candidate.path === path);
 	const image = images[index];
 	if (!path) {
-		// The picture shows at once from the pasted bytes; the dashed edge says it is still uploading.
 		return (
 			<span
 				data-composer-token="image-pending"
 				contentEditable={false}
-				className={cn(
-					"mx-0.5 inline-flex items-center gap-1 rounded-md border border-dashed border-border-strong py-0.5 align-middle text-[0.9em] leading-none text-muted-foreground select-none",
-					pendingSrc ? "pl-0.5 pr-1.5" : "px-1.5",
-				)}
+				className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-dashed border-border-strong px-1.5 py-0.5 align-middle text-[0.9em] leading-none text-muted-foreground select-none"
 			>
-				{pendingSrc ? (
-					<img src={pendingSrc} alt="" className="size-4 shrink-0 rounded-sm object-cover" />
-				) : (
-					<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
-				)}
+				<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
 				…
 			</span>
 		);
@@ -315,7 +303,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	}
 
 	decorate(): JSX.Element {
-		if (this.__kind === "image") return <ComposerImageChip path={this.__value} nodeKey={this.__key} />;
+		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
 		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);
 		return (
 			<span
@@ -657,13 +645,11 @@ const EditorBridge = forwardRef<
 		onEmptyChange: (empty: boolean) => void;
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
-		/** A reservation's local picture while it uploads; undefined once it is filled. */
-		onPendingImage: (reservation: NodeKey, src: string | undefined) => void;
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | typeof CONSUME_TRIGGER | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onPendingImage, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 	/** The dictated letters, after an empty anchor node, and when the last fade ends. */
 	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
@@ -783,17 +769,15 @@ const EditorBridge = forwardRef<
 					$insertComposerReference(path, display, wire);
 				}, { discrete: true });
 			},
-			reserveImages: (src) => {
+			reserveImages: () => {
 				let reservation: string | undefined;
 				editor.update(() => {
 					reservation = $reserveImages();
 				}, { discrete: true });
-				if (reservation && src) onPendingImage(reservation, src);
 				return reservation;
 			},
 			fillImages: (reservation, paths) => {
 				editor.update(() => $fillImages(reservation, paths), { discrete: true });
-				onPendingImage(reservation, undefined);
 			},
 			removeImage: (path) => {
 				editor.update(() => $removeImageTokens((candidate) => candidate === path), { discrete: true });
@@ -805,7 +789,7 @@ const EditorBridge = forwardRef<
 			getTokens: () => editor.getEditorState().read($composerTokens),
 			caretBoundary: () => editor.read(() => $caretBoundary(editor)),
 		}),
-		[attachedImages, editor, onPendingImage],
+		[attachedImages, editor],
 	);
 
 	useLayoutEffect(() => {
@@ -1055,15 +1039,6 @@ export const ComposerEditor = forwardRef<
 	const imagesRef = useRef(images);
 	imagesRef.current = images;
 	const attachedImages = useCallback(() => imagesRef.current.map((image) => image.path), []);
-	const [pendingImages, setPendingImages] = useState<Readonly<Record<NodeKey, string>>>({});
-	const onPendingImage = useCallback((reservation: NodeKey, src: string | undefined) => {
-		setPendingImages((current) => {
-			if (src) return { ...current, [reservation]: src };
-			if (!(reservation in current)) return current;
-			const { [reservation]: _filled, ...rest } = current;
-			return rest;
-		});
-	}, []);
 
 	const placeholderNode = useCallback(
 		() => (
@@ -1094,7 +1069,6 @@ export const ComposerEditor = forwardRef<
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerImages.Provider value={images}>
-			<ComposerPendingImages.Provider value={pendingImages}>
 			<div className={cn("relative", suggestion && cn("max-h-40 overflow-y-auto overscroll-contain", COMPOSER_SCROLL_GUTTER))}>
 				<PlainTextPlugin
 					contentEditable={
@@ -1147,13 +1121,11 @@ export const ComposerEditor = forwardRef<
 					onDismissSuggestion={dismissSuggestion}
 					onEmptyChange={setEmpty}
 					attachedImages={attachedImages}
-					onPendingImage={onPendingImage}
 					onChange={onChange}
 					onComplete={onComplete}
 					onEnter={onEnter}
 				/>
 			</div>
-			</ComposerPendingImages.Provider>
 			</ComposerImages.Provider>
 		</LexicalComposer>
 	);

@@ -667,15 +667,9 @@ export const ChatComposer = memo(function ChatComposer({
 	// A message sent while its files upload: it waits in the queue, and the draft
 	// is hidden until the upload settles (then the send clears it as usual).
 	const [awaitingUploads, setAwaitingUploads] = useState(false);
-	const uploadingSend = useRef<UploadingSend | null>(null);
+	// Read when the send settles, which can be after a re-render replaced it.
 	const onUploadingSendChangeRef = useRef(onUploadingSendChange);
 	onUploadingSendChangeRef.current = onUploadingSendChange;
-	const publishUploadingSend = useCallback((send: UploadingSend | null) => {
-		if (!send && !uploadingSend.current) return;
-		uploadingSend.current = send;
-		onUploadingSendChangeRef.current?.(send);
-	}, []);
-	useEffect(() => () => publishUploadingSend(null), [publishUploadingSend]);
 	/**
 	 * Messages sent in quick succession go out one after another, in order.
 	 *
@@ -1869,8 +1863,7 @@ export const ChatComposer = memo(function ChatComposer({
 			await performClaimedSubmit(forceSteer, mutationToken);
 		} finally {
 			if (draftScope && mutationToken) cancelChatComposerMutation(draftScope, mutationToken);
-			setAwaitingUploads(false);
-			publishUploadingSend(null);
+			onUploadingSendChangeRef.current?.(null);
 		}
 	}
 
@@ -1931,7 +1924,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (draftScope && !recoveringDelivery && !savingQueuedEdit && !forceSteer && fileAttachments.preparing) {
 			uploadingId = crypto.randomUUID();
 			setAwaitingUploads(true);
-			publishUploadingSend({
+			onUploadingSendChangeRef.current?.({
 				clientMessageId: uploadingId,
 				// Images show as chips in the row, so their paths leave the text.
 				text: splitInlineImagePaths(currentText)
@@ -2036,12 +2029,11 @@ export const ChatComposer = memo(function ChatComposer({
 		});
 		// The daemon already holds each staged image, so where it reads them by path
 		// the message names them instead of carrying their bytes a second time.
-		const byPath = (attachment: FileAttachment): FileAttachmentPayload[] =>
-			stagedImageReferences && attachment.stagedPath ? [{ mimeType: attachment.mimeType, data: "", path: attachment.stagedPath }] : [];
+		const byPath = (attachment: FileAttachment): FileAttachmentPayload | undefined =>
+			stagedImageReferences && attachment.stagedPath ? { mimeType: attachment.mimeType, data: "", path: attachment.stagedPath } : undefined;
 		let nativePayloads = nativeImageAttachments.flatMap((attachment) => {
-			const named = byPath(attachment);
-			if (named.length > 0) return named;
-			return attachment.data ? [{ mimeType: attachment.mimeType, data: attachment.data }] : [];
+			const payload = byPath(attachment) ?? (attachment.data ? { mimeType: attachment.mimeType, data: attachment.data } : undefined);
+			return payload ? [payload] : [];
 		});
 		const restoreNativePayloads = async (): Promise<boolean> => {
 			if (!attachmentScope || !sendNativeImages || recoveringDelivery?.kind === "steer" || recoveringDelivery?.state === "accepted") return true;
@@ -2049,8 +2041,8 @@ export const ChatComposer = memo(function ChatComposer({
 			try {
 				for (const attachment of nativeImageAttachments) {
 					const named = byPath(attachment);
-					if (named.length > 0) {
-						restored.push(...named);
+					if (named) {
+						restored.push(named);
 						continue;
 					}
 					if (attachment.data) {
@@ -2487,19 +2479,14 @@ export const ChatComposer = memo(function ChatComposer({
 	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
-		// The spot shows the pasted picture meanwhile.
-		const firstImage = files.find((file) => isSupportedImageAttachment(file.type));
-		const reservationSrc = firstImage && typeof URL.createObjectURL === "function" ? URL.createObjectURL(firstImage) : undefined;
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
-			? editor.current?.reserveImages(reservationSrc)
+			? editor.current?.reserveImages()
 			: undefined;
-		if (!reservation && reservationSrc) URL.revokeObjectURL(reservationSrc);
 		void fileAttachments.addFiles(files).then((added) => {
 			if (!reservation) return;
 			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
 				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
-			if (reservationSrc) URL.revokeObjectURL(reservationSrc);
 		});
 	}
 
@@ -2752,17 +2739,18 @@ export const ChatComposer = memo(function ChatComposer({
 									>
 										{/* An image shows its own picture while it uploads; the pulse says it is still on its way. */}
 										{file.previewUrl ? (
-											<img src={file.previewUrl} alt="" aria-hidden="true" className="size-6 shrink-0 rounded-sm object-cover motion-safe:animate-pulse" />
+											<>
+												<img src={file.previewUrl} alt="" aria-hidden="true" className="size-6 shrink-0 rounded-sm object-cover motion-safe:animate-pulse" />
+												<span aria-hidden="true" className="max-w-[120px] truncate text-xs text-muted-foreground">{file.name}</span>
+											</>
 										) : (
-											<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
-										)}
-										{file.previewUrl ? (
-											<span aria-hidden="true" className="max-w-[120px] truncate text-xs text-muted-foreground">{file.name}</span>
-										) : (
-											<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
-												<span className="invisible">{file.name}</span>
-												<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
-											</span>
+											<>
+												<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
+												<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
+													<span className="invisible">{file.name}</span>
+													<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
+												</span>
+											</>
 										)}
 										{/* Removing a file while it attaches cancels it. */}
 										<Button

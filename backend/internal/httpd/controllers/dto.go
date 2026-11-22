@@ -4069,11 +4069,8 @@ type ConversationSnapshotResponse struct {
 	ContinueTurnID string `json:"continueTurnId"`
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.
-	SupportsExcerpts       bool `json:"supportsExcerpts,omitempty"`
-	SupportsFileReferences bool `json:"supportsFileReferences,omitempty"`
-	// SupportsStagedImages advertises that a native image may name a staged
-	// file (ConversationImageContentRequest.Path) instead of carrying its bytes.
-	// An older daemon would refuse the path as empty image data.
+	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
+	SupportsFileReferences     bool   `json:"supportsFileReferences,omitempty"`
 	SupportsStagedImages       bool   `json:"supportsStagedImages,omitempty"`
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
