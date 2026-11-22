@@ -3443,6 +3443,8 @@
 	"shell.signInToAOCloud": "Cloud oturumu aç",
 	"shell.signedInAs": "{{email}} olarak oturum açık",
 	"shell.signOut": "Oturumu kapat",
+	"shell.signOutConfirmTitle": "Orchestrator Cloud oturumu kapatılsın mı?",
+	"shell.signOutConfirmDescription": "Yeniden oturum açmanız gerekecek. Bu bilgisayarda önbelleğe alınmış Cloud önizlemeleri silinecek. Cloud projeleriniz ve oturumlarınız hesabınızda kalır.",
 	"chat.branch.previous": "Önceki konuşma dalı",
 	"chat.branch.next": "Sonraki konuşma dalı",
 	"chat.branch.position": "{{total}} konuşma dalından {{position}}",

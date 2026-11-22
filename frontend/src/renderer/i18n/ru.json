@@ -3587,6 +3587,8 @@
 	"shell.signInToAOCloud": "Войти в облако",
 	"shell.signedInAs": "Выполнен вход: {{email}}",
 	"shell.signOut": "Выйти",
+	"shell.signOutConfirmTitle": "Выйти из Orchestrator Cloud?",
+	"shell.signOutConfirmDescription": "Потребуется войти снова. Кэшированные превью Cloud на этом компьютере будут удалены. Ваши проекты и сессии Cloud останутся в аккаунте.",
 	"chat.branch.previous": "Предыдущая ветка диалога",
 	"chat.branch.next": "Следующая ветка диалога",
 	"chat.branch.position": "Ветка диалога {{position}} из {{total}}",

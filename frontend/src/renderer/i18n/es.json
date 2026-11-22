@@ -3499,6 +3499,8 @@
 	"shell.signInToAOCloud": "Iniciar sesión en Orchestrator Cloud",
 	"shell.signedInAs": "Sesión iniciada como {{email}}",
 	"shell.signOut": "Cerrar sesión",
+	"shell.signOutConfirmTitle": "¿Cerrar sesión en Orchestrator Cloud?",
+	"shell.signOutConfirmDescription": "Tendrás que volver a iniciar sesión. Se borrarán las vistas previas de Cloud guardadas en este equipo. Tus proyectos y sesiones de Cloud seguirán en tu cuenta.",
 	"chat.branch.previous": "Rama de conversación anterior",
 	"chat.branch.next": "Rama de conversación siguiente",
 	"chat.branch.position": "Rama de conversación {{position}} de {{total}}",

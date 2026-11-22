@@ -3431,6 +3431,8 @@
 	"shell.signInToAOCloud": "Bei Orchestrator Cloud anmelden",
 	"shell.signedInAs": "Angemeldet als {{email}}",
 	"shell.signOut": "Abmelden",
+	"shell.signOutConfirmTitle": "Von Orchestrator Cloud abmelden?",
+	"shell.signOutConfirmDescription": "Danach ist eine erneute Anmeldung nötig. Zwischengespeicherte Cloud-Vorschauen auf diesem Computer werden gelöscht. Cloud-Projekte und -Sitzungen bleiben im Konto erhalten.",
 	"chat.branch.previous": "Vorheriger Gesprächszweig",
 	"chat.branch.next": "Nächster Gesprächszweig",
 	"chat.branch.position": "Gesprächszweig {{position}} von {{total}}",

@@ -3413,6 +3413,8 @@
 	"shell.signInToAOCloud": "登录 Orchestrator Cloud",
 	"shell.signedInAs": "已登录为 {{email}}",
 	"shell.signOut": "退出登录",
+	"shell.signOutConfirmTitle": "退出 Orchestrator Cloud 登录？",
+	"shell.signOutConfirmDescription": "需要重新登录。此电脑上缓存的 Cloud 预览将被清除。你的 Cloud 项目和会话仍保留在账户中。",
 	"chat.branch.previous": "上一个对话分支",
 	"chat.branch.next": "下一个对话分支",
 	"chat.branch.position": "第 {{position}} 个对话分支，共 {{total}} 个",

@@ -3499,6 +3499,8 @@
 	"shell.signInToAOCloud": "Entrar no Orchestrator Cloud",
 	"shell.signedInAs": "Conectado como {{email}}",
 	"shell.signOut": "Sair",
+	"shell.signOutConfirmTitle": "Sair do Orchestrator Cloud?",
+	"shell.signOutConfirmDescription": "Você precisará entrar novamente. As prévias do Cloud em cache neste computador serão apagadas. Seus projetos e sessões do Cloud continuam na sua conta.",
 	"chat.branch.previous": "Ramificação de conversa anterior",
 	"chat.branch.next": "Próxima ramificação de conversa",
 	"chat.branch.position": "Ramificação de conversa {{position}} de {{total}}",
