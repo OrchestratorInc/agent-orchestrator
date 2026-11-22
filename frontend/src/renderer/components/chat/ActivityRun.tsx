@@ -14,7 +14,7 @@
  * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
@@ -27,12 +27,12 @@ import {
 	isFailedCall,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { aoActionName, summarizeAOActions } from "./activity-action";
+import { aoActionName, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
 import { activityCommandStep, activityToolStep, isExploratoryTool, type CommandStep } from "./activity-step";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
 export function ActivityRun({
-	activities,
+	activities: recorded,
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
@@ -42,6 +42,8 @@ export function ActivityRun({
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
+	// A failed spawn is one step: its call, with the daemon's record folded in.
+	const activities = useMemo(() => mergeFailedSpawns(recorded), [recorded]);
 	const [localOpen, setLocalOpen] = useState(false);
 	const open = disclosureKey && disclosureOverrides
 		? disclosureOverrides[disclosureKey] ?? false

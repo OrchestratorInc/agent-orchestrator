@@ -217,7 +217,14 @@ describe("auto review", () => {
 
 	it("shows the risk the provider assessed", () => {
 		render(<ActivityRow activity={review} />);
-		expect(screen.getByTitle("Risk assessed as low")).toBeInTheDocument();
+		expect(screen.getByTitle("Risk assessed as low")).toHaveTextContent("low risk");
+	});
+
+	it("opens onto the command it allowed", async () => {
+		render(<ActivityRow activity={review} />);
+		expect(screen.queryByTitle("curl -s https://proxy.golang.org/")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button"));
+		expect(screen.getByTitle("curl -s https://proxy.golang.org/")).toBeInTheDocument();
 	});
 
 	it("calls a denial a denial", () => {

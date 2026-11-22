@@ -182,3 +182,53 @@ function safeActionHref(value: unknown): string | undefined {
 function text(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
+
+// The command that runs a spawn: `ao spawn`, or `ao' spawn` as a shell quotes it.
+const SPAWN_COMMAND = /\bao'?\s+spawn\b/;
+
+function isFailedSpawnRecord(activity: ConversationActivity): boolean {
+	return activity.activityKind === "ao_action" && activity.status === "failed" && activity.detail?.action === "session.spawned";
+}
+
+function isFailedSpawnCommand(activity: ConversationActivity): boolean {
+	return activity.activityKind === "command" && activity.status === "failed" && SPAWN_COMMAND.test(activity.detail?.command ?? activity.summary);
+}
+
+/** A failed `ao spawn` call that carries the daemon's reason, as {@link mergeFailedSpawns} leaves it. */
+export function isSpawnFailure(activity: ConversationActivity): boolean {
+	return isFailedSpawnCommand(activity) && Boolean(text(activity.detail?.error));
+}
+
+/**
+ * A spawn that failed reads as one step: its `ao spawn` call, carrying the reason
+ * the daemon gave. The daemon's failed spawn record would repeat it as a row of
+ * its own, and the call's exit code would count it again as "exited" beside the
+ * "failed" record. Each failed record joins the nearest failed call; a record with
+ * no call beside it keeps its own row.
+ */
+export function mergeFailedSpawns(activities: ConversationActivity[]): ConversationActivity[] {
+	const records = activities.filter(isFailedSpawnRecord);
+	if (records.length === 0) return activities;
+	const calls = activities.filter(isFailedSpawnCommand);
+	const reasons = new Map<string, string>();
+	const merged = new Set<string>();
+	for (const record of records) {
+		let nearest: ConversationActivity | undefined;
+		for (const call of calls) {
+			if (reasons.has(call.id)) continue;
+			if (!nearest || Math.abs(call.sequence - record.sequence) < Math.abs(nearest.sequence - record.sequence)) nearest = call;
+		}
+		if (!nearest) continue;
+		reasons.set(nearest.id, text(record.detail?.error));
+		merged.add(record.id);
+	}
+	if (merged.size === 0) return activities;
+	return activities
+		.filter((activity) => !merged.has(activity.id))
+		.map((activity) => {
+			const reason = reasons.get(activity.id);
+			if (reason === undefined) return activity;
+			// The daemon's reason replaces the bare exit code, so the call reads and counts as failed.
+			return { ...activity, detail: { ...activity.detail, exitCode: undefined, error: reason || undefined } };
+		});
+}

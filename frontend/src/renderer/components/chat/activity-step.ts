@@ -730,9 +730,13 @@ function aoStep(args: string[]): CommandStep {
 			return { done: "Shared progress", live: "Sharing progress", icon: "check" };
 		case "send":
 			return { done: "Messaged session", live: "Messaging session", target: flagValue(args, ["--session"]), icon: "tool" };
-		case "spawn":
-			// The spawned agent's own row names it; repeating the name here shows it twice.
-			return { done: "Started a session", live: "Starting a session", icon: "tool" };
+		case "spawn": {
+			// Named for the agent it starts, so a spawn that failed still says which one.
+			const name = flagValue(args, ["--name"]);
+			return name
+				? { done: "Started", live: "Starting", target: name, icon: "run" }
+				: { done: "Started a session", live: "Starting a session", icon: "run" };
+		}
 		case "review":
 			if (action === "trigger") return { done: "Requested a code review", live: "Requesting a code review", icon: "pr" };
 			return { done: "Checked code reviews", live: "Checking code reviews", icon: "pr" };

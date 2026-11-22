@@ -71,3 +71,51 @@ describe("AO action batching", () => {
 		expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
 	});
 });
+
+describe("a failed spawn", () => {
+	const reason = "The default account is signed out or now holds another login, and no other account is signed in.";
+	const activities: ConversationActivity[] = [
+		{
+			kind: "activity", id: "1", sequence: 1, revision: 1, activityKind: "auto_review", status: "completed",
+			summary: "ao spawn --project market-place --name 'background config snapshot'",
+			detail: { status: "approved", riskLevel: "medium", command: "ao spawn --project market-place --name 'background config snapshot'" },
+			createdAt: "",
+		},
+		{
+			kind: "activity", id: "2", sequence: 2, revision: 1, activityKind: "command", status: "failed",
+			summary: "ao spawn --project market-place --name 'background config snapshot'",
+			detail: { command: "ao spawn --project market-place --name 'background config snapshot'", exitCode: 1, output: reason },
+			createdAt: "",
+		},
+		action("3", "session.spawned", { operationId: "failed:req-1", error: reason }),
+	];
+	activities[2]!.status = "failed";
+
+	it("reads as one failed step that opens onto the daemon's reason", () => {
+		render(<ChatLinkProvider><ActivityRun activities={activities} /></ChatLinkProvider>);
+		// The spawn record joins its call: no second row, and the exit is not counted again.
+		const run = screen.getByRole("button", { name: /Ran 2 tool calls/ });
+		expect(run).toHaveTextContent("1 failed");
+		expect(run).not.toHaveTextContent("exited");
+		expect(run).not.toHaveTextContent("Spawned an agent");
+		// Folded, the run still shows the call that failed, open onto why.
+		const step = screen.getByRole("button", { name: /Starting\s*background config snapshot\s*failed/ });
+		expect(step).toHaveAttribute("aria-expanded", "true");
+		expect(step.querySelector("svg.icon-square-terminal")).not.toBeNull();
+		expect(screen.getByText(reason)).toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("opens the approval onto the command it allowed, its chevron turned down", async () => {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={activities[0]!} />);
+		const row = screen.getByRole("button", { name: /Auto-approved\s*medium risk/ });
+		expect(row).toHaveAttribute("aria-expanded", "false");
+		expect(row.querySelector("svg.icon-chevron-right")).not.toHaveClass("rotate-90");
+		expect(screen.queryByText("ao spawn --project market-place --name 'background config snapshot'")).not.toBeInTheDocument();
+		await user.click(row);
+		expect(row).toHaveAttribute("aria-expanded", "true");
+		expect(row.querySelector("svg.icon-chevron-right")).toHaveClass("rotate-90");
+		expect(screen.getByTitle("ao spawn --project market-place --name 'background config snapshot'")).toBeInTheDocument();
+	});
+});

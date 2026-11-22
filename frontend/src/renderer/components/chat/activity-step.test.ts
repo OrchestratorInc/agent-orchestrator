@@ -305,6 +305,13 @@ describe("Orchestrator CLI", () => {
 		expect(live("ao preview README.md")).toBe("Previewing README.md");
 	});
 
+	it("names a spawn for the agent it starts", () => {
+		const spawn = "ao spawn --project market-place --name 'background config snapshot' --prompt 'Read the config'";
+		expect(done(spawn)).toBe("Started background config snapshot");
+		expect(live(spawn)).toBe("Starting background config snapshot");
+		expect(done("ao spawn --project market-place")).toBe("Started a session");
+	});
+
 	it("names a chain of browser steps by the step that acts", () => {
 		expect(done('ao preview a.html && ao browser wait --load && ao browser act "Click me" ; ao browser console')).toBe(
 			"Interacted with the page",

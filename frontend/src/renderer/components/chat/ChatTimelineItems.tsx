@@ -154,7 +154,7 @@ import {
 	isNonzeroCommandExit,
 } from "./activity-command";
 import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, type CommandStep, type StepIcon } from "./activity-step";
-import { actionDetailLines, describeConversationActivity } from "./activity-action";
+import { actionDetailLines, describeConversationActivity, isSpawnFailure } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
@@ -1951,7 +1951,8 @@ function GenericActivityRow({
 	const revealedId = useContext(RevealedChatActivity);
 	const revealed = revealedId !== undefined
 		&& (revealedId === activity.id || repeats.some((each) => each.id === revealedId));
-	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? revealed);
+	// A spawn that failed starts open: why it failed is the whole point of the row.
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? (revealed || isSpawnFailure(activity)));
 	useEffect(() => {
 		if (revealed) setOpen(true);
 	}, [revealed]);
@@ -2153,6 +2154,10 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const isFileChange = activity.activityKind === "file_change";
+	if (isSpawnFailure(activity)) {
+		// The daemon's reason, in its words, under the step it explains.
+		return <p className="pb-1 pl-5 text-xs leading-relaxed text-muted-foreground">{detail?.error}</p>;
+	}
 	if (
 		activity.activityKind === "command" &&
 		(detail?.command || detail?.output || detail?.terminalInput)
@@ -2497,6 +2502,8 @@ function ActivityState({
 			</span>
 		);
 	}
+	// A spawn that failed reads in words, as its run line counts it, not as a process exit.
+	if (isSpawnFailure(activity)) return <span className="shrink-0 text-xs text-destructive">failed</span>;
 	if (status === "failed") {
 		return (
 			<span
@@ -3109,12 +3116,8 @@ function lastLine(text: string): string {
 /* auto review                                                                 */
 /* -------------------------------------------------------------------------- */
 
-const RISK_TONE: Record<string, string> = {
-	low: "text-muted-foreground",
-	medium: "text-warning",
-	high: "text-destructive",
-	critical: "text-destructive",
-};
+/** Only a risk worth stopping on takes a color; the rest read as the row's own detail. */
+const ALARMING_RISK = new Set(["high", "critical"]);
 
 /**
  * A decision the provider made instead of asking.
@@ -3122,130 +3125,124 @@ const RISK_TONE: Record<string, string> = {
  * This is not an approval card and must not read like one: nobody was asked, and
  * there is nothing to answer. What the row owes the user is the fact that a decision
  * was taken on their behalf, what it allowed, and — reachable rather than shouted —
- * the reasoning that allowed it. Denials are called out more loudly than approvals,
- * because a denial is why something the user expected did not happen.
+ * the reasoning that allowed it. It is a step line like the calls around it: what
+ * was decided and at what risk, opening onto the command and the reasoning. Denials
+ * are called out more loudly than approvals, because a denial is why something the
+ * user expected did not happen.
  */
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
+	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
 	const denied = (detail?.status ?? "").toLowerCase().includes("den");
 	const Icon = denied ? ShieldX : ShieldCheck;
 	const paths = reviewedPaths(activity);
-	const hasBody = Boolean(
-		detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
-	);
+	const command = detail?.command || activity.summary;
+	const risk = detail?.riskLevel;
+	const hasMeta = Boolean(detail?.cwd || detail?.host || paths.length || detail?.decisionSource);
+	const hasBody = Boolean(command || detail?.rationale || hasMeta);
+	// Said in full rather than implied by the label: "auto-approved" alone leaves it
+	// ambiguous whether the user set something up that did this.
+	const onYourBehalf = denied
+		? "The agent asked to do this and the provider declined on your behalf. You were not asked."
+		: "The agent asked to do this and the provider allowed it on your behalf. You were not asked.";
 
 	return (
-		<div className="group/activity border-t border-border first:border-t-0">
+		<div className="flex min-w-0 max-w-full flex-col">
 			<Pressable
 				onClick={() => setOpen((prev) => !prev)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
-				className={cn(
-					"activity-row-toggle flex min-h-[35px] w-full select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
-					hasBody && "hover:text-foreground",
-					!hasBody && "cursor-default",
-				)}
+				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
 			>
 				<Icon
 					aria-hidden="true"
-					className={cn(
-						"w-[15px] shrink-0 text-center",
-						denied ? "text-destructive" : "text-muted-foreground/70",
-					)}
-					size={14}
+					className={cn("size-3 shrink-0", denied ? "text-destructive" : "text-muted-foreground/70")}
 				/>
-				<strong className="shrink-0 font-medium text-foreground">
+				<strong className="shrink-0 text-xs font-medium text-foreground" title={onYourBehalf}>
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
-				<span
-					className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground"
-					title={activity.summary}
-				>
-					<ActivityTitle text={shortenPaths(activity.summary)} />
-				</span>
-				{detail?.riskLevel ? (
+				{risk ? (
 					<span
 						className={cn(
 							"shrink-0 text-xs",
-							RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground",
+							ALARMING_RISK.has(risk.toLowerCase()) ? "text-destructive" : "text-muted-foreground",
 						)}
-						title={`Risk assessed as ${detail.riskLevel}`}
+						title={`Risk assessed as ${risk}`}
 					>
-						{detail.riskLevel}
+						{risk} risk
 					</span>
 				) : null}
 				{hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
 						className={cn(
-							"size-3 shrink-0 text-muted-foreground/50 transition-all",
-							open ? "rotate-90 opacity-100" : "opacity-0 group-hover/activity:opacity-100",
+							"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground",
+							open && "rotate-90",
 						)}
 					/>
 				) : null}
 			</Pressable>
 
-			{open && hasBody ? (
-				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
-					{/* Said in full rather than implied by the label: "auto-approved" alone
-					    leaves it ambiguous whether the user set something up that did this. */}
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						{denied
-							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
-							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
-					</p>
-					{detail?.rationale ? (
-						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
-							{detail.rationale}
-						</p>
-					) : null}
-					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
-						{detail?.command ? (
-							<>
-								<dt className="text-muted-foreground/70">command</dt>
-								<dd className="min-w-0 break-all text-foreground">{detail.command}</dd>
-							</>
-						) : null}
-						{detail?.cwd ? (
-							<>
-								<dt className="text-muted-foreground/70">cwd</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{shortenPaths(detail.cwd)}
-								</dd>
-							</>
-						) : null}
-						{detail?.host ? (
-							<>
-								<dt className="text-muted-foreground/70">host</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">{detail.host}</dd>
-							</>
-						) : null}
-						{paths.length ? (
-							<>
-								<dt className="text-muted-foreground/70">files</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{paths.map((path) => shortenPaths(path)).join(", ")}
-								</dd>
-							</>
-						) : null}
-						{detail?.decisionSource ? (
-							<>
-								<dt className="text-muted-foreground/70">decided by</dt>
-								<dd className="text-muted-foreground">
-									{/* A model making the call is a materially different thing to be
-									    told than a policy rule matching, so the provider's own word
-									    for it is carried rather than flattened to "automatically". */}
-									{detail.decisionSource}
-									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDecisionDuration(detail.durationMs)}`
-										: ""}
-								</dd>
-							</>
-						) : null}
-					</dl>
-				</div>
-			) : null}
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						<div className="flex min-w-0 flex-col gap-1 pb-1 pl-5">
+							<p className="sr-only">{onYourBehalf}</p>
+							{command ? (
+								<p className="truncate font-mono text-caption leading-relaxed text-muted-foreground" title={command}>
+									<ActivityTitle text={shortenPaths(command)} />
+								</p>
+							) : null}
+							{detail?.rationale ? (
+								<p className="text-xs leading-relaxed text-muted-foreground">{detail.rationale}</p>
+							) : null}
+							{hasMeta ? (
+								<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 font-mono text-caption leading-relaxed text-muted-foreground">
+									{detail?.cwd ? (
+										<>
+											<dt className="text-muted-foreground/70">cwd</dt>
+											<dd className="min-w-0 break-all">{shortenPaths(detail.cwd)}</dd>
+										</>
+									) : null}
+									{detail?.host ? (
+										<>
+											<dt className="text-muted-foreground/70">host</dt>
+											<dd className="min-w-0 break-all">{detail.host}</dd>
+										</>
+									) : null}
+									{paths.length ? (
+										<>
+											<dt className="text-muted-foreground/70">files</dt>
+											<dd className="min-w-0 break-all">{paths.map((path) => shortenPaths(path)).join(", ")}</dd>
+										</>
+									) : null}
+									{detail?.decisionSource ? (
+										<>
+											<dt className="text-muted-foreground/70">decided by</dt>
+											<dd>
+												{/* A model making the call is a materially different thing to be
+												    told than a policy rule matching, so the provider's own word
+												    for it is carried rather than flattened to "automatically". */}
+												{detail.decisionSource}
+												{detail.durationMs !== undefined && detail.durationMs > 0
+													? ` · ${formatDecisionDuration(detail.durationMs)}`
+													: ""}
+											</dd>
+										</>
+									) : null}
+								</dl>
+							) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
 }
