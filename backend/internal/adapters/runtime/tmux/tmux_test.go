@@ -335,6 +335,22 @@ func TestSessionNameMatchesCreateNaming(t *testing.T) {
 
 func TestDottedReviewerHandleResolvesToCreateName(t *testing.T) {
 	raw := "review-memron.ai-2"
+	// The reviewer launcher destroys a stale pane with the raw derived handle
+	// before Create returns a tmux handle. Exercise that actual lookup path.
+	r, fr := newTestRuntime(0)
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy raw reviewer handle: %v", err)
+	}
+	for _, call := range fr.calls {
+		for _, arg := range call.args {
+			if arg == raw {
+				t.Fatalf("tmux received raw dotted reviewer handle: %v", call.args)
+			}
+		}
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one for sanitized reviewer handle", countCalls(fr, "kill-session"))
+	}
 	got, err := handleID(ports.RuntimeHandle{ID: raw})
 	if err != nil || got != SessionName(raw) {
 		t.Fatalf("handleID(%q) = %q, %v; want Create name %q", raw, got, err, SessionName(raw))

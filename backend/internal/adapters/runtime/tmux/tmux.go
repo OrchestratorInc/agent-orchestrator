@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -47,7 +48,6 @@ const (
 )
 
 var sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-var dottedSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$`)
 
 var getenv = os.Getenv
 
@@ -1519,7 +1519,7 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 	}
 	// Reviewer panes derive their stable handle from the worker session ID.
 	// A dotted project ID reaches lookup before Create has returned its tmux name.
-	if strings.Contains(id, ".") && dottedSessionIDPattern.MatchString(id) {
+	if strings.Contains(id, ".") && runtimeid.ValidDottedSessionID(id) {
 		id = SessionName(id)
 	}
 	if !sessionIDPattern.MatchString(id) {
