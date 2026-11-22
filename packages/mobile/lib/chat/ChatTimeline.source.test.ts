@@ -126,6 +126,8 @@ describe("a sent message", () => {
 
 	it("moves to it in one native animated scroll after the keyboard closes", () => {
 		expect(source).toContain("sendScroll.current.awaiting = anchorFound;");
+		// A failed send must not leave the follow waiting for a move that never comes.
+		expect(source).toContain("if (sendScroll.current.awaiting === anchorFound) sendScroll.current.awaiting = undefined;");
 		expect(source).toContain("send.awaiting = undefined;\n\t\tsend.pending = true;");
 		expect(source).toContain("scrollToLatest(true, true);");
 		expect(source).toContain("if (viewportHeight.current && !native) glide.place(endOffset());");

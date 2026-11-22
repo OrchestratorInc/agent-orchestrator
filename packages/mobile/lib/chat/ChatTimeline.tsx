@@ -536,7 +536,11 @@ function Timeline({
 		sendScroll.current.awaiting = anchorFound;
 		// A message whose row cannot report (drawn inside a folded run) moves without waiting long.
 		const cap = setTimeout(() => latestRoomPlaced.current(), ROOM_PLACE_CAP_MS);
-		return () => clearTimeout(cap);
+		return () => {
+			clearTimeout(cap);
+			// The send failed or the session changed before the move: following carries on.
+			if (sendScroll.current.awaiting === anchorFound) sendScroll.current.awaiting = undefined;
+		};
 	}, [anchorFound]);
 	const roomPlaced = useCallback(() => latestRoomPlaced.current(), []);
 	const latestRoomPlaced = useRef(() => {});
