@@ -1,6 +1,6 @@
 import type { ErrorEvent, StackFrame } from "@sentry/react-native";
 import { classifyError, type ClassifyInput } from "./observability";
-import { safeSentryExceptionType, scrubSentryMessage, sentryExceptionValue, sentryMessageFingerprint } from "../../../frontend/src/shared/sentry-message";
+import { safeSentryExceptionType, scrubSentryMessage, sentryExceptionValue, sentryMessageFingerprint } from "../../shared/telemetry/sentry-message";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
 const SAFE_CATEGORIES = new Set(["native_crash", "render_crash", "http_5xx", "http_4xx", "offline", "timeout"]);

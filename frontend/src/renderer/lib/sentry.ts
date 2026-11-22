@@ -2,7 +2,7 @@
 // the latest main-owned generation before forwarding to Electron main.
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
-import { scrubSentryMessage } from "../../shared/sentry-message";
+import { scrubSentryMessage } from "../../../../packages/shared/telemetry/sentry-message";
 import { onboardingFailureCode, ONBOARDING_SENTRY_REASONS, type OnboardingAction, type OnboardingFailureReason } from "../../shared/onboarding-failures";
 import { aoBridge } from "./bridge";
 import { onboardingSentryFlow } from "./onboarding-flow";

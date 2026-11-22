@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DAEMON_SENTRY_DSN, daemonSentryDsn, isPublishedSentryBuild, safeSentryExceptionType } from "./sentry-config";
 
-import { scrubSentryMessage, sentryExceptionValue } from "./sentry-message";
+import { scrubSentryMessage, sentryExceptionValue } from "../../../packages/shared/telemetry/sentry-message";
 
 beforeEach(() => { vi.stubEnv("AO_PUBLISHED_BUILD", "1"); });
 afterEach(() => { vi.unstubAllEnvs(); });

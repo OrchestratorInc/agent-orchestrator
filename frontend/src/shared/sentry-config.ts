@@ -38,7 +38,7 @@ export function safeSentryFunctionName(value: unknown, fallback: string): string
 	return typeof value === "string" && SAFE_FUNCTION_NAMES.has(value) ? value : fallback;
 }
 
-export { safeSentryExceptionType } from "./sentry-message";
+export { safeSentryExceptionType } from "../../../packages/shared/telemetry/sentry-message";
 
 // Keep this version mapping aligned with sentryEnvironment in the Go daemon.
 export function sentryEnvironment(version: string): "unknown" | "nightly" | "development" | "stable" {
