@@ -3,7 +3,10 @@ import { aoBridge } from "./bridge";
 import { queryClient } from "./query-client";
 import { captureRendererEvent, isDeniedEvent, withTelemetryContext } from "./telemetry";
 import {
+	bundleName,
+	invokerName,
 	LONG_FRAME_CAUSES,
+	longFrameCauseProperty,
 	memoryBucket,
 	openSessionsBucket,
 	uptimeBucket,
@@ -40,7 +43,13 @@ const SWITCH_BUCKETS_MS = [150, 500, 1000] as const;
 
 type Cause = (typeof LONG_FRAME_CAUSES)[number];
 /** Script invoker types the browser reports, each its own cause. */
-const SCRIPT_CAUSES: readonly string[] = LONG_FRAME_CAUSES.filter((cause) => cause !== "rendering" && cause !== "other");
+const SCRIPT_CAUSES: readonly string[] = LONG_FRAME_CAUSES.filter(
+	(cause) => !["rendering", "frame-callbacks", "forced-layout", "unlisted"].includes(cause),
+);
+/** Invoker types whose invoker is a script URL rather than an entry point name. */
+const URL_INVOKER_TYPES: readonly string[] = ["classic-script", "module-script"];
+/** Distinct entry points and bundles kept per window; later new ones are not counted. */
+const NAMES_KEPT = 40;
 type SwitchBuckets = [number, number, number, number];
 
 type Summary = {
@@ -57,14 +66,26 @@ type Summary = {
 	longest: Array<{ id: number; ms: number }>;
 	longFrames: number;
 	longFrameBlockingMs: number;
+	/** Total and longest duration of the long frames. */
+	longFrameMs: number;
+	longFrameMaxMs: number;
+	/** Long frames the browser listed no script for. */
+	longFrameNoScript: number;
 	causes: Partial<Record<Cause, number>>;
+	/** Listed script time by entry point name, such as Window.requestAnimationFrame. */
+	invokers: Record<string, number>;
+	/** Listed script time by the app's own bundle name. */
+	bundles: Record<string, number>;
 	chatOpenMs: number[];
 	chatOpenSeen: number;
 };
 
 type PersistedState = {
-	/** 2 since causes gained "rendering" and windows gained closedMs; a version 1 window is dropped. */
-	version: 2;
+	/**
+	 * 3 since frames split into phases ("other" became "unlisted") and kept
+	 * entry points and bundles; an earlier window is dropped.
+	 */
+	version: 3;
 	windowStartedAt: number;
 	windowFlushAt: number;
 	/** When this state was last saved, so a later launch knows how long the app was closed. */
@@ -100,32 +121,43 @@ const zeroSummary = (): Summary => ({
 	longest: [],
 	longFrames: 0,
 	longFrameBlockingMs: 0,
+	longFrameMs: 0,
+	longFrameMaxMs: 0,
+	longFrameNoScript: 0,
 	causes: {},
+	invokers: {},
+	bundles: {},
 	chatOpenMs: [],
 	chatOpenSeen: 0,
 });
 
 function freshState(now: number): PersistedState {
-	return { version: 2, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, closedMs: 0, summary: zeroSummary() };
+	return { version: 3, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, closedMs: 0, summary: zeroSummary() };
 }
 
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const isCountList = (value: unknown, max: number): value is number[] => Array.isArray(value) && value.length <= max && value.every(isCount);
 const isBuckets = (value: unknown): value is SwitchBuckets => isCountList(value, 4) && value.length === 4;
+const isNameTotals = (value: unknown, valid: (name: string) => boolean): value is Record<string, number> =>
+	typeof value === "object" && value !== null && !Array.isArray(value) &&
+	Object.keys(value).length <= NAMES_KEPT &&
+	Object.entries(value).every(([name, ms]) => valid(name) && isCount(ms));
 
 function loadState(storage: Storage, now: number): PersistedState {
 	try {
 		const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null") as Partial<PersistedState> | null;
 		const summary = parsed?.summary as Partial<Summary> | undefined;
 		if (
-			parsed?.version === 2 && isCount(parsed.windowStartedAt) && isCount(parsed.windowFlushAt) && summary &&
+			parsed?.version === 3 && isCount(parsed.windowStartedAt) && isCount(parsed.windowFlushAt) && summary &&
 			isBuckets(summary.switchCached) && isBuckets(summary.switchUncached) &&
 			isCountList(summary.switchVisibleMs, SAMPLES_KEPT) && isCountList(summary.chatOpenMs, SAMPLES_KEPT) &&
 			Array.isArray(summary.longest) && summary.longest.length <= LONGEST_KEPT &&
 			summary.longest.every((entry) => isCount(entry?.ms)) &&
 			typeof summary.causes === "object" && summary.causes !== null &&
 			Object.entries(summary.causes).every(([cause, ms]) => (LONG_FRAME_CAUSES as readonly string[]).includes(cause) && isCount(ms)) &&
-			(["activeMs", "switchVisibleSeen", "switchDropped", "interactions", "slowInteractions", "verySlowInteractions", "longFrames", "longFrameBlockingMs", "chatOpenSeen"] as const)
+			isNameTotals(summary.invokers, (name) => invokerName(name) === name) &&
+			isNameTotals(summary.bundles, (name) => bundleName(`app://renderer/assets/${name}-00000000.js`) === name) &&
+			(["activeMs", "switchVisibleSeen", "switchDropped", "interactions", "slowInteractions", "verySlowInteractions", "longFrames", "longFrameBlockingMs", "longFrameMs", "longFrameMaxMs", "longFrameNoScript", "chatOpenSeen"] as const)
 				.every((key) => isCount(summary[key]))
 		) {
 			// Interaction ids restart with each page, so kept ones cannot be matched again.
@@ -166,6 +198,13 @@ function bucketIndex(ms: number): number {
 }
 
 const BUCKET_SUFFIXES = ["lt150", "lt500", "lt1000", "ge1000"] as const;
+
+/** The name with the most time, or undefined when none has any. */
+function topName<K extends string>(totals: Partial<Record<K, number>>): K | undefined {
+	return (Object.entries(totals) as Array<[K, number]>)
+		.filter(([, ms]) => ms > 0)
+		.sort((a, b) => b[1] - a[1])[0]?.[0];
+}
 
 export class PerformanceAccumulator {
 	private state: PersistedState;
@@ -237,34 +276,52 @@ export class PerformanceAccumulator {
 	}
 
 	/**
-	 * Splits a long frame's time among causes: each script's run time under its
-	 * invoker type, style, layout and paint under "rendering", and the rest of
-	 * the frame (scripts under the browser's 5 ms floor, other browser work)
-	 * under "other". Without the frame's duration, a frame with nothing
-	 * credited adds its blocking time to "other".
+	 * Splits a long frame's time into causes by phase. Before rendering began:
+	 * each listed script under its invoker type, less the style and layout it
+	 * forced ("forced-layout"), and the rest of those tasks under "unlisted".
+	 * From the start of rendering to style and layout: listed scripts the same
+	 * way and the rest under "frame-callbacks". Style, layout and paint:
+	 * "rendering". The browser lists only scripts over 5 ms.
 	 */
-	recordLongFrame(
-		blockingMs: number,
-		scripts: ReadonlyArray<{ invokerType?: string; duration: number }>,
-		renderMs = 0,
-		durationMs?: number,
-	): void {
+	recordLongFrame(frame: LongFrame): void {
 		const summary = this.state.summary;
-		let credited = 0;
 		const add = (cause: Cause, ms: number) => {
-			if (!(ms > 0)) return;
-			summary.causes[cause] = (summary.causes[cause] ?? 0) + ms;
-			credited += ms;
+			if (ms > 0) summary.causes[cause] = (summary.causes[cause] ?? 0) + ms;
 		};
-		summary.longFrames += 1;
-		summary.longFrameBlockingMs += Math.max(0, blockingMs);
+		const addName = (totals: Record<string, number>, name: string | undefined, ms: number) => {
+			if (!name || !(ms > 0)) return;
+			if (totals[name] === undefined && Object.keys(totals).length >= NAMES_KEPT) return;
+			totals[name] = (totals[name] ?? 0) + ms;
+		};
+		const duration = Math.max(0, frame.duration);
+		const end = frame.startTime + duration;
+		const renderStart = frame.renderStart ?? 0;
+		const rendered = renderStart > 0;
+		const tasksEnd = rendered ? Math.min(end, renderStart) : end;
+		const styleStart = rendered && (frame.styleAndLayoutStart ?? 0) > 0 ? Math.min(end, frame.styleAndLayoutStart!) : end;
+		const scripts = frame.scripts ?? [];
+		let listedInTasks = 0;
+		let listedInCallbacks = 0;
 		for (const script of scripts) {
-			const cause = SCRIPT_CAUSES.includes(script.invokerType ?? "") ? (script.invokerType as Cause) : "other";
-			add(cause, script.duration);
+			const ms = Math.max(0, script.duration);
+			const forced = Math.min(ms, Math.max(0, script.forcedStyleAndLayoutDuration ?? 0));
+			const type = script.invokerType ?? "";
+			// A type this code does not know is still task time no cause names.
+			add(SCRIPT_CAUSES.includes(type) ? (type as Cause) : "unlisted", ms - forced);
+			add("forced-layout", forced);
+			if (rendered && (script.startTime ?? frame.startTime) >= tasksEnd) listedInCallbacks += ms;
+			else listedInTasks += ms;
+			if (!URL_INVOKER_TYPES.includes(type)) addName(summary.invokers, invokerName(script.invoker), ms);
+			addName(summary.bundles, bundleName(script.sourceURL), ms);
 		}
-		add("rendering", renderMs);
-		if (durationMs !== undefined) add("other", durationMs - credited);
-		else if (credited === 0) add("other", blockingMs);
+		add("unlisted", tasksEnd - frame.startTime - listedInTasks);
+		if (rendered) add("frame-callbacks", styleStart - tasksEnd - listedInCallbacks);
+		add("rendering", end - styleStart);
+		summary.longFrames += 1;
+		summary.longFrameBlockingMs += Math.max(0, frame.blockingDuration ?? 0);
+		summary.longFrameMs += duration;
+		summary.longFrameMaxMs = Math.max(summary.longFrameMaxMs, duration);
+		if (scripts.length === 0) summary.longFrameNoScript += 1;
 	}
 
 	recordOpen(timing: OpenTiming): void {
@@ -310,13 +367,11 @@ export class PerformanceAccumulator {
 		const longest = [...summary.longest].sort((a, b) => b.ms - a.ms);
 		// The web-vitals INP method: skip one of the longest per 50 interactions.
 		const p98 = longest.length ? longest[Math.min(longest.length - 1, Math.floor(summary.interactions / 50))]!.ms : 0;
-		const topCause = (Object.entries(summary.causes) as Array<[Cause, number]>)
-			.filter(([, ms]) => ms > 0)
-			.sort((a, b) => b[1] - a[1])[0]?.[0];
+		const topCause = topName(summary.causes);
 		const resources = await this.readResources().catch(() => null);
 		const openSessions = this.countOpenSessions();
 		const properties: Record<string, unknown> = {
-			measurement_schema_version: 2,
+			measurement_schema_version: 3,
 			flush_reason: reason,
 			// Never shorter than the active time, even after the clock was set back.
 			window_seconds: Math.round(Math.max(summary.activeMs, now - windowStartedAt - closedMs) / 1000),
@@ -329,7 +384,12 @@ export class PerformanceAccumulator {
 			interaction_p98_ms: Math.round(p98),
 			long_frame_count: summary.longFrames,
 			long_frame_blocking_ms: Math.round(summary.longFrameBlockingMs),
+			long_frame_ms: Math.round(summary.longFrameMs),
+			long_frame_max_ms: Math.round(summary.longFrameMaxMs),
+			long_frame_no_script_count: summary.longFrameNoScript,
 			long_frame_top_cause: topCause,
+			long_frame_top_invoker: topName(summary.invokers),
+			long_frame_top_bundle: topName(summary.bundles),
 			chat_open_count: summary.chatOpenSeen,
 			chat_open_p75_ms: percentile(summary.chatOpenMs, 0.75),
 			open_sessions_bucket: openSessions === undefined ? undefined : openSessionsBucket(openSessions),
@@ -342,6 +402,10 @@ export class PerformanceAccumulator {
 				}
 				: {}),
 		};
+		for (const cause of LONG_FRAME_CAUSES) {
+			const ms = summary.causes[cause];
+			if (ms) properties[longFrameCauseProperty(cause)] = Math.round(ms);
+		}
 		BUCKET_SUFFIXES.forEach((suffix, index) => {
 			properties[`switch_cached_${suffix}_count`] = summary.switchCached[index];
 			properties[`switch_uncached_${suffix}_count`] = summary.switchUncached[index];
@@ -362,22 +426,26 @@ export class PerformanceAccumulator {
 // --- Runtime: observers, input tracking and session open timing ---
 
 type EventTimingEntry = PerformanceEntry & { interactionId?: number };
-type LongFrameEntry = Pick<PerformanceEntry, "startTime" | "duration"> & {
+/** The fields of a Long Animation Frame entry and its scripts that the summary reads. */
+export type LongFrame = {
+	startTime: number;
+	duration: number;
 	blockingDuration?: number;
-	/** When style and layout began; 0 for a frame that did not render. */
+	/** When rendering began; 0 for a frame that did not render. */
+	renderStart?: number;
+	/** When style and layout began; 0 for a frame that did not reach them. */
 	styleAndLayoutStart?: number;
-	scripts?: Array<{ invokerType?: string; duration: number }>;
+	scripts?: ReadonlyArray<{
+		invokerType?: string;
+		/** The entry point, such as "BUTTON#send.onclick"; reduced to "BUTTON.onclick" before it is kept. */
+		invoker?: string;
+		/** Only the bundle name of the app's own code is kept. */
+		sourceURL?: string;
+		startTime?: number;
+		duration: number;
+		forcedStyleAndLayoutDuration?: number;
+	}>;
 };
-
-/**
- * Time from the start of style and layout to the end of the frame: style,
- * layout and paint. Not renderStart, which also covers requestAnimationFrame
- * and observer callbacks that are already counted as scripts.
- */
-export function renderDuration(entry: LongFrameEntry): number {
-	const start = entry.styleAndLayoutStart ?? 0;
-	return start > 0 ? Math.max(0, entry.startTime + entry.duration - start) : 0;
-}
 
 type PendingOpen = {
 	sessionId: string;
@@ -609,7 +677,7 @@ function startRuntime(): void {
 	// during the opt-out belong to no window.
 	const frameObserver = observe("long-animation-frame", (entries) => {
 		if (!visible()) return;
-		for (const entry of entries as LongFrameEntry[]) accumulator.recordLongFrame(entry.blockingDuration ?? 0, entry.scripts ?? [], renderDuration(entry), entry.duration);
+		for (const entry of entries as unknown as LongFrame[]) accumulator.recordLongFrame(entry);
 	}, { buffered: !restarted });
 
 	const checkpoint = window.setInterval(() => {
