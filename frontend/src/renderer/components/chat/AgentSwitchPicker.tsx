@@ -426,6 +426,9 @@ export function AgentModelPicker({
 		: undefined;
 	// A starred model is listed once, first, as its favourite; the rows below are the rest.
 	const unstarred = <T extends { model: PickerModel }>(rows: T[]) => setups.length > 0 ? rows.filter((row) => !starredFor(row.model)) : rows;
+	// That favourite is checked when the model row it replaces is the chosen one, under its id or an alias.
+	const standsForChosen = (favorite: ModelFavorite) => source.models.some((model) =>
+		model.id === source.modelId && (model.id === favorite.row || Boolean(model.aliases?.includes(favorite.row))));
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	// Search reaches every agent on the rail, the chosen one first.
 	const searchRows = (open ? [...agents].sort((a, b) => Number(b.id === shownHarness) - Number(a.id === shownHarness)) : []).flatMap((agent) => {
@@ -636,7 +639,7 @@ export function AgentModelPicker({
 							{setups.map((favorite) => (
 								<OptionMenuItem
 									key={`${favorite.harness}:${favorite.row}`}
-									active={favorite.model === chosenModel}
+									active={favorite.model === chosenModel || standsForChosen(favorite)}
 									radio
 									disabled={!pickable(favorite.harness) || !offered(favorite)}
 									onSelect={(event) => { stayOpen(event); pickSetup(favorite); }}

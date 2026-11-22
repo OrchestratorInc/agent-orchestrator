@@ -89,7 +89,8 @@ describe("AgentModelPicker", () => {
 		expect(screen.queryByRole("menuitem", { name: /^Agent/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /^Model/ })).not.toBeInTheDocument();
 		// The effort is a slider row: Left and Right step through the levels, the menu stays open.
-		const effort = screen.getByRole("menuitem", { name: /Effort.*High/ });
+		const effort = screen.getByRole("slider", { name: "Effort" });
+		expect(effort).toHaveAttribute("aria-valuetext", "High");
 		act(() => effort.focus());
 		await user.keyboard("{ArrowLeft}");
 		expect(current.onPickEffort).not.toHaveBeenCalled();
@@ -159,6 +160,25 @@ describe("AgentModelPicker", () => {
 		expect(screen.getByText("fireworks/accounts/fireworks/models/kimi")).toBeInTheDocument();
 	});
 
+	it("shows the agent's level again after a dragged level is released and not taken", async () => {
+		const user = userEvent.setup();
+		const { current } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const slider = screen.getByRole("slider", { name: "Effort" });
+		const track = slider.querySelector<HTMLElement>('[aria-hidden="true"]')!;
+		track.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 18, right: 200, bottom: 18, x: 0, y: 0, toJSON: () => ({}) });
+		let captured = false;
+		track.setPointerCapture = () => { captured = true; };
+		track.hasPointerCapture = () => captured;
+		track.releasePointerCapture = () => { captured = false; };
+		fireEvent.pointerDown(track, { button: 0, clientX: 195, pointerId: 1 });
+		expect(slider).toHaveAttribute("aria-valuetext", "Max");
+		fireEvent.pointerUp(track, { button: 0, clientX: 195, pointerId: 1 });
+		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
+		// The agent still reports High (the change was refused, or has not landed), so High is shown.
+		expect(slider).toHaveAttribute("aria-valuetext", "High");
+	});
+
 	it("lists Claude's newest models first and keeps the older releases below them", async () => {
 		const user = userEvent.setup();
 		open(undefined, false, "claude-code", {
@@ -184,7 +204,7 @@ describe("AgentModelPicker", () => {
 		if (model === "Sonnet") expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
 		else expect(current.onPickModel).not.toHaveBeenCalled();
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
-		expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
+		expect(screen.getByRole("slider", { name: "Effort" })).toBeInTheDocument();
 	});
 
 	it.each(["Fast mode", "Thinking"])("keeps the parent menu open after toggling %s", async (label) => {
@@ -201,7 +221,7 @@ describe("AgentModelPicker", () => {
 		const user = userEvent.setup();
 		open(undefined, false, "cursor", { thinking: true, onToggleThinking: vi.fn() });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
+		expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuetext", "High");
 		expect(screen.getByText("Thinking")).toBeInTheDocument();
 	});
 
@@ -210,7 +230,7 @@ describe("AgentModelPicker", () => {
 		open(undefined, false, "cursor", { thinking: true, onToggleThinking: vi.fn() }, true);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.queryByText("Loading settings")).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
+		expect(screen.getByRole("slider", { name: "Effort" })).toBeInTheDocument();
 		expect(screen.getByText("Thinking")).toBeInTheDocument();
 	});
 
@@ -268,6 +288,8 @@ describe("AgentModelPicker", () => {
 			// The model row it folded into is the favourite, not a second row with a second star.
 			expect(await screen.findAllByRole("button", { name: "Remove from favourites" })).toHaveLength(1);
 			expect(screen.getAllByRole("menuitemradio", { name: /^Opus/ })).toHaveLength(1);
+			// And it is checked, as the model it stands for is the one running.
+			expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toHaveAttribute("aria-checked", "true");
 		} finally {
 			toggleModelFavorite(saved);
 		}
@@ -358,7 +380,7 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
 		await user.keyboard("{ArrowDown}");
-		expect(screen.getByRole("menuitem", { name: /Effort/ })).toHaveFocus();
+		expect(screen.getByRole("slider", { name: "Effort" })).toHaveFocus();
 		await user.keyboard("{ArrowUp}");
 		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveFocus();
 		await user.keyboard("{ArrowDown}");
@@ -558,7 +580,7 @@ describe("AgentModelPicker", () => {
 		open({ harness: "codex" });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
-		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
+		expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuetext", "High");
 		expect(await screen.findByRole("menuitemradio", { name: /^GPT X/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: /^Opus/ })).not.toBeInTheDocument();
 	});

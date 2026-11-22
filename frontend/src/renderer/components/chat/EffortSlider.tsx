@@ -43,10 +43,11 @@ export function EffortSlider({
 	const last = Math.max(choices.length - 1, 1);
 	const percent = (index / last) * 100;
 
+	// The slider then shows the level the agent reports, so a refused change does not stay on screen.
 	const commit = (next: number) => {
+		setDraft(undefined);
 		const choice = choices[next];
 		if (choice && choice.value !== value) onCommit(choice.value);
-		else setDraft(undefined);
 	};
 	const levelAt = (event: PointerEvent) => {
 		const rect = trackRef.current?.getBoundingClientRect();
@@ -57,6 +58,14 @@ export function EffortSlider({
 
 	return (
 		<OptionMenuItem
+			// Announced as a slider, not a plain row, so its range and level are read out.
+			role="slider"
+			aria-label={label}
+			aria-valuemin={0}
+			aria-valuemax={Math.max(choices.length - 1, 0)}
+			aria-valuenow={index}
+			aria-valuetext={valueLabel(shown)}
+			aria-orientation="horizontal"
 			disabled={disabled}
 			// The row stays open on a click or Enter: the level is set on the track or with Left and Right.
 			onSelect={(event) => event.preventDefault()}
