@@ -106,6 +106,21 @@ type Service struct {
 	// booted as soon as it starts, but its stream is only ready when the boot
 	// returns; a viewer that connected in between got a black picture.
 	booting map[string]bool
+	// releasing holds the devices whose lease just ended while their driver
+	// claims are released (and the device shut down, when asked). Until that
+	// finishes no other session may take them, or the cleanup would hit the
+	// new holder's device.
+	releasing map[string]bool
+	// watches ends the hub connections opened under a lease when it is
+	// released or replaced, so a viewer cannot keep driving a device another
+	// session now holds.
+	watches map[domain.SessionID]leaseWatch
+}
+
+type leaseWatch struct {
+	deviceID string
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 // Enabled reports whether the user opted into device support. Session prompts
@@ -116,6 +131,61 @@ func Enabled(dataDir string) bool {
 }
 
 func markerPath(dataDir string) string { return filepath.Join(dataDir, "devices", "enabled") }
+
+// sessionGone reports whether a session lookup proves the session ended: it
+// terminated or it does not exist. Any other lookup error (a cancelled
+// request, a store hiccup) proves nothing, and the lease is kept.
+func sessionGone(info SessionInfo, err error) bool {
+	if err == nil {
+		return info.Terminated
+	}
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) && apiErr.Code == "SESSION_NOT_FOUND" {
+		return true
+	}
+	return errors.Is(err, ports.ErrSessionNotFound)
+}
+
+// endLeaseLocked removes the session's lease, closes the hub connections
+// opened under it, and holds the device until finishRelease runs. Callers
+// hold s.mu and must call finishRelease with the returned lease when ok.
+func (s *Service) endLeaseLocked(id domain.SessionID) (Lease, bool) {
+	l, ok := s.leases[id]
+	if !ok {
+		return Lease{}, false
+	}
+	delete(s.leases, id)
+	s.stopWatchLocked(id)
+	if s.releasing == nil {
+		s.releasing = map[string]bool{}
+	}
+	s.releasing[l.Device.ID] = true
+	s.saveLocked()
+	return l, true
+}
+
+// stopWatchLocked closes the hub connections opened under the session's lease.
+func (s *Service) stopWatchLocked(id domain.SessionID) {
+	if w, ok := s.watches[id]; ok {
+		w.cancel()
+		delete(s.watches, id)
+	}
+}
+
+// finishRelease frees the driver's claims on a device whose lease ended,
+// shuts it down when asked, and only then lets another session take it.
+func (s *Service) finishRelease(ctx context.Context, device ports.DeviceInfo, shutdown bool) error {
+	defer func() {
+		s.mu.Lock()
+		delete(s.releasing, device.ID)
+		s.mu.Unlock()
+	}()
+	s.releaseControl(ctx, device, "")
+	if !shutdown {
+		return nil
+	}
+	return s.cfg.Provider.Shutdown(ctx, device)
+}
 
 // New builds the service. When the user already opted in, the provider starts
 // in the background so the first open does not pay for it.
@@ -253,18 +323,17 @@ func (s *Service) pruneEnded(ctx context.Context) {
 	s.mu.Unlock()
 	for _, id := range owners {
 		info, err := s.cfg.Sessions(ctx, id)
-		if err == nil && !info.Terminated {
+		if !sessionGone(info, err) {
+			if err != nil {
+				s.log.Debug("keep device lease: session lookup failed", "session", id, "err", err)
+			}
 			continue
 		}
 		s.mu.Lock()
-		lease, ok := s.leases[id]
-		delete(s.leases, id)
-		if ok {
-			s.saveLocked()
-		}
+		lease, ok := s.endLeaseLocked(id)
 		s.mu.Unlock()
 		if ok {
-			s.releaseControl(ctx, lease.Device, "")
+			_ = s.finishRelease(ctx, lease.Device, false)
 		}
 	}
 }
@@ -351,12 +420,34 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 		if err != nil {
 			return Lease{}, apierr.Unavailable("DEVICE_BOOT_FAILED", err.Error())
 		}
-		existing.Device = device
+		updated := existing
+		updated.Device = device
+		if device.ID != existing.Device.ID {
+			// A restarted emulator runs under a new serial: the agent's command is
+			// bound to the old one, so bind it again.
+			control, err := s.cfg.Provider.AgentControl(device, string(id))
+			if err != nil {
+				return Lease{}, err
+			}
+			updated.AgentControl = control
+		}
 		s.mu.Lock()
-		s.leases[id] = existing
+		defer s.mu.Unlock()
+		// The boot took a while: the lease may have been released (and the
+		// device taken by another session) meanwhile. Never bring it back.
+		cur, still := s.leases[id]
+		if !still || !cur.OpenedAt.Equal(existing.OpenedAt) || cur.Device.ID != existing.Device.ID {
+			return Lease{}, apierr.Conflict("DEVICE_LEASE_CHANGED", "This session's device was released while it was starting. Open it again.", nil)
+		}
+		if owner, clash := s.ownerOfLocked(device.ID); (clash && owner != id) || s.releasing[device.ID] {
+			return Lease{}, apierr.Conflict("DEVICE_IN_USE", device.Name+" is in use by another session.", nil)
+		}
+		if device.ID != existing.Device.ID {
+			s.stopWatchLocked(id)
+		}
+		s.leases[id] = updated
 		s.saveLocked()
-		s.mu.Unlock()
-		return existing, nil
+		return updated, nil
 	}
 	var workspace string
 	if s.cfg.Sessions != nil {
@@ -390,8 +481,12 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 			taken[l.Device.ID] = owner
 		}
 	}
+	releasing := make(map[string]bool, len(s.releasing))
+	for deviceID := range s.releasing {
+		releasing[deviceID] = true
+	}
 	s.mu.Unlock()
-	device, err := pickDevice(devices, decision.Platform, req.DeviceID, taken, owned)
+	device, err := pickDevice(devices, decision.Platform, req.DeviceID, taken, owned, releasing)
 	if err != nil {
 		return Lease{}, err
 	}
@@ -422,12 +517,29 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 		s.mu.Unlock()
 		return Lease{}, apierr.Conflict("DEVICE_IN_USE", booted.Name+" was just taken by session "+string(owner)+".", nil)
 	}
+	if s.releasing[booted.ID] {
+		s.mu.Unlock()
+		return Lease{}, apierr.Conflict("DEVICE_IN_USE", booted.Name+" is being released by another session. Try again in a moment.", nil)
+	}
 	previous, hadPrevious := s.leases[id]
+	// Opens run concurrently: the free slot seen before the boot may be gone.
+	if !hadPrevious && len(s.leases) >= s.cfg.MaxLocalLeases {
+		s.mu.Unlock()
+		return Lease{}, apierr.Conflict("NO_DEVICE_AVAILABLE", fmt.Sprintf("This machine already runs %d devices for other sessions, the most it runs at once. Release one of them, or end its session, to open another.", s.cfg.MaxLocalLeases), map[string]any{"platform": string(booted.Platform)})
+	}
+	replaced := hadPrevious && previous.Device.ID != booted.ID
+	if replaced {
+		s.stopWatchLocked(id)
+		if s.releasing == nil {
+			s.releasing = map[string]bool{}
+		}
+		s.releasing[previous.Device.ID] = true
+	}
 	s.leases[id] = lease
 	s.saveLocked()
 	s.mu.Unlock()
-	if hadPrevious && previous.Device.ID != booted.ID {
-		s.releaseControl(ctx, previous.Device, "")
+	if replaced {
+		_ = s.finishRelease(ctx, previous.Device, false)
 	}
 	// No other AO session holds this device now, so any other claim on it is
 	// stale: an ended session, or one whose lease a daemon restart dropped.
@@ -450,7 +562,7 @@ func (s *Service) ownerOfLocked(deviceID string) (domain.SessionID, bool) {
 // sessions and the user's own work share these machines, and a running
 // simulator may be mid-use. Within each, a phone beats a tablet and the newest
 // OS wins: what an app is mostly built for and tested on.
-func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantID string, taken map[string]domain.SessionID, owned map[string]bool) (ports.DeviceInfo, error) {
+func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantID string, taken map[string]domain.SessionID, owned, releasing map[string]bool) (ports.DeviceInfo, error) {
 	if wantID != "" {
 		for _, d := range devices {
 			if d.ID != wantID && d.Name != wantID {
@@ -458,6 +570,9 @@ func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantI
 			}
 			if owner, ok := taken[d.ID]; ok {
 				return ports.DeviceInfo{}, apierr.Conflict("DEVICE_IN_USE", d.Name+" is in use by session "+string(owner)+".", nil)
+			}
+			if releasing[d.ID] {
+				return ports.DeviceInfo{}, apierr.Conflict("DEVICE_IN_USE", d.Name+" is being released by another session. Try again in a moment.", nil)
 			}
 			return d, nil
 		}
@@ -468,7 +583,7 @@ func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantI
 		if d.Platform != platform {
 			continue
 		}
-		if _, ok := taken[d.ID]; ok {
+		if _, ok := taken[d.ID]; ok || releasing[d.ID] {
 			continue
 		}
 		free = append(free, d)
@@ -547,18 +662,16 @@ func (s *Service) LiveLease(ctx context.Context, id domain.SessionID) (Lease, bo
 		return l, false
 	}
 	if s.cfg.Sessions != nil {
-		if info, err := s.cfg.Sessions(ctx, id); err != nil || info.Terminated {
+		if info, err := s.cfg.Sessions(ctx, id); sessionGone(info, err) {
 			s.mu.Lock()
-			_, held := s.leases[id]
-			delete(s.leases, id)
-			if held {
-				s.saveLocked()
-			}
+			ended, held := s.endLeaseLocked(id)
 			s.mu.Unlock()
 			if held {
-				s.releaseControl(ctx, l.Device, "")
+				_ = s.finishRelease(ctx, ended.Device, false)
 			}
 			return Lease{}, false
+		} else if err != nil {
+			s.log.Debug("keep device lease: session lookup failed", "session", id, "err", err)
 		}
 	}
 	if listed, found := s.listedDevice(ctx, l.Device); found {
@@ -614,20 +727,12 @@ func (s *Service) requireLease(id domain.SessionID) (Lease, error) {
 // Close releases the session's device, optionally shutting it down.
 func (s *Service) Close(ctx context.Context, id domain.SessionID, shutdown bool) error {
 	s.mu.Lock()
-	l, ok := s.leases[id]
-	delete(s.leases, id)
-	if ok {
-		s.saveLocked()
-	}
+	l, ok := s.endLeaseLocked(id)
 	s.mu.Unlock()
 	if !ok {
 		return nil
 	}
-	s.releaseControl(ctx, l.Device, "")
-	if !shutdown {
-		return nil
-	}
-	return s.cfg.Provider.Shutdown(ctx, l.Device)
+	return s.finishRelease(ctx, l.Device, shutdown)
 }
 
 // Install installs a built app on the session's device.
@@ -762,17 +867,37 @@ func (s *Service) PressButton(ctx context.Context, id domain.SessionID, button s
 	return nil
 }
 
-// HubTarget returns the stream endpoint and the lease it may serve.
-func (s *Service) HubTarget(ctx context.Context, id domain.SessionID) (ports.DeviceHubEndpoint, Lease, error) {
+// HubTarget returns the stream endpoint, the lease it may serve, and a
+// context that ends when that lease is released or replaced: a hub connection
+// must close with it.
+func (s *Service) HubTarget(ctx context.Context, id domain.SessionID) (ports.DeviceHubEndpoint, Lease, context.Context, error) {
 	l, err := s.requireLease(id)
 	if err != nil {
-		return ports.DeviceHubEndpoint{}, Lease{}, err
+		return ports.DeviceHubEndpoint{}, Lease{}, nil, err
 	}
 	endpoint, err := s.cfg.Provider.Hub(ctx)
 	if err != nil {
-		return ports.DeviceHubEndpoint{}, Lease{}, apierr.Unavailable("DEVICE_HUB_UNAVAILABLE", err.Error())
+		return ports.DeviceHubEndpoint{}, Lease{}, nil, apierr.Unavailable("DEVICE_HUB_UNAVAILABLE", err.Error())
 	}
-	return endpoint, l, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.leases[id]
+	if !ok || current.Device.ID != l.Device.ID {
+		return ports.DeviceHubEndpoint{}, Lease{}, nil, apierr.NotFound("NO_DEVICE_LEASE", "This session has no device. Run `ao device open` first.")
+	}
+	w, ok := s.watches[id]
+	if !ok || w.deviceID != current.Device.ID {
+		if ok {
+			w.cancel()
+		}
+		watchCtx, cancel := context.WithCancel(context.Background())
+		w = leaseWatch{deviceID: current.Device.ID, ctx: watchCtx, cancel: cancel}
+		if s.watches == nil {
+			s.watches = map[domain.SessionID]leaseWatch{}
+		}
+		s.watches[id] = w
+	}
+	return endpoint, current, w.ctx, nil
 }
 
 // Shutdown stops the provider's helpers when the daemon exits.

@@ -22,10 +22,14 @@ run setup yourself unless the user asked for device support.
    Reopening returns this session's existing device. Other sessions' devices
    are never handed out.
 
-2. Build with the project's own tools and fix build errors yourself, for
-   example `npx expo run:ios --device <udid>`, `npx react-native run-android`,
-   `xcodebuild -destination id=<udid>`, or `./gradlew installDebug`. These
-   install and launch the app themselves. When a build only produces an
+2. Build with the project's own tools and fix build errors yourself, aimed at
+   this session's device (the id `ao device open` printed): for example
+   `npx expo run:ios --device <udid>`, `xcodebuild -destination id=<udid>`, or
+   `npx react-native run-android --deviceId <serial>`. Other sessions' devices
+   may be running too, and Android tools without a device install on every one
+   of them: `./gradlew installDebug` does, so build the APK
+   (`./gradlew assembleDebug`) and install it with `ao device install`, or set
+   `ANDROID_SERIAL=<serial>` for the Gradle run. When a build only produces an
    artifact, install it:
 
    ```bash

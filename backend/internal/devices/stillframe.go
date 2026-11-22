@@ -67,13 +67,17 @@ func StillFrameStream(body io.ReadCloser, delay time.Duration) io.ReadCloser {
 					_ = body.Close()
 					return
 				}
-				if t.feed(chunk) {
-					repeat = true
-					timer.Reset(delay)
-				} else if t.partial() {
-					// A part is in flight: the next complete one is the news.
+				completed := t.feed(chunk)
+				switch {
+				case t.partial():
+					// A part is in flight (perhaps right after one that completed in
+					// the same chunk): repeating now would land inside it, and the
+					// next complete part is the news anyway.
 					repeat = false
 					timer.Stop()
+				case completed:
+					repeat = true
+					timer.Reset(delay)
 				}
 			case <-timer.C:
 				if repeat {

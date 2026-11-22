@@ -22,10 +22,17 @@ type fakeProvider struct {
 	readyErr  error
 	booted    []string
 	shutdowns []string
-	// bootGate, when set, holds Boot until it is closed.
-	bootGate  chan struct{}
-	installed []string
-	released  []string
+	// bootGate, when set, holds Boot until it is closed; bootEntered, when
+	// set, hears each Boot as it starts.
+	bootGate    chan struct{}
+	bootEntered chan string
+	// bootID, when set, renames a booted device (an emulator back under a new
+	// serial).
+	bootID func(ports.DeviceInfo) string
+	// releaseGate, when set, holds a full release (no session kept) until closed.
+	releaseGate chan struct{}
+	installed   []string
+	released    []string
 }
 
 func (f *fakeProvider) Name() string { return "local" }
@@ -48,16 +55,24 @@ func (f *fakeProvider) setBooted(id string, booted bool) {
 	}
 }
 func (f *fakeProvider) Boot(_ context.Context, d ports.DeviceInfo) (ports.DeviceInfo, error) {
+	if f.bootEntered != nil {
+		f.bootEntered <- d.ID
+	}
 	if f.bootGate != nil {
 		<-f.bootGate
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.booted = append(f.booted, d.ID)
+	if f.bootID != nil {
+		d.ID = f.bootID(d)
+	}
 	d.Booted = true
 	return d, nil
 }
 func (f *fakeProvider) Shutdown(_ context.Context, d ports.DeviceInfo) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.shutdowns = append(f.shutdowns, d.ID)
 	return nil
 }
@@ -76,6 +91,9 @@ func (f *fakeProvider) AgentControl(d ports.DeviceInfo, session string) (ports.D
 	return ports.DeviceAgentControl{Command: "/bin/agent-device", Args: []string{"--udid", d.ID, "--session", "ao-" + session}}, nil
 }
 func (f *fakeProvider) ReleaseControl(_ context.Context, d ports.DeviceInfo, keep string) error {
+	if keep == "" && f.releaseGate != nil {
+		<-f.releaseGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.released = append(f.released, d.ID+" keep="+keep)
@@ -646,28 +664,28 @@ func TestPickDevicePrefersAPhoneOnTheNewestOS(t *testing.T) {
 		ios("iphone-new", "iOS 26.5", false, false),
 		ios("iphone-mid", "iOS 26.1", false, false),
 	}
-	got, err := pickDevice(devices, ports.DevicePlatformIOS, "", nil, nil)
+	got, err := pickDevice(devices, ports.DevicePlatformIOS, "", nil, nil, nil)
 	if err != nil || got.ID != "iphone-new" {
 		t.Fatalf("picked %q, %v; want the iPhone on iOS 26.5", got.ID, err)
 	}
 	// Taken: the next newest phone, still not the iPad.
-	got, _ = pickDevice(devices, ports.DevicePlatformIOS, "", map[string]domain.SessionID{"iphone-new": "other"}, nil)
+	got, _ = pickDevice(devices, ports.DevicePlatformIOS, "", map[string]domain.SessionID{"iphone-new": "other"}, nil, nil)
 	if got.ID != "iphone-mid" {
 		t.Fatalf("picked %q, want iphone-mid", got.ID)
 	}
 	// Only tablets left: a tablet still beats nothing.
-	got, _ = pickDevice(devices[:1], ports.DevicePlatformIOS, "", nil, nil)
+	got, _ = pickDevice(devices[:1], ports.DevicePlatformIOS, "", nil, nil, nil)
 	if got.ID != "ipad-new" {
 		t.Fatalf("picked %q, want the iPad when it is all there is", got.ID)
 	}
 	// The ladder first: an old iPhone this service booted beats a newer one that is off.
 	withOwned := append([]ports.DeviceInfo{ios("iphone-ours", "iOS 17.0", false, true)}, devices...)
-	got, _ = pickDevice(withOwned, ports.DevicePlatformIOS, "", nil, map[string]bool{"iphone-ours": true})
+	got, _ = pickDevice(withOwned, ports.DevicePlatformIOS, "", nil, map[string]bool{"iphone-ours": true}, nil)
 	if got.ID != "iphone-ours" {
 		t.Fatalf("picked %q, want the running simulator this service booted", got.ID)
 	}
 	// A named device is taken as named.
-	got, _ = pickDevice(devices, ports.DevicePlatformIOS, "ipad-new", nil, nil)
+	got, _ = pickDevice(devices, ports.DevicePlatformIOS, "ipad-new", nil, nil, nil)
 	if got.ID != "ipad-new" {
 		t.Fatalf("picked %q, want the named iPad", got.ID)
 	}
@@ -688,5 +706,168 @@ func TestNewerVersion(t *testing.T) {
 		if got := newerVersion(c.a, c.b); got != c.want {
 			t.Errorf("newerVersion(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// A reopen waits on a boot; if the lease is closed meanwhile (and the device
+// handed to someone else), the reopen must not bring the old lease back.
+func TestReopenDoesNotBringBackALeaseClosedDuringItsBoot(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newTestService(t, p, 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	p.setBooted("A", false) // shut down outside AO: the reopen boots it
+	p.bootGate, p.bootEntered = make(chan struct{}), make(chan string, 1)
+	done := make(chan error, 1)
+	go func() { _, err := svc.Open(ctx, "s-1", OpenRequest{}); done <- err }()
+	<-p.bootEntered
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	close(p.bootGate)
+	if err := <-done; apiCode(err) != "DEVICE_LEASE_CHANGED" {
+		t.Fatalf("reopen = %v, want DEVICE_LEASE_CHANGED", err)
+	}
+	if _, ok := svc.Lease("s-1"); ok {
+		t.Fatal("a closed lease came back")
+	}
+}
+
+// Two opens can both see a free slot before they boot; only one may commit.
+func TestConcurrentOpensRespectTheCap(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newTestService(t, p, 1)
+	p.bootGate, p.bootEntered = make(chan struct{}), make(chan string, 2)
+	results := make(chan error, 2)
+	go func() { _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); results <- err }()
+	go func() { _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "C"}); results <- err }()
+	<-p.bootEntered
+	<-p.bootEntered
+	close(p.bootGate)
+	var ok, full int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			ok++
+		case apiCode(err) == "NO_DEVICE_AVAILABLE":
+			full++
+		default:
+			t.Fatalf("open = %v", err)
+		}
+	}
+	if ok != 1 || full != 1 || len(svc.Status(ctx).Leases) != 1 {
+		t.Fatalf("ok=%d full=%d leases=%d, want one lease under a cap of 1", ok, full, len(svc.Status(ctx).Leases))
+	}
+}
+
+// While a released device's driver claims are still being closed (or it is
+// shutting down), nobody else may take it: the cleanup would hit them.
+func TestDeviceStaysReservedWhileItIsReleased(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newTestService(t, p, 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	p.releaseGate = make(chan struct{})
+	closed := make(chan error, 1)
+	go func() { closed <- svc.Close(ctx, "s-1", true) }()
+	deadline := time.Now().Add(2 * time.Second)
+	var err error
+	for time.Now().Before(deadline) {
+		if _, err = svc.Open(ctx, "s-2", OpenRequest{DeviceID: "A"}); apiCode(err) == "DEVICE_IN_USE" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if apiCode(err) != "DEVICE_IN_USE" {
+		t.Fatalf("open during release = %v, want DEVICE_IN_USE", err)
+	}
+	if got, _ := svc.Open(ctx, "s-3", OpenRequest{Platform: ports.DevicePlatformIOS}); got.Device.ID == "A" {
+		t.Fatal("an automatic pick took the device being released")
+	}
+	close(p.releaseGate)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatalf("open after the release finished = %v", err)
+	}
+}
+
+// A lookup that fails for any reason but "no such session" proves nothing:
+// the lease stays. Not found, or terminated, frees it.
+func TestLeaseSurvivesAFailedSessionLookup(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	var lookupErr error
+	svc := New(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) { return SessionInfo{}, lookupErr }})
+	if _, err := svc.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	lookupErr = errors.New("database is locked")
+	svc.Status(ctx)
+	if _, ok := svc.LiveLease(ctx, "s-1"); !ok {
+		t.Fatal("a transient lookup error released the lease")
+	}
+	lookupErr = apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	if _, ok := svc.LiveLease(ctx, "s-1"); ok {
+		t.Fatal("a session that no longer exists kept its device")
+	}
+}
+
+// An emulator restarted under a new serial: the reopened lease, and the agent
+// command bound to it, follow the new serial.
+func TestReopenRebindsAnEmulatorWithANewSerial(t *testing.T) {
+	ctx := context.Background()
+	p := &fakeProvider{
+		platforms: []ports.DevicePlatformAvailability{{Platform: ports.DevicePlatformAndroid, Available: true}},
+		devices:   []ports.DeviceInfo{{ID: "emulator-5554", Name: "pixel", Platform: ports.DevicePlatformAndroid, Booted: true}},
+	}
+	svc := newTestService(t, p, 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.devices = []ports.DeviceInfo{{ID: "pixel", Name: "pixel", Platform: ports.DevicePlatformAndroid}}
+	p.bootID = func(ports.DeviceInfo) string { return "emulator-5556" }
+	p.mu.Unlock()
+	lease, err := svc.Open(ctx, "s-1", OpenRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Device.ID != "emulator-5556" || !strings.Contains(strings.Join(lease.AgentControl.Args, " "), "emulator-5556") {
+		t.Fatalf("lease = %+v, want the device and its agent command on emulator-5556", lease)
+	}
+}
+
+// Hub connections live as long as the lease they were opened under.
+func TestHubTargetEndsWithTheLease(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, iosFleet(), 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, watch, err := svc.HubTarget(ctx, "s-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if watch.Err() != nil {
+		t.Fatal("the lease's connections ended while it was held")
+	}
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-watch.Done():
+	case <-time.After(time.Second):
+		t.Fatal("releasing the device left its hub connections open")
 	}
 }

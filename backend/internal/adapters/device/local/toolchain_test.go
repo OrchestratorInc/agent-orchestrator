@@ -360,10 +360,13 @@ func TestPressButtonRunsIOSHomeAndAppSwitcherThroughTheDriver(t *testing.T) {
 // and frame rate on the emulator helper, iOS a size cap, frame rate and JPEG
 // quality on the simulator's.
 func TestSetStreamQualityPatchesTheDevicesHelper(t *testing.T) {
-	var got []string
+	var mu sync.Mutex
+	var seen []string
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		got = append(got, r.Method+" "+r.URL.RequestURI()+" auth="+r.Header.Get("Authorization")+" "+strings.TrimSpace(string(body)))
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.RequestURI()+" auth="+r.Header.Get("Authorization")+" "+strings.TrimSpace(string(body)))
+		mu.Unlock()
 		_, _ = io.WriteString(w, "{}")
 	}))
 	t.Cleanup(hub.Close)
@@ -378,6 +381,9 @@ func TestSetStreamQualityPatchesTheDevicesHelper(t *testing.T) {
 	if err := p.SetStreamQuality(context.Background(), ios, ports.DeviceQualityHigh); err != nil {
 		t.Fatal(err)
 	}
+	mu.Lock()
+	got := append([]string(nil), seen...)
+	mu.Unlock()
 	want := []string{
 		`PATCH /vendor/serve-emu/api/stream-settings?device=emulator-5554 auth=Bearer tok {"h264Bitrate":800000,"h264Fps":20,"maxDimension":720}`,
 		`PATCH /vendor/serve-sim/helper/UDID-1/stream-settings auth=Bearer tok {"h264Bitrate":6000000,"h264Fps":60,"maxDimension":1600,"mjpegFps":60,"mjpegQuality":0.7}`,
@@ -471,5 +477,86 @@ func TestReadyProbeGivesUpOnAHubThatNeverAnswers(t *testing.T) {
 	}
 	if waited := time.Since(start); waited > 2*time.Second {
 		t.Fatalf("probe waited %v, want it to stop at its 200ms deadline", waited)
+	}
+}
+
+// The hub's address is the one it prints for the port it bound itself, read
+// across writes however they split.
+func TestPortWatcherReadsTheHubsOwnAddress(t *testing.T) {
+	w := newPortWatcher()
+	for _, chunk := range []string{"Expo Device Hub ready\n\n  Local:   http://local", "host:51234/?token=abc\n", "  Local:   http://localhost:9\n"} {
+		_, _ = w.Write([]byte(chunk))
+	}
+	select {
+	case port := <-w.port:
+		if port != 51234 {
+			t.Fatalf("port = %d, want 51234", port)
+		}
+	default:
+		t.Fatal("no port read from the hub's output")
+	}
+	select {
+	case port := <-w.port:
+		t.Fatalf("a second port %d was passed on", port)
+	default:
+	}
+}
+
+// A simulator this boot powered on is shut down again when its stream does not
+// start (nobody would own it); one that was already running is left alone.
+func TestBootRollsBackASimulatorWhoseStreamDidNotStart(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path == "/vendor/serve-sim/grid/api/start" {
+			_, _ = io.WriteString(w, `{"ok":false,"error":"capture failed"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(hub.Close)
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	shutdowns := func(booted bool) int {
+		mu.Lock()
+		paths = nil
+		mu.Unlock()
+		got, err := p.Boot(context.Background(), ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: booted})
+		if err == nil {
+			t.Fatal("a failed stream start was reported as a boot")
+		}
+		if !booted && got.Booted {
+			t.Fatal("the rolled-back simulator still reads as booted")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, path := range paths {
+			if path == "/api/devices/shutdown" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := shutdowns(false); n != 1 {
+		t.Fatalf("simulator this boot started: %d shutdowns, want 1", n)
+	}
+	if n := shutdowns(true); n != 0 {
+		t.Fatalf("simulator already running: %d shutdowns, want none", n)
+	}
+}
+
+// A hub exit while a restart is running is not dropped: it is queued.
+func TestHubExitDuringARestartIsQueued(t *testing.T) {
+	p := New(Config{DataDir: t.TempDir()})
+	p.reviving = true
+	p.reviveHub() // the exit callback, while a restart runs
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.reviveAgain {
+		t.Fatal("an exit seen during a restart was dropped")
 	}
 }
