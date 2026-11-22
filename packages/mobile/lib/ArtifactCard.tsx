@@ -8,6 +8,14 @@ import { useThemedStyles } from "./ThemeProvider";
 import { fontScaleCap, press, radius, space, type } from "./tokens";
 
 /**
+ * How a grid of artifact cards loads lazily: a few screens of cards mounted at
+ * a time, and a card's preview requested only once a quarter of it has been
+ * on screen for a moment, so scrolling past does not fetch it.
+ */
+export const ARTIFACT_GRID_WINDOW = { initialNumToRender: 6, maxToRenderPerBatch: 4, updateCellsBatchingPeriod: 80, windowSize: 5 } as const;
+export const ARTIFACT_VIEWABILITY = { itemVisiblePercentThreshold: 25, minimumViewTime: 200 } as const;
+
+/**
  * An artifact as a card, as the desktop's Artifacts grid draws one: a preview
  * of the file filling its top, then its name and a line under it. Long press
  * opens its actions, where it has any.

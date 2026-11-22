@@ -1,8 +1,8 @@
 import { Stack, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, TextInput, useWindowDimensions, View, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArtifactCard } from "../../lib/ArtifactCard";
+import { ArtifactCard, ARTIFACT_GRID_WINDOW, ARTIFACT_VIEWABILITY } from "../../lib/ArtifactCard";
 import { artifactIndexRows, filterArtifactRows, type ArtifactIndexRow } from "../../lib/artifactsIndex";
 import { daemonArtifactsBackend, type ArtifactsBackend } from "../../lib/artifactsBackend";
 import { haptics } from "../../lib/haptics";
@@ -62,7 +62,7 @@ export default function ArtifactsPage() {
 	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<ArtifactIndexRow>[] }) => {
 		setVisibleKeys(new Set(viewableItems.flatMap((token) => token.item ? [token.item.key] : [])));
 	}).current;
-	const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 1, minimumViewTime: 120 }).current;
+	const viewabilityConfig = useRef(ARTIFACT_VIEWABILITY).current;
 
 	const open = useCallback((row: ArtifactIndexRow) => {
 		haptics.tap();
@@ -89,6 +89,8 @@ export default function ArtifactsPage() {
 				keyExtractor={(row) => row.key}
 				onViewableItemsChanged={onViewableItemsChanged}
 				viewabilityConfig={viewabilityConfig}
+				// Lazy: a few screens of cards are mounted at a time, not the whole list.
+				{...ARTIFACT_GRID_WINDOW}
 				ListHeaderComponent={rows.length ? (
 					<View style={styles.search}>
 						<Feather name="search" size={15} color={t.textTertiary} />
@@ -112,24 +114,44 @@ export default function ArtifactsPage() {
 					</View>
 				)}
 				renderItem={({ item }) => (
-					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard
-							artifact={item.artifact}
-							backend={backends.get(item.hostId) ?? null}
-							sessionId={item.sessionId}
-							visible={visibleKeys.has(item.key)}
-							refreshes={refreshes}
-							versionOf={(path) => item.sessionArtifacts.find((file) => file.path === path)?.updatedAt}
-							meta={[item.hostName, relativeTime(item.updatedAt)].filter(Boolean).join(" · ")}
-							onOpen={() => open(item)}
-						/>
-					</View>
+					<GridCell row={item} columns={columns} backend={backends.get(item.hostId) ?? null} visible={visibleKeys.has(item.key)} refreshes={refreshes} onOpen={open} />
 				)}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} {...refreshControlColors(t)} />}
 			/>
 		</>
 	);
 }
+
+/**
+ * One card in the grid, redrawn only when its own visibility, file or retry
+ * count changes: scrolling changes which cards are on screen, and redrawing
+ * every mounted card each time is what made the page feel like it loaded
+ * everything at once.
+ */
+const GridCell = memo(function GridCell({ row, columns, backend, visible, refreshes, onOpen }: {
+	row: ArtifactIndexRow;
+	columns: number;
+	backend: ArtifactsBackend | null;
+	visible: boolean;
+	refreshes: number;
+	onOpen(row: ArtifactIndexRow): void;
+}) {
+	const versionOf = useCallback((path: string) => row.sessionArtifacts.find((file) => file.path === path)?.updatedAt, [row.sessionArtifacts]);
+	return (
+		<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
+			<ArtifactCard
+				artifact={row.artifact}
+				backend={backend}
+				sessionId={row.sessionId}
+				visible={visible}
+				refreshes={refreshes}
+				versionOf={versionOf}
+				meta={[row.hostName, relativeTime(row.updatedAt)].filter(Boolean).join(" · ")}
+				onOpen={() => onOpen(row)}
+			/>
+		</View>
+	);
+});
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	page: { flex: 1, backgroundColor: t.bgBase },

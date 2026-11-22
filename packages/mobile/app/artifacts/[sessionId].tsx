@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
-import { ArtifactCard } from "../../lib/ArtifactCard";
+import { ArtifactCard, ARTIFACT_GRID_WINDOW, ARTIFACT_VIEWABILITY } from "../../lib/ArtifactCard";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import type { SessionArtifact } from "../../lib/artifacts";
@@ -74,7 +74,7 @@ function SessionArtifactsContent() {
 	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<SessionArtifact>[] }) => {
 		setVisiblePaths(new Set(viewableItems.flatMap((token) => token.item ? [token.item.path] : [])));
 	}).current;
-	const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 1, minimumViewTime: 120 }).current;
+	const viewabilityConfig = useRef(ARTIFACT_VIEWABILITY).current;
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
@@ -110,6 +110,7 @@ function SessionArtifactsContent() {
 				keyExtractor={(artifact) => artifact.path}
 				onViewableItemsChanged={onViewableItemsChanged}
 				viewabilityConfig={viewabilityConfig}
+				{...ARTIFACT_GRID_WINDOW}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor={t.accent} />}
 				ListHeaderComponent={title ? <Text numberOfLines={1} style={styles.caption}>{title}</Text> : null}
 				ListEmptyComponent={<EmptyState icon={{ ios: "doc.text", android: "description" }} title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
