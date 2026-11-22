@@ -1031,10 +1031,11 @@ function ChatWorkspaceContent({
 	const terminated = Boolean(session && !sessionIsActive(session));
 	// A message sent to an archived chat restores it first. The restore reads as one
 	// step until the agent is back, though the session turns live partway through it.
-	const restoringArchived = useRef(false);
-	if (terminated) restoringArchived.current = true;
-	else if (!resumingAgent) restoringArchived.current = false;
-	const restoring = Boolean(resumingAgent) && restoringArchived.current;
+	// Kept by session id: the Cloud surface shows several sessions in one workspace.
+	const restoringArchived = useRef<string | undefined>(undefined);
+	if (terminated) restoringArchived.current = session?.id;
+	else if (!resumingAgent) restoringArchived.current = undefined;
+	const restoring = Boolean(resumingAgent) && restoringArchived.current !== undefined && restoringArchived.current === session?.id;
 	// After a restart the daemon is still verifying this session and reconnects
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&

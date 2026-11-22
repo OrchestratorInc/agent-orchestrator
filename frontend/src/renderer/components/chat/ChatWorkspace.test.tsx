@@ -3497,6 +3497,22 @@ describe("ChatWorkspace timeline", () => {
 		expect(send).toHaveBeenCalledOnce();
 	});
 
+	it("does not carry an archived chat's restore over to the next session shown in the same workspace", () => {
+		const view = (id: string, isTerminated: boolean, resumingAgent: boolean) => (
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, sessionId: id, controller: { state: "stopped" } }}
+				session={{ ...chatSession, id, isTerminated }}
+				onResumeAgent={vi.fn()}
+				onSend={vi.fn()}
+				resumingAgent={resumingAgent}
+			/>
+		);
+		const { rerender } = render(view("archived-first", true, false));
+		// Another, live session whose agent is resuming: an ordinary resume, not a restore.
+		rerender(view("live-next", false, true));
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).not.toHaveAttribute("aria-placeholder", "Restoring session");
+	});
+
 	it("gives the draft back with the reason when the archived chat cannot be restored", async () => {
 		const user = userEvent.setup();
 		const send = vi.fn()
