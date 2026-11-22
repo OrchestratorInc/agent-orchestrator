@@ -166,7 +166,7 @@ func (s *Store) SetSessionProvisionedWorkspace(
 		Branch:            branch,
 		WorkspacePath:     workspacePath,
 		WorkspaceRepoPath: workspaceRepoPath,
-		UpdatedAt:         now,
+		UpdatedAt:         normalizeTime(now),
 		ID:                id,
 	})
 	if err != nil {
@@ -185,7 +185,7 @@ func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, e
 	err := s.inTx(ctx, fmt.Sprintf("record task branch for %s", id), func(q *gen.Queries) error {
 		var err error
 		rows, err = q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
-			ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
+			ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: normalizeTime(now),
 		})
 		for repo, repoBranch := range repoBranches {
 			if err != nil || rows == 0 {
@@ -249,7 +249,7 @@ func (s *Store) SetSessionProvisionState(
 	rows, err := s.qw.SetSessionProvisionState(ctx, gen.SetSessionProvisionStateParams{
 		ProvisionState: state.WithDefault(),
 		ProvisionError: provisionError,
-		UpdatedAt:      now,
+		UpdatedAt:      normalizeTime(now),
 		ID:             id,
 	})
 	if err != nil {
@@ -321,8 +321,8 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 		Effort:              rec.Metadata.Effort,
 		SessionPermissions:  string(rec.Metadata.Permissions),
 		RequestedOutput:     string(rec.RequestedOutput),
-		CreatedAt:           rec.CreatedAt,
-		UpdatedAt:           rec.UpdatedAt,
+		CreatedAt:           normalizeTime(rec.CreatedAt),
+		UpdatedAt:           normalizeTime(rec.UpdatedAt),
 		AutoInjectReview:    rec.AutoInjectReview,
 		AutoInjectCI:        rec.AutoInjectCI,
 		ProvisionState:      rec.ProvisionState.WithDefault(),
@@ -411,7 +411,7 @@ func (s *Store) MarkHarnessSessionsStale(ctx context.Context, harness domain.Age
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.MarkHarnessSessionsStale(ctx, gen.MarkHarnessSessionsStaleParams{
-		Since: sql.NullTime{Time: at, Valid: true}, Version: version, Harness: harness,
+		Since: timeToNullTime(at), Version: version, Harness: harness,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("mark %s sessions stale: %w", harness, err)
@@ -425,7 +425,7 @@ func (s *Store) SetSessionVersionSwitchFailed(ctx context.Context, id domain.Ses
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if _, err := s.qw.SetSessionVersionSwitchFailed(ctx, gen.SetSessionVersionSwitchFailedParams{
-		FailedAt: sql.NullTime{Time: at, Valid: true}, Version: version, ID: id,
+		FailedAt: timeToNullTime(at), Version: version, ID: id,
 	}); err != nil {
 		return fmt.Errorf("record version switch failure for %s: %w", id, err)
 	}
@@ -435,7 +435,7 @@ func (s *Store) SetSessionVersionSwitchFailed(ctx context.Context, id domain.Ses
 // ListVersionRefreshChatCandidates lists idle Chat sessions, quiet since
 // idleBefore, whose current launch runs a replaced harness release.
 func (s *Store) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
-	ids, err := s.qr.ListVersionRefreshChatCandidates(ctx, idleBefore)
+	ids, err := s.qr.ListVersionRefreshChatCandidates(ctx, normalizeTime(idleBefore))
 	if err != nil {
 		return nil, fmt.Errorf("list chats for version refresh: %w", err)
 	}
@@ -445,7 +445,7 @@ func (s *Store) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore
 // ListVersionRefreshTerminalCandidates lists idle, natively resumable terminal
 // sessions, quiet since idleBefore, whose current launch runs a replaced release.
 func (s *Store) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
-	ids, err := s.qr.ListVersionRefreshTerminalCandidates(ctx, idleBefore)
+	ids, err := s.qr.ListVersionRefreshTerminalCandidates(ctx, normalizeTime(idleBefore))
 	if err != nil {
 		return nil, fmt.Errorf("list terminals for version refresh: %w", err)
 	}
@@ -619,7 +619,7 @@ func activitySignalProjectionParams(rec domain.SessionRecord, expectedRevision i
 		NativeTranscriptPath:             rec.Metadata.NativeTranscriptPath,
 		ClaudeActivityFacts:              rec.Metadata.ClaudeActivityFacts,
 		CodexActivityFacts:               rec.Metadata.CodexActivityFacts,
-		UpdatedAt:                        rec.UpdatedAt,
+		UpdatedAt:                        normalizeTime(rec.UpdatedAt),
 		ID:                               rec.ID,
 		ExpectedRevision:                 expectedRevision,
 		ExpectedHarness:                  rec.Harness,
@@ -685,7 +685,7 @@ func (s *Store) RenameSession(ctx context.Context, id domain.SessionID, displayN
 	rows, err := s.qw.RenameSession(ctx, gen.RenameSessionParams{
 		ID:          id,
 		DisplayName: displayName,
-		UpdatedAt:   updatedAt,
+		UpdatedAt:   normalizeTime(updatedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("rename session %s: %w", id, err)
@@ -707,7 +707,7 @@ func (s *Store) RenameSessionIfDisplayName(
 		ID:                 id,
 		CurrentDisplayName: currentDisplayName,
 		DisplayName:        displayName,
-		UpdatedAt:          updatedAt,
+		UpdatedAt:          normalizeTime(updatedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("rename session %s if unchanged: %w", id, err)
@@ -723,7 +723,7 @@ func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPin
 		ID:        id,
 		IsPinned:  isPinned,
 		PinnedAt:  timePtrToNullTime(pinnedAt),
-		UpdatedAt: updatedAt,
+		UpdatedAt: normalizeTime(updatedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("set session pinned %s: %w", id, err)
@@ -741,7 +741,7 @@ func (s *Store) SetSessionPreviewURL(ctx context.Context, id domain.SessionID, p
 	rows, err := s.qw.SetSessionPreviewURL(ctx, gen.SetSessionPreviewURLParams{
 		ID:         id,
 		PreviewURL: previewURL,
-		UpdatedAt:  updatedAt,
+		UpdatedAt:  normalizeTime(updatedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("set preview url for session %s: %w", id, err)
@@ -757,7 +757,7 @@ func (s *Store) SetSessionTerminateOnPRMerge(ctx context.Context, id domain.Sess
 	rows, err := s.qw.SetSessionTerminateOnPRMerge(ctx, gen.SetSessionTerminateOnPRMergeParams{
 		ID:                 id,
 		TerminateOnPRMerge: terminate,
-		UpdatedAt:          updatedAt,
+		UpdatedAt:          normalizeTime(updatedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("set terminate-on-pr-merge for session %s: %w", id, err)
@@ -772,7 +772,7 @@ func (s *Store) SetSessionAutoInjectReview(ctx context.Context, id domain.Sessio
 	rows, err := s.qw.SetSessionAutoInjectReview(ctx, gen.SetSessionAutoInjectReviewParams{
 		ID:               id,
 		AutoInjectReview: autoInject,
-		UpdatedAt:        updatedAt,
+		UpdatedAt:        normalizeTime(updatedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("set auto-inject review for session %s: %w", id, err)
@@ -791,7 +791,7 @@ func (s *Store) SetSessionAutoInjectCI(ctx context.Context, id domain.SessionID,
 		rows, err := q.SetSessionAutoInjectCI(ctx, gen.SetSessionAutoInjectCIParams{
 			ID:           id,
 			AutoInjectCI: autoInject,
-			UpdatedAt:    updatedAt,
+			UpdatedAt:    normalizeTime(updatedAt),
 		})
 		if err != nil {
 			return err
@@ -831,7 +831,7 @@ func (s *Store) SetSessionReviewerConfig(
 	rows, err := s.qw.SetSessionReviewerConfig(ctx, gen.SetSessionReviewerConfigParams{
 		ReviewerHarness:     harness,
 		ReviewerAgentConfig: encoded,
-		UpdatedAt:           updatedAt,
+		UpdatedAt:           normalizeTime(updatedAt),
 		ID:                  id,
 	})
 	if err != nil {
@@ -846,7 +846,7 @@ func (s *Store) SetSessionAutoReview(ctx context.Context, id domain.SessionID, e
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionAutoReview(ctx, gen.SetSessionAutoReviewParams{
 		AutoReviewEnabled: enabled,
-		UpdatedAt:         updatedAt,
+		UpdatedAt:         normalizeTime(updatedAt),
 		ID:                id,
 	})
 	if err != nil {
@@ -1424,8 +1424,8 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		Effort:                           rec.Metadata.Effort,
 		SessionPermissions:               string(rec.Metadata.Permissions),
 		RequestedOutput:                  string(rec.RequestedOutput),
-		CreatedAt:                        rec.CreatedAt,
-		UpdatedAt:                        rec.UpdatedAt,
+		CreatedAt:                        normalizeTime(rec.CreatedAt),
+		UpdatedAt:                        normalizeTime(rec.UpdatedAt),
 		ProvisionState:                   rec.ProvisionState.WithDefault(),
 		ProvisionError:                   rec.ProvisionError,
 		IsTaskPreparation:                rec.IsTaskPreparation,
@@ -1488,7 +1488,7 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 		ControllerGeneration:             rec.Metadata.ControllerGeneration,
 		Model:                            rec.Metadata.Model,
 		Effort:                           rec.Metadata.Effort,
-		UpdatedAt:                        rec.UpdatedAt,
+		UpdatedAt:                        normalizeTime(rec.UpdatedAt),
 		AutomationLaunchCompleted:        rec.AutomationLaunchCompleted,
 	}
 }
@@ -1538,37 +1538,6 @@ func normalizeSessionOutputType(v domain.SessionOutputType) domain.SessionOutput
 		return domain.SessionOutputNone
 	}
 	return v
-}
-
-// nullTimeToTime / timeToNullTime bridge the nullable first_signal_at column
-// to the domain's zero-time convention (zero = no signal received yet).
-func nullTimeToTime(t sql.NullTime) time.Time {
-	if !t.Valid {
-		return time.Time{}
-	}
-	return t.Time
-}
-
-func timeToNullTime(t time.Time) sql.NullTime {
-	if t.IsZero() {
-		return sql.NullTime{}
-	}
-	// Also used by handwritten SQL that does not go through utcTimes.
-	return sql.NullTime{Time: t.UTC(), Valid: true}
-}
-
-func nullTimeToTimePtr(t sql.NullTime) *time.Time {
-	if !t.Valid {
-		return nil
-	}
-	return &t.Time
-}
-
-func timePtrToNullTime(t *time.Time) sql.NullTime {
-	if t == nil {
-		return sql.NullTime{}
-	}
-	return sql.NullTime{Time: *t, Valid: true}
 }
 
 func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {

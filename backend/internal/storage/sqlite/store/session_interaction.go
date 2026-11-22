@@ -45,7 +45,7 @@ func (s *Store) recordSessionInteraction(ctx context.Context, q *gen.Queries, db
 	if err := normalizeSessionGuardTimes(ctx, db, id); err != nil {
 		return err
 	}
-	_, err := q.RecordSessionInteraction(ctx, gen.RecordSessionInteractionParams{ID: id, InteractionAt: timeToNullTime(at.UTC())})
+	_, err := q.RecordSessionInteraction(ctx, gen.RecordSessionInteractionParams{ID: id, InteractionAt: timeToNullTime(at)})
 	return err
 }
 

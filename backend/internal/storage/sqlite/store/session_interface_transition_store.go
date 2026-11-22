@@ -37,8 +37,8 @@ func (s *Store) CreateSessionInterfaceTransition(
 		Phase:                rec.Phase,
 		NativeConversationID: rec.NativeConversationID,
 		DegradedKind:         rec.DegradedKind,
-		CreatedAt:            rec.CreatedAt,
-		UpdatedAt:            rec.UpdatedAt,
+		CreatedAt:            normalizeTime(rec.CreatedAt),
+		UpdatedAt:            normalizeTime(rec.UpdatedAt),
 		SourceAccountID:      rec.SourceAccountID,
 		TargetAccountID:      rec.TargetAccountID,
 	})
@@ -90,7 +90,7 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 			TargetMode: rec.TargetMode, Policy: rec.Policy, HistoryPolicy: rec.HistoryPolicy,
 			Phase: rec.Phase, NativeConversationID: rec.NativeConversationID,
 			DegradedKind: rec.DegradedKind,
-			CreatedAt:    rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+			CreatedAt:    normalizeTime(rec.CreatedAt), UpdatedAt: normalizeTime(rec.UpdatedAt),
 			SourceAccountID: rec.SourceAccountID, TargetAccountID: rec.TargetAccountID,
 		})
 		if insertErr == nil {
@@ -196,14 +196,14 @@ func (s *Store) AdvanceSessionInterfaceTransition(
 	defer s.writeMu.Unlock()
 	var completed sql.NullTime
 	if next.Terminal() {
-		completed = sql.NullTime{Time: now, Valid: true}
+		completed = timeToNullTime(now)
 	}
 	rows, err := s.qw.AdvanceSessionInterfaceTransition(ctx, gen.AdvanceSessionInterfaceTransitionParams{
 		Phase:                next,
 		NativeConversationID: nativeID,
 		ErrorCode:            errorCode,
 		ErrorDetail:          errorDetail,
-		UpdatedAt:            now,
+		UpdatedAt:            normalizeTime(now),
 		CompletedAt:          completed,
 		ID:                   id,
 		Phase_2:              expected,
@@ -241,8 +241,8 @@ func (s *Store) CompleteSessionInterfaceTransition(
 		rows, err := q.AdvanceSessionInterfaceTransition(ctx, gen.AdvanceSessionInterfaceTransitionParams{
 			Phase:                domain.SessionInterfaceTransitionCompleted,
 			NativeConversationID: current.NativeConversationID,
-			UpdatedAt:            now,
-			CompletedAt:          sql.NullTime{Time: now, Valid: true},
+			UpdatedAt:            normalizeTime(now),
+			CompletedAt:          timeToNullTime(now),
 			ID:                   id,
 			Phase_2:              expected,
 		})
@@ -251,7 +251,7 @@ func (s *Store) CompleteSessionInterfaceTransition(
 		}
 		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
 			TransitionID: id, ClientMessageID: "interface-transition:" + id + ":context-boundary",
-			Message: message, CreatedAt: now,
+			Message: message, CreatedAt: normalizeTime(now),
 		}); err != nil {
 			return err
 		}
@@ -275,7 +275,7 @@ func (s *Store) AcknowledgeSessionInterfaceTransitionNotice(
 	row, err := s.qw.AcknowledgeSessionInterfaceTransitionNotice(
 		ctx,
 		gen.AcknowledgeSessionInterfaceTransitionNoticeParams{
-			NoticeAcknowledgedAt: sql.NullTime{Time: now, Valid: true},
+			NoticeAcknowledgedAt: timeToNullTime(now),
 			ID:                   transitionID,
 			SessionID:            sessionID,
 		},
@@ -354,8 +354,8 @@ func (s *Store) commitSessionControllerEpoch(
 			TargetMode:             target,
 			AgentSessionID:         nativeID,
 			ProviderConversationID: nativeID,
-			ActivityLastAt:         now,
-			UpdatedAt:              now,
+			ActivityLastAt:         normalizeTime(now),
+			UpdatedAt:              normalizeTime(now),
 			ID:                     id,
 			SourceMode:             source,
 		})
@@ -364,8 +364,8 @@ func (s *Store) commitSessionControllerEpoch(
 			TargetMode:             target,
 			AgentSessionID:         nativeID,
 			ProviderConversationID: nativeID,
-			ActivityLastAt:         now,
-			UpdatedAt:              now,
+			ActivityLastAt:         normalizeTime(now),
+			UpdatedAt:              normalizeTime(now),
 			ID:                     id,
 			SourceMode:             source,
 		})
@@ -469,7 +469,7 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	return s.inTxDB(ctx, "queue interface transition message", func(q *gen.Queries, db gen.DBTX) error {
 		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
 			SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
-			TransitionID: transitionID, ClientMessageID: clientMessageID, Message: message, CreatedAt: now,
+			TransitionID: transitionID, ClientMessageID: clientMessageID, Message: message, CreatedAt: normalizeTime(now),
 		}); err != nil {
 			return err
 		}
@@ -480,7 +480,7 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 		if err != nil {
 			return err
 		}
-		return s.recordSessionInteraction(ctx, q, db, transition.SessionID, opts.SenderSessionID, now)
+		return s.recordSessionInteraction(ctx, q, db, transition.SessionID, opts.SenderSessionID, normalizeTime(now))
 	})
 }
 
@@ -514,7 +514,7 @@ func (s *Store) MarkSessionInterfaceTransitionMessageDelivered(
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	_, err := s.qw.MarkSessionInterfaceTransitionMessageDelivered(ctx, gen.MarkSessionInterfaceTransitionMessageDeliveredParams{
-		DeliveredAt: sql.NullTime{Time: now, Valid: true},
+		DeliveredAt: timeToNullTime(now),
 		ID:          id,
 	})
 	if err != nil {
