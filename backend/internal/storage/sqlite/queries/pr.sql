@@ -291,6 +291,22 @@ WITH current_pr AS (
     FROM pr
     WHERE pr.session_id = sqlc.arg(session_id)
 ),
+effective_changes_request AS (
+    -- A later submitted verdict from the same author supersedes a request,
+    -- including when the author is a bot or the later verdict targets a new head.
+    SELECT r.pr_url, r.target_sha
+    FROM pr_reviews r
+    JOIN current_pr ON current_pr.url = r.pr_url
+    WHERE r.state = 'changes_requested'
+      AND NOT EXISTS (
+          SELECT 1 FROM pr_reviews newer
+          WHERE newer.pr_url = r.pr_url
+            AND newer.author = r.author
+            AND newer.state IN ('approved', 'changes_requested')
+            AND (newer.submitted_at > r.submitted_at
+                 OR (newer.submitted_at = r.submitted_at AND newer.review_id > r.review_id))
+      )
+),
 eligible_external_review AS (
     -- Each human reviewer's CURRENT verdict on the PR's current head. Reviews
     -- for an older explicit target_sha are stale and must not drive current
@@ -381,9 +397,8 @@ SELECT
     -- Bot and unknown-SHA current requests make that proof inconclusive.
     CAST((pr.provider = 'github' AND pr.head_sha != ''
       AND (EXISTS (
-          SELECT 1 FROM pr_reviews old_request
+          SELECT 1 FROM effective_changes_request old_request
           WHERE old_request.pr_url = pr.url
-            AND old_request.state = 'changes_requested'
             AND old_request.target_sha != ''
             AND old_request.target_sha != pr.head_sha
       ) OR EXISTS (
@@ -393,11 +408,18 @@ SELECT
             AND old_request.github_review_id != ''
             AND old_request.target_sha != ''
             AND old_request.target_sha != pr.head_sha
+            AND NOT EXISTS (
+                SELECT 1 FROM review_run newer
+                WHERE newer.pr_url = old_request.pr_url
+                  AND newer.harness = old_request.harness
+                  AND newer.verdict IN ('approved', 'changes_requested')
+                  AND (newer.created_at > old_request.created_at
+                       OR (newer.created_at = old_request.created_at AND newer.id > old_request.id))
+            )
       ))
       AND NOT EXISTS (
-          SELECT 1 FROM pr_reviews current_request
+          SELECT 1 FROM effective_changes_request current_request
           WHERE current_request.pr_url = pr.url
-            AND current_request.state = 'changes_requested'
             AND (current_request.target_sha = '' OR current_request.target_sha = pr.head_sha)
       )) AS INTEGER) AS stale_changes_requested,
     -- The open PR whose source branch this PR targets, in any session, so a
@@ -457,6 +479,20 @@ current_pr AS (
     SELECT pr.session_id, pr.url, pr.head_sha
     FROM pr
     JOIN wanted_session ON wanted_session.session_id = pr.session_id
+),
+effective_changes_request AS (
+    SELECT r.pr_url, r.target_sha
+    FROM pr_reviews r
+    JOIN current_pr ON current_pr.url = r.pr_url
+    WHERE r.state = 'changes_requested'
+      AND NOT EXISTS (
+          SELECT 1 FROM pr_reviews newer
+          WHERE newer.pr_url = r.pr_url
+            AND newer.author = r.author
+            AND newer.state IN ('approved', 'changes_requested')
+            AND (newer.submitted_at > r.submitted_at
+                 OR (newer.submitted_at = r.submitted_at AND newer.review_id > r.review_id))
+      )
 ),
 eligible_external_review AS (
     -- Each human reviewer's CURRENT verdict on the PR's current head. Reviews
@@ -552,9 +588,8 @@ SELECT
     -- The batch read uses the same positive stale-head proof as the detail read.
     CAST((pr.provider = 'github' AND pr.head_sha != ''
       AND (EXISTS (
-          SELECT 1 FROM pr_reviews old_request
+          SELECT 1 FROM effective_changes_request old_request
           WHERE old_request.pr_url = pr.url
-            AND old_request.state = 'changes_requested'
             AND old_request.target_sha != ''
             AND old_request.target_sha != pr.head_sha
       ) OR EXISTS (
@@ -564,11 +599,18 @@ SELECT
             AND old_request.github_review_id != ''
             AND old_request.target_sha != ''
             AND old_request.target_sha != pr.head_sha
+            AND NOT EXISTS (
+                SELECT 1 FROM review_run newer
+                WHERE newer.pr_url = old_request.pr_url
+                  AND newer.harness = old_request.harness
+                  AND newer.verdict IN ('approved', 'changes_requested')
+                  AND (newer.created_at > old_request.created_at
+                       OR (newer.created_at = old_request.created_at AND newer.id > old_request.id))
+            )
       ))
       AND NOT EXISTS (
-          SELECT 1 FROM pr_reviews current_request
+          SELECT 1 FROM effective_changes_request current_request
           WHERE current_request.pr_url = pr.url
-            AND current_request.state = 'changes_requested'
             AND (current_request.target_sha = '' OR current_request.target_sha = pr.head_sha)
       )) AS INTEGER) AS stale_changes_requested,
     -- The open PR whose source branch this PR targets, in any session, so a

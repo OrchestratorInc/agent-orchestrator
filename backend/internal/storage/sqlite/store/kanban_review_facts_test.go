@@ -414,6 +414,11 @@ func TestPRFactsRequireProofBeforeClearingChangesRequested(t *testing.T) {
 			{ID: "old-2", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
 			{ID: "bot-2", Author: "bot", IsBot: true, State: domain.ReviewChangesRequest, TargetSHA: "head2", SubmittedAt: now.Add(time.Second)},
 		}, false},
+		{"pr/superseded-current-bot", "github", []domain.PullRequestReview{
+			{ID: "old-5", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
+			{ID: "bot-5-request", Author: "bot", IsBot: true, State: domain.ReviewChangesRequest, TargetSHA: "head2", SubmittedAt: now.Add(time.Second)},
+			{ID: "bot-5-approval", Author: "bot", IsBot: true, State: domain.ReviewApproved, TargetSHA: "head2", SubmittedAt: now.Add(2 * time.Second)},
+		}, true},
 		{"pr/gitlab", "gitlab", []domain.PullRequestReview{{ID: "old-3", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now}}, false},
 		{"pr/unknown-head", "github", []domain.PullRequestReview{
 			{ID: "old-4", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
