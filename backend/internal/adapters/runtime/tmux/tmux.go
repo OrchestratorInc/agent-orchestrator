@@ -56,7 +56,7 @@ type Options struct {
 	Binary       string        // default configured/bundled/system tmux resolution
 	LegacyBinary string        // default system tmux from PATH when SocketName is set; used only for pre-private-socket sessions
 	SocketName   string        // default $AO_TMUX_SOCKET_NAME; empty uses tmux's machine-wide default socket
-	Shell        string        // default $SHELL else /bin/sh
+	Shell        string        // interactive fallback if pane $SHELL is unset; defaults to daemon $SHELL or /bin/sh
 	Timeout      time.Duration // default 5s
 	ChunkSize    int           // default 16*1024
 	EnterDelay   time.Duration // pause after pasting a non-empty message before pressing Enter; default defaultEnterDelay. Conpty already does this (ptyInputEnterDelay); tmux lacked it, so a large multiline paste could absorb the trailing Enter and leave the prompt unsubmitted (issue #2342).
