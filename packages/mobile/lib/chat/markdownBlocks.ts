@@ -42,6 +42,9 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 	// steps after the fence keep counting.
 	let list: { block: Extract<MarkdownBlock, { kind: "list" }>; indents: number[]; numbers: Array<number | undefined>; blank: boolean } | null = null;
 	let listResumes = false;
+	// Prose under an item after its code block (`npm i` … "Then run it."): its own
+	// paragraph, with the list held open so the next step keeps its number.
+	let listProse: Extract<MarkdownBlock, { kind: "paragraph" }> | null = null;
 	const flushParagraph = () => {
 		if (paragraph.length) blocks.push({ kind: "paragraph", text: joinLines(paragraph) });
 		paragraph = [];
@@ -49,6 +52,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 	const closeList = () => {
 		list = null;
 		listResumes = false;
+		listProse = null;
 	};
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
@@ -58,7 +62,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 		if (fence && (fence[1].length <= 3 || list)) {
 			flushParagraph();
 			const marker = fence[2];
-			const language = fence[3].trim().split(/\s+/)[0] || undefined;
+			const language = fenceInfo(fence).split(/\s+/)[0] || undefined;
 			// A fence opened inside a list item keeps the list's numbering going.
 			const inList = Boolean(list) && (fence[1].length > 0 || !list!.blank);
 			if (!inList) closeList();
@@ -68,6 +72,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 			for (i += 1; i < lines.length && !closes(lines[i]); i++) code.push(dedent(raw[i], fence[1].length));
 			blocks.push({ kind: "code", language, text: code.join("\n") });
 			if (inList) listResumes = true;
+			listProse = null;
 			continue;
 		}
 
@@ -94,6 +99,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 				blocks.push(list.block);
 			}
 			listResumes = false;
+			listProse = null;
 			const depth = nestingDepth(list, indent);
 			let number: number | undefined;
 			if (ordered) {
@@ -112,7 +118,17 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 			// line straight after it (a lazy continuation), unless it opens a block.
 			const opensBlock = HEADING.test(line) || QUOTE.test(line) || RULE.test(line) || /^\s*!\[/.test(line)
 				|| (line.includes("|") && i + 1 < lines.length && tableDivider(lines[i + 1], tableCells(line).length) !== null);
-			if (last && !listResumes && (indent >= 2 || (!list.blank && !opensBlock))) {
+			const belongs = indent >= 2 || (!list.blank && !opensBlock);
+			if (last && listResumes && belongs) {
+				if (listProse && !list.blank) listProse.text = appendLine(listProse.text, line);
+				else {
+					listProse = { kind: "paragraph", text: line.trimStart() };
+					blocks.push(listProse);
+				}
+				list.blank = false;
+				continue;
+			}
+			if (last && !listResumes && belongs) {
 				last.text = list.blank ? `${last.text.trimEnd()}\n${line.trimStart()}` : appendLine(last.text, line);
 				list.blank = false;
 				continue;
@@ -164,7 +180,10 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 		paragraph.push(line);
 	}
 	flushParagraph();
-	for (const block of blocks) if (block.kind === "list") for (const item of block.items) item.text = item.text.trimEnd();
+	for (const block of blocks) {
+		if (block.kind === "list") for (const item of block.items) item.text = item.text.trimEnd();
+		else if (block.kind === "paragraph") block.text = block.text.trimEnd();
+	}
 	return blocks;
 }
 
@@ -174,7 +193,15 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
  */
 function closesFence(line: string, opener: string, maxIndent: number): boolean {
 	const fence = FENCE.exec(line);
-	return Boolean(fence) && fence![1].length <= maxIndent && fence![2][0] === opener[0] && fence![2].length >= opener.length && !fence![3].trim();
+	return Boolean(fence) && fence![1].length <= maxIndent && fence![2][0] === opener[0] && fence![2].length >= opener.length && !fenceInfo(fence!);
+}
+
+/**
+ * A fence line's info string, without the cursor the timeline appends while a
+ * reply streams: "``` ▍" closes a block, and "```js ▍" opens one in js.
+ */
+function fenceInfo(fence: RegExpExecArray): string {
+	return fence[3].replace(/\u258D\s*$/, "").trim();
 }
 
 /** The glyph the timeline appends to a reply while it streams: not part of the reply's text. */

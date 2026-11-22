@@ -179,3 +179,34 @@ it("keeps the asterisks around an escaped backtick apart", () => {
 	expect(repairStreamingInline("*\\`* text")).toBe("*\\`* text");
 	expect(repairStreamingInline("Use \\` and **bold")).toBe("Use \\` and **bold**");
 });
+
+describe("fourth review fixes", () => {
+	const explained = (second: string) => `1. Install:\n   \`\`\`sh\n   npm i\n   \`\`\`\n   Then run it.\n${second} Start the app`;
+
+	it.each(["2.", "1."])("keeps the step after an explained code block in the list, numbered on (%s)", (second) => {
+		expect(parseBlocks(explained(second))).toEqual([
+			{ kind: "list", ordered: true, items: [{ text: "Install:", depth: 0, number: 1 }] },
+			{ kind: "code", language: "sh", text: "npm i" },
+			{ kind: "paragraph", text: "Then run it." },
+			{ kind: "list", ordered: true, items: [{ text: "Start the app", depth: 0, number: 2 }] },
+		]);
+	});
+
+	it("joins a multi-line explanation under a step into one paragraph, and a blank line starts another", () => {
+		expect(parseBlocks("1. Build:\n   ```sh\n   make\n   ```\n   This compiles\n   everything.\n\n   It takes a minute.\n2. Ship")).toEqual([
+			{ kind: "list", ordered: true, items: [{ text: "Build:", depth: 0, number: 1 }] },
+			{ kind: "code", language: "sh", text: "make" },
+			{ kind: "paragraph", text: "This compiles everything." },
+			{ kind: "paragraph", text: "It takes a minute." },
+			{ kind: "list", ordered: true, items: [{ text: "Ship", depth: 0, number: 2 }] },
+		]);
+	});
+
+	it("closes and opens fences that carry the streaming cursor", () => {
+		expect(parseBlocks("```js\nconst a = 1\n``` ▍")).toEqual([{ kind: "code", language: "js", text: "const a = 1" }]);
+		expect(parseBlocks("```js ▍")).toEqual([{ kind: "code", language: "js", text: "" }]);
+		expect(parseBlocks("``` ▍")).toEqual([{ kind: "code", text: "" }]);
+		expect(repairStreamingInline("```js\nconst a = 1\n``` ▍")).toBe("```js\nconst a = 1\n``` ▍");
+		expect(repairStreamingInline("```js\nx\n```\nNow **bold ▍")).toBe("```js\nx\n```\nNow **bold** ▍");
+	});
+});
