@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -64,6 +63,9 @@ type Provider struct {
 	// daemon is shutting down; reviving guards against two restart loops.
 	closed   bool
 	reviving bool
+	// reviveAgain records a hub exit seen while a restart was running: the
+	// restart's own hub may have died before it finished.
+	reviveAgain bool
 	// tuned holds each device's last stream quality. A stream's settings live
 	// in the hub, so a restarted hub would stream at full size (~90 Mbit/s for
 	// a simulator) until something asked again; they are put back instead.
@@ -214,10 +216,6 @@ func (p *Provider) retune(streams []tunedStream) {
 // startHub starts the hub and waits for it to answer. ctx bounds only that
 // wait (with hubReadyTimeout); the hub itself runs until Close.
 func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubProcess, error) {
-	port, err := freeLoopbackPort()
-	if err != nil {
-		return nil, fmt.Errorf("pick a device hub port: %w", err)
-	}
 	token, err := randomToken()
 	if err != nil {
 		return nil, err
@@ -231,7 +229,10 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 		return nil, fmt.Errorf("open device hub log: %w", err)
 	}
 	hubCtx, cancel := context.WithCancel(context.Background())
-	cmd := process.CommandContext(hubCtx, nodePath, entry, "--port", strconv.Itoa(port), "--host", "127.0.0.1")
+	// Port 0: the hub binds a free port itself and prints it. A port picked
+	// here and handed over could be taken by another local process in between,
+	// which would then pass the readiness probe and receive the hub's token.
+	cmd := process.CommandContext(hubCtx, nodePath, entry, "--port", "0", "--host", "127.0.0.1")
 	process.ConfigureTreeCancellation(cmd)
 	cmd.Env = append(os.Environ(),
 		"EXPO_DEVICE_HUB_SESSION_TOKEN="+token,
@@ -241,13 +242,14 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 	if sdk := androidSDK(); sdk != "" && os.Getenv("ANDROID_HOME") == "" {
 		cmd.Env = append(cmd.Env, "ANDROID_HOME="+sdk)
 	}
-	cmd.Stdout, cmd.Stderr = logFile, logFile
+	announced := newPortWatcher()
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(logFile, announced), logFile
 	if err := cmd.Start(); err != nil {
 		cancel()
 		_ = logFile.Close()
 		return nil, fmt.Errorf("start device hub: %w", err)
 	}
-	hub := &hubProcess{origin: "http://127.0.0.1:" + strconv.Itoa(port), token: token, cancel: cancel, done: make(chan struct{})}
+	hub := &hubProcess{token: token, cancel: cancel, done: make(chan struct{})}
 	pid := cmd.Process.Pid
 	p.recordHubPID(pid)
 	go func() {
@@ -264,6 +266,16 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 	// never answers would otherwise hold this wait, and p.mu with it, forever.
 	probeCtx, stopProbing := context.WithTimeout(ctx, hubReadyTimeout)
 	defer stopProbing()
+	// The address comes from the hub's own output, which only this child writes.
+	select {
+	case port := <-announced.port:
+		hub.origin = "http://127.0.0.1:" + strconv.Itoa(port)
+	case <-hub.done:
+		return nil, errors.New("device hub exited during startup; see " + filepath.Join(p.stateRoot(), "hub.log"))
+	case <-probeCtx.Done():
+		cancel()
+		return nil, errors.New("device hub did not say which port it listens on")
+	}
 	for {
 		select {
 		case <-hub.done:
@@ -280,6 +292,40 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// hubPortLine is the hub's startup line naming its address.
+var hubPortLine = regexp.MustCompile(`Local:\s+http://(?:localhost|127\.0\.0\.1):(\d+)`)
+
+// portWatcher reads the hub's stdout for the port it bound and passes the
+// first one on; the rest of the output only goes to the log.
+type portWatcher struct {
+	mu   sync.Mutex
+	buf  []byte
+	sent bool
+	port chan int
+}
+
+func newPortWatcher() *portWatcher { return &portWatcher{port: make(chan int, 1)} }
+
+func (w *portWatcher) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.sent {
+		return len(b), nil
+	}
+	w.buf = append(w.buf, b...)
+	if m := hubPortLine.FindSubmatch(w.buf); m != nil {
+		if port, err := strconv.Atoi(string(m[1])); err == nil && port > 0 && port <= 65535 {
+			w.port <- port
+			w.sent, w.buf = true, nil
+			return len(b), nil
+		}
+	}
+	if len(w.buf) > 64<<10 {
+		w.buf = w.buf[len(w.buf)-4<<10:]
+	}
+	return len(b), nil
 }
 
 // ready reports whether one readiness probe answered 200 before ctx ended.
@@ -390,7 +436,12 @@ func (p *Provider) PressButton(ctx context.Context, device ports.DeviceInfo, ses
 // It retries with a growing pause until the hub runs or the daemon closes.
 func (p *Provider) reviveHub() {
 	p.mu.Lock()
-	if p.reviving || p.closed {
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	if p.reviving {
+		p.reviveAgain = true
 		p.mu.Unlock()
 		return
 	}
@@ -399,7 +450,12 @@ func (p *Provider) reviveHub() {
 	defer func() {
 		p.mu.Lock()
 		p.reviving = false
+		again := p.reviveAgain && !p.closed
+		p.reviveAgain = false
 		p.mu.Unlock()
+		if again {
+			go p.reviveHub()
+		}
 	}()
 	for attempt := 0; ; attempt++ {
 		time.Sleep(hubRestartDelay(attempt))
@@ -655,7 +711,8 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 	if device.Platform == ports.DevicePlatformAndroid && device.Booted {
 		return device, nil
 	}
-	if device.Platform == ports.DevicePlatformIOS && !device.Booted {
+	startedHere := !device.Booted
+	if device.Platform == ports.DevicePlatformIOS && startedHere {
 		p.resetSimulatorHelper(ctx, device)
 	}
 	var res hubActionResult
@@ -674,10 +731,21 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		// Booting alone does not attach a stream helper; the grid start does
 		// both and is idempotent for a booted simulator.
 		var started hubActionResult
-		if err := p.hubJSON(ctx, http.MethodPost, "/vendor/serve-sim/grid/api/start", map[string]string{"udid": device.ID}, &started); err != nil {
-			return device, err
+		err := p.hubJSON(ctx, http.MethodPost, "/vendor/serve-sim/grid/api/start", map[string]string{"udid": device.ID}, &started)
+		if err == nil {
+			err = started.err("stream")
 		}
-		if err := started.err("stream"); err != nil {
+		if err != nil {
+			// Nobody gets this device, so nothing would ever shut down one this
+			// request powered on. One that was running before is left running.
+			if startedHere {
+				stopCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				if stopErr := p.Shutdown(stopCtx, device); stopErr != nil {
+					p.log.Warn("shut down a simulator whose stream did not start", "device", device.ID, "err", stopErr)
+				}
+				stop()
+				device.Booted = false
+			}
 			return device, err
 		}
 		p.awaitLiveStream(ctx, device)
@@ -990,19 +1058,6 @@ func adbPath() string {
 func executable(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
-}
-
-func freeLoopbackPort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = l.Close() }()
-	addr, ok := l.Addr().(*net.TCPAddr)
-	if !ok {
-		return 0, errors.New("loopback listener has no TCP address")
-	}
-	return addr.Port, nil
 }
 
 func randomToken() (string, error) {
