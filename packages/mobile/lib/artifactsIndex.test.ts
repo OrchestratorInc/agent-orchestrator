@@ -8,18 +8,30 @@ const names = (id: string) => (id === "web" ? "Web app" : undefined);
 describe("artifactIndexRows", () => {
 	it("lists every session's deliverables together, newest first, with their session and project", () => {
 		const rows = artifactIndexRows([
-			{ id: "s1", hostId: "h", projectId: "web", title: "Fix login", artifacts: [file("report.html", "2026-11-20T10:00:00Z")] },
-			{ id: "s2", hostId: "h", title: "Notes", artifacts: [file("plan.md", "2026-11-21T10:00:00Z")] },
+			{ id: "s1", hostId: "h", projectId: "web", outputType: "artifact", title: "Fix login", artifacts: [file("report.html", "2026-11-20T10:00:00Z")] },
+			{ id: "s2", hostId: "h", outputType: "pr_artifact", title: "Notes", artifacts: [file("plan.md", "2026-11-21T10:00:00Z")] },
 			{ id: "s3", hostId: "h", title: "Empty" },
 		], (_host, id) => names(id));
 		expect(rows.map((row) => [row.name, row.sessionTitle, row.projectName])).toEqual([["plan.md", "Notes", undefined], ["report.html", "Fix login", "Web app"]]);
 		expect(rows[1]).toMatchObject({ sessionId: "s1", hostId: "h", path: "report.html" });
 	});
 
+	// The desktop lists a session's files only when it was started to deliver
+	// artifacts (sessionArtifacts); a PR-only session's files are not listed.
+	it("lists only sessions that deliver artifacts, as the desktop does", () => {
+		const rows = artifactIndexRows([
+			{ id: "pr", hostId: "h", outputType: "pr", title: "PR only", artifacts: [file("scratch.md", "2026-11-21T10:00:00Z")] },
+			{ id: "art", hostId: "h", outputType: "artifact", title: "Report", artifacts: [file("report.html", "2026-11-20T10:00:00Z")] },
+			{ id: "both", hostId: "h", outputType: "pr_artifact", title: "Both", artifacts: [file("both.md", "2026-11-19T10:00:00Z")] },
+			{ id: "unknown", hostId: "h", title: "No output type", artifacts: [file("notes.md", "2026-11-18T10:00:00Z")] },
+		], () => undefined);
+		expect(rows.map((row) => row.sessionId)).toEqual(["art", "both"]);
+	});
+
 	it("searches the file, its session and its project", () => {
 		const rows = artifactIndexRows([
-			{ id: "s1", hostId: "h", projectId: "web", title: "Fix login", artifacts: [file("report.html", "2026-11-20T10:00:00Z")] },
-			{ id: "s2", hostId: "h", title: "Notes", artifacts: [file("plan.md", "2026-11-21T10:00:00Z")] },
+			{ id: "s1", hostId: "h", projectId: "web", outputType: "artifact", title: "Fix login", artifacts: [file("report.html", "2026-11-20T10:00:00Z")] },
+			{ id: "s2", hostId: "h", outputType: "pr_artifact", title: "Notes", artifacts: [file("plan.md", "2026-11-21T10:00:00Z")] },
 		], (_host, id) => names(id));
 		expect(filterArtifactRows(rows, "web").map((row) => row.name)).toEqual(["report.html"]);
 		expect(filterArtifactRows(rows, "NOTES").map((row) => row.name)).toEqual(["plan.md"]);

@@ -14,17 +14,27 @@ export type ArtifactIndexRow = {
 	projectName?: string;
 };
 
-type Source = { id: string; hostId: string; projectId?: string | null; artifacts?: SessionArtifact[]; title: string };
+type Source = { id: string; hostId: string; projectId?: string | null; artifacts?: SessionArtifact[]; outputType?: string; title: string };
+
+/**
+ * Whether a session's files are artifacts at all: only a session started to
+ * deliver them, exactly as the desktop's sessionArtifacts decides, so the two
+ * Artifacts pages list the same files.
+ */
+export function deliversArtifacts(outputType: string | undefined): boolean {
+	return outputType === "artifact" || outputType === "pr_artifact";
+}
 
 /**
  * Every session's deliverables in one list, newest change first, as the
- * desktop's Artifacts page lists them: the files a person opens, not the
- * images a page links to (deliverableArtifacts).
+ * desktop's Artifacts page lists them: from sessions that deliver artifacts,
+ * the files a person opens, not the images a page links to
+ * (deliverableArtifacts).
  */
 export function artifactIndexRows(sessions: readonly Source[], projectName: (hostId: string, projectId: string) => string | undefined): ArtifactIndexRow[] {
 	const rows: ArtifactIndexRow[] = [];
 	for (const session of sessions) {
-		if (!session.artifacts?.length) continue;
+		if (!session.artifacts?.length || !deliversArtifacts(session.outputType)) continue;
 		for (const artifact of deliverableArtifacts(session.artifacts)) {
 			rows.push({
 				key: `${session.hostId}:${session.id}:${artifact.path}`,

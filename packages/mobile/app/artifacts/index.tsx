@@ -36,7 +36,7 @@ export default function ArtifactsPage() {
 	const rows = useMemo(() => {
 		const projects = new Map(app.allProjects.map((project) => [`${project.hostId}:${project.id}`, project.name]));
 		return artifactIndexRows(
-			app.allSessions.map((session) => ({ id: session.id, hostId: session.hostId, projectId: session.projectId, artifacts: session.artifacts, title: sessionTitle(session) })),
+			app.allSessions.map((session) => ({ id: session.id, hostId: session.hostId, projectId: session.projectId, artifacts: session.artifacts, outputType: session.outputType, title: sessionTitle(session) })),
 			(hostId, projectId) => projects.get(`${hostId}:${projectId}`),
 		);
 	}, [app.allProjects, app.allSessions]);
