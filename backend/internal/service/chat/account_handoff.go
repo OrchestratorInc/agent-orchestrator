@@ -147,6 +147,7 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 		workers.Go(func() {
 			done, err := s.stepAccountHandoff(ctx, store, deps, h)
 			s.handoffMu.Lock()
+			release := err != nil && h.holdsQueue && s.now().Sub(h.stepAt) >= accountHandoffGiveUp
 			h.busy, h.done = false, done
 			h.holdsQueue = h.holdsQueue && !done
 			h.retryAt = time.Time{}
@@ -154,6 +155,9 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 				h.retryAt = s.now().Add(accountHandoffBackoff)
 			}
 			s.handoffMu.Unlock()
+			if release {
+				s.releaseAccountHandoffQueue(ctx, h)
+			}
 			if err != nil {
 				failures <- fmt.Errorf("account handoff %s: %w", h.turnID, err)
 			}

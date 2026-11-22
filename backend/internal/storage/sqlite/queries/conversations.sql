@@ -816,6 +816,13 @@ SET state = 'failed',
     completed_at = ?
 WHERE handled_by_session_id = ? AND state IN ('queued', 'running');
 
+-- name: SettleOrphanedRunningConversationTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = ?
+WHERE handled_by_session_id = ? AND state = 'running';
+
 -- Reviewer Chat has its own controller generation on review, separate from
 -- the worker session. Settle only turns owned by that review conversation.
 -- name: FailOrphanedReviewActivities :exec

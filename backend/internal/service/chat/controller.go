@@ -88,6 +88,7 @@ type Store interface {
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
 	CleanupOwnedControllerWork(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
+	CleanupOwnedControllerWorkKeepingQueue(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
 	CleanupOwnedReviewControllerWork(ctx context.Context, reviewID, conversationID, generation string, now time.Time) (bool, error)
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
 
@@ -311,9 +312,8 @@ type Controller struct {
 	settings domain.ConversationSettings
 	// cancelQueuedAt is set when the user interrupts, and is the cutoff for the
 	// queue that interrupt cancels. Zero means nothing is being cancelled.
-	cancelQueuedAt  time.Time
-	queueHeld       bool
-	keepQueueOnStop bool
+	cancelQueuedAt   time.Time
+	holdQueueForMove bool
 	// handoff closes source-controller intake while ownership is being changed.
 	// Interface drain keeps dispatching accepted rows; interface interrupt and an
 	// idle branch mutation stop dispatch entirely. The target controller is not
@@ -2364,6 +2364,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	c.cancelQueuedAt = time.Time{}
 	busy := c.pendingTurnID != ""
 	handoff := c.handoff
+	holdForMove := c.holdQueueForMove
 	c.mu.Unlock()
 
 	if busy {
@@ -2380,12 +2381,9 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		}
 		allowDispatch = true
 	}
-	if handoff != controllerHandoffNone && handoff != controllerHandoffInterfaceDrain {
+	if holdForMove || (handoff != controllerHandoffNone && handoff != controllerHandoffInterfaceDrain) {
 		return nil
 	}
-	c.mu.Lock()
-	c.queueHeld = !allowDispatch
-	c.mu.Unlock()
 	if !allowDispatch {
 		return nil
 	}
@@ -2516,9 +2514,9 @@ func (c *Controller) BeginHandoff(
 
 	c.mu.Lock()
 	active := c.pendingTurnID != ""
-	held := keepHeldQueue && c.queueHeld
+	c.holdQueueForMove = keepHeldQueue
 	c.mu.Unlock()
-	if !active && !held {
+	if !active && !keepHeldQueue {
 		// A queued row can exist in the narrow gap after a completion was
 		// projected and before its drain ran. Claim it now so drain mode cannot
 		// report quiescent while accepted work is still waiting.
@@ -2538,23 +2536,12 @@ func (c *Controller) BeginHandoff(
 		c.sendMu.Lock()
 		c.mu.Lock()
 		busy := c.pendingTurnID != ""
-		held = keepHeldQueue && c.queueHeld && !busy
 		c.mu.Unlock()
-		if held {
-			idle, err := c.onlyQueueLeft(ctx)
-			if err != nil {
-				c.sendMu.Unlock()
-				c.abortHandoff(keepHeldQueue)
-				return fmt.Errorf("check held work before handoff: %w", err)
-			}
-			if idle {
-				c.mu.Lock()
-				c.keepQueueOnStop = true
-				c.mu.Unlock()
-				c.sendMu.Unlock()
-				return nil
-			}
-		} else if !busy {
+		if !busy && keepHeldQueue {
+			c.sendMu.Unlock()
+			return nil
+		}
+		if !busy {
 			_, err := c.store.NextQueuedTurn(ctx, c.conversation.ID)
 			switch {
 			case errors.Is(err, domain.ErrNoQueuedTurn):
@@ -2575,7 +2562,7 @@ func (c *Controller) BeginHandoff(
 		c.sendMu.Unlock()
 		select {
 		case <-ctx.Done():
-			c.abortHandoff(keepHeldQueue)
+			c.AbortHandoff()
 			return ctx.Err()
 		case <-c.stopped:
 			return nil
@@ -2691,16 +2678,14 @@ func lockWithin(ctx context.Context, mu *sync.Mutex, limit time.Duration) bool {
 
 // AbortHandoff reopens source intake when a drain is cancelled before the source
 // controller is stopped. Any queued work resumes through the ordinary drain.
-func (c *Controller) AbortHandoff() { c.abortHandoff(false) }
-
-func (c *Controller) abortHandoff(keepHeldQueue bool) {
+func (c *Controller) AbortHandoff() {
 	c.mu.Lock()
 	resumeDispatch := (c.handoff == controllerHandoffInterfaceDrain ||
-		c.handoff == controllerHandoffInterfaceInterrupt) && !(keepHeldQueue && c.queueHeld)
+		c.handoff == controllerHandoffInterfaceInterrupt) && !c.holdQueueForMove
+	c.holdQueueForMove = false
 	branchHandoffDone := c.branchHandoffDone
 	c.branchHandoffDone = nil
 	c.handoff = controllerHandoffNone
-	c.keepQueueOnStop = false
 	c.mu.Unlock()
 	if branchHandoffDone != nil {
 		close(branchHandoffDone)
@@ -3488,24 +3473,16 @@ func (c *Controller) projectUnit(
 	return true
 }
 
-func (c *Controller) onlyQueueLeft(ctx context.Context) (bool, error) {
-	running, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
-	if err != nil || len(running) != 0 {
-		return false, err
-	}
-	pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID)
-	return !pending, err
-}
-
 func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
-	c.mu.Lock()
-	keepQueue := c.keepQueueOnStop
-	c.mu.Unlock()
-	if keepQueue {
-		return nil
-	}
 	if c.reviewID != "" {
 		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
+		return err
+	}
+	c.mu.Lock()
+	keepQueue := c.holdQueueForMove
+	c.mu.Unlock()
+	if keepQueue {
+		_, err := c.store.CleanupOwnedControllerWorkKeepingQueue(ctx, c.sessionID, c.conversation.ID, c.generation, now)
 		return err
 	}
 	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)

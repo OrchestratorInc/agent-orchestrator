@@ -1892,7 +1892,7 @@ func (s *Service) AbortChatHandoff(id domain.SessionID) {
 	s.mu.Unlock()
 	controller, err := s.Controller(id)
 	if err == nil {
-		controller.abortHandoff(s.accountHandoffHoldsQueue(id))
+		controller.AbortHandoff()
 	}
 }
 

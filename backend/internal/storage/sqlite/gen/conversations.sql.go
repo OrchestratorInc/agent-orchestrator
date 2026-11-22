@@ -5346,6 +5346,24 @@ func (q *Queries) SettleOrphanedReviewTurns(ctx context.Context, arg SettleOrpha
 	return err
 }
 
+const settleOrphanedRunningConversationTurns = `-- name: SettleOrphanedRunningConversationTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = ?
+WHERE handled_by_session_id = ? AND state = 'running'
+`
+
+type SettleOrphanedRunningConversationTurnsParams struct {
+	CompletedAt        sql.NullTime
+	HandledBySessionID domain.SessionID
+}
+
+func (q *Queries) SettleOrphanedRunningConversationTurns(ctx context.Context, arg SettleOrphanedRunningConversationTurnsParams) error {
+	_, err := q.db.ExecContext(ctx, settleOrphanedRunningConversationTurns, arg.CompletedAt, arg.HandledBySessionID)
+	return err
+}
+
 const settleRunningConversationActivitiesForTurn = `-- name: SettleRunningConversationActivitiesForTurn :exec
 UPDATE conversation_activities
 SET status = ?1, revision = revision + 1, updated_at = ?2

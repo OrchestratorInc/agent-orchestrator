@@ -31,9 +31,16 @@ type fakeHandoffAccounts struct {
 	target   string
 	calls    int
 	onTarget func()
+	boundErr error
 }
 
 func (a *fakeHandoffAccounts) SessionAccountID(ctx context.Context, id domain.SessionID, _ domain.AgentHarness) (string, error) {
+	a.mu.Lock()
+	boundErr := a.boundErr
+	a.mu.Unlock()
+	if boundErr != nil {
+		return "", boundErr
+	}
 	account, _, err := a.st.GetSessionAgentAccount(ctx, id, a.provider)
 	return account, err
 }
@@ -642,4 +649,25 @@ func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
 	if got := hh.conv.sentTexts(); len(got) != 1 {
 		t.Fatalf("provider received %v, want nothing more on the limited account", got)
 	}
+}
+
+func TestAccountHandoffStuckStepReleasesTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx := context.Background()
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	hh.accounts.mu.Lock()
+	hh.accounts.boundErr = errors.New("account store unavailable")
+	hh.accounts.mu.Unlock()
+	if err := hh.svc.HandoffUsageLimitedTurns(ctx); err == nil {
+		t.Fatal("handoff step succeeded without its account binding")
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+
+	hh.advance(11 * time.Minute)
+	_ = hh.svc.HandoffUsageLimitedTurns(ctx)
+	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
 }
