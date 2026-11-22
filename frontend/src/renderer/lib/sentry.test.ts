@@ -72,3 +72,17 @@ it("keeps anonymous minified frames and their chunk debug IDs", () => {
 		delete (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
 	}
 });
+
+it("uses the browser location and error type when no error object or stack is available", () => {
+	const event = new ErrorEvent("error", {
+		message: "Uncaught TypeError: Cannot read properties of undefined (reading 'id')",
+		filename: "app://renderer/assets/index-A1B2C3D4.js?private=query",
+		lineno: 42,
+		colno: 9,
+	});
+	captureExceptionToSentry(undefined, { category: "renderer_exception", code: "WINDOW_ERROR" }, event);
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: "Cannot read properties of undefined (reading 'id')",
+		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/index-A1B2C3D4.js", lineno: 42, colno: 9 }] },
+	}));
+});
