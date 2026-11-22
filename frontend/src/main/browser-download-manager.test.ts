@@ -90,6 +90,75 @@ class FakeDownloadItem extends EventEmitter {
 }
 
 describe("browser download manager", () => {
+	it("keeps a collision of a 255-byte filename within the filesystem limit", () => {
+		const test = setup();
+		const fileName = `${"a".repeat(251)}.txt`;
+		const first = new FakeDownloadItem();
+		first.getFilename = () => fileName;
+		test.start(first);
+		const firstPath = first.setSavePath.mock.calls[0][0] as string;
+		expect(Buffer.byteLength(path.basename(firstPath))).toBe(255);
+		writeFileSync(firstPath, "first download");
+		const second = new FakeDownloadItem();
+		second.getFilename = () => fileName;
+		test.start(second);
+		const secondPath = second.setSavePath.mock.calls[0][0] as string;
+		expect(path.basename(secondPath)).toBe(`${"a".repeat(247)} (1).txt`);
+		expect(Buffer.byteLength(path.basename(secondPath))).toBe(255);
+		expect(secondPath).not.toBe(firstPath);
+		writeFileSync(secondPath, "second download");
+		const third = new FakeDownloadItem();
+		third.getFilename = () => fileName;
+		test.start(third);
+		expect(path.basename(third.setSavePath.mock.calls[0][0] as string)).toBe(`${"a".repeat(247)} (2).txt`);
+	});
+
+	it.each([
+		[`${"é".repeat(125)}a.txt`, `${"é".repeat(123)} (1).txt`],
+		[`${"😀".repeat(62)}abc.txt`, `${"😀".repeat(61)} (1).txt`],
+	])("truncates a multibyte filename without splitting a character", (fileName, expected) => {
+		const test = setup();
+		const first = new FakeDownloadItem();
+		first.getFilename = () => fileName;
+		test.start(first);
+		writeFileSync(first.setSavePath.mock.calls[0][0] as string, "first download");
+		const second = new FakeDownloadItem();
+		second.getFilename = () => fileName;
+		test.start(second);
+		const result = path.basename(second.setSavePath.mock.calls[0][0] as string);
+		expect(result).toBe(expected);
+		expect(Buffer.byteLength(result)).toBeLessThanOrEqual(255);
+	});
+
+	it("makes room when the collision number gains a digit", () => {
+		const test = setup();
+		const fileName = `${"a".repeat(251)}.txt`;
+		for (let index = 0; index <= 10; index += 1) {
+			const item = new FakeDownloadItem();
+			item.getFilename = () => fileName;
+			test.start(item);
+			const savePath = item.setSavePath.mock.calls[0][0] as string;
+			if (index === 10) expect(path.basename(savePath)).toBe(`${"a".repeat(246)} (10).txt`);
+			expect(Buffer.byteLength(path.basename(savePath))).toBe(255);
+			writeFileSync(savePath, "download");
+		}
+	});
+
+	it("shortens an extension only when it leaves no room for the collision suffix", () => {
+		const test = setup();
+		const fileName = `a.${"x".repeat(253)}`;
+		const first = new FakeDownloadItem();
+		first.getFilename = () => fileName;
+		test.start(first);
+		writeFileSync(first.setSavePath.mock.calls[0][0] as string, "first download");
+		const second = new FakeDownloadItem();
+		second.getFilename = () => fileName;
+		test.start(second);
+		const result = path.basename(second.setSavePath.mock.calls[0][0] as string);
+		expect(result).toBe(`a (1).${"x".repeat(249)}`);
+		expect(Buffer.byteLength(result)).toBe(255);
+	});
+
 	it.each(["active", "completed", "cancelled"] as const)("preserves a newer %s download when removing older completed history", async (status) => {
 		for (const reload of [false, true]) {
 			const test = setup();

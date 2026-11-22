@@ -62,6 +62,7 @@ const MAX_BLOCKED_DOWNLOADS = 20;
 const DOWNLOAD_DESTINATION_ERROR = "Could not prepare the Downloads folder.";
 const DOWNLOAD_DELETE_ERROR = "Could not delete the downloaded file.";
 const DOWNLOAD_UNAVAILABLE_ERROR = "This download is no longer available. Open the link again.";
+const MAX_FILENAME_BYTES = 255;
 // How long an explicit approval waits for Chromium to request the file again.
 const DOWNLOAD_APPROVAL_TTL_MS = 60_000;
 
@@ -89,12 +90,32 @@ function safeFilename(value: string): string {
 	return fileName && fileName !== "." && fileName !== ".." ? fileName : "download";
 }
 
+function truncateToBytes(value: string, maxBytes: number): string {
+	let result = "";
+	let bytes = 0;
+	for (const character of value) {
+		const size = Buffer.byteLength(character, "utf8");
+		if (bytes + size > maxBytes) break;
+		result += character;
+		bytes += size;
+	}
+	return result;
+}
+
 function collisionSafePath(directory: string, fileName: string, unavailable: Set<string>): string {
 	const parsed = path.parse(fileName);
-	let candidate = path.join(directory, fileName);
+	const candidateName = (suffix: string): string => {
+		// Keep the extension when it fits. An unusually long extension must also
+		// yield space for the suffix and at least the first stem character.
+		const stemBytes = Buffer.byteLength([...parsed.name][0] ?? "", "utf8");
+		const extension = truncateToBytes(parsed.ext, MAX_FILENAME_BYTES - Buffer.byteLength(suffix) - stemBytes);
+		const stem = truncateToBytes(parsed.name, MAX_FILENAME_BYTES - Buffer.byteLength(suffix) - Buffer.byteLength(extension));
+		return `${stem}${suffix}${extension}`;
+	};
+	let candidate = path.join(directory, candidateName(""));
 	let suffix = 1;
 	while (existsSync(candidate) || unavailable.has(candidate.toLowerCase())) {
-		candidate = path.join(directory, `${parsed.name} (${suffix})${parsed.ext}`);
+		candidate = path.join(directory, candidateName(` (${suffix})`));
 		suffix += 1;
 	}
 	return candidate;
