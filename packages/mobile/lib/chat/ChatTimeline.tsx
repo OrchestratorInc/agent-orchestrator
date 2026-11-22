@@ -348,9 +348,10 @@ function Timeline({
 	// The send under way in this conversation (see `sendAnchor`).
 	const anchor = sendAnchor?.conversationId === snapshot.conversationId ? sendAnchor : undefined;
 	// A message just sent shows at once, drawn from the send until the conversation has it.
+	// Matched against every item: a send the daemon queued sits in the queue, not the list.
 	const items = useMemo(() => {
 		const readable = readableConversationItems(snapshot, openingTurnId);
-		if (!anchor?.text || readable.some((item) => matchesSend(item, anchor))) return readable;
+		if (!anchor?.text || snapshot.items.some((item) => matchesSend(item, anchor))) return readable;
 		const optimistic = optimisticSentItem(anchor, newestSequence(snapshot.items));
 		return optimistic ? [...readable, optimistic] : readable;
 	}, [anchor, openingTurnId, snapshot]);

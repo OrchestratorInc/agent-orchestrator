@@ -114,7 +114,7 @@ describe("a sent message", () => {
 	// has it; a steer joins the running turn and its room starts at the steer.
 	it("shows at once, and a steer gets room below it inside the running turn", () => {
 		expect(source).toContain("const optimistic = optimisticSentItem(anchor, newestSequence(snapshot.items));");
-		expect(source).toContain("if (!anchor?.text || readable.some((item) => matchesSend(item, anchor))) return readable;");
+		expect(source).toContain("if (!anchor?.text || snapshot.items.some((item) => matchesSend(item, anchor))) return readable;");
 		expect(source).toContain("? <View key={row.key} onLayout={placeRoom(row.items[0].id)}>{renderItem(row.items[0])}</View>");
 		expect(source).toContain("if (room && roomItem && placedItem === roomItem) onRoomPlaced?.();");
 	});
