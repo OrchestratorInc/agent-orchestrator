@@ -88,8 +88,8 @@ type TerminalPaneProps = {
 	switchingLabel?: string;
 	/** Focus the terminal when an in-flight controller asks for human input. */
 	focusRequested?: boolean;
-	/** Ignore standalone SGR dim in this login terminal when the app is light. */
-	suppressDimInLightTheme?: boolean;
+	/** Ignore standalone SGR dim in this login terminal across theme changes. */
+	suppressLoginDim?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
 	onTerminalStateChange?: (state: TerminalSessionState) => void;
 	/** Open a web link from a standalone terminal that has no session Browser owner. */
@@ -169,7 +169,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.booting === right.booting &&
 		left.switchingLabel === right.switchingLabel &&
 		left.focusRequested === right.focusRequested &&
-		left.suppressDimInLightTheme === right.suppressDimInLightTheme &&
+		left.suppressLoginDim === right.suppressLoginDim &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
 		left.onLinkOpen === right.onLinkOpen &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
@@ -814,7 +814,7 @@ export function TerminalPane({
 	booting,
 	switchingLabel,
 	focusRequested,
-	suppressDimInLightTheme,
+	suppressLoginDim,
 	onTerminalStateChange,
 	onLinkOpen,
 	onTerminalContentReadyChange,
@@ -929,7 +929,7 @@ export function TerminalPane({
 		booting,
 		switchingLabel,
 		focusRequested,
-		suppressDimInLightTheme,
+		suppressLoginDim,
 		onTerminalStateChange,
 		onLinkOpen,
 		onTerminalContentReadyChange,
@@ -965,7 +965,7 @@ export function TerminalPane({
 			onChangeFontSize={onChangeFontSize}
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
-			suppressDimInLightTheme={suppressDimInLightTheme}
+			suppressLoginDim={suppressLoginDim}
 			onTerminalStateChange={onTerminalStateChange}
 			onLinkOpen={onLinkOpen}
 			onTerminalContentReadyChange={onTerminalContentReadyChange}
@@ -1133,7 +1133,7 @@ function AttachedTerminal({
 	booting,
 	switchingLabel,
 	focusRequested,
-	suppressDimInLightTheme,
+	suppressLoginDim,
 	onTerminalStateChange,
 	onLinkOpen,
 	onTerminalContentReadyChange,
@@ -1494,7 +1494,7 @@ function AttachedTerminal({
 					droppedFileMaxBytes={saveCloudDrop && cloudAttachmentMaxBytes !== undefined ? Math.min(cloudAttachmentMaxBytes, MAX_CLOUD_CP_BINARY_BYTES) : undefined}
 					fontSize={fontSize}
 					focusRequested={focusRequested}
-					suppressDimInLightTheme={suppressDimInLightTheme}
+					suppressLoginDim={suppressLoginDim}
 					isFullscreen={isFullscreen}
 					isVisible={isVisible}
 					onChangeFontSize={onChangeFontSize}

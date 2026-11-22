@@ -129,8 +129,8 @@ export type XtermTerminalProps = {
 	isVisible?: boolean;
 	/** Cursor Agent understands AO's terminal color protocol; generic terminals do not. */
 	supportsCursorColorScheme?: boolean;
-	/** Keep Cline's device-auth instructions readable on a light terminal. */
-	suppressDimInLightTheme?: boolean;
+	/** Keep Cline's device-auth instructions readable across theme changes. */
+	suppressLoginDim?: boolean;
 	/** Move keyboard focus into xterm when a controller needs human input. */
 	focusRequested?: boolean;
 	/**
@@ -1148,10 +1148,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		colorSchemeReporterRef.current = reportColorScheme;
 		// Cline 3.0.75 wraps its device code and URL in standalone SGR 2. xterm
 		// renders that as 50% opacity, which drops the light terminal's default
-		// text below 4.5:1. Consume only that request for the Cline login pane.
+		// text below 4.5:1. Parse-time attributes survive theme changes, so
+		// consume it in either theme for the Cline login pane only.
 		const readableLoginDim = term.parser.registerCsiHandler({ final: "m" }, (params) =>
-			callbacksRef.current.suppressDimInLightTheme === true &&
-			callbacksRef.current.theme === "light" &&
+			callbacksRef.current.suppressLoginDim === true &&
 			params.length === 1 && params[0] === 2,
 		);
 		const setColorSchemeUpdates = term.parser.registerCsiHandler(

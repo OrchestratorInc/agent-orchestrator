@@ -5,11 +5,11 @@ import { SettingsBrowserLinkContext } from "../SettingsBrowserOverlay";
 import { HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 
 const loginUrl = "https://app.cline.bot/auth/device";
-const terminalProps = vi.hoisted(() => ({ suppressDimInLightTheme: undefined as boolean | undefined }));
+const terminalProps = vi.hoisted(() => ({ suppressLoginDim: undefined as boolean | undefined }));
 
 vi.mock("../../TerminalPane", () => ({
-	TerminalPane: ({ onLinkOpen, suppressDimInLightTheme }: { onLinkOpen?: (url: string) => void; suppressDimInLightTheme?: boolean }) => {
-		terminalProps.suppressDimInLightTheme = suppressDimInLightTheme;
+	TerminalPane: ({ onLinkOpen, suppressLoginDim }: { onLinkOpen?: (url: string) => void; suppressLoginDim?: boolean }) => {
+		terminalProps.suppressLoginDim = suppressLoginDim;
 		return <button onClick={() => onLinkOpen?.(loginUrl)} type="button">Cline device link</button>;
 	},
 }));
@@ -47,6 +47,6 @@ describe("HarnessAuthTerminalPanel", () => {
 		["codex", "login", false],
 	] as const)("scopes dim suppression for %s %s", (agentId, action, expected) => {
 		render(<HarnessAuthTerminalPanel workflow={{ ...workflow, agentId, action }} onClose={vi.fn()} onRetry={vi.fn()} onTerminalState={vi.fn()} />);
-		expect(terminalProps.suppressDimInLightTheme).toBe(expected);
+		expect(terminalProps.suppressLoginDim).toBe(expected);
 	});
 });

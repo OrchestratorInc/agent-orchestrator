@@ -920,7 +920,7 @@ describe("XtermTerminal", () => {
 		}
 	});
 
-	it("keeps current Cline device-auth output readable only in its light login terminal", () => {
+	it("keeps current Cline device-auth output readable after a dark-to-light theme switch", () => {
 		// Sanitized from a Cline 3.0.75 PTY on Windows. Cline ignores NO_COLOR
 		// and dims both lines; the actual device code is deliberately omitted.
 		const authOutput = "\x1b[2m[auth] Enter this code in your browser: <CODE>\r\n\x1b[22m" +
@@ -931,18 +931,23 @@ describe("XtermTerminal", () => {
 		// light terminal's #3d3d3d foreground falls below WCAG AA contrast.
 		expect(contrastRatio(mixColor("#3d3d3d", "#fafafa", 0.5), "#fafafa")).toBeLessThan(4.5);
 
-		const view = render(<XtermTerminal theme="light" suppressDimInLightTheme />);
+		const view = render(<XtermTerminal theme="dark" suppressLoginDim />);
 		const terminal = state.lastTerminal!;
 		const handler = terminal.csiHandlers.find(({ id }) => id.final === "m" && !id.prefix);
+		// Cline prints the code once. It must be parsed without dim even when
+		// the login starts dark, so the retained buffer stays readable in light.
 		expect(handler?.callback([sgr[0]])).toBe(true);
 		expect(handler?.callback([22])).toBe(false);
 		expect(handler?.callback([2, 31])).toBe(false);
-		view.rerender(<XtermTerminal theme="dark" suppressDimInLightTheme />);
-		expect(handler?.callback([2])).toBe(false);
+		view.rerender(<XtermTerminal theme="light" suppressLoginDim />);
+		expect(state.lastTerminal).toBe(terminal);
+		expect(handler?.callback([2])).toBe(true);
 		view.unmount();
 
-		render(<XtermTerminal theme="light" />);
+		const ordinaryView = render(<XtermTerminal theme="light" />);
 		const ordinaryHandler = state.lastTerminal!.csiHandlers.find(({ id }) => id.final === "m" && !id.prefix);
+		expect(ordinaryHandler?.callback([2])).toBe(false);
+		ordinaryView.rerender(<XtermTerminal theme="dark" />);
 		expect(ordinaryHandler?.callback([2])).toBe(false);
 	});
 
